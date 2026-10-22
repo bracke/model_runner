@@ -15872,6 +15872,23 @@ package body Tests.CLI_Cases is
       Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--count"),
                          S ("101")], Item);
       Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a hundred and one pictures were accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--init-image"),
+                         S ("in.png"), S ("--strength"), S ("0.4")], Item);
+      Assert (E.Is_Ok (Status) and then T.To_String (Item.Image_Init) = "in.png" and then Item.Image_Strength = 0.4
+              and then not Item.Picture_Size_Set, "--init-image and --strength were not kept");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--init-image"),
+                         S ("in.png"), S ("--size"), S ("64x32")], Item);
+      Assert (E.Is_Ok (Status) and then Item.Picture_Size_Set and then Item.Image_Strength = 0.75,
+              "--size beside --init-image was not marked, or the strength unasked is not 0.75");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--strength"),
+                         S ("0.5")], Item);
+      Assert (Status.Code = E.CLI_Option_Combination, "--strength without --init-image was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--init-image"),
+                         S ("in.png"), S ("--strength"), S ("0")], Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a strength of nought was accepted");
+      Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--init-image"),
+                         S ("in.png"), S ("--strength"), S ("1.5")], Item);
+      Assert (Status.Code = E.CLI_Option_Out_Of_Range, "a strength past one was accepted");
       Status := Parsed ([S ("image"), S ("--prompt"), S ("x"), S ("--out"), S ("a.png"), S ("--no-cache"),
                          S ("--backend"), S ("cpu")], Item);
       Assert (E.Is_Ok (Status) and then Item.No_Cache and then Item.Backend_Set

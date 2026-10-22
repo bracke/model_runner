@@ -610,10 +610,15 @@ package body Model_Runner.Qwen_Image is
       Turbo     : Boolean := False;
       Guidance  : N.Real := 1.0;
       Negative  : N.Real_Array := No_Rows;
-      Negative_Rows : Natural := 0)
+      Negative_Rows : Natural := 0;
+      Init      : N.Real_Array := No_Rows;
+      Strength  : N.Real := 1.0)
    is
       use type N.Real;
-      Levels : constant N.Real_Array := (if Turbo then Turbo_Levels else Sigmas (Steps, Rows * Columns));
+      All_Levels : constant N.Real_Array := (if Turbo then Turbo_Levels else Sigmas (Steps, Rows * Columns));
+      Start  : constant Element_Count :=
+        (if Init'Length = 0 then 0 else Element_Count (First_Level (All_Levels'Length - 1, Strength)));
+      Levels : constant N.Real_Array := All_Levels (All_Levels'First + Start .. All_Levels'Last);
       Taken  : constant Positive := Levels'Length - 1;
       --  The negative prompt's velocity, where guidance asks for it.
       Away   : T.Real_Array_Access;
@@ -629,7 +634,20 @@ package body Model_Runner.Qwen_Image is
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
       end if;
+      if Init'Length > 0 and then Init'Length /= Latent'Length then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
       Model_Runner.Philox.Draw (Noise, Latent);
+      if Init'Length > 0 then
+         declare
+            First : constant N.Real := Levels (Levels'First);
+         begin
+            for I in Latent'Range loop
+               Latent (I) := Init (Init'First + (I - Latent'First)) * (1.0 - First) + Latent (I) * First;
+            end loop;
+         end;
+      end if;
       T.Allocate (Latent'Length, Speed);
       if Speed = null then
          Status := E.Make (E.Memory_Allocation_Failed);
@@ -667,6 +685,16 @@ package body Model_Runner.Qwen_Image is
       Forget (Toward);
       Forget (From);
    end Sample;
+
+   function First_Level (Steps : Positive; Strength : N.Real) return Natural is
+      use type N.Real;
+      Kept : Natural := Natural (N.Real'Truncation (N.Real (Steps) * N.Real'Max (0.0, N.Real'Min (1.0, Strength))));
+   begin
+      if Kept >= Steps then
+         Kept := Steps - 1;
+      end if;
+      return Steps - Kept - 1;
+   end First_Level;
 
    function Is_Ready (Item : Denoiser) return Boolean
    is (Item.Ready);

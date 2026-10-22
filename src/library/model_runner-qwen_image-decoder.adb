@@ -22,33 +22,14 @@ package body Model_Runner.Qwen_Image.Decoder is
    use type B.Byte_Count;
    use type B.Byte_Array_Access;
    use type Element_Count;
-   use type Real;
    use type Wide;
    use type System.Address;
    use type System.Storage_Elements.Integer_Address;
    use type T.Real_Array_Access;
    use type Model_Runner.GGUF.U64;
 
-   --  The latent's statistics, from the model's configuration: what the
-   --  sampler's latent is multiplied by and moved by before decoding.
-   Means : constant array (0 .. Latent_Channels - 1) of Real :=
-     [0.5126, 0.7721, -0.0631, 1.3506, -0.7855, -2.1025, -0.3458, 1.3722,
-      1.8873, -1.7177, -0.6510, 0.2732, 0.7562, -0.6163, -1.0277, 3.8363,
-      2.0210, 0.0472, 0.9320, 2.0087, 2.4954, -0.1391, -1.4249, 1.8464,
-      -0.5236, 1.2826, 3.7046, -1.3035, 2.7286, -1.4518, -1.9036, -1.9955,
-      -0.0342, -1.0265, -0.7636, 3.0555, 0.0746, -3.0751, -0.1076, 1.7376,
-      -1.0914, -1.9435, -0.2784, -1.3680, 0.4809, -0.4433, 0.3764, 0.5729,
-      -2.0595, 1.0960, -1.3260, -2.0211, -5.0179, 0.5275, 4.0162, 1.8505,
-      0.3026, 1.9373, 1.4937, 0.2632, 0.5547, -1.7121, -0.1562, 0.0304];
-   Deviations : constant array (0 .. Latent_Channels - 1) of Real :=
-     [3.2001, 3.2936, 3.4321, 3.0091, 3.1061, 4.0379, 4.0705, 3.7910,
-      3.0785, 3.6500, 3.9308, 3.0904, 2.8778, 3.7675, 3.7320, 5.0756,
-      3.2864, 4.0397, 3.1317, 4.0443, 2.9249, 3.9454, 3.0988, 4.2489,
-      3.4896, 3.8513, 3.9323, 3.4719, 3.7498, 4.2830, 3.5694, 4.2467,
-      3.9037, 3.2947, 5.0770, 3.5075, 3.2700, 3.4767, 2.8063, 5.1125,
-      3.5327, 4.7833, 3.1286, 4.1819, 3.8527, 3.8312, 3.5605, 4.3875,
-      3.9624, 4.0168, 3.5643, 4.0550, 5.5614, 4.2963, 4.4080, 3.4959,
-      3.8747, 3.7608, 3.5735, 3.1490, 3.7662, 3.6746, 3.4563, 3.8161];
+   Means      : Latent_Statistics renames Latent_Means;
+   Deviations : Latent_Statistics renames Latent_Deviations;
 
    --  Each level's width as a multiple of the last's: the mid block's
    --  first, then each level's out.
@@ -65,7 +46,12 @@ package body Model_Runner.Qwen_Image.Decoder is
    -- Open --
    ----------
 
-   procedure Open (Item : in out Picture_Decoder; Path : String; Status : out E.Error_Info) is
+   procedure Open
+     (Item    : in out Picture_Decoder;
+      Path    : String;
+      Status  : out E.Error_Info;
+      Encoder : Boolean := False)
+   is
 
       --  Whether the device is to run the convolutions: their taps are laid
       --  out apart for it where it is, and their kernels in panels for the
@@ -118,7 +104,8 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
       end Vector;
 
-      procedure Laid_Out (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution) is
+      procedure Laid_Out
+        (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution; With_Taps : Boolean) is
          Columns : constant Element_Count := Element_Count (Inputs * Size * Size);
          Index   : constant Natural := Find (Name & ".weight", Element_Count (Outputs) * Columns);
       begin
@@ -237,7 +224,7 @@ package body Model_Runner.Qwen_Image.Decoder is
             T.Make (Result.Kernel.Format, Rows_To, Across, Result.Owned, 0, Result.Kernel, Status);
 
             --  A 3x3's taps apart, for the device.
-            if Size = 3 and then On_Device and then E.Is_Ok (Status) then
+            if Size = 3 and then With_Taps and then E.Is_Ok (Status) then
                declare
                   Ins_To    : constant Element_Count := (Ins + 31) / 32 * 32;
                   Tap_Bytes : constant B.Byte_Count := B.Byte_Count (Rows_To * Ins_To) * Element;
@@ -280,10 +267,12 @@ package body Model_Runner.Qwen_Image.Decoder is
 
       --  The convolution Name, laid out for whichever of the device and the
       --  processor is to run it: on the processor its kernel in panels too.
-      procedure Convolve (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution) is
+      --  The encoder's run on the processor always.
+      procedure Convolve
+        (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution; Encoding : Boolean := False) is
       begin
-         Laid_Out (Name, Inputs, Outputs, Size, Result);
-         if not On_Device and then E.Is_Ok (Status) and then T.Is_Present (Result.Kernel) then
+         Laid_Out (Name, Inputs, Outputs, Size, Result, With_Taps => On_Device and then not Encoding);
+         if (Encoding or else not On_Device) and then E.Is_Ok (Status) and then T.Is_Present (Result.Kernel) then
             Model_Runner.Float_Panels.Pack (Result.Kernel, Result.Panels, Status);
          end if;
       end Convolve;
@@ -310,16 +299,17 @@ package body Model_Runner.Qwen_Image.Decoder is
          end;
       end Fit;
 
-      procedure Residual_Of (Name : String; Inputs, Outputs : Positive; Result : out Residual) is
+      procedure Residual_Of
+        (Name : String; Inputs, Outputs : Positive; Result : out Residual; Encoding : Boolean := False) is
       begin
          Vector (Name & ".norm1.gamma", Inputs, Result.Norm_1);
-         Convolve (Name & ".conv1", Inputs, Outputs, 3, Result.Conv_1);
+         Convolve (Name & ".conv1", Inputs, Outputs, 3, Result.Conv_1, Encoding);
          Fit (Result.Norm_1, Result.Conv_1);
          Vector (Name & ".norm2.gamma", Outputs, Result.Norm_2);
-         Convolve (Name & ".conv2", Outputs, Outputs, 3, Result.Conv_2);
+         Convolve (Name & ".conv2", Outputs, Outputs, 3, Result.Conv_2, Encoding);
          Fit (Result.Norm_2, Result.Conv_2);
          if Inputs /= Outputs then
-            Convolve (Name & ".conv_shortcut", Inputs, Outputs, 1, Result.Shortcut);
+            Convolve (Name & ".conv_shortcut", Inputs, Outputs, 1, Result.Shortcut, Encoding);
          end if;
       end Residual_Of;
       Widths : Width_Array renames Item.Widths;
@@ -404,6 +394,57 @@ package body Model_Runner.Qwen_Image.Decoder is
       Vector ("decoder.norm_out.gamma", Widths (5), Item.Norm_Out);
       Convolve ("decoder.conv_out", Widths (5), Picture_Channels, 3, Item.Conv_Out);
       Fit (Item.Norm_Out, Item.Conv_Out);
+
+      --  The encoder's, where asked: its widths off conv_in's, the levels
+      --  doubling them three times and keeping the last.
+      if Encoder and then E.Is_Ok (Status) then
+         declare
+            First : constant Natural := S.Find (Item.Table, "encoder.conv_in.bias");
+            Downs : Width_Array renames Item.Down_Widths;
+            Mults : constant array (0 .. 4) of Positive := [1, 2, 4, 8, 8];
+         begin
+            if First = 0 then
+               Status := E.Make (E.Arch_Missing_Tensor);
+               E.Add_Text (Status, "tensor", "encoder.conv_in.bias", E.Param_Identifier);
+            elsif S.Info (Item.Table, First).Elements = 0 or else S.Info (Item.Table, First).Elements > 4_096 then
+               Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+               E.Add_Text (Status, "tensor", "encoder.conv_in.bias", E.Param_Identifier);
+               E.Add_Integer (Status, "rows", 1);
+               E.Add_Integer (Status, "columns", Long_Long_Integer (S.Info (Item.Table, First).Elements));
+               E.Add_Integer (Status, "expected_rows", 1);
+               E.Add_Integer (Status, "expected_columns", 96);
+            else
+               Downs (0) := Positive (S.Info (Item.Table, First).Elements);
+               for L in Mults'Range loop
+                  Downs (L + 1) := Mults (L) * Downs (0);
+               end loop;
+               Convolve ("encoder.conv_in", Picture_Channels, Downs (0), 3, Item.Enc_In, True);
+               for L in Item.Downs'Range loop
+                  declare
+                     Lead : constant String := "encoder.down_blocks." & Image (L) & ".";
+                  begin
+                     Item.Downs (L).Temporal := (if L in 1 .. 3 then 2 else 1);
+                     Residual_Of (Lead & "resnets.0", Downs (L), Downs (L + 1), Item.Downs (L).Blocks (1), True);
+                     Residual_Of (Lead & "resnets.1", Downs (L + 1), Downs (L + 1), Item.Downs (L).Blocks (2), True);
+                     if L < Item.Downs'Last then
+                        Convolve (Lead & "downsampler.resample.1", Downs (L + 1), Downs (L + 1), 3,
+                                  Item.Downs (L).Down, True);
+                     end if;
+                  end;
+               end loop;
+               Residual_Of ("encoder.mid_block.resnets.0", Downs (5), Downs (5), Item.Enc_Mid_1, True);
+               Vector ("encoder.mid_block.attentions.0.norm.gamma", Downs (5), Item.Enc_Attention_Norm);
+               Convolve ("encoder.mid_block.attentions.0.to_qkv", Downs (5), 3 * Downs (5), 1, Item.Enc_Joint, True);
+               Convolve ("encoder.mid_block.attentions.0.proj", Downs (5), Downs (5), 1, Item.Enc_Attention_Out,
+                         True);
+               Residual_Of ("encoder.mid_block.resnets.1", Downs (5), Downs (5), Item.Enc_Mid_2, True);
+               Vector ("encoder.norm_out.gamma", Downs (5), Item.Enc_Norm_Out);
+               Convolve ("encoder.conv_out", Downs (5), 2 * Latent_Channels, 3, Item.Enc_Out, True);
+               Convolve ("quant_conv", 2 * Latent_Channels, 2 * Latent_Channels, 1, Item.Quant, True);
+               Item.Encoding := E.Is_Ok (Status);
+            end if;
+         end;
+      end if;
       if E.Is_Error (Status) then
          declare
             Kept : constant E.Error_Info := Status;
@@ -458,6 +499,22 @@ package body Model_Runner.Qwen_Image.Decoder is
       end loop;
       T.Free (Item.Norm_Out);
       Let_Go (Item.Conv_Out);
+      Let_Go (Item.Enc_In);
+      for L of Item.Downs loop
+         for R of L.Blocks loop
+            Let_Go (R);
+         end loop;
+         Let_Go (L.Down);
+      end loop;
+      Let_Go (Item.Enc_Mid_1);
+      Let_Go (Item.Enc_Mid_2);
+      T.Free (Item.Enc_Attention_Norm);
+      Let_Go (Item.Enc_Joint);
+      Let_Go (Item.Enc_Attention_Out);
+      T.Free (Item.Enc_Norm_Out);
+      Let_Go (Item.Enc_Out);
+      Let_Go (Item.Quant);
+      Item.Encoding := False;
       B.Free (Item.Arena);
       Item.Base := System.Null_Address;
       Item.Span := 0;
@@ -467,6 +524,9 @@ package body Model_Runner.Qwen_Image.Decoder is
 
    function Is_Ready (Item : Picture_Decoder) return Boolean
    is (Item.Ready);
+
+   function Can_Encode (Item : Picture_Decoder) return Boolean
+   is (Item.Ready and then Item.Encoding);
 
    function To_Pixels (Picture : N.Real_Array; Pixels : Element_Count) return B.Byte_Array is
       Result : B.Byte_Array (0 .. B.Byte_Count (Pixels) * Picture_Channels - 1);
@@ -581,7 +641,12 @@ package body Model_Runner.Qwen_Image.Decoder is
    --  Or, for the device's 3x3, a band's rows laid out padded: a pixel of
    --  zeros either side of each row and a row of them above and below, each
    --  pixel's channels padded to Across with zeros.
-   type Pixel_Kind is (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels, Pad_Rows);
+   --  And the encoder's: a band's neighbourhoods for a 3x3 of stride two,
+   --  the picture padded a pixel right and below; and a level's input
+   --  averaged into the halved pixels as its shortcut, Encode says how.
+   type Pixel_Kind is
+     (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels, Pad_Rows, Gather_Halved,
+      Average_Pixels);
 
    type Pixel_Work is new Model_Runner.Shares.Work with record
       Kind            : Pixel_Kind := Gather_Rows;
@@ -658,6 +723,66 @@ package body Model_Runner.Qwen_Image.Decoder is
                   end loop;
                end;
             end loop;
+         when Gather_Halved =>
+            --  First .. Last count the halved band's pixels; Height and
+            --  Width are the picture's before halving, which is even.
+            for Pixel in First .. Last loop
+               declare
+                  At_Patch : constant Element_Count := Pixel * Item.Across;
+                  Y        : constant Element_Count := Item.Row + Pixel / (Item.Width / 2);
+                  X        : constant Element_Count := Pixel rem (Item.Width / 2);
+               begin
+                  for DY in Element_Count range 0 .. 2 loop
+                     for DX in Element_Count range 0 .. 2 loop
+                        declare
+                           Into : constant Element_Count := At_Patch + (DY * 3 + DX) * Ins;
+                        begin
+                           if 2 * Y + DY >= Item.Height or else 2 * X + DX >= Item.Width then
+                              Item.Target (Into .. Into + Ins - 1) := [others => 0.0];
+                           else
+                              declare
+                                 From : constant Element_Count := ((2 * Y + DY) * Item.Width + 2 * X + DX) * Ins;
+                              begin
+                                 Item.Target (Into .. Into + Ins - 1) := Item.Source (From .. From + Ins - 1);
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                  end loop;
+               end;
+            end loop;
+         when Average_Pixels =>
+            --  First .. Last count the halved pixels; Width is the input's,
+            --  Inputs its channels, Channels the halved pixels', Factor the
+            --  frames. Element K of the input's 2x2 cells, a frame of zeros
+            --  first where there are two, is channel K / (4 Factor), frame
+            --  K / 4 mod Factor, row K / 2 mod 2, column K mod 2; each out
+            --  channel the mean of its run of them.
+            declare
+               Group : constant Element_Count := Item.Inputs * Item.Factor * 4 / Ins;
+            begin
+               for Pixel in First .. Last loop
+                  declare
+                     Y : constant Element_Count := Pixel / (Item.Width / 2);
+                     X : constant Element_Count := Pixel rem (Item.Width / 2);
+                  begin
+                     for O in 0 .. Ins - 1 loop
+                        declare
+                           Sum : Real := 0.0;
+                        begin
+                           for K in O * Group .. O * Group + Group - 1 loop
+                              if K / 4 mod Item.Factor = Item.Factor - 1 then
+                                 Sum := Sum + Item.Source
+                                   (((2 * Y + K / 2 mod 2) * Item.Width + 2 * X + K mod 2) * Item.Inputs
+                                    + K / (4 * Item.Factor));
+                              end if;
+                           end loop;
+                           Item.Target (Pixel * Ins + O) := Item.Target (Pixel * Ins + O) + Sum / Real (Group);
+                        end;
+                     end loop;
+                  end;
+               end loop;
+            end;
          when Pad_Rows =>
             --  First .. Last count the padded band's pixels, Width + 2 a
             --  row, the first row the one above the band's first.
@@ -1382,5 +1507,359 @@ package body Model_Runner.Qwen_Image.Decoder is
       T.Free (Chunk_In);
       T.Free (Chunk_Out);
    end Decode;
+
+   -----------------
+   -- From_Raster --
+   -----------------
+
+   procedure From_Raster
+     (Source : Model_Runner.Images.Raster;
+      Height : Positive;
+      Width  : Positive;
+      Planes : out N.Real_Array)
+   is
+      Plane : constant Element_Count := Element_Count (Height) * Element_Count (Width);
+   begin
+      for Y in 0 .. Height - 1 loop
+         for X in 0 .. Width - 1 loop
+            declare
+               From_Y : constant Natural := Natural (Long_Long_Integer (Y) * Long_Long_Integer (Source.Height)
+                                                     / Long_Long_Integer (Height));
+               From_X : constant Natural := Natural (Long_Long_Integer (X) * Long_Long_Integer (Source.Width)
+                                                     / Long_Long_Integer (Width));
+               At_Pixel : constant B.Byte_Count := B.Byte_Count (From_Y) * B.Byte_Count (Source.Width)
+                                                   + B.Byte_Count (From_X);
+               Into     : constant Element_Count := Planes'First + Element_Count (Y) * Element_Count (Width)
+                                                    + Element_Count (X);
+               function Value (Byte : B.Byte) return Real is (Real (Byte) / 255.0 * 2.0 - 1.0);
+            begin
+               for Channel in Element_Count range 0 .. 2 loop
+                  Planes (Into + Channel * Plane) :=
+                    Value (Source.Pixels (Source.Pixels'First + 3 * At_Pixel + B.Byte_Count (Channel)));
+               end loop;
+               Planes (Into + 3 * Plane) :=
+                 (if Source.Alpha = null then 1.0 else Value (Source.Alpha (Source.Alpha'First + At_Pixel)));
+            end;
+         end loop;
+      end loop;
+   end From_Raster;
+
+   ------------
+   -- Encode --
+   ------------
+
+   procedure Encode
+     (Item    : Picture_Decoder;
+      Picture : N.Real_Array;
+      Height  : Positive;
+      Width   : Positive;
+      Pool    : CPU.Pool_Reference;
+      Latent  : out N.Real_Array;
+      Status  : out E.Error_Info)
+   is
+      package FP renames Model_Runner.Float_Panels;
+      Team   : constant Model_Runner.Shares.Team_Access := CPU.Sharing (Pool);
+      Downs  : Width_Array renames Item.Down_Widths;
+      --  The activation's rows and columns, halved by each level's 3x3.
+      H      : Element_Count := Element_Count (Height);
+      W      : Element_Count := Element_Count (Width);
+      X, Y, Z, V, Kept : T.Real_Array_Access;
+
+      procedure Swap (A, B_Side : in out T.Real_Array_Access) is
+         Held : constant T.Real_Array_Access := A;
+      begin
+         A := B_Side;
+         B_Side := Held;
+      end Swap;
+
+      procedure Room (Buffer : in out T.Real_Array_Access; Length : Element_Count) is
+      begin
+         if Buffer = null or else Buffer'Length < Length then
+            T.Free (Buffer);
+            T.Allocate (Length, Buffer);
+            if Buffer = null and then E.Is_Ok (Status) then
+               Status := E.Make (E.Memory_Allocation_Failed);
+            end if;
+         end if;
+      end Room;
+
+      procedure Share (Job : in out Pixel_Work; Count, Cost : Element_Count) is
+      begin
+         if E.Is_Ok (Status) then
+            CPU.Dispatch_Shares (Pool, Count, Job'Unchecked_Access, Status, Cost => Cost);
+         end if;
+      end Share;
+
+      --  Target := C applied to Source's H by W pixels, through its panels:
+      --  a 3x3 a band of neighbourhoods at a time, of stride two where
+      --  Halve says so -- the answers then H / 2 by W / 2.
+      procedure Apply
+        (C : Convolution; Source : T.Real_Array_Access; Target : in out T.Real_Array_Access;
+         Halve : Boolean := False)
+      is
+         Rows    : constant Element_Count := (if Halve then H / 2 else H);
+         Columns : constant Element_Count := (if Halve then W / 2 else W);
+         Pixels  : constant Element_Count := Rows * Columns;
+         Outs    : constant Element_Count := Element_Count (C.Outputs);
+         Fitted  : constant Element_Count := C.Kernel.Rows;
+         Across  : constant Element_Count := C.Kernel.Columns;
+         Answers : T.Real_Array_Access;
+
+         procedure Put (First, Count : Element_Count) is
+            Job : aliased Pixel_Work :=
+              (Kind => Put_Answers, Source => Answers, Target => Target, Gain => C.Bias, Silu => False,
+               Row => First, Height => Rows, Width => Columns, Channels => Outs, Across => Fitted, others => 0);
+         begin
+            Share (Job, Count, Count * Outs);
+         end Put;
+
+         procedure Product (Vectors : T.Real_Array_Access; Count : Element_Count) is
+         begin
+            if E.Is_Ok (Status) then
+               FP.Multiply (Team, C.Panels, Vectors.all, Count, Answers.all);
+            end if;
+         end Product;
+      begin
+         Room (Target, Pixels * Outs);
+         if E.Is_Error (Status) then
+            return;
+         elsif not FP.Is_Packed (C.Panels) then
+            Status := E.Make (E.Internal_Invariant_Violated);
+            return;
+         end if;
+         if C.Size = 1 then
+            if Fitted = Outs then
+               Answers := Target;
+               Product (Source, Pixels);
+               Put (0, Pixels);
+            else
+               T.Allocate (Pixels * Fitted, Answers);
+               if Answers = null then
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  return;
+               end if;
+               Product (Source, Pixels);
+               Put (0, Pixels);
+               T.Free (Answers);
+            end if;
+            return;
+         end if;
+         declare
+            --  Neighbourhoods of about 64 MB a band.
+            Band    : constant Element_Count :=
+              Element_Count'Max (1, Element_Count'Min (Rows, 16_777_216 / (Across * Columns)));
+            Patches : T.Real_Array_Access;
+            Row     : Element_Count := 0;
+         begin
+            T.Allocate (Band * Columns * Across, Patches);
+            T.Allocate (Band * Columns * Fitted, Answers);
+            if Patches = null or else Answers = null then
+               T.Free (Patches);
+               T.Free (Answers);
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+            while Row < Rows and then E.Is_Ok (Status) loop
+               declare
+                  Rows_Here : constant Element_Count := Element_Count'Min (Band, Rows - Row);
+                  Job       : aliased Pixel_Work :=
+                    (Kind => (if Halve then Gather_Halved else Gather_Rows), Source => Source, Target => Patches,
+                     Gain => null, Silu => False, Row => Row, Height => H, Width => W,
+                     Channels => Element_Count (C.Inputs), Across => Across, others => 0);
+               begin
+                  Share (Job, Rows_Here * Columns, Rows_Here * Columns * Across);
+                  Product (Patches, Rows_Here * Columns);
+                  Put (Row * Columns, Rows_Here * Columns);
+                  Row := Row + Rows_Here;
+               end;
+            end loop;
+            T.Free (Patches);
+            T.Free (Answers);
+         end;
+      end Apply;
+
+      procedure Norm
+        (Source : T.Real_Array_Access; Channels : Element_Count; Gain : T.Real_Array_Access;
+         Target : in out T.Real_Array_Access; Silu : Boolean := True)
+      is
+      begin
+         Room (Target, H * W * Channels);
+         declare
+            Job : aliased Pixel_Work :=
+              (Kind => Norm_Pixels, Source => Source, Target => Target, Gain => Gain, Silu => Silu, Row => 0,
+               Height => H, Width => W, Channels => Channels, others => 0);
+         begin
+            Share (Job, H * W, H * W * Channels);
+         end;
+      end Norm;
+
+      procedure Add (Target, Source : T.Real_Array_Access; Channels : Element_Count) is
+         Job : aliased Pixel_Work :=
+           (Kind => Add_Pixels, Source => Source, Target => Target, Gain => null, Silu => False, Row => 0,
+            Height => H, Width => W, Channels => Channels, others => 0);
+      begin
+         Share (Job, H * W, H * W * Channels);
+      end Add;
+
+      --  X := the residual block of X.
+      procedure Block (R : Residual) is
+         Ins  : constant Element_Count := Element_Count (R.Conv_1.Inputs);
+         Outs : constant Element_Count := Element_Count (R.Conv_1.Outputs);
+         Side : T.Real_Array_Access;
+      begin
+         Norm (X, Ins, R.Norm_1, Y);
+         Apply (R.Conv_1, Y, Z);
+         Norm (Z, Outs, R.Norm_2, Y);
+         Apply (R.Conv_2, Y, V);
+         if R.Shortcut.Outputs > 0 then
+            Apply (R.Shortcut, X, Side);
+            Add (V, Side, Outs);
+            T.Free (Side);
+         else
+            Add (V, X, Outs);
+         end if;
+         Swap (X, V);
+      end Block;
+
+      --  X := X plus the mid block's attention over it: one head as wide
+      --  as the channels, every pixel seeing every one -- the keys and the
+      --  values turned in panels, a chunk of the queries at a time against
+      --  them, their weights softened and the values blended.
+      procedure Attend is
+         C       : constant Element_Count := Element_Count (Downs (5));
+         P       : constant Element_Count := H * W;
+         Chunk   : constant Element_Count := Element_Count'Min (P, 1_024);
+         Keys, Values : FP.Panel_Set;
+         Scores  : T.Real_Array_Access;
+         From    : Element_Count := 0;
+      begin
+         Norm (X, C, Item.Enc_Attention_Norm, Y, Silu => False);
+         Apply (Item.Enc_Joint, Y, Z);
+         Room (Y, P * C);
+         if E.Is_Ok (Status) then
+            FP.Pack (Team, Z.all, C, P, C, 3 * C, 1, Keys, Status);
+         end if;
+         if E.Is_Ok (Status) then
+            FP.Pack (Team, Z.all, 2 * C, C, P, 1, 3 * C, Values, Status);
+         end if;
+         if E.Is_Ok (Status) then
+            T.Allocate (Chunk * P, Scores);
+            if Scores = null then
+               Status := E.Make (E.Memory_Allocation_Failed);
+            end if;
+         end if;
+         while From < P and then E.Is_Ok (Status) loop
+            declare
+               Take : constant Element_Count := Element_Count'Min (Chunk, P - From);
+               Job  : aliased Softmax_Work :=
+                 (Scores => Scores, Positions => P, Across => P, Scale => Real (1.0 / N.Sqrt (Wide (C))));
+            begin
+               FP.Multiply (Team, Keys, Z.all, From * 3 * C, 3 * C, Take, Scores.all, 0, P);
+               CPU.Dispatch_Shares (Pool, Take, Job'Unchecked_Access, Status, Cost => Take * P);
+               if E.Is_Ok (Status) then
+                  FP.Multiply (Team, Values, Scores.all, 0, P, Take, Y.all, From * C, C);
+               end if;
+               From := From + Take;
+            end;
+         end loop;
+         T.Free (Scores);
+         FP.Free (Keys);
+         FP.Free (Values);
+         Apply (Item.Enc_Attention_Out, Y, V);
+         Add (X, V, C);
+      end Attend;
+
+      Plane : constant Element_Count := Element_Count (Height) * Element_Count (Width);
+   begin
+      Latent := [others => 0.0];
+      Status := E.Success;
+      if not Item.Encoding or else Height mod Upscale /= 0 or else Width mod Upscale /= 0
+        or else Picture'Length /= Element_Count (Picture_Channels) * Plane
+        or else Latent'Length /= Element_Count (Latent_Channels) * Plane / (Upscale * Upscale)
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+
+      --  The picture a pixel at a time.
+      Room (Y, Plane * Picture_Channels);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      for Channel in 0 .. Element_Count (Picture_Channels) - 1 loop
+         for Pixel in 0 .. Plane - 1 loop
+            Y (Pixel * Picture_Channels + Channel) := Picture (Picture'First + Channel * Plane + Pixel);
+         end loop;
+      end loop;
+      Apply (Item.Enc_In, Y, X);
+
+      --  The levels, each a pair of residual blocks; the first four halve
+      --  the picture and add the shortcut, the last adds its input.
+      for L in Item.Downs'Range loop
+         exit when E.Is_Error (Status);
+         declare
+            Level_Of : Down_Level renames Item.Downs (L);
+            Ins      : constant Element_Count := Element_Count (Downs (L));
+            Outs     : constant Element_Count := Element_Count (Downs (L + 1));
+         begin
+            Room (Kept, H * W * Ins);
+            if E.Is_Ok (Status) then
+               Kept (0 .. H * W * Ins - 1) := X (0 .. H * W * Ins - 1);
+            end if;
+            Block (Level_Of.Blocks (1));
+            Block (Level_Of.Blocks (2));
+            if Level_Of.Down.Outputs > 0 then
+               Apply (Level_Of.Down, X, Y, Halve => True);
+               declare
+                  Job : aliased Pixel_Work :=
+                    (Kind => Average_Pixels, Source => Kept, Target => Y, Gain => null, Silu => False, Row => 0,
+                     Height => H, Width => W, Channels => Outs, Across => 0, Inputs => Ins,
+                     Factor => Element_Count (Level_Of.Temporal), Repeats => 0, Frame => 0, Padded => 0);
+               begin
+                  Share (Job, H / 2 * (W / 2), H / 2 * (W / 2) * Outs * 4);
+               end;
+               H := H / 2;
+               W := W / 2;
+               Swap (X, Y);
+            else
+               Add (X, Kept, Outs);
+            end if;
+         end;
+      end loop;
+
+      --  The mid block, and the head.
+      if E.Is_Ok (Status) then
+         Block (Item.Enc_Mid_1);
+      end if;
+      if E.Is_Ok (Status) then
+         Attend;
+      end if;
+      if E.Is_Ok (Status) then
+         Block (Item.Enc_Mid_2);
+      end if;
+      if E.Is_Ok (Status) then
+         Norm (X, Element_Count (Downs (5)), Item.Enc_Norm_Out, Y);
+         Apply (Item.Enc_Out, Y, Z);
+         Apply (Item.Quant, Z, V);
+      end if;
+      if E.Is_Ok (Status) then
+         declare
+            Cells : constant Element_Count := H * W;
+            Wide_Out : constant Element_Count := 2 * Latent_Channels;
+         begin
+            for Channel in 0 .. Element_Count (Latent_Channels) - 1 loop
+               for Pixel in 0 .. Cells - 1 loop
+                  Latent (Latent'First + Channel * Cells + Pixel) :=
+                    (V (Pixel * Wide_Out + Channel) - Means (Natural (Channel))) / Deviations (Natural (Channel));
+               end loop;
+            end loop;
+         end;
+      end if;
+      T.Free (X);
+      T.Free (Y);
+      T.Free (Z);
+      T.Free (V);
+      T.Free (Kept);
+   end Encode;
 
 end Model_Runner.Qwen_Image.Decoder;

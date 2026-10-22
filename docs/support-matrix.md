@@ -373,7 +373,8 @@ trained to see the date was being shown July 2024 forever.
 | Output | An RGBA PNG, each channel turned to a byte as the reference turns it, each row through the Sub filter and the whole deflated through the zlib crate's fixed codes |
 | Checked against the reference | `tests image --expect` (the encoder's rows, the first two steps' velocities, the reference's 40-step latent decoded) on the processor and the device; the suite holds each part to a binary64 computation on small fixtures |
 | Several pictures | `--count N`, each from the seed after the one before's, the models read once for all |
-| Not implemented | Pictures from pictures (editing, inpainting, a reference image), LoRA, other diffusion models, the VAE's encoder, guided steps batched |
+| Pictures from pictures | `--init-image FILE --strength S` (above 0 up to 1, 0.75 unless said): the picture read (PNG with its alpha, JPEG, PPM), each pixel its nearest at the size drawn -- the picture's own, rounded up to 16, unless `--size` says -- encoded by the VAE's encoder on the processor through panels (a 512 picture 2.1 s), the levels from where the reference starts them, the first a mix of the latent and the seed's noise. Checked against the reference: the encoder's mean at a cosine of 0.9999998, the velocities at 0.99999 |
+| Not implemented | Editing with reference images (`-r`: needs Qwen3-VL's vision tower in the text encoder and the reference's latents in the denoiser's sequence), inpainting, LoRA, other diffusion models, guided steps batched |
 
 ## Backend
 

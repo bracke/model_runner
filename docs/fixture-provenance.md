@@ -53,7 +53,12 @@ the default scheduler; `apple-1024.expect` at 1024 and
 `cfg4-apple-512.expect` with guidance 4 from "blurry, dark", both the first
 two steps of a forty-step run stopped there, and
 `turbo-levels-apple-512.expect` through the Turbo file's own eight levels
-(the harness's `--sigmas`). `tests image --expect` holds this build to them.
+(the harness's `--sigmas`). `green-from-apple-512.expect` is "a green apple
+on a wooden table" drawn from `apple-512.png` -- the reference's own forty-step
+picture of the red apple, its PNG beside its PAM, the same pixels -- at
+strength 0.6 over twenty steps (the harness's `--init-img`): every 8th value of
+the VAE encoder's mean, then the rows and the first two velocities as
+before. `tests image --expect` holds this build to them.
 `record.py` writes one afresh from a run's dump; the runs themselves --
 every velocity, the picture, a Vulkan run beside the processor's -- are
 kept outside the repository, in

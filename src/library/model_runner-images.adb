@@ -248,6 +248,7 @@ package body Model_Runner.Images is
    procedure Free (Item : in out Raster) is
    begin
       B.Free (Item.Pixels);
+      B.Free (Item.Alpha);
       Item.Width  := 0;
       Item.Height := 0;
    end Free;
@@ -635,6 +636,9 @@ package body Model_Runner.Images is
                      Sample (Line_At, Column, 1),
                      Sample (Line_At, Column, 2)];
             end case;
+            if Result.Alpha /= null then
+               Result.Alpha (At_Pixel / 3) := Sample (Line_At, Column, (if Colour = 4 then 1 else 3));
+            end if;
          end Put;
 
          --  Unfilter the lines of one image or pass, Columns pixels wide
@@ -742,6 +746,10 @@ package body Model_Runner.Images is
             Free (Unfiltered);
             Refuse ("png size");
             return;
+         end if;
+         --  And its transparency, where it has a channel of it.
+         if Colour in 4 | 6 then
+            Result.Alpha := new B.Byte_Array'(0 .. B.Byte_Count (Width) * B.Byte_Count (Height) - 1 => 255);
          end if;
 
          if not Interlaced then

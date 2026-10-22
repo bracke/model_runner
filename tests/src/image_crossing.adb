@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
@@ -14,6 +15,7 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
 with Model_Runner.Numerics;
 with Model_Runner.Philox;
+with Model_Runner.Images;
 with Model_Runner.Platform;
 with Model_Runner.Qwen_Image;
 with Model_Runner.Qwen_Image.Decoder;
@@ -69,6 +71,12 @@ package body Image_Crossing is
       Negative      : U.Unbounded_String;
       Guidance      : N.Real := 1.0;
       Named_Levels  : Wide_Access;
+      --  A picture drawn from another: its file beside the expectation, how
+      --  much of it is drawn anew, and the encoder's mean of it recorded.
+      Init_Name     : U.Unbounded_String;
+      Strength      : N.Real := 1.0;
+      Encoded_Seen  : Recorded;
+      Init_Latent   : Tk.Real_Array_Access;
       Row_Count, Speed_Count : Natural := 0;
       Failed : Boolean := False;
 
@@ -202,6 +210,12 @@ package body Image_Crossing is
                      begin
                         Named_Levels := Read.Values;
                      end;
+                  elsif Key = "init" then
+                     Init_Name := U.To_Unbounded_String (Rest);
+                  elsif Key = "strength" then
+                     Strength := N.Real'Value (Rest);
+                  elsif Key = "encoded" then
+                     Encoded_Seen := Read_Run ("x 0 " & Rest, 2);
                   elsif Key = "away" and then Away_Count < Aways_Seen'Last then
                      Away_Count := Away_Count + 1;
                      Aways_Seen (Away_Count) := Read_Run (Line, At_Word);
@@ -318,6 +332,51 @@ package body Image_Crossing is
             end;
          end if;
 
+         --  A picture drawn from another: the picture read and encoded, its
+         --  mean against the reference's.
+         if U.Length (Init_Name) > 0 then
+            declare
+               Path   : constant String :=
+                 Ada.Directories.Containing_Directory (U.To_String (Given.Expect)) & "/" & U.To_String (Init_Name);
+               Raster : Model_Runner.Images.Raster;
+               Planes : Tk.Real_Array_Access;
+               VAE    : Dec.Picture_Decoder;
+               Cells  : constant N.Element_Count := N.Element_Count (Latent_Rows * Latent_Columns);
+               Apart, Cosine : N.Wide_Real;
+            begin
+               Model_Runner.Images.Load (Path, Raster, Status);
+               if E.Is_Ok (Status) then
+                  Tk.Allocate (N.Element_Count (Dec.Picture_Channels * Width * Height), Planes);
+                  Dec.From_Raster (Raster, Height, Width, Planes.all);
+                  Dec.Open (VAE, VAE_Path, Status, Encoder => True);
+               end if;
+               if E.Is_Ok (Status) then
+                  Tk.Allocate (N.Element_Count (Dec.Latent_Channels) * Cells, Init_Latent);
+                  Dec.Encode (VAE, Planes.all, Height, Width, Pool, Init_Latent.all, Status);
+               end if;
+               Dec.Close (VAE);
+               Model_Runner.Images.Free (Raster);
+               Tk.Free (Planes);
+               if E.Is_Error (Status) then
+                  Fail ("the picture was not encoded: " & E.Error_Code'Image (Status.Code));
+               elsif Encoded_Seen.Values /= null then
+                  declare
+                     Mean : N.Real_Array (Init_Latent'Range);
+                  begin
+                     for I in Mean'Range loop
+                        Mean (I) := Init_Latent (I) * Dec.Latent_Deviations (Natural (I / Cells))
+                          + Dec.Latent_Means (Natural (I / Cells));
+                     end loop;
+                     Against (Mean, 0, Encoded_Seen, Apart, Cosine);
+                     Ada.Text_IO.Put_Line ("encoded: cosine" & Cosine'Image & ", apart by" & Apart'Image);
+                     if Cosine < Cosine_Floor then
+                        Fail ("the encoded picture is below the cosine");
+                     end if;
+                  end;
+               end if;
+            end;
+         end if;
+
          --  The first two steps, the prompt's rows kept from the first.
          Open_Device;
          declare
@@ -329,14 +388,23 @@ package body Image_Crossing is
                declare
                   Image  : constant N.Element_Count := N.Element_Count (Latent_Rows * Latent_Columns);
                   Planes : constant N.Element_Count := N.Element_Count (Q.Config (Model).Out_Channels) * Image;
-                  Levels : constant N.Real_Array :=
+                  All_Levels : constant N.Real_Array :=
                     (if Named_Levels = null then Q.Sigmas (Steps, Latent_Rows * Latent_Columns)
                      else [for I in Named_Levels'Range => N.Real (Named_Levels (I))]);
+                  Start  : constant N.Element_Count :=
+                    (if Init_Latent = null then 0 else N.Element_Count (Q.First_Level (Steps, Strength)));
+                  Levels : constant N.Real_Array := All_Levels (All_Levels'First + Start .. All_Levels'Last);
                   Latent, Speed, Away_Speed : N.Real_Array (0 .. Planes - 1);
                   Noise  : Model_Runner.Philox.Generator := Model_Runner.Philox.Seeded (Interfaces.Unsigned_64 (Seed));
                   Apart, Cosine : N.Wide_Real;
                begin
                   Model_Runner.Philox.Draw (Noise, Latent);
+                  if Init_Latent /= null then
+                     for I in Latent'Range loop
+                        Latent (I) := Init_Latent (I) * (1.0 - Levels (Levels'First))
+                          + Latent (I) * Levels (Levels'First);
+                     end loop;
+                  end if;
                   for Step in 1 .. 2 loop
                      declare
                         Sigma : constant N.Real := Levels (Levels'First + N.Element_Count (Step) - 1);
@@ -388,6 +456,7 @@ package body Image_Crossing is
          end;
          Tk.Free (Text);
          Tk.Free (Away_Text);
+         Tk.Free (Init_Latent);
          if E.Is_Error (Status) then
             Ada.Text_IO.Put_Line ("image: the denoiser failed: " & E.Error_Code'Image (Status.Code));
             if Ready then
@@ -424,12 +493,38 @@ package body Image_Crossing is
                      Close (Handle);
                   end;
                   Tk.Allocate (Pixels * Dec.Picture_Channels, Planes);
-                  Dec.Open (VAE, VAE_Path, Status);
+                  Dec.Open (VAE, VAE_Path, Status, Encoder => True);
                   if Given.Stripe_Bytes > 0 then
                      Dec.Set_Stripes (Given.Stripe_Bytes);
                   end if;
                   if E.Is_Ok (Status) then
                      Dec.Decode (VAE, Latent, Latent_Rows, Latent_Columns, Pool, Planes.all, Status);
+                  end if;
+                  --  The picture encoded back: near the latent it was
+                  --  decoded from, as far as an autoencoder comes back.
+                  if E.Is_Ok (Status) then
+                     declare
+                        Back  : Tk.Real_Array_Access;
+                        Dot, Mine, Theirs : N.Wide_Real := 0.0;
+                        Began : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                        use type Ada.Calendar.Time;
+                     begin
+                        Tk.Allocate (Latent'Length, Back);
+                        Dec.Encode (VAE, Planes.all, Height, Width, Pool, Back.all, Status);
+                        if E.Is_Error (Status) then
+                           Fail ("the encoder failed: " & E.Error_Code'Image (Status.Code));
+                        else
+                           for I in Latent'Range loop
+                              Dot := Dot + N.Wide_Real (Latent (I)) * N.Wide_Real (Back (I - Latent'First));
+                              Mine := Mine + N.Wide_Real (Back (I - Latent'First)) ** 2;
+                              Theirs := Theirs + N.Wide_Real (Latent (I)) ** 2;
+                           end loop;
+                           Ada.Text_IO.Put_Line
+                             ("encoded back: cosine" & N.Wide_Real'Image (Dot / N.Sqrt (Mine * Theirs)) & " in"
+                              & Duration'Image (Ada.Calendar.Clock - Began) & " s");
+                        end if;
+                        Tk.Free (Back);
+                     end;
                   end if;
                   Dec.Set_Stripes;
                   Dec.Close (VAE);

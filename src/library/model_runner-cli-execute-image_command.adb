@@ -8,6 +8,7 @@ with Hostkit.Metadata;
 
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Images;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.PNG_Writer;
@@ -55,8 +56,30 @@ package body Model_Runner.CLI.Execute.Image_Command is
       function Path_Of (Given : String; Published : String) return String
       is (Model_Runner.Platform.Resolve_Model_Path (if Given = "" then Published else Given));
 
-      Rows    : constant Positive := Item.Image_Height / Dec.Upscale;
-      Columns : constant Positive := Item.Image_Width / Dec.Upscale;
+      --  The picture to draw from, where one is given, read before anything
+      --  else is: the picture drawn is its size, each side rounded up to
+      --  the latent's sixteen pixels, unless --size says.
+      function Read_Init (Read : in out E.Error_Info) return Model_Runner.Images.Raster is
+         Result : Model_Runner.Images.Raster;
+      begin
+         if not T.Is_Empty (Item.Image_Init) then
+            Model_Runner.Images.Load (T.To_String (Item.Image_Init), Result, Read);
+         end if;
+         return Result;
+      end Read_Init;
+
+      function Side (Given : Positive; Found : Natural) return Positive
+      is (if T.Is_Empty (Item.Image_Init) or else Item.Picture_Size_Set or else Found = 0 then Given
+          else Positive'Min (4_096, (Found + Dec.Upscale - 1) / Dec.Upscale * Dec.Upscale));
+
+      Init_Read    : E.Error_Info := E.Success;
+      Init_Picture : Model_Runner.Images.Raster := Read_Init (Init_Read);
+      Height  : constant Positive := Side (Item.Image_Height, Init_Picture.Height);
+      Width   : constant Positive := Side (Item.Image_Width, Init_Picture.Width);
+      Rows    : constant Positive := Height / Dec.Upscale;
+      Columns : constant Positive := Width / Dec.Upscale;
+      --  What the picture drawn from is to the latent, encoded.
+      Init_Latent : Tk.Real_Array_Access;
       --  A latent a picture, each drawn from the seed after the one
       --  before's.
       Latents : array (1 .. Item.Image_Count) of Tk.Real_Array_Access;
@@ -75,6 +98,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
          end loop;
          Tk.Free (Text);
          Tk.Free (Away);
+         Tk.Free (Init_Latent);
+         Model_Runner.Images.Free (Init_Picture);
       end Fail;
 
       procedure Draw (Team : Model_Runner.Backend.CPU.Pool_Reference) is
@@ -183,6 +208,34 @@ package body Model_Runner.CLI.Execute.Image_Command is
             end if;
          end;
 
+         --  The picture drawn from, encoded on the processor, the encoder let
+         --  go after.
+         if Model_Runner.Bytes."/=" (Init_Picture.Pixels, null) then
+            declare
+               Planes : Tk.Real_Array_Access;
+               VAE    : Dec.Picture_Decoder;
+            begin
+               Tk.Allocate (N.Element_Count (Dec.Picture_Channels * Height * Width), Planes);
+               Tk.Allocate (N.Element_Count (Dec.Latent_Channels * Rows * Columns), Init_Latent);
+               if Planes = null or else Init_Latent = null then
+                  Condition := E.Make (E.Memory_Allocation_Failed);
+               else
+                  Dec.From_Raster (Init_Picture, Height, Width, Planes.all);
+                  Dec.Open (VAE, Path_Of (T.To_String (Item.VAE_Path), VAE_Name), Condition, Encoder => True);
+               end if;
+               if E.Is_Ok (Condition) then
+                  Dec.Encode (VAE, Planes.all, Height, Width, Team, Init_Latent.all, Condition);
+               end if;
+               Dec.Close (VAE);
+               Tk.Free (Planes);
+               Model_Runner.Images.Free (Init_Picture);
+            end;
+            if E.Is_Error (Condition) then
+               Fail (Condition);
+               return;
+            end if;
+         end if;
+
          --  The latent, the denoiser let go after: on the device where one
          --  opens, its products and attention there; on the processor in
          --  panels otherwise.
@@ -212,11 +265,14 @@ package body Model_Runner.CLI.Execute.Image_Command is
                          Text.all, Text_Rows, Team,
                          Latents (Index).all, Condition, Say_Step'Access, Turbo => Item.Image_Turbo,
                          Guidance => Item.Image_Guidance,
-                         Negative => (if Away = null then Q.No_Rows else Away.all), Negative_Rows => Away_Rows);
+                         Negative => (if Away = null then Q.No_Rows else Away.all), Negative_Rows => Away_Rows,
+                         Init => (if Init_Latent = null then Q.No_Rows else Init_Latent.all),
+                         Strength => Item.Image_Strength);
             end loop;
             Q.Close (Model);
             Tk.Free (Text);
             Tk.Free (Away);
+            Tk.Free (Init_Latent);
             if E.Is_Error (Condition) then
                Model_Runner.Backend.Device.Close;
                Fail (Condition);
@@ -292,6 +348,10 @@ package body Model_Runner.CLI.Execute.Image_Command is
       end Draw;
    begin
       Status := E.Exit_Success;
+      if E.Is_Error (Init_Read) then
+         Fail (Init_Read);
+         return;
+      end if;
       --  The arithmetic the step was measured in: activations rounded to
       --  eight bits, its velocity the reference's at a cosine of 0.99999.
       Model_Runner.Backend.CPU.Use_Integer_Activations (Model_Runner.Backend.CPU.Every_Role);

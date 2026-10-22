@@ -13,7 +13,9 @@ latent's rows by its columns, as this program lays a latent out.
 Recorded: three of the rows kept (the first, the middle, the last), every
 second value of each; and the first two steps' velocities, every 32nd value
 -- with --cfg, the negative's too, as "away" lines; with --sigmas, the levels
-the run was drawn through.
+the run was drawn through. With --init, a picture drawn from another: the
+dump begins with the VAE encoder's mean, every 8th value of which is kept as
+the "encoded" line, and the rest follows it one file on.
 """
 import argparse
 import array
@@ -43,12 +45,16 @@ def main():
     parser.add_argument("--cfg", type=float, default=1.0)
     parser.add_argument("--negative", default="")
     parser.add_argument("--sigmas", default="")
+    parser.add_argument("--init", default="",
+                        help="the picture the run was drawn from, beside the expectation")
+    parser.add_argument("--strength", type=float, default=1.0)
     parser.add_argument("--away-second", action="store_true",
                         help="a guided run's negative velocity is the second of each step's two")
     args = parser.parse_args()
 
     width, height = (int(side) for side in args.size.split("x"))
-    rows = floats(args.run + "/t000000.f32")
+    base = 1 if args.init else 0
+    rows = floats(args.run + "/t%06d.f32" % base)
     count = len(rows) // args.width - args.dropped
     with open(args.out, "w") as out:
         out.write("# mr-reference, stable-diffusion.cpp b13a48219d, on the processor;"
@@ -61,6 +67,11 @@ def main():
         out.write("rows %d\n" % count)
         if args.sigmas:
             out.write("sigmas %s\n" % " ".join(args.sigmas.split(",")))
+        if args.init:
+            out.write("init %s\n" % args.init)
+            out.write("strength %g\n" % args.strength)
+            mean = floats(args.run + "/t000000.f32")
+            out.write("encoded stride 8 %s\n" % " ".join("%.7g" % v for v in mean[::8]))
         if args.cfg != 1.0:
             out.write("cfg %g\n" % args.cfg)
             out.write("negative %s\n" % args.negative)
@@ -73,7 +84,7 @@ def main():
         # A guided run dumps the negative's rows after the prompt's, then two
         # velocities a step.
         guided = args.cfg != 1.0
-        first = 2 if guided else 1
+        first = base + (2 if guided else 1)
         for step in (1, 2):
             if guided:
                 at = first + 2 * (step - 1)

@@ -877,6 +877,45 @@ package body Tests.Image_Cases is
          end loop;
          Assert (N."=" (Drawn, Wanted), "a guided latent is not its steps leaning from the negative");
       end;
+
+      --  Drawn from a picture's latent: the levels from where the strength
+      --  starts them, the first a mix of the latent and the noise.
+      Assert (Q.First_Level (20, 0.6) = 7 and then Q.First_Level (20, 1.0) = 0
+              and then Q.First_Level (8, 0.75) = 1 and then Q.First_Level (4, 0.01) = 3
+              and then Q.First_Level (40, 0.5) = 19,
+              "a picture drawn from another does not start where the reference starts it");
+      declare
+         Init    : N.Real_Array (Drawn'Range);
+         Five    : constant N.Real_Array := Q.Sigmas (5, Grid_Rows * Grid_Columns);
+         Start   : constant N.Element_Count := N.Element_Count (Q.First_Level (5, 0.6));
+         Taken   : Natural := 0;
+         procedure Count (Step : Positive; Steps : Positive) is
+            pragma Unreferenced (Step);
+         begin
+            Taken := Steps;
+         end Count;
+      begin
+         for Value of Init loop
+            Seed := (Seed * 1_103 + 12_345) mod 65_521;
+            Value := N.Real (Seed mod 401 - 200) / 100.0;
+         end loop;
+         Q.Sample (Model, Grid_Rows, Grid_Columns, 5, 7, Text, Text_Rows, null, Drawn, Status, Count'Access,
+                   Init => Init, Strength => 0.6);
+         Assert (E.Is_Ok (Status) and then Taken = 4, "a picture drawn from another took" & Taken'Image & " steps");
+         Noise := Model_Runner.Philox.Seeded (7);
+         Model_Runner.Philox.Draw (Noise, Wanted);
+         for I in Wanted'Range loop
+            Wanted (I) := Init (I) * (1.0 - Five (Start)) + Wanted (I) * Five (Start);
+         end loop;
+         for Step in Start .. 4 loop
+            Q.Velocity (Model, Wanted, Grid_Rows, Grid_Columns, Five (Step) * 1000.0, Text, Text_Rows, null, Speed,
+                        Status);
+            for I in Wanted'Range loop
+               Wanted (I) := Wanted (I) + (Five (Step + 1) - Five (Step)) * Speed (I);
+            end loop;
+         end loop;
+         Assert (N."=" (Drawn, Wanted), "a latent drawn from another is not its steps from the mix");
+      end;
       Q.Close (Model);
    end A_Latent_Is_Its_Steps;
 
@@ -886,6 +925,10 @@ package body Tests.Image_Cases is
    VAE_Base : constant := 4;
    VAE_Widths : constant array (0 .. 5) of Positive := [8 * VAE_Base, 8 * VAE_Base, 8 * VAE_Base, 4 * VAE_Base,
                                                         2 * VAE_Base, VAE_Base];
+
+   --  The encoder's: conv_in's, then each level's out.
+   Encoder_Widths : constant array (0 .. 5) of Positive := [VAE_Base, VAE_Base, 2 * VAE_Base, 4 * VAE_Base,
+                                                            8 * VAE_Base, 8 * VAE_Base];
 
    procedure Write_VAE is
       use Ada.Streams.Stream_IO;
@@ -969,6 +1012,25 @@ package body Tests.Image_Cases is
       end loop;
       Gain ("decoder.norm_out.gamma", VAE_Widths (5));
       Conv ("decoder.conv_out", VAE_Widths (5), 4, 3);
+      --  And the encoder: conv_in from the four channels, five levels of
+      --  two blocks, the first four halving, the mid block, the head.
+      Conv ("encoder.conv_in", 4, Encoder_Widths (0), 3);
+      for L in 0 .. 4 loop
+         Residual ("encoder.down_blocks." & Img (L) & ".resnets.0", Encoder_Widths (L), Encoder_Widths (L + 1));
+         Residual ("encoder.down_blocks." & Img (L) & ".resnets.1", Encoder_Widths (L + 1), Encoder_Widths (L + 1));
+         if L < 4 then
+            Conv ("encoder.down_blocks." & Img (L) & ".downsampler.resample.1", Encoder_Widths (L + 1),
+                  Encoder_Widths (L + 1), 3);
+         end if;
+      end loop;
+      Residual ("encoder.mid_block.resnets.0", Encoder_Widths (5), Encoder_Widths (5));
+      Gain ("encoder.mid_block.attentions.0.norm.gamma", Encoder_Widths (5));
+      Conv ("encoder.mid_block.attentions.0.to_qkv", Encoder_Widths (5), 3 * Encoder_Widths (5), 1, Spread => 12.0);
+      Conv ("encoder.mid_block.attentions.0.proj", Encoder_Widths (5), Encoder_Widths (5), 1);
+      Residual ("encoder.mid_block.resnets.1", Encoder_Widths (5), Encoder_Widths (5));
+      Gain ("encoder.norm_out.gamma", Encoder_Widths (5));
+      Conv ("encoder.conv_out", Encoder_Widths (5), 128, 3);
+      Conv ("quant_conv", 128, 128, 1);
       Ada.Strings.Unbounded.Append (Header, "}");
       declare
          Text   : constant String := Ada.Strings.Unbounded.To_String (Header);
@@ -1289,6 +1351,278 @@ package body Tests.Image_Cases is
       Assert (Largest > 1.0E-3 and then Worst <= 1.0E-4 * Largest,
               "a decoded picture differs from the plain computation by" & Worst'Image & " of" & Largest'Image);
    end A_Latent_Decodes_As_The_Plain_Computation;
+
+   --  The VAE encoder computed plainly in binary64 from the weights written,
+   --  as stable-diffusion.cpp's wan_vae.hpp describes it: a 3x3 of stride
+   --  two over the picture padded a pixel right and below, the level's
+   --  input averaged over each 2x2 into the halved pixels' channels behind
+   --  a frame of zeros where the level halves time too, the mean's half of
+   --  quant_conv's answer, normalized. Nothing of the engine's.
+   procedure Reference_Encode (Picture : N.Real_Array; Height, Width : Positive; Answer : out N.Wide_Real_Array) is
+      use Ada.Numerics.Long_Elementary_Functions;
+      package Dec renames Model_Runner.Qwen_Image.Decoder;
+      type Planes is array (Natural range <>, Natural range <>, Natural range <>) of Long_Float;
+
+      function W (Name : String; Index : Natural) return Long_Float
+      is (Long_Float (Written.Constant_Reference (Name) (N.Element_Count (Index))));
+
+      function Img (V : Natural) return String is (Ada.Strings.Fixed.Trim (V'Image, Ada.Strings.Left));
+
+      --  Side Size, stride Step: a stride of one pads a pixel all round
+      --  for a 3x3, a stride of two only right and below.
+      function Conv (Name : String; X : Planes; Outs, Size : Positive; Step : Positive := 1) return Planes is
+         Ins  : constant Natural := X'Length (1);
+         H    : constant Natural := X'Length (2);
+         Wd   : constant Natural := X'Length (3);
+         Lead : constant Integer := (if Step = 1 then Size / 2 else 0);
+         Y    : Planes (0 .. Outs - 1, 0 .. H / Step - 1, 0 .. Wd / Step - 1);
+      begin
+         for O in Y'Range (1) loop
+            for R in Y'Range (2) loop
+               for C in Y'Range (3) loop
+                  declare
+                     Sum : Long_Float := W (Name & ".bias", O);
+                  begin
+                     for I in 0 .. Ins - 1 loop
+                        for DY in 0 .. Size - 1 loop
+                           for DX in 0 .. Size - 1 loop
+                              declare
+                                 SY : constant Integer := Step * R + DY - Lead;
+                                 SX : constant Integer := Step * C + DX - Lead;
+                              begin
+                                 if SY in 0 .. H - 1 and then SX in 0 .. Wd - 1 then
+                                    Sum := Sum + W (Name & ".weight", ((O * Ins + I) * Size + DY) * Size + DX)
+                                      * X (I, SY, SX);
+                                 end if;
+                              end;
+                           end loop;
+                        end loop;
+                     end loop;
+                     Y (O, R, C) := Sum;
+                  end;
+               end loop;
+            end loop;
+         end loop;
+         return Y;
+      end Conv;
+
+      function Norm (Name : String; X : Planes; Silu : Boolean := True) return Planes is
+         Y : Planes (X'Range (1), X'Range (2), X'Range (3));
+      begin
+         for R in X'Range (2) loop
+            for C in X'Range (3) loop
+               declare
+                  Sum : Long_Float := 0.0;
+               begin
+                  for I in X'Range (1) loop
+                     Sum := Sum + X (I, R, C) ** 2;
+                  end loop;
+                  for I in X'Range (1) loop
+                     declare
+                        V : constant Long_Float := X (I, R, C) / Sqrt (Sum / Long_Float (X'Length (1)) + 1.0E-12)
+                          * W (Name, I);
+                     begin
+                        Y (I, R, C) := (if Silu then V / (1.0 + Exp (-V)) else V);
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+         return Y;
+      end Norm;
+
+      function Sum_Of (A, B_Side : Planes) return Planes is
+         Y : Planes := A;
+      begin
+         for I in Y'Range (1) loop
+            for R in Y'Range (2) loop
+               for C in Y'Range (3) loop
+                  Y (I, R, C) := Y (I, R, C) + B_Side (I, R, C);
+               end loop;
+            end loop;
+         end loop;
+         return Y;
+      end Sum_Of;
+
+      function Residual (Name : String; X : Planes; Outs : Positive) return Planes is
+         A : constant Planes := Conv (Name & ".conv1", Norm (Name & ".norm1.gamma", X), Outs, 3);
+         Y : constant Planes := Conv (Name & ".conv2", Norm (Name & ".norm2.gamma", A), Outs, 3);
+      begin
+         return Sum_Of (Y, (if X'Length (1) /= Outs then Conv (Name & ".conv_shortcut", X, Outs, 1) else X));
+      end Residual;
+
+      function Attention (X : Planes) return Planes is
+         Ch : constant Natural := X'Length (1);
+         P  : constant Natural := X'Length (2) * X'Length (3);
+         QKV : constant Planes := Conv ("encoder.mid_block.attentions.0.to_qkv",
+                                        Norm ("encoder.mid_block.attentions.0.norm.gamma", X, Silu => False), 3 * Ch,
+                                        1);
+         A  : Planes (X'Range (1), X'Range (2), X'Range (3));
+         Wd : constant Natural := X'Length (3);
+      begin
+         for Query in 0 .. P - 1 loop
+            declare
+               Score : array (0 .. P - 1) of Long_Float;
+               Most  : Long_Float := Long_Float'First;
+               Sum   : Long_Float := 0.0;
+            begin
+               for Key in 0 .. P - 1 loop
+                  Score (Key) := 0.0;
+                  for I in 0 .. Ch - 1 loop
+                     Score (Key) :=
+                       Score (Key) + QKV (I, Query / Wd, Query mod Wd) * QKV (Ch + I, Key / Wd, Key mod Wd);
+                  end loop;
+                  Score (Key) := Score (Key) / Sqrt (Long_Float (Ch));
+                  Most := Long_Float'Max (Most, Score (Key));
+               end loop;
+               for Key in 0 .. P - 1 loop
+                  Score (Key) := Exp (Score (Key) - Most);
+                  Sum := Sum + Score (Key);
+               end loop;
+               for I in 0 .. Ch - 1 loop
+                  A (I, Query / Wd, Query mod Wd) := 0.0;
+                  for Key in 0 .. P - 1 loop
+                     A (I, Query / Wd, Query mod Wd) :=
+                       A (I, Query / Wd, Query mod Wd) + Score (Key) / Sum * QKV (2 * Ch + I, Key / Wd, Key mod Wd);
+                  end loop;
+               end loop;
+            end;
+         end loop;
+         return Sum_Of (Conv ("encoder.mid_block.attentions.0.proj", A, Ch, 1), X);
+      end Attention;
+
+      --  The weightless shortcut, as the reference writes it: frames of
+      --  zeros before the picture where Frames is two, each 2x2 cell's
+      --  elements laid out channel, frame, row, column, each out channel
+      --  the mean of its run of them.
+      function Averaged (X : Planes; Outs, Frames : Positive) return Planes is
+         Group : constant Natural := X'Length (1) * Frames * 4 / Outs;
+         Y     : Planes (0 .. Outs - 1, 0 .. X'Length (2) / 2 - 1, 0 .. X'Length (3) / 2 - 1);
+      begin
+         for O in Y'Range (1) loop
+            for R in Y'Range (2) loop
+               for C in Y'Range (3) loop
+                  declare
+                     Sum : Long_Float := 0.0;
+                  begin
+                     for K in O * Group .. O * Group + Group - 1 loop
+                        declare
+                           Column  : constant Natural := K mod 2;
+                           Row     : constant Natural := K / 2 mod 2;
+                           Frame   : constant Natural := K / 4 mod Frames;
+                           Channel : constant Natural := K / (4 * Frames);
+                        begin
+                           if Frame = Frames - 1 then
+                              Sum := Sum + X (Channel, 2 * R + Row, 2 * C + Column);
+                           end if;
+                        end;
+                     end loop;
+                     Y (O, R, C) := Sum / Long_Float (Group);
+                  end;
+               end loop;
+            end loop;
+         end loop;
+         return Y;
+      end Averaged;
+
+      function Level (L : Natural; X : Planes) return Planes is
+         Lead : constant String := "encoder.down_blocks." & Img (L) & ".";
+         Outs : constant Positive := Encoder_Widths (L + 1);
+         Y    : constant Planes := Residual (Lead & "resnets.1", Residual (Lead & "resnets.0", X, Outs), Outs);
+      begin
+         if L = 4 then
+            return Sum_Of (Y, X);
+         end if;
+         return Sum_Of (Conv (Lead & "downsampler.resample.1", Y, Outs, 3, Step => 2),
+                        Averaged (X, Outs, (if L in 1 .. 3 then 2 else 1)));
+      end Level;
+
+      P : Planes (0 .. 3, 0 .. Height - 1, 0 .. Width - 1);
+   begin
+      for C in 0 .. 3 loop
+         for R in 0 .. Height - 1 loop
+            for Col in 0 .. Width - 1 loop
+               P (C, R, Col) := Long_Float (Picture (Picture'First + N.Element_Count ((C * Height + R) * Width + Col)));
+            end loop;
+         end loop;
+      end loop;
+      declare
+         X0 : constant Planes := Conv ("encoder.conv_in", P, Encoder_Widths (0), 3);
+         L4 : constant Planes := Level (4, Level (3, Level (2, Level (1, Level (0, X0)))));
+         M  : constant Planes :=
+           Residual ("encoder.mid_block.resnets.1",
+                     Attention (Residual ("encoder.mid_block.resnets.0", L4, Encoder_Widths (5))), Encoder_Widths (5));
+         Q_Out : constant Planes :=
+           Conv ("quant_conv", Conv ("encoder.conv_out", Norm ("encoder.norm_out.gamma", M), 128, 3), 128, 1);
+         Cells : constant Natural := Q_Out'Length (2) * Q_Out'Length (3);
+      begin
+         for C in 0 .. 63 loop
+            for R in Q_Out'Range (2) loop
+               for Col in Q_Out'Range (3) loop
+                  Answer (Answer'First + N.Element_Count (C * Cells + R * Q_Out'Length (3) + Col)) :=
+                    N.Wide_Real ((Q_Out (C, R, Col) - Long_Float (Dec.Latent_Means (C)))
+                                 / Long_Float (Dec.Latent_Deviations (C)));
+               end loop;
+            end loop;
+         end loop;
+      end;
+   end Reference_Encode;
+
+   --  A picture encoded is the plain binary64 computation of the same
+   --  encoder, alone and across a pool.
+   procedure A_Picture_Encodes_As_The_Plain_Computation (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Dec renames Model_Runner.Qwen_Image.Decoder;
+      Height  : constant := 32;
+      Width   : constant := 48;
+      Picture : N.Real_Array (0 .. 4 * Height * Width - 1);
+      Latent  : N.Real_Array (0 .. 64 * (Height / 16) * (Width / 16) - 1);
+      Wanted  : N.Wide_Real_Array (Latent'Range);
+      VAE     : Dec.Picture_Decoder;
+      Status  : E.Error_Info;
+      Seed    : Natural := 5;
+      Wrong   : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Value of Picture loop
+         Seed := (Seed * 1_103 + 12_345) mod 65_521;
+         Value := N.Real (Seed mod 401 - 200) / 200.0;
+      end loop;
+      Write_VAE;
+      Reference_Encode (Picture, Height, Width, Wanted);
+      Dec.Open (VAE, VAE_Path, Status, Encoder => True);
+      Assert (E.Is_Ok (Status) and then Dec.Can_Encode (VAE),
+              "the encoder did not open: " & E.Error_Code'Image (Status.Code));
+      for Shared in Boolean loop
+         declare
+            Team : aliased Model_Runner.Backend.CPU.Pool (3);
+            Worst, Largest : Long_Float := 0.0;
+         begin
+            Model_Runner.Backend.CPU.Open (Team);
+            Dec.Encode (VAE, Picture, Height, Width, (if Shared then Team'Unchecked_Access else null), Latent, Status);
+            Model_Runner.Backend.CPU.Close (Team);
+            --  Before the normalization, which moves every value by its
+            --  channel's mean and would drown what the encoder made.
+            for Index in Latent'Range loop
+               declare
+                  Channel : constant Natural := Natural (Index / (Latent'Length / 64));
+                  Spread  : constant Long_Float := Long_Float (Dec.Latent_Deviations (Channel));
+               begin
+                  Worst := Long_Float'Max
+                    (Worst, abs (Long_Float (Latent (Index)) - Long_Float (Wanted (Index))) * Spread);
+                  Largest := Long_Float'Max (Largest, abs (Long_Float (Wanted (Index)) * Spread
+                                                           + Long_Float (Dec.Latent_Means (Channel))));
+               end;
+            end loop;
+            if E.Is_Error (Status) or else Largest <= 1.0E-3 or else Worst > 1.0E-5 * Largest then
+               Wrong := Ada.Strings.Unbounded.To_Unbounded_String
+                 ("an encoded picture (pool " & Shared'Image & ") differs from the plain computation by"
+                  & Worst'Image & " of" & Largest'Image & ", " & E.Error_Code'Image (Status.Code));
+            end if;
+         end;
+      end loop;
+      Dec.Close (VAE);
+      Assert (Ada.Strings.Unbounded.Length (Wrong) = 0, Ada.Strings.Unbounded.To_String (Wrong));
+   end A_Picture_Encodes_As_The_Plain_Computation;
 
    --  A latent decoded a stripe of rows at a time, each with its halo of
    --  rows either side, is the latent decoded whole: one-row stripes over
@@ -1752,6 +2086,73 @@ package body Tests.Image_Cases is
       Assert (Ada.Strings.Unbounded.Length (Wrong) = 0, Ada.Strings.Unbounded.To_String (Wrong));
    end Panel_Products_Sum;
 
+   --  A picture as the encoder reads it: each pixel its source's nearest,
+   --  the bytes to -1 .. 1, alpha its own or opaque; and a PNG's alpha
+   --  read beside its colours, an opaque one's not at all.
+   procedure Pictures_Read_As_The_Encoder_Reads_Them (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Dec renames Model_Runner.Qwen_Image.Decoder;
+      use type B.Byte_Array_Access;
+      use type B.Byte_Count;
+      use type B.Byte;
+      Source : Model_Runner.Images.Raster;
+      Planes : N.Real_Array (0 .. 4 * 4 * 6 - 1);
+      Status : E.Error_Info;
+      function Byte (V : N.Real) return Integer is (Integer ((V + 1.0) / 2.0 * 255.0));
+   begin
+      --  Two rows of three, made four rows of six: each source pixel a 2x2.
+      Source.Width := 3;
+      Source.Height := 2;
+      Source.Pixels := new B.Byte_Array'(0 .. 17 => 0);
+      for I in Source.Pixels'Range loop
+         Source.Pixels (I) := B.Byte (I * 13 mod 256);
+      end loop;
+      Dec.From_Raster (Source, 4, 6, Planes);
+      for Y in 0 .. 3 loop
+         for X in 0 .. 5 loop
+            for C in 0 .. 2 loop
+               Assert (Byte (Planes (N.Element_Count (C * 24 + Y * 6 + X)))
+                       = Integer (Source.Pixels (B.Byte_Count (3 * ((Y / 2) * 3 + X / 2) + C))),
+                       "pixel" & X'Image & Y'Image & " is not its nearest source pixel");
+            end loop;
+            Assert (Planes (N.Element_Count (3 * 24 + Y * 6 + X)) = 1.0, "an opaque picture's alpha is not one");
+         end loop;
+      end loop;
+      Source.Alpha := new B.Byte_Array'(0 .. 5 => 0);
+      Source.Alpha (4) := 255;
+      Dec.From_Raster (Source, 4, 6, Planes);
+      Assert (Planes (N.Element_Count (3 * 24 + 2 * 6 + 2)) = 1.0 and then Planes (3 * 24) = -1.0,
+              "a picture's own alpha was not read");
+      Model_Runner.Images.Free (Source);
+
+      --  Through PNG: an RGBA picture's alpha kept, an RGB one's none.
+      for Channels in 3 .. 4 loop
+         declare
+            Bytes : constant B.Byte_Array (0 .. B.Byte_Count (5 * 4 * Channels) - 1) :=
+              [for I in 0 .. B.Byte_Count (5 * 4 * Channels) - 1 => B.Byte (I * 7 mod 256)];
+            File  : B.Byte_Array_Access;
+            Read  : Model_Runner.Images.Raster;
+         begin
+            Model_Runner.PNG_Writer.Encode (5, 4, Channels, Bytes, File, Status);
+            Assert (E.Is_Ok (Status), "the PNG was not written");
+            Model_Runner.Images.Decode (File.all, "test.png", Read, Status);
+            B.Free (File);
+            Assert (E.Is_Ok (Status) and then Read.Width = 5 and then Read.Height = 4, "the PNG was not read");
+            if Channels = 3 then
+               Assert (Read.Alpha = null, "an opaque PNG was given an alpha");
+            else
+               Assert (Read.Alpha /= null, "an RGBA PNG's alpha was dropped");
+               for P in 0 .. B.Byte_Count (19) loop
+                  Assert (Read.Alpha (P) = Bytes (4 * P + 3)
+                          and then Read.Pixels (3 * P) = Bytes (4 * P),
+                          "pixel" & P'Image & " of an RGBA PNG was not read as written");
+               end loop;
+            end if;
+            Model_Runner.Images.Free (Read);
+         end;
+      end loop;
+   end Pictures_Read_As_The_Encoder_Reads_Them;
+
    --  Several pictures are numbered beside the name given, before its
    --  extension; one keeps the name.
    procedure Pictures_Are_Numbered (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -1807,6 +2208,12 @@ package body Tests.Image_Cases is
         (T, A_Large_PNG_Encodes'Access, "a picture past what a process's first stack holds encodes");
       Register_Routine
         (T, Panel_Products_Sum'Access, "the processor's panel products sum as binary64 does, every kernel");
+      Register_Routine
+        (T, A_Picture_Encodes_As_The_Plain_Computation'Access,
+         "a picture encoded is the plain binary64 computation of the same VAE encoder");
+      Register_Routine
+        (T, Pictures_Read_As_The_Encoder_Reads_Them'Access,
+         "a picture is read as the encoder reads it: nearest, its alpha its own or opaque");
       Register_Routine
         (T, Stripes_Decode_As_The_Whole'Access,
          "a latent decoded a stripe of rows at a time is the latent decoded whole");

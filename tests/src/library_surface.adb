@@ -213,7 +213,12 @@ package body Library_Surface is
       --  takes the large-picture road and can be set against the whole.
       new String'("Set_Chunking"),
       new String'("Set_Stripes"),
-      new String'("Set_Prefix_Room")];
+      new String'("Set_Prefix_Room"),
+
+      --  Whether a picture decoder was opened with its encoder. The command
+      --  opens it so where it encodes and knows; a caller handed a decoder
+      --  asks before encoding with it.
+      new String'("Can_Encode")];
 
    ---------------
    -- Is_Listed --

@@ -237,6 +237,11 @@ package Model_Runner.Qwen_Image is
    --  @param Negative the negative prompt's rows, Negative_Rows of them,
    --    read where Guidance is not one
    --  @param Negative_Rows how many
+   --  @param Init a picture's latent to draw from, as the encoder leaves
+   --    it, or none to draw from noise
+   --  @param Strength how much of Init is drawn anew: the levels from
+   --    First_Level on, and the first a mix of Init and the noise -- the
+   --    noise times that level, Init times one less it
    procedure Sample
      (Item      : Denoiser;
       Rows      : Positive;
@@ -252,7 +257,20 @@ package Model_Runner.Qwen_Image is
       Turbo     : Boolean := False;
       Guidance  : Model_Runner.Numerics.Real := 1.0;
       Negative  : Model_Runner.Numerics.Real_Array := No_Rows;
-      Negative_Rows : Natural := 0);
+      Negative_Rows : Natural := 0;
+      Init      : Model_Runner.Numerics.Real_Array := No_Rows;
+      Strength  : Model_Runner.Numerics.Real := 1.0);
+
+   --  Where a picture drawn from another starts on its levels, as the
+   --  reference starts it: Steps times Strength in binary32, truncated, is
+   --  how many steps the picture keeps, one fewer where that is all of
+   --  them; the levels taken from that many and one before the end.
+   --
+   --  @param Steps the levels a picture from noise is drawn through, less
+   --    the last
+   --  @param Strength how much of the picture is drawn anew, 0 .. 1
+   --  @return the index, from nought, of the first level taken
+   function First_Level (Steps : Positive; Strength : Model_Runner.Numerics.Real) return Natural;
 
 private
 

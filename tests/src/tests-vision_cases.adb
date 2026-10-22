@@ -269,18 +269,26 @@ package body Tests.Vision_Cases is
          Images.Free (Picture);
       end;
 
-      --  Sixteen-bit RGBA keeps the high byte and drops the alpha; a
-      --  two-bit palette reads its indices out of the packed byte; and
-      --  one-bit grey spreads to black and white.
+      --  Sixteen-bit RGBA keeps the high byte, the alpha's apart; grey
+      --  with alpha keeps both; a two-bit palette reads its indices out of
+      --  the packed byte; and one-bit grey spreads to black and white.
       Images.Decode
         (Stored_PNG (1, 1, 16, 6,
                      [0, 16#12#, 16#34#, 16#56#, 16#78#, 16#9A#, 16#BC#,
-                      16#FF#, 16#00#]),
+                      16#E1#, 16#00#]),
          "test", Picture, Status);
       Assert (E.Is_Ok (Status) and then Pixel (Picture, 0, 0, 0) = 16#12#
               and then Pixel (Picture, 0, 0, 1) = 16#56#
-              and then Pixel (Picture, 0, 0, 2) = 16#9A#,
+              and then Pixel (Picture, 0, 0, 2) = 16#9A#
+              and then Picture.Alpha /= null and then Natural (Picture.Alpha (0)) = 16#E1#,
               "sixteen-bit samples did not keep their high byte");
+      Images.Free (Picture);
+
+      Images.Decode (Stored_PNG (2, 1, 8, 4, [0, 10, 20, 30, 40]), "test", Picture, Status);
+      Assert (E.Is_Ok (Status) and then Pixel (Picture, 0, 0, 0) = 10 and then Pixel (Picture, 1, 0, 2) = 30
+              and then Picture.Alpha /= null and then Natural (Picture.Alpha (0)) = 20
+              and then Natural (Picture.Alpha (1)) = 40,
+              "grey with alpha was read wrongly");
       Images.Free (Picture);
 
       Images.Decode

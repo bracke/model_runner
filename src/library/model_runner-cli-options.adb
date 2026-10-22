@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 127) of Registry_Row :=
+   Registry : constant array (1 .. 129) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -39,6 +39,8 @@ package body Model_Runner.CLI.Options is
       (Text ("--negative"), [Command_Image => True, others => False], Text ("negative")),
       (Text ("--cfg"), [Command_Image => True, others => False], Text ("cfg")),
       (Text ("--count"), [Command_Image => True, others => False], Text ("count")),
+      (Text ("--init-image"), [Command_Image => True, others => False], Text ("init_image")),
+      (Text ("--strength"), [Command_Image => True, others => False], Text ("strength")),
       (Text ("--prompt-file"),
        [Command_Run | Command_Embed => True, others => False], Text ("prompt_file")),
       (Text ("--prompt-parts"), [Command_Run => True, others => False],
@@ -911,7 +913,7 @@ package body Model_Runner.CLI.Options is
          Flag_Device_Index,
          Flag_Logprobs,
          Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE, Flag_Turbo,
-         Flag_Negative, Flag_Guidance, Flag_Picture_Count,
+         Flag_Negative, Flag_Guidance, Flag_Picture_Count, Flag_Init_Image, Flag_Strength,
          Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
@@ -2325,6 +2327,34 @@ package body Model_Runner.CLI.Options is
                         Result.Image_Guidance := Scale;
                      end;
 
+                  elsif Name = "--init-image" then
+                     Mark (Flag_Init_Image, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Image_Init := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--strength" then
+                     declare
+                        Share : Model_Runner.Numerics.Real;
+                     begin
+                        Real_Value (Flag_Strength, Share, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        if Share <= 0.0 or else Share > 1.0 then
+                           Fail (E.CLI_Option_Out_Of_Range, Name);
+                           return;
+                        end if;
+                        Result.Image_Strength := Share;
+                        Result.Image_Strength_Set := True;
+                     end;
+
                   elsif Name = "--turbo" then
                      No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
                      if not Good then
@@ -2411,6 +2441,7 @@ package body Model_Runner.CLI.Options is
                         end if;
                         Result.Image_Width := Positive (Wide);
                         Result.Image_Height := Positive (High);
+                        Result.Picture_Size_Set := True;
                      end;
                      Free_Text (Held);
 
@@ -3270,6 +3301,10 @@ package body Model_Runner.CLI.Options is
             --  The distilled model is drawn through its own eight levels.
             First := T.To_Bounded ("--steps");
             Second := T.To_Bounded ("--turbo");
+         elsif Result.Image_Strength_Set and then T.Is_Empty (Result.Image_Init) then
+            --  How much of a picture is drawn anew, with no picture.
+            First := T.To_Bounded ("--strength");
+            Second := T.To_Bounded ("--init-image");
          elsif Result.Kind in Command_Embed | Command_Image and then Result.Prompt_Count > 1 then
             --  embed reads one text, and image draws one; the second was
             --  read by nobody.

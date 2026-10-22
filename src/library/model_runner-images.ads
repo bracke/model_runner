@@ -7,9 +7,9 @@
 --  jpeglib, the native Ada codec, baseline and progressive alike; and a
 --  PPM -- the binary P6 and its grey P5 -- is read as it stands, which is
 --  what a test writes when it wants a picture whose pixels it knows. A
---  picture's transparency is dropped: the encoders here were trained on
---  opaque pictures, and what a transparent pixel is over is nobody's to
---  decide but the caller's, who can flatten it first.
+--  picture's transparency is kept apart from its colours: the language
+--  models' encoders were trained on opaque pictures and read the colours
+--  alone, and a picture model's own encoder reads the alpha beside them.
 --
 --  A picture is resampled to the encoder's size the way the reference
 --  pipeline resamples it -- a triangle filter whose support widens with
@@ -27,10 +27,17 @@ package Model_Runner.Images is
 
    --  Rows of pixels, top row first, each pixel red, green and blue in
    --  that order: Pixels (3 * (Y * Width + X) + 0 .. 2), indexed from 0.
+   --
+   --  And a PNG's transparency, where it has a channel of it: Alpha (Y *
+   --  Width + X), indexed from 0; null for a picture without, which is
+   --  opaque. Kept for a caller that reads a picture with it -- a picture
+   --  model's encoder does -- and given back by Free; the operations below
+   --  that make a raster of another make it opaque.
    type Raster is record
       Width  : Natural := 0;
       Height : Natural := 0;
       Pixels : Model_Runner.Bytes.Byte_Array_Access := null;
+      Alpha  : Model_Runner.Bytes.Byte_Array_Access := null;
    end record;
 
    --  Most pixels a picture may hold. Sixty-four million is a picture 8192

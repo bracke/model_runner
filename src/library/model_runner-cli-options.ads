@@ -486,6 +486,14 @@ package Model_Runner.CLI.Options is
       --  step leans; one leans nowhere and costs no second pass.
       Image_Negative     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Image_Guidance     : Model_Runner.Numerics.Real := 1.0;
+      --  Whether --size was given: a picture drawn from another takes that
+      --  one's size unless it was.
+      Picture_Size_Set     : Boolean := False;
+      --  A picture drawn from another: its file, and how much of it is
+      --  drawn anew -- 0.75 unless said, the reference's.
+      Image_Init         : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Image_Strength     : Model_Runner.Numerics.Real := 0.75;
+      Image_Strength_Set : Boolean := False;
       Text_Encoder_Path  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       VAE_Path           : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 
