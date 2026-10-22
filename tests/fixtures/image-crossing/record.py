@@ -90,10 +90,11 @@ def main():
         if args.cfg != 1.0:
             out.write("cfg %g\n" % args.cfg)
             out.write("negative %s\n" % args.negative)
-        # On the device a prompt beside a picture puts its first kept row
-        # 0.10 of its norm from the reference's, where the same row of a
-        # prompt alone is 0.055 and the processor's 0.042 both ways: the
-        # batch that carries the picture's rows is read otherwise there.
+        # Beside a picture the reference's own first kept row is 0.09 of its
+        # norm from the same row of a prompt alone -- the same token after
+        # the same system turn -- where this program's is the same to the
+        # bit either way; held to it, that row is 0.04 on the processor and
+        # 0.10 on the device.
         out.write("row-tolerance %s\n" % ("0.12" if args.ref else "0.08"))
         out.write("velocity-cosine 0.9999\n")
         for kept in sorted({0, count // 2, count - 1}):
