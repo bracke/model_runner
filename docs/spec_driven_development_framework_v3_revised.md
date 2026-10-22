@@ -2793,6 +2793,7 @@ Core commands SHALL include:
 /sym <symbol>
 /refs <symbol>
 /impact <symbol|file>
+/search <words>
 
 /check
 /check full
@@ -3866,3 +3867,21 @@ Each page SHALL say first that it is generated and not to be edited, and SHALL s
 A page SHALL be made from the state alone, the same state making the same page, and SHALL be made again when the state changes, so that an edit to one does not last.
 
 Nothing SHALL read a page, and the framework SHALL work the same without one; the project SHALL be able to turn them off (views.markdown).
+
+---
+
+# 125. Ranked Retrieval and Source Excerpts
+
+The harness SHALL find what a query is about without a model -- symbols, files, records and lines of text -- ranked by fixed, documented rules with stable tie-breaking, the same state and query giving the same list.
+
+Each hit SHALL say why it ranks and how far it is to be taken as said: accepted, proposed, historical, not authoritative, or derived from the code; a historical record SHALL rank below an accepted one and SHALL NOT be merged with it.
+
+An excerpt SHALL be the lines a declaration takes as its language's structure says them, found by the repository engine's own scanner; where no end is found it SHALL be a bounded run of lines, said not to be the declaration's own.
+
+Every excerpt SHALL say its file, lines, language, symbol, how it was bounded, and a reference carrying the print of the text it was cut from; lines named by a reference SHALL NOT be shown once their file has changed.
+
+A task's context SHALL give the declarations the task names, and where they are used, as excerpts, and SHALL leave out an excerpt of a file it gives whole; its manifest SHALL say how the source was chosen and why each item went in.
+
+An agent's search and declaration requests SHALL be bounded, SHALL read the tree the agent works in, and SHALL show only what the agent may read, and records only to one that may read specifications.
+
+The index of the files' words SHALL be derived state: brought up to date by each file's print, a deleted or renamed file's words gone from its old path, and an index brought up to date SHALL rank as one made anew.

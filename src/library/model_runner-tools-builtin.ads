@@ -318,6 +318,14 @@ package Model_Runner.Tools.Builtin is
    --  End what Hold_Reads began, for this task.
    procedure Let_Reads_Go;
 
+   --  Whether a file a search or the graph found may be shown: what the
+   --  agent may read, as Hold_Reads holds it, or a process of its own its
+   --  environment; every file where neither holds.
+   --
+   --  @param Path The file, within the tree.
+   --  @return Whether it may be shown.
+   function May_Read_Found (Path : String) return Boolean;
+
    --  The directory the file tools work in, as Set_Base named it; "" for
    --  the process's own.
    --

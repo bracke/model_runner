@@ -41,8 +41,35 @@ package Model_Runner.Framework.Code_Queries is
       Args   : String;
       Failed : out Boolean) return String;
 
+   --  What the find tool's search and declaration kinds answer, bounded:
+   --  search, the hits Retrieval.Search ranks for a query, each with where
+   --  it is, its score and why, and how far it is to be taken as said;
+   --  declaration, the lines of a name's declarations, of the declaration
+   --  holding PATH:LINE, or of the lines a reference PATH:FIRST-LAST@PRINT
+   --  names -- refused where that file has changed since. Lines are shown
+   --  numbered, as read_file shows them, under where they are from.
+   --
+   --  @param Store The store.
+   --  @param Kind search or declaration.
+   --  @param Query What is asked.
+   --  @param Root The tree the files are read from; "" for the project's.
+   --  @param Records Whether records may be searched.
+   --  @param Failed Whether it could not be asked or found nothing to show.
+   --  @return The answer, at most Answer_Most characters.
+   function Retrieve
+     (Store   : Stores.Store;
+      Kind    : String;
+      Query   : String;
+      Root    : String;
+      Records : Boolean;
+      Failed  : out Boolean) return String;
+
+   --  The most a search or declaration answer says.
+   Answer_Most : constant := 12_000;
+
    --  A finding by its kind, as the find tool asks it: symbol, references,
-   --  uses, used_by or impact, of a query -- a name, a unit, a file.
+   --  uses, used_by or impact, of a query -- a name, a unit, a file; or
+   --  search and declaration, as Retrieve answers them for the project.
    --
    --  @param Store The store.
    --  @param Kind The kind of finding.

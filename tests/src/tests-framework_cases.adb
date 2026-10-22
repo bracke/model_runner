@@ -60,6 +60,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Repository.Languages;
 with Model_Runner.Framework.Results;
+with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
@@ -19275,6 +19276,598 @@ package body Tests.Framework_Cases is
       end;
    end Harness_Leaves_And_Keeps_What_It_Should;
 
+   ---------------------------------------------------------------------------
+   --  Retrieval: ranked search, excerpts, task-directed context.
+   ---------------------------------------------------------------------------
+
+   package Rv renames Model_Runner.Framework.Retrieval;
+   use type Rv.Hit_Kind;
+
+   --  A reader who may not see src/tool.py.
+   function Not_Tool (Path : String) return Boolean
+   is (Path /= "src/tool.py");
+
+   --  The project the retrieval cases read: an Ada package with overloads,
+   --  a record, aspects, a generic, a nested helper, a block and an
+   --  expression function; a main that calls through a renaming; Python, C
+   --  and a text file.
+   procedure Retrieval_Files (Root : String) is
+   begin
+      Dirs.Create_Path (Root & "/src");
+      Dirs.Create_Path (Root & "/docs");
+      Put_File (Root & "/src/parser.ads",
+                "package Parser is" & LF
+                & LF
+                & "   --  The kinds of token." & LF
+                & "   type Kind is (Number, Plus);" & LF
+                & LF
+                & "   --  One token, read." & LF
+                & "   type Token is record" & LF
+                & "      Of_Kind : Kind;" & LF
+                & "      Value   : Integer;" & LF
+                & "   end record;" & LF
+                & LF
+                & "   --  Read a number." & LF
+                & "   procedure Parse_Number (Text : String; Value : out Integer)" & LF
+                & "     with Pre => Text'Length > 0;" & LF
+                & LF
+                & "   --  Read a number, from a token." & LF
+                & "   procedure Parse_Number (Item : Token; Value : out Integer);" & LF
+                & LF
+                & "   --  The token's width." & LF
+                & "   function Width (Item : Token) return Natural;" & LF
+                & LF
+                & "   generic" & LF
+                & "      type Element is private;" & LF
+                & "   package Stacks is" & LF
+                & "      procedure Push (X : Element);" & LF
+                & "   end Stacks;" & LF
+                & LF
+                & "end Parser;" & LF);
+      Put_File (Root & "/src/parser.adb",
+                "package body Parser is" & LF
+                & LF
+                & "   procedure Parse_Number (Text : String; Value : out Integer) is" & LF
+                & "      --  A helper inside." & LF
+                & "      function Digit (C : Character) return Integer is" & LF
+                & "      begin" & LF
+                & "         return Character'Pos (C) - 48;" & LF
+                & "      end Digit;" & LF
+                & "   begin" & LF
+                & "      Value := 0;" & LF
+                & "      for C of Text loop" & LF
+                & "         Value := Value * 10 + Digit (C);" & LF
+                & "      end loop;" & LF
+                & "   end Parse_Number;" & LF
+                & LF
+                & "   procedure Parse_Number (Item : Token; Value : out Integer) is" & LF
+                & "   begin" & LF
+                & "      begin" & LF
+                & "         Value := Item.Value;" & LF
+                & "      exception" & LF
+                & "         when others => Value := 0;" & LF
+                & "      end;" & LF
+                & "   end Parse_Number;" & LF
+                & LF
+                & "   function Width (Item : Token) return Natural" & LF
+                & "   is (if Item.Value < 10 then 1 else 2);" & LF
+                & LF
+                & "   package body Stacks is" & LF
+                & "      procedure Push (X : Element) is null;" & LF
+                & "   end Stacks;" & LF
+                & LF
+                & "   procedure After_Block is" & LF
+                & "   begin" & LF
+                & "      null;" & LF
+                & "   end After_Block;" & LF
+                & LF
+                & "end Parser;" & LF);
+      Put_File (Root & "/src/main.adb",
+                "with Parser;" & LF
+                & "procedure Main is" & LF
+                & "   package P renames Parser;" & LF
+                & "   V : Integer;" & LF
+                & "begin" & LF
+                & "   P.Parse_Number (""42"", V);" & LF
+                & "end Main;" & LF);
+      Put_File (Root & "/src/tool.py",
+                "import os" & LF
+                & LF
+                & "# Count the words." & LF
+                & "def count_words(text):" & LF
+                & "    total = 0" & LF
+                & "    for word in text.split():" & LF
+                & "        total += 1" & LF
+                & "    return total" & LF
+                & LF
+                & "class Reader:" & LF
+                & "    pass" & LF);
+      Put_File (Root & "/src/fold.c",
+                "#include <stdio.h>" & LF
+                & LF
+                & "/* Fold a value. */" & LF
+                & "int fold(int x)" & LF
+                & "{" & LF
+                & "    if (x > 0) {" & LF
+                & "        return x;" & LF
+                & "    }" & LF
+                & "    return -x;" & LF
+                & "}" & LF
+                & "int declared(int y);" & LF);
+      Put_File (Root & "/docs/notes.txt",
+                "The parser reads numbers in a row." & LF & "Nothing else, ever quokka." & LF);
+   end Retrieval_Files;
+
+   --  A declaration's lines are found by the scanner the graph is read
+   --  with: an Ada declaration's from its comments, generic part and
+   --  overriding to its ; or end NAME; past records, aspects and nested
+   --  bodies; C's by braces, Python's by indentation; the innermost body
+   --  holding a line; and, where no end is found, a bounded run of lines
+   --  said not to be the declaration's own. The graph names a body after
+   --  a block, and a use through a package renaming.
+   procedure Declarations_Have_Extents
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Root : constant String := Fresh ("extents");
+
+      function Of_File (Path : String; Line : Positive; Most : Positive := 40) return Rp.Extent
+      is (Rp.Extent_Of (Path, Read_Whole (Root & "/" & Path), Line, Most));
+
+      procedure Expect (Path : String; Line, First, Last : Natural; Whole : Boolean := True) is
+         Found : constant Rp.Extent := Of_File (Path, Line);
+      begin
+         Assert (Found.First = First and then Found.Last = Last and then Found.Structural = Whole,
+                 Path & ":" & Natural'Image (Line) & " was taken as" & Natural'Image (Found.First) & " .."
+                 & Natural'Image (Found.Last) & " " & Boolean'Image (Found.Structural) & ", not"
+                 & Natural'Image (First) & " .." & Natural'Image (Last));
+      end Expect;
+   begin
+      Retrieval_Files (Root);
+      Expect ("src/parser.ads", 4, 3, 4);
+      Expect ("src/parser.ads", 7, 6, 10);
+      Expect ("src/parser.ads", 13, 12, 14);
+      Expect ("src/parser.ads", 17, 16, 17);
+      Expect ("src/parser.ads", 24, 22, 26);
+      Expect ("src/parser.adb", 3, 3, 14);
+      Expect ("src/parser.adb", 16, 16, 23);
+      Expect ("src/parser.adb", 25, 25, 26);
+      Expect ("src/fold.c", 4, 3, 10);
+      Expect ("src/fold.c", 11, 11, 11);
+      Expect ("src/tool.py", 4, 3, 8);
+      Expect ("docs/notes.txt", 1, 1, 2, Whole => False);
+
+      --  No end to be found: a run of lines, and said so.
+      Put_File (Root & "/src/broken.adb", "procedure Broken is" & LF & "begin" & LF & "   null;" & LF
+                & "   null;" & LF & "   null;" & LF);
+      declare
+         Found : constant Rp.Extent := Of_File ("src/broken.adb", 1, Most => 3);
+      begin
+         Assert (not Found.Structural and then Found.First = 1 and then Found.Last = 3,
+                 "a declaration without an end was given as whole, or not bounded");
+      end;
+
+      --  The innermost body holding a line.
+      declare
+         Inner : Unbounded_String;
+         Name  : Unbounded_String;
+         Found : constant Rp.Extent :=
+           Rp.Enclosing ("src/parser.adb", Read_Whole (Root & "/src/parser.adb"), 7, Inner);
+         Outer : constant Rp.Extent :=
+           Rp.Enclosing ("src/parser.adb", Read_Whole (Root & "/src/parser.adb"), 19, Name);
+      begin
+         Assert (Found.First = 4 and then Found.Last = 8 and then Found.Structural
+                 and then To_String (Inner) = "Parser.Digit",
+                 "a line in a nested body was not shown in it: " & To_String (Inner));
+         Assert (Outer.First = 16 and then Outer.Last = 23 and then To_String (Name) = "Parser.Parse_Number",
+                 "a line was not shown in the body holding it: " & To_String (Name));
+      end;
+
+      --  The graph: a body after a block, and a call through a renaming.
+      declare
+         Graph : constant Rp.Graph := Rp.Scan (Root, Rp.Default_Roots);
+      begin
+         Assert (Rp.Declared_Lines (Read_Whole (Root & "/src/parser.adb"), "parse_number")
+                 = F.Name_Lists.To_Vector ("3", 1) & "16",
+                 "the lines a name is declared on were not found by its text");
+         Assert (not Rp.Find_Symbols (Graph, "After_Block").Is_Empty,
+                 "a body after a block's end was not taken for the package's");
+         Assert (Rp.References_To (Graph, "Parser.Parse_Number").Contains ("src/main.adb:6"),
+                 "a call through a package renaming was not found");
+      end;
+   end Declarations_Have_Extents;
+
+   --  A search ranks by fixed rules -- a full name over its end, over its
+   --  last part, over a beginning, over the words of a name or a text --
+   --  says why each ranks and how far a record is to be taken as said,
+   --  puts an accepted record over a rejected one, weighs closeness to the
+   --  work, shows only what may be read, gives the same list each time,
+   --  and finds nothing in what holds nothing.
+   procedure Searches_Are_Ranked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Kept    : Unbounded_String;
+      Dropped : Unbounded_String;
+
+      function Find
+        (Query : String; Near : F.Name_Lists.Vector := F.Name_Lists.Empty_Vector;
+         May_Read : Rv.Path_Check := null; Records : Boolean := True) return Rv.Hit_Lists.Vector
+      is (Rv.Search (Store, Rp.Now (Store), "", Query, 20, Near, May_Read, Records));
+
+      function Holds (Hits : Rv.Hit_Lists.Vector; Name : String) return Boolean
+      is (for some One of Hits => To_String (One.Name) = Name);
+   begin
+      Task_Project (Store, "search");
+      Retrieval_Files (Fresh_Root (Store));
+      Nt.Propose (Store, Change, Nt.Requirement, "", "Parse numbers quickly", "Numbers are parsed in one pass.",
+                  "", "user", "", "project", Kept, Status);
+      Nt.Propose (Store, Change, Nt.Requirement, "", "Parse numbers slowly", "Numbers are parsed twice.",
+                  "", "user", "", "project", Dropped, Status);
+      S.Commit (Store, Change, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Kept), "accepted", Tr.Ordinary_Only, Status);
+      Nt.Move (Store, Change, Nt.Requirement, To_String (Dropped), "rejected", Tr.Ordinary_Only, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "the requirements were not made: " & Code_Of (Status));
+
+      declare
+         Hits : constant Rv.Hit_Lists.Vector := Find ("Parser.Parse_Number");
+      begin
+         Assert (not Hits.Is_Empty and then To_String (Hits.First_Element.Name) = "Parser.Parse_Number"
+                 and then Hits.First_Element.Score >= 1000
+                 and then Ada.Strings.Fixed.Index (To_String (Hits.First_Element.Why), "full name") > 0,
+                 "a full name did not find its symbol first");
+      end;
+      Assert (To_String (Find ("Parse_Number").First_Element.Name) = "Parser.Parse_Number",
+              "the end of a name did not find its symbol first");
+      Assert ((for some One of Find ("Pars") =>
+                 To_String (One.Name) = "Parser.Parse_Number"
+                 and then Ada.Strings.Fixed.Index (To_String (One.Why), "begins") > 0),
+              "the beginning of a name did not find it");
+      Assert ((for some One of Find ("count words") =>
+                 Ada.Strings.Fixed.Index (To_String (One.Name), "count_words") > 0
+                 or else To_String (One.Path) = "src/tool.py"),
+              "a Python function was not found by the words of its name");
+      declare
+         Hits : constant Rv.Hit_Lists.Vector := Find ("reads numbers in a row");
+      begin
+         Assert ((for some One of Hits =>
+                    One.Kind = Rv.Text_Hit and then To_String (One.Path) = "docs/notes.txt" and then One.Line = 1
+                    and then Ada.Strings.Fixed.Index (To_String (One.Why), "in a row") > 0),
+                 "words in a row in a text were not found as a phrase");
+      end;
+      declare
+         Hits : constant Rv.Hit_Lists.Vector := Find (To_String (Kept));
+      begin
+         Assert (Hits.First_Element.Kind = Rv.Record_Hit and then Hits.First_Element.Name = Kept
+                 and then To_String (Hits.First_Element.Authority) = "accepted",
+                 "a requirement was not found first by its identifier, as accepted");
+      end;
+      declare
+         Hits  : constant Rv.Hit_Lists.Vector := Find ("parse numbers");
+         Above : Natural := 0;
+         Below : Natural := 0;
+      begin
+         for Index in 1 .. Natural (Hits.Length) loop
+            if Hits (Index).Name = Kept then
+               Above := Index;
+            elsif Hits (Index).Name = Dropped then
+               Below := Index;
+               Assert (Ada.Strings.Fixed.Index (To_String (Hits (Index).Authority), "historical") = 1,
+                       "a rejected requirement was not said to be historical");
+            end if;
+         end loop;
+         Assert (Above > 0 and then Below > Above, "a rejected requirement ranked with an accepted one");
+      end;
+      declare
+         Near : F.Name_Lists.Vector;
+      begin
+         Near.Append ("Parser");
+         Assert ((for some One of Find ("Width", Near) =>
+                    Ada.Strings.Fixed.Index (To_String (One.Why), "close to the work") > 0),
+                 "closeness to the work was not weighed");
+      end;
+      Assert (not (for some One of Find ("count words", May_Read => Not_Tool'Access) =>
+                     To_String (One.Path) = "src/tool.py"),
+              "a search showed a file its reader may not read");
+      Assert (not (for some One of Find ("parse numbers", Records => False) => One.Kind = Rv.Record_Hit),
+              "a search of the code alone showed records");
+      declare
+         One_Way : constant Rv.Hit_Lists.Vector := Find ("parse number width token");
+         Again   : constant Rv.Hit_Lists.Vector := Find ("parse number width token");
+      begin
+         Assert (Rv.Hit_Lists."=" (One_Way, Again), "the same search gave another list");
+      end;
+      Assert (Find ("zzqqxx").Is_Empty, "a search of nothing found something");
+      Assert (Rv.Terms_Of ("Code_Queries.Units_Of_File, for it")
+              = F.Name_Lists.To_Vector ("code_queries", 1) & "code" & "queries" & "units_of_file" & "units" & "file",
+              "a query's words were not taken as an index takes a text's");
+      Assert (Holds (Find ("quokka"), "docs/notes.txt"), "a rare word was not found where it is");
+      S.Close (Store);
+   end Searches_Are_Ranked;
+
+   --  The index of the files' words follows the tree: a file read once is
+   --  not read again until it changes; a deleted file's words are gone,
+   --  a renamed one's found under its new path; and the index brought up
+   --  to date ranks as one made anew.
+   procedure Word_Index_Follows_The_Tree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+
+      function Find (Query : String) return Rv.Hit_Lists.Vector
+      is (Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", Query, 20, Records => False));
+
+      function Texts (Query : String; Path : String) return Boolean
+      is (for some One of Find (Query) => One.Kind = Rv.Text_Hit and then To_String (One.Path) = Path);
+
+      Read_Before : Natural;
+   begin
+      Task_Project (Store, "word-index");
+      Retrieval_Files (Fresh_Root (Store));
+      Rv.Forget;
+      Assert (Texts ("quokka", "docs/notes.txt"), "a word was not found in its file");
+      Read_Before := Rv.Indexed_Reads;
+      Assert (Read_Before >= 5, "the index did not read the tree's files");
+      Assert (Texts ("quokka", "docs/notes.txt") and then Rv.Indexed_Reads = Read_Before,
+              "files unchanged were read again");
+
+      Put_File (Fresh_Root (Store) & "/docs/notes.txt", "Now it says wombat." & LF);
+      Assert (Texts ("wombat", "docs/notes.txt") and then not Texts ("quokka", "docs/notes.txt")
+              and then Rv.Indexed_Reads = Read_Before + 1,
+              "a changed file was not read again alone");
+
+      Dirs.Rename (Fresh_Root (Store) & "/src/tool.py", Fresh_Root (Store) & "/src/counting.py");
+      Assert (Texts ("total", "src/counting.py") and then not Texts ("total", "src/tool.py"),
+              "a renamed file was not found under its new path only");
+
+      declare
+         Held_Before : constant Natural := Rv.Indexed_Held;
+      begin
+         Dirs.Delete_File (Fresh_Root (Store) & "/docs/notes.txt");
+         Assert (not Texts ("wombat", "docs/notes.txt"), "a deleted file's words were still found");
+         Assert (Rv.Indexed_Held = Held_Before - 1, "a deleted file's words were still held");
+      end;
+
+      declare
+         Kept_Up : constant Rv.Hit_Lists.Vector := Find ("parse number total width");
+      begin
+         Rv.Forget;
+         Assert (Rv.Hit_Lists."=" (Kept_Up, Find ("parse number total width")),
+                 "an index brought up to date ranked otherwise than one made anew");
+      end;
+      S.Close (Store);
+   end Word_Index_Follows_The_Tree;
+
+   --  An excerpt is a declaration's lines, cut from its file as it is now,
+   --  saying where it is from: each of an overloaded name's, a spec's
+   --  before its body; an expression function's body found by its text;
+   --  cut where it is longer than asked, and said so; found where it moved
+   --  since the graph was made; named again by a reference only while the
+   --  file is unchanged; and nothing outside the tree.
+   procedure Excerpts_Say_Where_They_Are_From
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Root   : constant String := Fresh ("excerpts");
+      Status : E.Error_Info;
+      Found  : Rv.Excerpt_Lists.Vector;
+      Graph  : Rp.Graph;
+   begin
+      Retrieval_Files (Root);
+      Graph := Rp.Scan (Root, Rp.Default_Roots);
+
+      Rv.Declaration (Graph, Root, "Parse_Number", 80, Found, Status);
+      Assert (E.Is_Ok (Status) and then Natural (Found.Length) = 4
+              and then To_String (Found (1).Path) = "src/parser.ads" and then Found (1).First = 12
+              and then Found (1).Last = 14 and then Found (1).Structural
+              and then To_String (Found (3).Path) = "src/parser.adb",
+              "an overloaded name's declarations were not each shown, spec first");
+      Assert (Ada.Strings.Fixed.Index (Rv.Provenance (Found (1)), "src/parser.ads lines 12-14 (Ada)") = 1
+              and then Ada.Strings.Fixed.Index (Rv.Provenance (Found (1)), ", whole") > 0
+              and then Ada.Strings.Fixed.Index (Rv.Provenance (Found (1)), "ref src/parser.ads:12-14@") > 0,
+              "an excerpt did not say where it is from: " & Rv.Provenance (Found (1)));
+
+      Rv.Declaration (Graph, Root, "Width", 80, Found, Status);
+      Assert (Natural (Found.Length) = 2
+              and then Ada.Strings.Fixed.Index (To_String (Found (2).Text), "is (if Item.Value") > 0,
+              "an expression function's body was not found beside its spec");
+
+      Rv.Declaration (Graph, Root, "Parser", 3, Found, Status);
+      Assert (Found (1).Truncated and then Found (1).Last - Found (1).First + 1 = 3
+              and then Ada.Strings.Fixed.Index (Rv.Provenance (Found (1)), "cut to 3 lines") > 0,
+              "a declaration longer than asked was not cut, or not said to be");
+
+      Rv.Declaration (Graph, Root, "No_Such_Name", 80, Found, Status);
+      Assert (Status.Code = E.Framework_Not_Found and then Found.Is_Empty, "a name of nothing was shown");
+
+      --  A reference names the lines again while the file is unchanged.
+      Rv.Declaration (Graph, Root, "Width", 80, Found, Status);
+      declare
+         Again : Rv.Excerpt;
+      begin
+         Rv.Expand (Root, Rv.Reference (Found (1)), 80, Again, Status);
+         Assert (E.Is_Ok (Status) and then Again.Text = Found (1).Text, "a reference did not name its lines");
+
+         Put_File (Root & "/src/parser.ads", "--  Moved down." & LF & LF & Read_Whole (Root & "/src/parser.ads"));
+         Rv.Expand (Root, Rv.Reference (Found (1)), 80, Again, Status);
+         Assert (Status.Code = E.Framework_Input_Invalid
+                 and then Ada.Strings.Fixed.Index (E.Text_Of (Status, "detail"), "has changed") > 0,
+                 "a reference to a changed file showed other lines as its own");
+         Rv.Expand (Root, "../outside.adb:1-2@0000000000000000", 80, Again, Status);
+         Assert (Status.Code = E.Framework_Input_Invalid, "a reference outside the tree was read");
+         Rv.Expand (Root, "src/parser.ads:9-2@x", 80, Again, Status);
+         Assert (Status.Code = E.Framework_Input_Invalid, "a reference with its lines backwards was read");
+      end;
+
+      --  The graph made before the change: the declaration found where it
+      --  is now, and said to have moved.
+      Rv.Declaration (Graph, Root, "Width", 80, Found, Status);
+      Assert (Found (1).Moved and then Found (1).First = 21
+              and then Ada.Strings.Fixed.Index (To_String (Found (1).Text), "function Width") > 0,
+              "a declaration that moved was not found where it is now");
+
+      declare
+         Piece : Rv.Excerpt;
+      begin
+         Rv.Around (Root, "src/main.adb", 6, 40, Piece, Status);
+         Assert (E.Is_Ok (Status) and then Piece.First = 2 and then Piece.Last = 7
+                 and then To_String (Piece.Symbol) = "Main",
+                 "a use was not shown in the body holding it");
+         Rv.Around (Root, "src/none.adb", 1, 40, Piece, Status);
+         Assert (Status.Code = E.Framework_Not_Found, "a file not there was shown");
+      end;
+   end Excerpts_Say_Where_They_Are_From;
+
+   --  A task that names a symbol is given its declarations and where it is
+   --  used, as excerpts that fit a small room, within the room, the same
+   --  each time; in a room that holds the whole file, the file is given
+   --  and the excerpt left out as inside it; the manifest says how the
+   --  source was chosen and why each item went in. The find tool's search
+   --  and declaration kinds answer the same, bounded, shown only where the
+   --  agent may read.
+   procedure Tasks_Are_Given_What_They_Name
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Cq renames Model_Runner.Framework.Code_Queries;
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Small  : Cx.Built;
+      Again  : Cx.Built;
+      Large  : Cx.Built;
+
+      function Has_Item (Made : Cx.Built; Id_Start, Kind_Part : String) return Boolean
+      is (for some Index in 1 .. Cx.Included_Count (Made) =>
+            Ada.Strings.Fixed.Index (To_String (Cx.Included_At (Made, Index).Id), Id_Start) = 1
+            and then Ada.Strings.Fixed.Index (To_String (Cx.Included_At (Made, Index).Kind), Kind_Part) > 0);
+   begin
+      Task_Project (Store, "named");
+      Retrieval_Files (Fresh_Root (Store));
+      --  Files far past a small room, their lines where they were.
+      declare
+         Padding : Unbounded_String;
+      begin
+         for Line in 1 .. 600 loop
+            Append (Padding, "--  Padding line" & Natural'Image (Line) & " after the unit." & LF);
+         end loop;
+         for Name of F.Name_Lists.Vector'(["/src/parser.ads", "/src/parser.adb"]) loop
+            Put_File (Fresh_Root (Store) & Name, Read_Whole (Fresh_Root (Store) & Name) & To_String (Padding));
+         end loop;
+      end;
+      Tk.Create (Store, Change, Fields ("Parser.Parse_Number should take a sign", "implementation",
+                                        "component", "parser"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+
+      Cx.Build (Store, To_String (Id),
+                (Id => To_Unbounded_String ("small"), Context_Limit => 4_096, Output_Reserve => 512, others => <>),
+                Small, Status);
+      Assert (E.Is_Ok (Status), "the context was not built: " & Code_Of (Status));
+      Assert (Has_Item (Small, "code:src/parser.ads#", "the declaration the task names"),
+              "the declaration the task names was not given");
+      Assert (Has_Item (Small, "code:src/main.adb#", "where Parser.Parse_Number is used"),
+              "where the named symbol is used was not given");
+      Assert (Cx.Cost (Small) <= Cx.Budget (Small), "the context went past its room");
+      Cx.Build (Store, To_String (Id),
+                (Id => To_Unbounded_String ("small"), Context_Limit => 4_096, Output_Reserve => 512, others => <>),
+                Again, Status);
+      Assert (Cx.Manifest_Id (Small) = Cx.Manifest_Id (Again), "the same state gave another context");
+
+      Cx.Build (Store, To_String (Id),
+                (Id => To_Unbounded_String ("large"), Context_Limit => 60_000, Output_Reserve => 512, others => <>),
+                Large, Status);
+      Assert ((for some Index in 1 .. Cx.Excluded_Count (Large) =>
+                 Ada.Strings.Fixed.Index (To_String (Cx.Excluded_At (Large, Index).Id), "code:src/parser.ads#") = 1
+                 and then Cx.Excluded_Why (Large, Index) = "inside file:src/parser.ads, given whole"),
+              "an excerpt of a file given whole was given too");
+
+      Change := S.No_Changes;
+      Cx.Keep (Store, Change, Small, Status);
+      S.Commit (Store, Change, Status);
+      declare
+         Manifest : R.Item;
+      begin
+         S.Read (Store, F.Invocations_Area, "manifest." & Cx.Manifest_Id (Small), Manifest, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Ada.Strings.Fixed.Index (R.Get (Manifest, "retrieval_strategy"), "ranked") = 1
+                 and then R.Get (Manifest, "included_why.1") /= "",
+                 "the manifest did not say how the source was chosen and why each item went in");
+      end;
+
+      --  The find tool's kinds.
+      declare
+         Failed : Boolean;
+         Said   : Unbounded_String;
+      begin
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "Parse_Number", "", True, Failed));
+         Assert (not Failed
+                 and then Ada.Strings.Fixed.Index (To_String (Said), "Parser.Parse_Number at src/parser.ads:13") > 0
+                 and then Length (Said) <= Cq.Answer_Most + 100,
+                 "a search did not rank the name first: " & To_String (Said));
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", "Width", "", True, Failed));
+         Assert (not Failed and then Ada.Strings.Fixed.Index (To_String (Said), "20:    function Width") > 0
+                 and then Ada.Strings.Fixed.Index (To_String (Said), "ref src/parser.ads:19-20@") > 0,
+                 "a declaration was not shown numbered with its reference: " & To_String (Said));
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", "src/main.adb:6", "", True, Failed));
+         Assert (not Failed and then Ada.Strings.Fixed.Index (To_String (Said), "6:    P.Parse_Number") > 0,
+                 "the declaration holding a line was not shown");
+         Said := To_Unbounded_String
+           (Cq.Retrieve (Store, "declaration", "src/parser.ads:1-2@0123456789abcdef", "", True, Failed));
+         Assert (Failed and then Ada.Strings.Fixed.Index (To_String (Said), "has changed") > 0,
+                 "a stale reference was not refused");
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "  ", "", True, Failed));
+         Assert (Failed and then Ada.Strings.Fixed.Index (To_String (Said), "takes a query") > 0,
+                 "an empty search was answered");
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "Parse_Number", "", False, Failed));
+         Assert (not Failed and then Ada.Strings.Fixed.Index (To_String (Said), "REQ-") = 0,
+                 "records were shown to one without them");
+         declare
+            Held : Pm.Permission_Set := Pm.Unrestricted;
+         begin
+            Held (Pm.Read_Source).Deny.Append ("src");
+            Held (Pm.Read_Specs).Deny.Append ("src");
+            Model_Runner.Tools.Builtin.Hold_Reads (Dirs.Full_Name (Fresh_Root (Store)), Held);
+            Assert (not Model_Runner.Tools.Builtin.May_Read_Found ("src/main.adb")
+                    and then Model_Runner.Tools.Builtin.May_Read_Found ("docs/notes.txt"),
+                    "what the agent may read was not held to its grants");
+            Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "Parse_Number width", "", True, Failed));
+            declare
+               Refused   : Boolean;
+               Shown_Too : constant Unbounded_String :=
+                 To_Unbounded_String (Cq.Retrieve (Store, "declaration", "Width", "", True, Refused));
+            begin
+               Assert (Refused, "a declaration in a file the agent may not read was not refused");
+               Model_Runner.Tools.Builtin.Hold_Reads (Dirs.Full_Name (Fresh_Root (Store)), Held);
+               declare
+                  Line_Refused, Ref_Refused : Boolean;
+                  By_Line : constant String :=
+                    Cq.Retrieve (Store, "declaration", "src/main.adb:6", "", True, Line_Refused);
+                  By_Ref  : constant String :=
+                    Cq.Retrieve (Store, "declaration", "src/parser.ads:19-20@0123456789abcdef", "", True,
+                                 Ref_Refused);
+               begin
+                  Model_Runner.Tools.Builtin.Let_Reads_Go;
+                  Assert (Line_Refused and then Ref_Refused
+                          and then Ada.Strings.Fixed.Index (By_Line, "not yours to read") > 0
+                          and then Ada.Strings.Fixed.Index (By_Ref, "not yours to read") > 0,
+                          "lines of a file the agent may not read were shown: " & By_Line);
+               end;
+               Model_Runner.Tools.Builtin.Let_Reads_Go;
+               Assert (Ada.Strings.Fixed.Index (To_String (Said), "src/") = 0
+                       and then Ada.Strings.Fixed.Index (To_String (Shown_Too), "function Width") = 0,
+                       "a search or a declaration showed a file the agent may not read: " & To_String (Said));
+            end;
+         end;
+      end;
+      S.Close (Store);
+   end Tasks_Are_Given_What_They_Name;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -19676,6 +20269,21 @@ package body Tests.Framework_Cases is
         (T, Derivation_Is_Idempotent'Access,
          "a requirement derives its task once, however often derivation"
          & " runs");
+      Register_Routine
+        (T, Declarations_Have_Extents'Access,
+         "a declaration's lines are found by its language's structure, a run of lines where they are not");
+      Register_Routine
+        (T, Searches_Are_Ranked'Access,
+         "a search ranks by fixed rules, says why, and shows only what may be read");
+      Register_Routine
+        (T, Word_Index_Follows_The_Tree'Access,
+         "the index of the files' words follows the tree and ranks as one made anew");
+      Register_Routine
+        (T, Excerpts_Say_Where_They_Are_From'Access,
+         "an excerpt is a declaration's lines as the file is now, and says where it is from");
+      Register_Routine
+        (T, Tasks_Are_Given_What_They_Name'Access,
+         "a task is given the declarations it names and where they are used, within its room");
    end Register_Tests;
 
 end Tests.Framework_Cases;

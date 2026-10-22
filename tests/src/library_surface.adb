@@ -184,6 +184,12 @@ package body Library_Surface is
       --  lowers it so a fixture's reply crosses it.
       new String'("Set_Host_Depth_Most"),
 
+      --  What the index of the files' words has read, and holds: the
+      --  engine never asks; a test asks so that an index brought up to
+      --  date is told from one read again, and a deleted file let go.
+      new String'("Indexed_Reads"),
+      new String'("Indexed_Held"),
+
       --  Where a hybrid's checkpoint went. The engine does not ask: it
       --  rewinds to it wherever it is; a test asks so that a device that
       --  ran no linear layer is told apart from a copy that worked.

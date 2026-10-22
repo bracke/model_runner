@@ -161,6 +161,7 @@ package body Model_Runner.CLI.Project_Commands is
       (new String'("/scan"),        new String'("cli.interactive.help.scan"), Repository_Route, True, In_Project),
       (new String'("/tree"),        new String'("cli.interactive.help.tree"), Repository_Route, True, In_Project),
       (new String'("/sym"),         new String'("cli.interactive.help.sym"), Repository_Route, True, In_Project),
+      (new String'("/search"),      new String'("cli.interactive.help.search"), Repository_Route, True, In_Project),
       (new String'("/refs"),        new String'("cli.interactive.help.refs"), Repository_Route, True, In_Project),
       (new String'("/deps"),        new String'("cli.interactive.help.deps"), Repository_Route, True, In_Project),
       (new String'("/users"),       new String'("cli.interactive.help.users"), Repository_Route, True, In_Project),
@@ -1485,18 +1486,47 @@ package body Model_Runner.CLI.Project_Commands is
             Put ("error: there is no project graph to ask here");
          else
             declare
+               Kind : constant String := Model_Runner.Tools.Builtin.Text_Argument (Arguments, "kind", Found_Scope);
                Asked_Failed : Boolean;
-               Said : constant String :=
-                 Model_Runner.Framework.Code_Queries.Find
-                   (Self.Host.Store_Of.all,
-                    Model_Runner.Tools.Builtin.Text_Argument (Arguments, "kind", Found_Scope),
-                    Model_Runner.Tools.Builtin.Text_Argument (Arguments, "query", Found_Scope),
-                    Asked_Failed);
             begin
-               if Asked_Failed then
-                  Outcome.Answer := Tr.Failed;
+               if Kind in "search" | "declaration" then
+                  --  Found in the tree the work is done in, and shown only
+                  --  where the agent may read: a file it may not is not
+                  --  named, and records only to one that may read specs.
+                  Model_Runner.Tools.Builtin.Hold_Reads (Root, Grants);
+                  declare
+                     Said : constant String :=
+                       Model_Runner.Framework.Code_Queries.Retrieve
+                         (Self.Host.Store_Of.all, Kind,
+                          Model_Runner.Tools.Builtin.Text_Argument (Arguments, "query", Found_Scope),
+                          (if Self.Base = "" then "" else Self.Base),
+                          Records => Grants (Pm.Read_Specs).Granted,
+                          Failed  => Asked_Failed);
+                  begin
+                     Model_Runner.Tools.Builtin.Let_Reads_Go;
+                     if Asked_Failed then
+                        Outcome.Answer := Tr.Failed;
+                     end if;
+                     Put (Said);
+                  end;
+               else
+                  declare
+                     Said : constant String :=
+                       Model_Runner.Framework.Code_Queries.Find
+                         (Self.Host.Store_Of.all, Kind,
+                          Model_Runner.Tools.Builtin.Text_Argument (Arguments, "query", Found_Scope),
+                          Asked_Failed);
+                  begin
+                     if Asked_Failed then
+                        Outcome.Answer := Tr.Failed;
+                     end if;
+                     Put (Said);
+                  end;
                end if;
-               Put (Said);
+            exception
+               when others =>
+                  Model_Runner.Tools.Builtin.Let_Reads_Go;
+                  raise;
             end;
          end if;
       elsif Graph_Tool (Named) then
@@ -2921,7 +2951,7 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       --  What the code is asked about is a name in the code, as typed: a
       --  document's label is not an entry there.
-      if Command in "/refs" | "/sym" | "/deps" | "/users" | "/impact" | "/tree" | "/scan" then
+      if Command in "/refs" | "/sym" | "/deps" | "/users" | "/impact" | "/tree" | "/scan" | "/search" then
          return Words;
       end if;
       for Index in 1 .. Natural (Words.Length) loop

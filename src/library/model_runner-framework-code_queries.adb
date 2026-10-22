@@ -3,6 +3,8 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Errors;
+with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Traceability;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Schemas;
@@ -236,6 +238,147 @@ package body Model_Runner.Framework.Code_Queries is
               else To_String (Said));
    end Answer;
 
+   --------------
+   -- Retrieve --
+   --------------
+
+   function Retrieve
+     (Store   : Stores.Store;
+      Kind    : String;
+      Query   : String;
+      Root    : String;
+      Records : Boolean;
+      Failed  : out Boolean) return String
+   is
+      package Rv renames Retrieval;
+      Tree  : constant String :=
+        (if Root /= "" then Root else Ada.Directories.Containing_Directory (Stores.Root (Store)));
+      Asked : constant String := Ada.Strings.Fixed.Trim (Query, Ada.Strings.Both);
+      Said  : Unbounded_String;
+
+      --  Whatever is said, held to the bound, the cut said.
+      function Bounded (Text : String) return String
+      is (if Text'Length <= Answer_Most then Text
+          else Text (Text'First .. Text'First + Answer_Most - 1) & ASCII.LF
+               & "(cut at" & Natural'Image (Answer_Most) & " characters: ask for less)");
+
+      --  An excerpt as the agent is shown it: where from, then its lines
+      --  numbered.
+      procedure Show (Piece : Rv.Excerpt) is
+         Text  : constant String := To_String (Piece.Text);
+         Row   : Natural := Piece.First;
+         Start : Positive := Text'First;
+      begin
+         Append (Said, "-- " & Rv.Provenance (Piece) & ASCII.LF);
+         for At_Char in Text'Range loop
+            if Text (At_Char) = ASCII.LF then
+               Append (Said, Image (Row) & ": " & Text (Start .. At_Char - 1) & ASCII.LF);
+               Row := Row + 1;
+               Start := At_Char + 1;
+            end if;
+         end loop;
+      end Show;
+
+      function Shown (Path : String) return Boolean
+      is (Model_Runner.Tools.Builtin.May_Read_Found (Path));
+
+      --  What a refusal says, in the words it was given.
+      function Why (Status : Model_Runner.Errors.Error_Info) return String
+      is (if Model_Runner.Errors.Text_Of (Status, "detail") /= "" then Model_Runner.Errors.Text_Of (Status, "detail")
+          else Model_Runner.Errors.Text_Of (Status, "name") & " is not in the project or will not read");
+   begin
+      Failed := False;
+      if Asked = "" then
+         Failed := True;
+         return "error: find kind " & Kind & " takes a query";
+      end if;
+      if Kind = "search" then
+         declare
+            Hits : constant Rv.Hit_Lists.Vector :=
+              Rv.Search (Store, Repository.Now (Store), Tree, Asked, Most => 15,
+                         May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access, Records => Records);
+            Rank : Natural := 0;
+         begin
+            if Hits.Is_Empty then
+               return "nothing in the project for " & Asked;
+            end if;
+            for One of Hits loop
+               Rank := Rank + 1;
+               Append (Said, Image (Rank) & ". "
+                       & (case One.Kind is
+                            when Rv.Symbol_Hit => To_String (One.What) & " " & To_String (One.Name) & " at "
+                                                  & To_String (One.Path) & ":" & Image (One.Line),
+                            when Rv.File_Hit   => "file " & To_String (One.Name) & " (" & To_String (One.What) & ")",
+                            when Rv.Record_Hit => To_String (One.Name) & " " & To_String (One.What),
+                            when Rv.Text_Hit   => "text " & To_String (One.Path) & ":" & Image (One.Line) & ": "
+                                                  & To_String (One.What))
+                       & " -- score" & Natural'Image (One.Score) & ": " & To_String (One.Why)
+                       & " [" & To_String (One.Authority) & "]" & ASCII.LF);
+            end loop;
+            Append (Said, "find kind declaration with a name or PATH:LINE shows its lines" & ASCII.LF);
+            return Bounded (To_String (Said));
+         end;
+      elsif Kind = "declaration" then
+         declare
+            At_Sign : constant Natural := Ada.Strings.Fixed.Index (Asked, "@", Ada.Strings.Backward);
+            Colon   : constant Natural := Ada.Strings.Fixed.Index (Asked, ":", Ada.Strings.Backward);
+            Status  : Model_Runner.Errors.Error_Info;
+            Piece   : Rv.Excerpt;
+         begin
+            if At_Sign > 0 then
+               --  A reference: the lines it named, while the file is still
+               --  what they were cut from.
+               if not Shown (Asked (Asked'First .. Natural'Max (Asked'First, Colon) - 1)) then
+                  Failed := True;
+                  return "error: " & Asked & " is not yours to read";
+               end if;
+               Rv.Expand (Tree, Asked, 200, Piece, Status);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  Failed := True;
+                  return "error: " & Why (Status);
+               end if;
+               Show (Piece);
+            elsif Colon > Asked'First and then Colon < Asked'Last
+              and then (for all C of Asked (Colon + 1 .. Asked'Last) => C in '0' .. '9')
+              and then Asked'Last - Colon <= 7
+            then
+               --  PATH:LINE: the declaration holding the line.
+               if not Shown (Asked (Asked'First .. Colon - 1)) then
+                  Failed := True;
+                  return "error: " & Asked (Asked'First .. Colon - 1) & " is not yours to read";
+               end if;
+               Rv.Around (Tree, Asked (Asked'First .. Colon - 1), Positive'Value (Asked (Colon + 1 .. Asked'Last)),
+                          120, Piece, Status);
+               if Model_Runner.Errors.Is_Error (Status) then
+                  Failed := True;
+                  return "error: " & Why (Status);
+               end if;
+               Show (Piece);
+            else
+               declare
+                  Found : Rv.Excerpt_Lists.Vector;
+               begin
+                  Rv.Declaration (Repository.Now (Store), Tree, Asked, 120, Found, Status,
+                                  May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access);
+                  if Found.Is_Empty then
+                     Failed := True;
+                     return "nothing in the project's graph declares " & Asked
+                       & "; find kind search finds what is near it";
+                  end if;
+                  for One of Found loop
+                     Show (One);
+                  end loop;
+               end;
+            end if;
+            Append (Said, "an excerpt's ref, given to find kind declaration, shows those lines again"
+                    & " while the file is unchanged; read_file reads more" & ASCII.LF);
+            return Bounded (To_String (Said));
+         end;
+      end if;
+      Failed := True;
+      return "error: find kind " & Kind & " is neither search nor declaration";
+   end Retrieve;
+
    ----------
    -- Find --
    ----------
@@ -254,9 +397,12 @@ package body Model_Runner.Framework.Code_Queries is
       Key   : constant String :=
         (if Kind in "symbol" | "references" then "name" elsif Kind = "impact" then "target" else "unit");
    begin
-      if Named = "" then
+      if Kind in "search" | "declaration" then
+         return Retrieve (Store, Kind, Query, "", Records => True, Failed => Failed);
+      elsif Named = "" then
          Failed := True;
-         return "error: find takes kind symbol, references, depends_on, used_by, impact or text -- not " & Kind;
+         return "error: find takes kind symbol, references, depends_on, used_by, impact, search, declaration"
+           & " or text -- not " & Kind;
       end if;
       return Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed);
    end Find;

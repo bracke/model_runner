@@ -168,6 +168,7 @@ TASK-001  [ready]  REQ-001: Greets by name
 > /task integrate 1                                       # where work runs in a workspace: take it in
 > /state                                                  # where the project stands
 > /tree   /sym Greet   /refs Greet   /impact src/hello.adb   # ask about the code; no model involved
+> /search greet by name --verbose                         # ranked: symbols, files, records, lines; why each
 > /exit
 ```
 
@@ -226,6 +227,31 @@ no one is running are recorded abandoned. Every call is on record: a child
 has an invocation and a context manifest of its own, each tool call is
 noted on the invocation that made it, with what it used, and `/work`
 budgets for the loaded model's own context size.
+
+What a task's agent is shown of the code is chosen by the harness, not
+found by the model. A symbol the task names -- `Parser.Parse_Number`,
+`Units_Of_File` -- is given as its declarations, cut from their files as
+they are now (an Ada declaration from its comments and generic part to its
+`;` or `end NAME;`, C-like code by braces, Python by indentation), and as
+the bodies it is used in, before the component's files, which follow
+ranked by the task's words: in a small room the model gets the lines it
+needs where a whole file would not fit. Each excerpt says its file, lines,
+how it was bounded and a reference with its file's print; an excerpt of a
+file given whole is left out, and the manifest records how the source was
+chosen and why each item went in. During the work the agent asks for more
+with the `find` tool -- kind `search` ranks the symbols, files, records and
+lines that best match words or names, saying why and how far each is to be
+taken as said (accepted, proposed, historical, not authoritative); kind
+`declaration` shows a name's declarations, the one holding `PATH:LINE`, or
+a reference's lines while its file is unchanged -- each held to what the
+agent may read. `/search WORDS` asks the same at the terminal. Measured by
+`tests retrieval-bench` on twelve frozen framework sources, five tasks at
+rooms of 4,096, 8,192 and 32,768 tokens: the lines each task needs went in
+36 times of 36, against 14 before; at 8,192 the lookup task's context is
+4,003 tokens where it was 7,168 and held neither line. The ranking's
+rules are written in `Model_Runner.Framework.Retrieval`; the index of the
+files' words is kept in the process and read again on the first search
+after a start.
 
 Work is verified as widely as what it changed reaches. The traceability graph
 says which tests the change reaches and how sure that is; where the policy

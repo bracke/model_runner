@@ -33,6 +33,7 @@ with Tests.Suite;
 with Checks;
 with Agent_Trial;
 with Knowledge_Bench;
+with Retrieval_Bench;
 with Conformance;
 with Conformance.Parts;
 with Fixture_Mutation;
@@ -2828,6 +2829,11 @@ begin
       begin
          Knowledge_Bench.Run (Count ("--tasks", 400), Count ("--files", 400), Count ("--observations", 200));
       end;
+
+   elsif Command = "retrieval-bench" then
+      --  What a task's context holds of the code it is about; see
+      --  Retrieval_Bench.
+      Retrieval_Bench.Run;
 
    elsif Command = "probe" then
       --  A process the suite watches from outside, for what only a whole

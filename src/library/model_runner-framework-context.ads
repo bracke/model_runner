@@ -213,8 +213,9 @@ package Model_Runner.Framework.Context is
    Retrieval_Kind : constant String := "context_retrieval";
 
    --  The retrieval's version, raised whenever what it offers for the same
-   --  state changes.
-   Retrieval_Version : constant String := "1";
+   --  state changes. 2: the declarations a task names and where they are
+   --  used, as excerpts; the component's files ranked.
+   Retrieval_Version : constant String := "2";
 
    --  The derivation the context's candidates came from, DRV- and its
    --  digits: the same for every model and room it is fitted to; "" where

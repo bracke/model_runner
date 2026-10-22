@@ -18,6 +18,7 @@ with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
+with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
@@ -29,6 +30,7 @@ package body Model_Runner.Framework.Context is
    use type Derivations.Currentness;
 
    package E renames Model_Runner.Errors;
+   package Rv renames Model_Runner.Framework.Retrieval;
 
    --  Names to what each stands for.
    package Remembered_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -106,6 +108,10 @@ package body Model_Runner.Framework.Context is
          return "What you are asked";
       elsif Kind = "source" then
          return "The file " & Id (Id'First + 5 .. Id'Last);
+      elsif Kind'Length > 6 and then Kind (Kind'First .. Kind'First + 5) = "code: " then
+         --  A piece of a file: what it is, and where it is from.
+         return "Part of " & Id (Id'First + 5 .. Ada.Strings.Fixed.Index (Id, "#") - 1) & ", "
+           & Kind (Kind'First + 6 .. Kind'Last);
       elsif Kind = "observation" then
          return "Seen before, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id & "@", "@") - 1)
            & " (an observation, not authoritative)";
@@ -733,6 +739,30 @@ package body Model_Runner.Framework.Context is
             end if;
          end loop;
 
+         --  A piece of a file given whole says nothing the file does not:
+         --  left out, and its room given back.
+         for Index in 1 .. Natural (Candidates.Length) loop
+            declare
+               Id : constant String := To_String (Candidates (Index).Id);
+            begin
+               if Chosen (Index) and then Id'Length > 5 and then Id (Id'First .. Id'First + 4) = "code:" then
+                  declare
+                     Whole : constant String := "file:" & Id (Id'First + 5 .. Ada.Strings.Fixed.Index (Id, "#") - 1);
+                  begin
+                     for Other in 1 .. Natural (Candidates.Length) loop
+                        if Chosen (Other) and then To_String (Candidates (Other).Id) = Whole then
+                           Chosen (Index) := False;
+                           Result.Cost := Result.Cost - Costs (Index);
+                           Result.Excluded.Append (Candidates (Index));
+                           Result.Reasons.Append ("inside " & Whole & ", given whole");
+                           exit;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+            end;
+         end loop;
+
          --  The list of what was left out takes room too: while it does
          --  not fit, the last of the least wanted given is left out in its
          --  turn -- a line in the list for a section in the room.
@@ -1160,6 +1190,64 @@ package body Model_Runner.Framework.Context is
 
             --  The files the task names, for what uses them to follow.
             Named_Files : Name_Lists.Vector;
+
+            --  And the symbols it names, by their full names.
+            Named_Symbols : Name_Lists.Vector;
+
+            --  How many lines a declaration the task names shows at most,
+            --  and a use; and how many uses.
+            Declaration_Lines : constant := 80;
+            Use_Lines         : constant := 30;
+            Uses_Most         : constant := 8;
+            Uses_Offered      : Natural := 0;
+
+            --  The pieces shown so far, each PATH, a tab, FIRST, a tab, LAST:
+            --  a use inside one is not shown again.
+            Spans : Name_Lists.Vector;
+
+            function Inside_A_Span (Path : String; Line : Positive) return Boolean is
+            begin
+               for Span of Spans loop
+                  declare
+                     First_Tab : constant Natural := Ada.Strings.Fixed.Index (Span, [Tab]);
+                     Last_Tab  : constant Natural := Ada.Strings.Fixed.Index (Span, [Tab], Ada.Strings.Backward);
+                  begin
+                     if Span (Span'First .. First_Tab - 1) = Path
+                       and then Line in Positive'Value (Span (First_Tab + 1 .. Last_Tab - 1))
+                                     .. Positive'Value (Span (Last_Tab + 1 .. Span'Last))
+                     then
+                        return True;
+                     end if;
+                  end;
+               end loop;
+               return False;
+            end Inside_A_Span;
+
+            --  A piece of a file, by its path and lines, saying what it is and
+            --  where from.
+            procedure Offer_Excerpt (Piece : Rv.Excerpt; Why : String; Rank : Priority) is
+               Path : constant String := To_String (Piece.Path);
+            begin
+               if not Inside_A_Span (Path, Piece.First) or else not Inside_A_Span (Path, Piece.Last) then
+                  Offer ("code:" & Path & "#" & Image (Piece.First) & "-" & Image (Piece.Last),
+                         "code: " & Why & ", " & Rv.Provenance (Piece), Rank, To_String (Piece.Text));
+                  Spans.Append (Path & Tab & Image (Piece.First) & Tab & Image (Piece.Last));
+               end if;
+            end Offer_Excerpt;
+
+            --  The declaration a use is in, unless one shown holds it.
+            procedure Offer_Use (Path : String; Line : Positive; Why : String; Rank : Priority) is
+               Piece : Rv.Excerpt;
+               Got   : E.Error_Info;
+            begin
+               if Uses_Offered < Uses_Most and then not Inside_A_Span (Path, Line) then
+                  Rv.Around (Project, Path, Line, Use_Lines, Piece, Got);
+                  if E.Is_Ok (Got) then
+                     Offer_Excerpt (Piece, Why, Rank);
+                     Uses_Offered := Uses_Offered + 1;
+                  end if;
+               end if;
+            end Offer_Use;
          begin
 
             --  A file the task names in its title, notes or question is what it is
@@ -1220,9 +1308,75 @@ package body Model_Runner.Framework.Context is
                end loop;
             end;
 
+            --  The symbols the task names -- Find_Symbols, Code_Queries.Units_Of_File
+            --  -- as their declarations, cut from their files as they are, and
+            --  where they are used: what a change to one is made seeing,
+            --  without the whole of a file the room could not hold.
+            declare
+               Title_Word : constant String :=
+                 (if Records.Get (View, "definition.title") = "" then ""
+                  else Records.Get (View, "definition.title")
+                         (Records.Get (View, "definition.title")'First
+                          .. Ada.Strings.Fixed.Index (Records.Get (View, "definition.title") & " ", " ") - 1));
+
+               --  A word written as a name is: with an underscore, a dot or
+               --  ::, or a capital that is not only the sentence's.
+               function As_A_Name (Word : String) return Boolean
+               is (Ada.Strings.Fixed.Index (Word, "_") > 0 or else Ada.Strings.Fixed.Index (Word, ".") > 0
+                   or else Ada.Strings.Fixed.Index (Word, "::") > 0
+                   or else (for some Index in Word'First + 1 .. Word'Last => Word (Index) in 'A' .. 'Z')
+                   or else (Word (Word'First) in 'A' .. 'Z' and then Word /= Title_Word));
+            begin
+               for Word of Named_Words (Item, View) loop
+                  if As_A_Name (Word)
+                    and then not (Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word)))
+                  then
+                     declare
+                        Names : constant Name_Lists.Vector := Repository.Find_Symbols (Graph, Word);
+                        Found : Rv.Excerpt_Lists.Vector;
+                        Got   : E.Error_Info;
+                     begin
+                        --  A name of many symbols says none of them: Next, Read.
+                        if not Names.Is_Empty and then Natural (Names.Length) <= Rv.Declarations_Most then
+                           Rv.Declaration (Graph, Project, Word, Declaration_Lines, Found, Got);
+                           for Piece of Found loop
+                              Offer_Excerpt (Piece, "the declaration the task names", High);
+                           end loop;
+                           for Name of Names loop
+                              Named_Symbols.Append (Name);
+                           end loop;
+                        end if;
+                     end;
+                  end if;
+               end loop;
+
+               for Name of Named_Symbols loop
+                  for Index in 1 .. Repository.Relation_Count (Graph) loop
+                     declare
+                        use type Repository.Relation_Kind;
+                        Link  : constant Repository.Relation := Repository.Relation_At (Graph, Index);
+                        Where : constant String := To_String (Link.Where);
+                        Colon : constant Natural := Ada.Strings.Fixed.Index (Where, ":", Ada.Strings.Backward);
+                     begin
+                        exit when Uses_Offered = Uses_Most;
+                        if Link.Kind in Repository.References | Repository.Calls and then To_String (Link.To) = Name
+                          and then Colon > Where'First and then Colon < Where'Last
+                          and then (for all C of Where (Colon + 1 .. Where'Last) => C in '0' .. '9')
+                          and then Where'Last - Colon <= 7
+                        then
+                           Offer_Use (Where (Where'First .. Colon - 1),
+                                      Positive'Value (Where (Colon + 1 .. Where'Last)),
+                                      "where " & Name & " is used", Normal);
+                        end if;
+                     end;
+                  end loop;
+               end loop;
+            end;
+
             --  And what uses those files: the units that depend on theirs, their
-            --  files offered after, so a change to what the task names is made
-            --  seeing its callers -- found by the graph, not by the model.
+            --  uses offered after, so a change to what the task names is made
+            --  seeing its callers -- found by the graph, not by the model. A
+            --  file that only withs them, its uses not found, is offered whole.
             declare
                Users_Offered : Natural := 0;
                Users_Most    : constant := 6;
@@ -1255,14 +1409,42 @@ package body Model_Runner.Framework.Context is
                                  exit when Users_Offered = Users_Most;
                                  if not Named_Files.Contains (Path) then
                                     declare
-                                       Text : Unbounded_String;
-                                       Got  : E.Error_Info;
+                                       use type Repository.Relation_Kind;
+                                       Text  : Unbounded_String;
+                                       Got   : E.Error_Info;
+                                       Lines : Natural := 0;
                                     begin
-                                       Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Got);
-                                       if E.Is_Ok (Got) then
-                                          Offer ("file:" & Path, "user of " & Named, Low, To_String (Text));
-                                          Users_Offered := Users_Offered + 1;
+                                       --  Where the file uses what the unit declares.
+                                       for Index in 1 .. Repository.Relation_Count (Graph) loop
+                                          declare
+                                             Link  : constant Repository.Relation :=
+                                               Repository.Relation_At (Graph, Index);
+                                             Where : constant String := To_String (Link.Where);
+                                          begin
+                                             exit when Lines = 2;
+                                             if Link.Kind in Repository.References | Repository.Calls
+                                               and then Ada.Strings.Fixed.Index (To_String (Link.To), Unit & ".") = 1
+                                               and then Where'Length > Path'Length + 1
+                                               and then Where (Where'First .. Where'First + Path'Length) = Path & ":"
+                                               and then Where'Last - Where'First - Path'Length <= 7
+                                               and then (for all C of Where (Where'First + Path'Length + 1
+                                                                             .. Where'Last) => C in '0' .. '9')
+                                             then
+                                                Offer_Use
+                                                  (Path,
+                                                   Positive'Value (Where (Where'First + Path'Length + 1 .. Where'Last)),
+                                                   "where " & Path & " uses " & To_String (Link.To), Low);
+                                                Lines := Lines + 1;
+                                             end if;
+                                          end;
+                                       end loop;
+                                       if Lines = 0 then
+                                          Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Got);
+                                          if E.Is_Ok (Got) then
+                                             Offer ("file:" & Path, "user of " & Named, Low, To_String (Text));
+                                          end if;
                                        end if;
+                                       Users_Offered := Users_Offered + 1;
                                     end;
                                  end if;
                               end loop;
@@ -1274,43 +1456,110 @@ package body Model_Runner.Framework.Context is
             end;
 
             if Wanted /= "" then
-               for Index in 1 .. Repository.File_Count (Graph) loop
-                  declare
-                     use type Repository.File_Role;
-                     File : constant Repository.File_Entry :=
-                       Repository.File_At (Graph, Index);
-                     Path : constant String := To_String (File.Path);
-                     Text : Unbounded_String;
-                  begin
-                     if Ada.Strings.Fixed.Index (Lower (Path), Wanted) > 0
-                       and then File.Role in Repository.Source | Repository.Test
-                     then
-                        Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
-                        if E.Is_Ok (Read) then
-                           Offer ("file:" & Path,
-                                  (if File.Role = Repository.Source then "source" else "test"),
-                                  (if File.Role = Repository.Source then Normal else Low),
-                                  To_String (Text));
-                        end if;
-                     end if;
-                  end;
-               end loop;
-
-               --  The symbols its files declare: what there is to use or to
-               --  change, where the files themselves may not all fit.
                declare
+                  use type Repository.File_Role;
+
+                  --  The component's files, best for the task first: a room
+                  --  that holds only some of them holds those. Ranked by what
+                  --  a search of the task's words finds in each, the graph's
+                  --  order where two rank the same.
+                  Asked : constant String :=
+                    Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
+                    & " " & Records.Get (View, "definition.question");
+                  Hits  : constant Rv.Hit_Lists.Vector :=
+                    Rv.Search (Item, Graph, Project, Asked, Most => 400, Records => False);
+                  Order : Name_Lists.Vector;
+                  Score : Remembered_Maps.Map;
+
+                  function Score_Of (Path : String) return Natural
+                  is (if Score.Contains (Path) then Natural'Value (Score.Element (Path)) else 0);
+
+                  function Better (Left, Right : String) return Boolean
+                  is (Score_Of (Left) > Score_Of (Right));
+
+                  Tests_Of : Name_Lists.Vector;
                   Listed : Unbounded_String;
+                  Lines  : Natural := 0;
+                  More   : Natural := 0;
+                  Lines_Most : constant := 150;
                begin
-                  for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                  for Found of Hits loop
                      declare
-                        One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                        Path : constant String := To_String (Found.Path);
                      begin
-                        if Ada.Strings.Fixed.Index (Lower (To_String (One.Path)), Wanted) > 0 then
-                           Append (Listed, To_String (One.Kind) & " " & To_String (One.Name)
-                                   & "  " & To_String (One.Path) & ":" & Image (One.Line) & ASCII.LF);
+                        if Path /= "" and then Score_Of (Path) < Found.Score then
+                           Score.Include (Path, Image (Found.Score));
                         end if;
                      end;
                   end loop;
+                  for Index in 1 .. Repository.File_Count (Graph) loop
+                     declare
+                        File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
+                        Path : constant String := To_String (File.Path);
+                     begin
+                        if Ada.Strings.Fixed.Index (Lower (Path), Wanted) > 0
+                          and then File.Role in Repository.Source | Repository.Test
+                        then
+                           Order.Append (Path);
+                           if File.Role = Repository.Test then
+                              Tests_Of.Append (Path);
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+                  --  Stable: an insertion sort, so the graph's order holds
+                  --  between files that rank the same.
+                  for Index in 2 .. Natural (Order.Length) loop
+                     declare
+                        Moving : constant String := Order (Index);
+                        Place  : Natural := Index - 1;
+                     begin
+                        while Place >= 1 and then Better (Moving, Order (Place)) loop
+                           Place := Place - 1;
+                        end loop;
+                        if Place + 1 < Index then
+                           Order.Delete (Index);
+                           Order.Insert (Place + 1, Moving);
+                        end if;
+                     end;
+                  end loop;
+                  for Path of Order loop
+                     declare
+                        Text : Unbounded_String;
+                        Test : constant Boolean := Tests_Of.Contains (Path);
+                     begin
+                        Files.Read_Text (Hostkit.Fs.Join (Project, Path), Text, Read);
+                        if E.Is_Ok (Read) then
+                           Offer ("file:" & Path, (if Test then "test" else "source"),
+                                  (if Test then Low else Normal), To_String (Text));
+                        end if;
+                     end;
+                  end loop;
+
+                  --  The symbols its files declare: what there is to use or to
+                  --  change, where the files themselves may not all fit -- the
+                  --  best ranked files' first, so many files do not fill the
+                  --  room the list was to save.
+                  for Path of Order loop
+                     for Index in 1 .. Repository.Symbol_Count (Graph) loop
+                        declare
+                           One : constant Repository.Symbol := Repository.Symbol_At (Graph, Index);
+                        begin
+                           if To_String (One.Path) = Path then
+                              if Lines < Lines_Most then
+                                 Append (Listed, To_String (One.Kind) & " " & To_String (One.Name)
+                                         & "  " & To_String (One.Path) & ":" & Image (One.Line) & ASCII.LF);
+                                 Lines := Lines + 1;
+                              else
+                                 More := More + 1;
+                              end if;
+                           end if;
+                        end;
+                     end loop;
+                  end loop;
+                  if More > 0 then
+                     Append (Listed, "and" & Natural'Image (More) & " more, which find kind symbol names" & ASCII.LF);
+                  end if;
                   Offer (Task_Id & "#symbols", "symbols", Normal, To_String (Listed));
                end;
             end if;
@@ -1818,7 +2067,9 @@ package body Model_Runner.Framework.Context is
          --  holds in a row -- so that a heading in it is its own, not the
          --  harness's.
          if Ada.Strings.Fixed.Trim (Said (Next), Ada.Strings.Both) /= "" then
-            if To_String (Next.Kind) in "source" | "test" | "results" | "observation" then
+            if To_String (Next.Kind) in "source" | "test" | "results" | "observation"
+              or else Ada.Strings.Fixed.Index (To_String (Next.Kind), "code: ") = 1
+            then
                declare
                   Inner : constant String := Said (Next);
                   Run, Most : Natural := 0;
@@ -1922,6 +2173,9 @@ package body Model_Runner.Framework.Context is
          Records.Set (Value, "configuration_revision", Image (From.Config_Revision));
          Records.Set (Value, "configuration_fingerprint", To_String (From.Config_Fingerprint));
          Records.Set (Value, "retrieval", (if From.Semantic then "semantic" else "textual"));
+         --  How the source was chosen: ranked search and excerpts, at the
+         --  retrieval's version.
+         Records.Set (Value, "retrieval_strategy", "ranked excerpts, version " & Retrieval_Version);
          if Length (From.Retrieval) > 0 then
             Records.Set (Value, "retrieval_derivation", To_String (From.Retrieval));
          end if;
@@ -1947,6 +2201,11 @@ package body Model_Runner.Framework.Context is
                To_String (From.Included (Index).Id) & " "
                & Lower (Priority'Image (From.Included (Index).Rank)) & " "
                & Image (Estimate (To_String (From.Included (Index).Text))));
+         end loop;
+         --  And why each went in: its kind, and for a piece of a file what
+         --  it is, where from, and its reference.
+         for Index in 1 .. Natural (From.Included.Length) loop
+            Records.Set (Value, "included_why." & Image (Index), To_String (From.Included (Index).Kind));
          end loop;
          for Index in 1 .. Natural (From.Excluded.Length) loop
             Records.Set

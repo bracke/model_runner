@@ -38,6 +38,7 @@ package body Tool_Commands is
    Name_Imatrix        : aliased constant String := "imatrix";
    Name_Probe          : aliased constant String := "probe";
    Name_Knowledge      : aliased constant String := "knowledge-bench";
+   Name_Retrieval      : aliased constant String := "retrieval-bench";
 
    Nothing : aliased constant String := "";
 
@@ -136,6 +137,8 @@ package body Tool_Commands is
    Takes_Probe     : aliased constant String := "leave-signals | processors | hold-screen";
    Takes_Knowledge : aliased constant String := "[--tasks N] [--files N] [--observations N]";
 
+   Says_Retrieval : aliased constant String :=
+     "what a task's context holds of the code it is about, case by case and room by room";
    Says_Knowledge : aliased constant String :=
      "time what the knowledge layer costs on a project of many tasks, files and observations";
    Says_Probe : aliased constant String :=
@@ -296,7 +299,7 @@ package body Tool_Commands is
    Opts_Image  : aliased constant String :=
      " --expect --device --model --text-encoder --vae --reference --stripe-bytes ";
 
-   Held : constant array (1 .. 36) of Command :=
+   Held : constant array (1 .. 37) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -367,7 +370,9 @@ package body Tool_Commands is
       (Name_Probe'Access, Takes_Probe'Access, Says_Probe'Access,
        Opts_None'Access),
       (Name_Knowledge'Access, Takes_Knowledge'Access, Says_Knowledge'Access,
-       Opts_Knowledge'Access)];
+       Opts_Knowledge'Access),
+      (Name_Retrieval'Access, Nothing'Access, Says_Retrieval'Access,
+       Opts_None'Access)];
 
    -----------
    -- Count --

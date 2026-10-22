@@ -236,7 +236,9 @@ package body Model_Runner.Tools.Registry is
          begin
             Kinds.Append ("text");
             if Can (Project_Graph) then
-               for One of Sc.Choice_Lists.Vector'(["symbol", "references", "depends_on", "used_by", "impact"]) loop
+               for One of Sc.Choice_Lists.Vector'(["symbol", "references", "depends_on", "used_by", "impact",
+                                                   "search", "declaration"])
+               loop
                   Kinds.Append (One);
                end loop;
             end if;
@@ -248,7 +250,9 @@ package body Model_Runner.Tools.Registry is
                   then "; symbol -- where a name is declared; references -- where it is used; depends_on --"
                        & " the units a unit or a file's unit depends on; used_by -- the units that use"
                        & " it; impact -- what"
-                       & " changing a file or a name reaches"
+                       & " changing a file or a name reaches; search -- the symbols, files, records and lines"
+                       & " that best match words or names, ranked; declaration -- the lines of a name's"
+                       & " declaration, of the one holding PATH:LINE, or of a ref a search or excerpt gave"
                   else "")
                & ".",
                [Sc.Text ("kind", Choices => Kinds), Sc.Text ("query"), Sc.Text ("path", Required => False)]);

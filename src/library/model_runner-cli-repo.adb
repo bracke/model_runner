@@ -20,6 +20,7 @@ with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Bootstrap;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
+with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Traceability;
@@ -702,6 +703,92 @@ package body Model_Runner.CLI.Repo is
                   end;
                end loop;
             end;
+         end;
+
+      elsif Action = "search" then
+         --  Ranked: the symbols, files, records and lines that best match
+         --  the words, each with where it is, why it ranks and how far it
+         --  is to be taken as said; --verbose shows the best one's lines.
+         declare
+            package Rv renames Model_Runner.Framework.Retrieval;
+            use type Rv.Hit_Kind;
+            Store  : S.Store;
+            Report : S.Recovery_Report;
+            Opened : E.Error_Info;
+            Hits   : Rv.Hit_Lists.Vector;
+         begin
+            if S.Is_Initialized (Directory) then
+               S.Open (Store, Directory, Report, Opened);
+            else
+               Opened := E.Make (E.Framework_Not_Found);
+            end if;
+            Hits := Rv.Search (Store, Found, Top, Typed, Most => 15, Records => E.Is_Ok (Opened));
+            if Hits.Is_Empty then
+               if E.Is_Ok (Opened) then
+                  S.Close (Store);
+               end if;
+               Not_Found;
+               return;
+            end if;
+            for One of Hits loop
+               declare
+                  Where : constant String :=
+                    (if Length (One.Path) = 0 then ""
+                     elsif One.Line = 0 then To_String (One.Path)
+                     else To_String (One.Path) & ":" & Image (One.Line));
+                  Said  : constant String :=
+                    To_String (One.What)
+                    & (if Where = "" or else One.Kind in Rv.File_Hit | Rv.Text_Hit then "" else " at " & Where)
+                    & " -- " & To_String (One.Why) & " [" & To_String (One.Authority) & "]"
+                    & (if Verbose then " (" & Image (One.Score) & ")" else "");
+               begin
+                  if Pres.Is_Structured (Screen) then
+                     Pres.Put_Message
+                       (Screen, "cli.repo.symbol",
+                        [Loc.Named ("name", To_String (One.Name)), Loc.Named ("value", Said),
+                         Loc.Named ("path", Where)]);
+                  else
+                     Pres.Put_Row (Screen, (if One.Kind = Rv.Text_Hit then Where else To_String (One.Name)), Said);
+                  end if;
+               end;
+            end loop;
+            if Verbose then
+               declare
+                  Best  : constant Rv.Hit := Hits.First_Element;
+                  Piece : Rv.Excerpt;
+                  Found_Pieces : Rv.Excerpt_Lists.Vector;
+                  Got   : E.Error_Info;
+               begin
+                  if Best.Kind = Rv.Symbol_Hit then
+                     Rv.Declaration (Found, Top, To_String (Best.Name), 60, Found_Pieces, Got);
+                     if not Found_Pieces.Is_Empty then
+                        Piece := Found_Pieces.First_Element;
+                     end if;
+                  elsif Best.Kind = Rv.Text_Hit and then Best.Line > 0 then
+                     Rv.Around (Top, To_String (Best.Path), Best.Line, 60, Piece, Got);
+                  end if;
+                  if Length (Piece.Text) > 0 then
+                     Pres.Put_Line (Screen, "");
+                     Pres.Put_Line (Screen, Rv.Provenance (Piece));
+                     declare
+                        Text  : constant String := To_String (Piece.Text);
+                        Row   : Natural := Piece.First;
+                        Start : Positive := Text'First;
+                     begin
+                        for At_Char in Text'Range loop
+                           if Text (At_Char) = ASCII.LF then
+                              Pres.Put_Line (Screen, Image (Row) & ": " & Text (Start .. At_Char - 1));
+                              Row := Row + 1;
+                              Start := At_Char + 1;
+                           end if;
+                        end loop;
+                     end;
+                  end if;
+               end;
+            end if;
+            if E.Is_Ok (Opened) then
+               S.Close (Store);
+            end if;
          end;
 
       elsif Action = "sym" then

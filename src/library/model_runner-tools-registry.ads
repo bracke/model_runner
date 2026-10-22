@@ -147,6 +147,6 @@ package Model_Runner.Tools.Registry is
    --  @param Kind The kind.
    --  @return Whether it asks the graph.
    function Graph_Finding (Kind : String) return Boolean is
-     (Kind in "symbol" | "references" | "depends_on" | "used_by" | "impact");
+     (Kind in "symbol" | "references" | "depends_on" | "used_by" | "impact" | "search" | "declaration");
 
 end Model_Runner.Tools.Registry;

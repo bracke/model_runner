@@ -1023,12 +1023,17 @@ package body Model_Runner.Framework.Repository is
       --  In a body, each subprogram the unit's outer level gives a body:
       --  a place it is declared too, so /sym names the body beside the
       --  spec. Nesting is followed by what opens and closes a body -- a
-      --  header ending in is, declare, and end other than end if, loop,
-      --  case, record, select or return.
+      --  header ending in is, declare, a begin that is no header's own --
+      --  a block of its own -- and end other than end if, loop, case,
+      --  record, select or return.
       if Is_Body then
          declare
             Level : Natural := 0;
             Where : Positive := Index;
+
+            --  For each level open, whether its begin has been seen: a
+            --  begin past it opens a block, one level more.
+            Begun : array (1 .. 200) of Boolean := [others => True];
 
             --  Where a header from At_Token ends: its is, or its ;, at no
             --  depth of brackets; 0 at neither.
@@ -1082,6 +1087,9 @@ package body Model_Runner.Framework.Repository is
                                   Line => Tokens (At_Name).Line));
                            end if;
                            Level := Level + 1;
+                           if Level in Begun'Range then
+                              Begun (Level) := False;
+                           end if;
                            Where := Stop;
                         elsif Stop > 0 then
                            Where := Stop;
@@ -1089,6 +1097,18 @@ package body Model_Runner.Framework.Repository is
                      end;
                   elsif Spelled = "declare" then
                      Level := Level + 1;
+                     if Level in Begun'Range then
+                        Begun (Level) := False;
+                     end if;
+                  elsif Spelled = "begin" then
+                     if Level in Begun'Range and then not Begun (Level) then
+                        Begun (Level) := True;
+                     else
+                        Level := Level + 1;
+                        if Level in Begun'Range then
+                           Begun (Level) := True;
+                        end if;
+                     end if;
                   elsif Spelled = "end" then
                      if not (Where < Count
                              and then (Is_Word (Tokens (Where + 1), "if") or else Is_Word (Tokens (Where + 1), "loop")
@@ -1238,6 +1258,29 @@ package body Model_Runner.Framework.Repository is
       Visible : Name_Sets.Set;
       Places : Word_Places.Map;
 
+      --  The file's package renamings, each new name lowered to the
+      --  lowered name it stands for: Rp.Find_Symbols, where package Rp
+      --  renames Model_Runner.Framework.Repository, is that package's.
+      Renamed : Name_Maps.Map;
+
+      --  Renaming the name it sees the package by: whole, or as a child
+      --  sees a sibling -- package Tc renames Traceability, within
+      --  Model_Runner.Framework.
+      function Stands_For (Short, Owner : String) return Boolean is
+      begin
+         if not Renamed.Contains (Lower (Short)) then
+            return False;
+         end if;
+         declare
+            Target : constant String := Renamed.Element (Lower (Short)).First_Element;
+            Whole  : constant String := Lower (Owner);
+         begin
+            return Whole = Target
+              or else (Whole'Length > Target'Length
+                       and then Whole (Whole'Last - Target'Length .. Whole'Last) = "." & Target);
+         end;
+      end Stands_For;
+
       --  Whether the name at a place -- its whole dotted name -- is being
       --  declared or ended there, not used.
       --  Whether the name at a place is written whole, as its owner and
@@ -1251,7 +1294,8 @@ package body Model_Runner.Framework.Repository is
             Spelled := (if Spelled = Null_Unbounded_String then Tokens (First).Text
                         else Tokens (First).Text & "." & Spelled);
          end loop;
-         return Spelled /= Null_Unbounded_String and then Lower (To_String (Spelled)) = Lower (Owner);
+         return Spelled /= Null_Unbounded_String
+           and then (Lower (To_String (Spelled)) = Lower (Owner) or else Stands_For (To_String (Spelled), Owner));
       end Spelled_Whole;
 
       function Declaring (At_Index : Positive) return Boolean is
@@ -1322,6 +1366,21 @@ package body Model_Runner.Framework.Repository is
       for Name of Seen loop
          Visible.Include (Name);
       end loop;
+      for At_Index in 1 .. Natural (Tokens.Length) - 3 loop
+         if Is_Word (Tokens (At_Index), "package") and then Tokens (At_Index + 1).Kind = Word
+           and then Is_Word (Tokens (At_Index + 2), "renames")
+         then
+            declare
+               Target : Unbounded_String;
+               Past   : Positive;
+            begin
+               Name_At (Tokens, At_Index + 3, Target, Past);
+               if Target /= Null_Unbounded_String then
+                  Add_Name (Renamed, Lower (To_String (Tokens (At_Index + 1).Text)), Lower (To_String (Target)));
+               end if;
+            end;
+         end if;
+      end loop;
       for At_Index in 1 .. Natural (Tokens.Length) loop
          if Tokens (At_Index).Kind = Word then
             Add_Place (Places, Lower (To_String (Tokens (At_Index).Text)), At_Index);
@@ -1361,7 +1420,8 @@ package body Model_Runner.Framework.Repository is
                          (At_Index > 2 and then Is_Mark (Tokens (At_Index - 1), '.')
                           and then Tokens (At_Index - 2).Kind = Word
                           and then Lower (To_String (Tokens (At_Index - 2).Text))
-                                     /= Lower (Last_Part (Owner)))
+                                     /= Lower (Last_Part (Owner))
+                          and then not Stands_For (To_String (Tokens (At_Index - 2).Text), Owner))
                        and then not (Own and then Here.Line = Item.Line)
                        and then not Declaring (At_Index)
                        --  An attribute, X'Image, is the language's, not a use
@@ -2389,6 +2449,578 @@ package body Model_Runner.Framework.Repository is
          E.Add_Text (Status, "path", "indexes/" & Index_Name, E.Param_Path);
          E.Add_Text (Status, "detail", "a line of the graph is not one");
    end Load;
+
+   ---------------------------------------------------------------------------
+   --  Extents.
+   ---------------------------------------------------------------------------
+
+   --  The text's lines, each without its end.
+   function Text_Lines (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Positive := Text'First;
+   begin
+      for Index in Text'Range loop
+         if Text (Index) = ASCII.LF then
+            Result.Append
+              (Text (Start .. (if Index > Start and then Text (Index - 1) = ASCII.CR then Index - 2
+                               else Index - 1)));
+            Start := Index + 1;
+         end if;
+      end loop;
+      if Start <= Text'Last then
+         Result.Append (Text (Start .. Text'Last));
+      end if;
+      return Result;
+   end Text_Lines;
+
+   --  A line's text with its leading blanks taken off.
+   function Unindented (Line : String) return String
+   is (Ada.Strings.Fixed.Trim (Line, Ada.Strings.Left));
+
+   --  How far a line is indented, a tab as one.
+   function Indent_Of (Line : String) return Natural is
+   begin
+      for Index in Line'Range loop
+         if Line (Index) not in ' ' | ASCII.HT then
+            return Index - Line'First;
+         end if;
+      end loop;
+      return Line'Length;
+   end Indent_Of;
+
+   --  First moved up over the comment lines just above it -- what a
+   --  declaration says of itself -- as far as a blank line.
+   function With_Comments
+     (Lines : Name_Lists.Vector; First : Positive; Marks : String) return Positive
+   is
+      Result : Positive := First;
+   begin
+      while Result > 1 and then First - Result < 40 loop
+         declare
+            Above : constant String := Unindented (Lines (Result - 1));
+         begin
+            exit when Above'Length = 0
+              or else not (for some Mark of Name_Lists.Vector'(Split (Marks)) =>
+                             Above'Length >= Mark'Length
+                             and then Above (Above'First .. Above'First + Mark'Length - 1) = Mark);
+         end;
+         Result := Result - 1;
+      end loop;
+      return Result;
+   end With_Comments;
+
+   --  An Ada declaration's lines, by the tokens a scan reads.
+   function Ada_Extent (Tokens : Token_Vectors.Vector; Line : Positive) return Extent is
+      Count  : constant Natural := Natural (Tokens.Length);
+      Start  : Natural := 0;
+      Key    : Natural := 0;
+      Opener : Natural;
+      Result : Extent;
+
+      function Spelled (Index : Positive) return String
+      is (if Tokens (Index).Kind = Word then Lower (To_String (Tokens (Index).Text)) else "");
+
+      function Declares (Index : Positive) return Boolean
+      is (Spelled (Index) in "procedure" | "function" | "package" | "type" | "subtype" | "task"
+                             | "protected" | "entry");
+
+      --  The first ; at no depth of brackets or records from a token.
+      function Semicolon_From (From : Positive) return Natural is
+         Brackets : Integer := 0;
+         Records  : Integer := 0;
+      begin
+         for Ahead in From .. Count loop
+            if Is_Mark (Tokens (Ahead), '(') then
+               Brackets := Brackets + 1;
+            elsif Is_Mark (Tokens (Ahead), ')') then
+               Brackets := Brackets - 1;
+            elsif Spelled (Ahead) = "record"
+              and then not (Ahead > 1 and then (Is_Word (Tokens (Ahead - 1), "null")
+                                                or else Is_Word (Tokens (Ahead - 1), "end")))
+            then
+               Records := Records + 1;
+            elsif Spelled (Ahead) = "end" and then Ahead < Count and then Is_Word (Tokens (Ahead + 1), "record")
+            then
+               Records := Records - 1;
+            elsif Brackets <= 0 and then Records <= 0 and then Is_Mark (Tokens (Ahead), ';') then
+               return Ahead;
+            end if;
+         end loop;
+         return 0;
+      end Semicolon_From;
+
+      --  The ; of the first end NAME; after a token, NAME dotted or not.
+      function End_Of (Name : String; From : Positive) return Natural is
+         Wanted : constant String := Lower (Name);
+         Named  : Unbounded_String;
+         Next   : Positive;
+      begin
+         for Ahead in From .. Count - 2 loop
+            if Is_Word (Tokens (Ahead), "end") then
+               if Tokens (Ahead + 1).Kind = Text_Literal then
+                  if Lower (To_String (Tokens (Ahead + 1).Text)) = Wanted
+                    and then Is_Mark (Tokens (Ahead + 2), ';')
+                  then
+                     return Ahead + 2;
+                  end if;
+               else
+                  Name_At (Tokens, Ahead + 1, Named, Next);
+                  if Lower (To_String (Named)) = Wanted and then Next <= Count
+                    and then Is_Mark (Tokens (Next), ';')
+                  then
+                     return Next;
+                  end if;
+               end if;
+            end if;
+         end loop;
+         return 0;
+      end End_Of;
+
+      --  The name a declaring word gives, past body and type.
+      function Name_After (Index : Positive) return String is
+         At_Name : Positive := Index + 1;
+         Named   : Unbounded_String;
+         Next    : Positive;
+      begin
+         if At_Name <= Count and then Spelled (At_Name) in "body" | "type" then
+            At_Name := At_Name + 1;
+         end if;
+         if At_Name > Count then
+            return "";
+         elsif Tokens (At_Name).Kind = Text_Literal then
+            return To_String (Tokens (At_Name).Text);
+         end if;
+         Name_At (Tokens, At_Name, Named, Next);
+         return To_String (Named);
+      end Name_After;
+
+      Stop : Natural := 0;
+   begin
+      for Index in 1 .. Count loop
+         if Tokens (Index).Line >= Line then
+            Start := Index;
+            exit;
+         end if;
+      end loop;
+      if Start = 0 or else Tokens (Start).Line /= Line then
+         return Result;
+      end if;
+
+      --  The declaring word: the line's first, or one just before the name
+      --  the line starts with -- procedure on one line and its name on the
+      --  next.
+      if Declares (Start) then
+         Key := Start;
+      else
+         for Back in reverse Natural'Max (1, Start - 3) .. Start - 1 loop
+            exit when Is_Mark (Tokens (Back), ';');
+            if Declares (Back) then
+               Key := Back;
+               exit;
+            end if;
+         end loop;
+         if Key = 0 then
+            Key := Start;
+         end if;
+      end if;
+
+      --  Where it starts: overriding, or not overriding, before it; a
+      --  generic's formal part before that -- walked back to generic, and
+      --  stopped at what ends or opens anything else.
+      Opener := Key;
+      if Opener > 1 and then Is_Word (Tokens (Opener - 1), "overriding") then
+         Opener := Opener - 1;
+         if Opener > 1 and then Is_Word (Tokens (Opener - 1), "not") then
+            Opener := Opener - 1;
+         end if;
+      end if;
+      if Spelled (Key) in "procedure" | "function" | "package" then
+         for Back in reverse Natural'Max (1, Opener - 2_000) .. Opener - 1 loop
+            declare
+               Word_Text : constant String := Spelled (Back);
+            begin
+               if Word_Text = "generic" then
+                  Opener := Back;
+                  exit;
+               end if;
+               exit when Word_Text in "end" | "begin"
+                 or else (Word_Text in "procedure" | "function" | "package"
+                          and then not (Back > 1 and then Is_Word (Tokens (Back - 1), "with")));
+            end;
+         end loop;
+      end if;
+
+      declare
+         Kind : constant String := Spelled (Key);
+         Name : constant String := (if Declares (Key) then Name_After (Key) else "");
+      begin
+         if Kind in "procedure" | "function" | "entry" then
+            --  Its header ends at is, or at ; where it is only declared.
+            declare
+               Brackets : Integer := 0;
+               Header   : Natural := 0;
+            begin
+               for Ahead in Key + 1 .. Count loop
+                  if Is_Mark (Tokens (Ahead), '(') then
+                     Brackets := Brackets + 1;
+                  elsif Is_Mark (Tokens (Ahead), ')') then
+                     Brackets := Brackets - 1;
+                  elsif Brackets = 0
+                    and then (Is_Mark (Tokens (Ahead), ';') or else Is_Word (Tokens (Ahead), "is"))
+                  then
+                     Header := Ahead;
+                     exit;
+                  end if;
+               end loop;
+               if Header = 0 then
+                  Stop := 0;
+               elsif Is_Mark (Tokens (Header), ';') then
+                  Stop := Header;
+               elsif Header < Count
+                 and then (Spelled (Header + 1) in "new" | "abstract" | "null" | "separate"
+                           or else Is_Mark (Tokens (Header + 1), '('))
+               then
+                  --  An instance, an abstract or null one, a separate body,
+                  --  an expression function: to its ;.
+                  Stop := Semicolon_From (Header + 1);
+               else
+                  Stop := End_Of (Name, Header + 1);
+               end if;
+            end;
+         elsif Kind in "package" | "task" | "protected" then
+            declare
+               Brackets : Integer := 0;
+               Header   : Natural := 0;
+            begin
+               for Ahead in Key + 1 .. Count loop
+                  if Is_Mark (Tokens (Ahead), '(') then
+                     Brackets := Brackets + 1;
+                  elsif Is_Mark (Tokens (Ahead), ')') then
+                     Brackets := Brackets - 1;
+                  elsif Brackets = 0
+                    and then (Is_Mark (Tokens (Ahead), ';') or else Is_Word (Tokens (Ahead), "is"))
+                  then
+                     Header := Ahead;
+                     exit;
+                  end if;
+               end loop;
+               if Header = 0 then
+                  Stop := 0;
+               elsif Is_Mark (Tokens (Header), ';') then
+                  Stop := Header;
+               elsif Header < Count and then Spelled (Header + 1) in "new" | "separate" then
+                  Stop := Semicolon_From (Header + 1);
+               else
+                  Stop := End_Of (Name, Header + 1);
+               end if;
+            end;
+         else
+            --  A type, a subtype, a constant, an exception, a literal: to
+            --  the ; that ends it, past its record and its brackets.
+            Stop := Semicolon_From (Key);
+         end if;
+      end;
+
+      Result.First := Tokens (Opener).Line;
+      if Stop > 0 then
+         Result.Last := Tokens (Stop).Line;
+         Result.Structural := True;
+      end if;
+      return Result;
+   end Ada_Extent;
+
+   --  A declaration's lines by its braces: from its line to the ; that
+   --  ends a declaration without a body, or to the brace that closes the
+   --  first it opens; strings, characters and comments not counted.
+   function Brace_Extent (Lines : Name_Lists.Vector; Line : Positive) return Extent is
+      Result   : Extent := (First => Line, Last => 0, Structural => False);
+      Depth    : Natural := 0;
+      Brackets : Integer := 0;
+      Opened   : Boolean := False;
+      In_Block : Boolean := False;
+   begin
+      for Row in Line .. Natural (Lines.Length) loop
+         declare
+            Text  : constant String := Lines (Row);
+            Index : Natural := Text'First;
+         begin
+            while Index <= Text'Last loop
+               declare
+                  Char : constant Character := Text (Index);
+               begin
+                  if In_Block then
+                     if Char = '*' and then Index < Text'Last and then Text (Index + 1) = '/' then
+                        In_Block := False;
+                        Index := Index + 1;
+                     end if;
+                  elsif Char = '/' and then Index < Text'Last and then Text (Index + 1) = '/' then
+                     exit;
+                  elsif Char = '/' and then Index < Text'Last and then Text (Index + 1) = '*' then
+                     In_Block := True;
+                     Index := Index + 1;
+                  elsif Char = '"' then
+                     Index := Index + 1;
+                     while Index <= Text'Last and then Text (Index) /= '"' loop
+                        if Text (Index) = '\' then
+                           Index := Index + 1;
+                        end if;
+                        Index := Index + 1;
+                     end loop;
+                  elsif Char = ''' and then Index + 2 <= Text'Last
+                    and then (Text (Index + 2) = ''' or else Text (Index + 1) = '\')
+                  then
+                     Index := Index + (if Text (Index + 1) = '\' then 3 else 2);
+                  elsif Char = '(' then
+                     Brackets := Brackets + 1;
+                  elsif Char = ')' then
+                     Brackets := Brackets - 1;
+                  elsif Char = '{' then
+                     Depth := Depth + 1;
+                     Opened := True;
+                  elsif Char = '}' and then Depth > 0 then
+                     Depth := Depth - 1;
+                     if Opened and then Depth = 0 then
+                        Result.Last := Row;
+                        Result.Structural := True;
+                        return Result;
+                     end if;
+                  elsif Char = ';' and then not Opened and then Brackets <= 0 then
+                     Result.Last := Row;
+                     Result.Structural := True;
+                     return Result;
+                  end if;
+               end;
+               Index := Index + 1;
+            end loop;
+         end;
+      end loop;
+      return Result;
+   end Brace_Extent;
+
+   --  A Python definition's lines: its header, and every line after it
+   --  indented further, blank lines among them, up to the last such.
+   function Indent_Extent (Lines : Name_Lists.Vector; Line : Positive) return Extent is
+      Header : constant Natural := Indent_Of (Lines (Line));
+      Result : Extent := (First => Line, Last => Line, Structural => True);
+      Row    : Positive := Line;
+   begin
+      --  A header over several lines: to the one ending in its colon.
+      while Row < Natural (Lines.Length)
+        and then Ada.Strings.Fixed.Index (Ada.Strings.Fixed.Trim (Lines (Row), Ada.Strings.Right), ":",
+                                          Ada.Strings.Backward)
+                 /= Ada.Strings.Fixed.Trim (Lines (Row), Ada.Strings.Right)'Last
+      loop
+         exit when Row - Line > 20;
+         Row := Row + 1;
+      end loop;
+      Result.Last := Row;
+      for Next in Row + 1 .. Natural (Lines.Length) loop
+         if Unindented (Lines (Next))'Length > 0 then
+            exit when Indent_Of (Lines (Next)) <= Header;
+            Result.Last := Next;
+         end if;
+      end loop;
+      return Result;
+   end Indent_Extent;
+
+   ---------------
+   -- Extent_Of --
+   ---------------
+
+   --  As Extent_Of, of a text already parted into lines and, for Ada,
+   --  into tokens: what Enclosing asks of every symbol of one file.
+   function Extent_In
+     (Language : String;
+      Lines    : Name_Lists.Vector;
+      Tokens   : Token_Vectors.Vector;
+      Line     : Positive;
+      Most     : Positive) return Extent
+   is
+      Result : Extent;
+   begin
+      if Line > Natural (Lines.Length) then
+         return Result;
+      end if;
+      if Language = "Ada" then
+         Result := Ada_Extent (Tokens, Line);
+         if Result.First > 0 then
+            Result.First := With_Comments (Lines, Result.First, "--");
+         end if;
+      elsif Language = "Python" then
+         Result := Indent_Extent (Lines, Line);
+         Result.First := With_Comments (Lines, Result.First, "# @");
+      elsif Language in "C" | "C++" | "Rust" | "Go" | "Java" | "JavaScript" | "TypeScript" | "C#"
+                      | "Kotlin" | "Swift" | "Zig"
+      then
+         Result := Brace_Extent (Lines, Line);
+         Result.First := With_Comments (Lines, Result.First, "// /* * #[");
+      end if;
+      if Result.First = 0 then
+         Result.First := Line;
+      end if;
+      if not Result.Structural then
+         Result.Last := Natural'Min (Natural (Lines.Length), Line + Most - 1);
+      end if;
+      return Result;
+   end Extent_In;
+
+   function Extent_Of
+     (Path : String;
+      Text : String;
+      Line : Positive;
+      Most : Positive := 40) return Extent
+   is
+      Language : constant String := Language_Of (Path);
+   begin
+      return Extent_In
+        (Language, Text_Lines (Text),
+         (if Language = "Ada" then Tokens_Of (Text) else Token_Vectors.Empty_Vector), Line, Most);
+   end Extent_Of;
+
+   --------------------
+   -- Declared_Lines --
+   --------------------
+
+   function Declared_Lines (Text, Name : String) return Name_Lists.Vector is
+      Tokens : constant Token_Vectors.Vector := Tokens_Of (Text);
+      Wanted : constant String := Lower (Name);
+      Result : Name_Lists.Vector;
+   begin
+      for Index in 1 .. Natural (Tokens.Length) - 1 loop
+         if Tokens (Index).Kind = Word
+           and then Lower (To_String (Tokens (Index).Text)) in "procedure" | "function" | "entry" | "package"
+                                                              | "task" | "protected"
+           and then not (Index > 1 and then (Is_Word (Tokens (Index - 1), "with")
+                                             or else Is_Word (Tokens (Index - 1), "access")
+                                             or else Is_Word (Tokens (Index - 1), "end")))
+         then
+            declare
+               At_Name : Positive := Index + 1;
+            begin
+               if At_Name < Natural (Tokens.Length)
+                 and then (Is_Word (Tokens (At_Name), "body") or else Is_Word (Tokens (At_Name), "type"))
+               then
+                  At_Name := At_Name + 1;
+               end if;
+               if Lower (To_String (Tokens (At_Name).Text)) = Wanted
+                 and then not Result.Contains (Image (Tokens (Index).Line))
+               then
+                  Result.Append (Image (Tokens (Index).Line));
+               end if;
+            end;
+         end if;
+      end loop;
+      return Result;
+   end Declared_Lines;
+
+   --------------
+   -- Read_One --
+   --------------
+
+   function Read_One (Path, Text : String) return Graph is
+      Result : Graph;
+   begin
+      Result.Reading := To_Unbounded_String (Path);
+      Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);
+      return Result;
+   end Read_One;
+
+   ---------------
+   -- Enclosing --
+   ---------------
+
+   function Enclosing
+     (Path : String;
+      Text : String;
+      Line : Positive;
+      Name : out Unbounded_String) return Extent
+   is
+      Own      : constant Graph := Read_One (Path, Text);
+      Language : constant String := Language_Of (Path);
+      Lines    : constant Name_Lists.Vector := Text_Lines (Text);
+      Tokens   : constant Token_Vectors.Vector :=
+        (if Language = "Ada" then Tokens_Of (Text) else Token_Vectors.Empty_Vector);
+      Best     : Extent;
+      Count    : constant Natural := Natural (Lines.Length);
+   begin
+      Name := Null_Unbounded_String;
+
+      --  Ada's from its tokens: every body and nested unit, not only those
+      --  the graph names, so a use is shown in the subprogram it is in and
+      --  not in the whole of the one around that.
+      if Language = "Ada" then
+         declare
+            Unit : constant String := Unit_Of (Tokens);
+         begin
+            for Index in 1 .. Natural (Tokens.Length) loop
+               exit when Tokens (Index).Line > Line;
+               if Tokens (Index).Kind = Word
+                 and then Lower (To_String (Tokens (Index).Text)) in "procedure" | "function" | "entry" | "package"
+                                                                    | "task" | "protected"
+                 and then not (Index > 1 and then (Is_Word (Tokens (Index - 1), "with")
+                                                   or else Is_Word (Tokens (Index - 1), "access")))
+                 and then Index < Natural (Tokens.Length)
+                 and then (Index = 1 or else Tokens (Index - 1).Line < Tokens (Index).Line
+                           or else Is_Word (Tokens (Index - 1), "overriding"))
+               then
+                  declare
+                     Held : constant Extent := Extent_In (Language, Lines, Tokens, Tokens (Index).Line, 40);
+                     At_Name : Positive := Index + 1;
+                  begin
+                     if Held.Structural and then Held.First <= Line and then Held.Last >= Line
+                       and then (Best.First = 0 or else Held.First >= Best.First)
+                     then
+                        Best := Held;
+                        if At_Name < Natural (Tokens.Length)
+                          and then (Is_Word (Tokens (At_Name), "body") or else Is_Word (Tokens (At_Name), "type"))
+                        then
+                           At_Name := At_Name + 1;
+                        end if;
+                        declare
+                           Dotted  : Unbounded_String;
+                           Past    : Positive;
+                        begin
+                           Name_At (Tokens, At_Name, Dotted, Past);
+                           if Dotted = Null_Unbounded_String then
+                              Dotted := Tokens (At_Name).Text;
+                           end if;
+                           declare
+                              Spelled : constant String := To_String (Dotted);
+                           begin
+                              Name := To_Unbounded_String
+                                (if Lower (Spelled) = Lower (Unit) or else Unit = "" then Spelled
+                                 else Unit & "." & Spelled);
+                           end;
+                        end;
+                     end if;
+                  end;
+               end if;
+            end loop;
+         end;
+         if Best.First > 0 then
+            return Best;
+         end if;
+      end if;
+
+      for Item of Own.Symbols loop
+         if Item.Line in 1 .. Line then
+            declare
+               Held : constant Extent := Extent_In (Language, Lines, Tokens, Item.Line, 40);
+            begin
+               if Held.Structural and then Held.First <= Line and then Held.Last >= Line
+                 and then (Best.First = 0 or else Held.First >= Best.First)
+               then
+                  Best := Held;
+                  Name := Item.Name;
+               end if;
+            end;
+         end if;
+      end loop;
+      if Best.First = 0 and then Line <= Count then
+         Best := (First => Natural'Max (1, Line - 8), Last => Natural'Min (Count, Line + 8), Structural => False);
+      end if;
+      return Best;
+   end Enclosing;
 
    ---------------------------------------------------------------------------
    --  Queries.

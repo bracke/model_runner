@@ -398,8 +398,10 @@ package Model_Runner.Framework.Repository is
 
    --  How source is read into the graph: a graph kept by another is read
    --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
-   --  formal part is not its unit.
-   Reader_Version : constant String := "6";
+   --  formal part is not its unit. 7: a block's begin opens a level in a
+   --  body, so its end closes it and not the body around it; a package
+   --  renaming's name qualifies what the package declares.
+   Reader_Version : constant String := "7";
 
    --  The symbols a name matches: the full name, or the last part of it,
    --  in any case.
@@ -446,6 +448,69 @@ package Model_Runner.Framework.Repository is
    function Dependents_Of
      (From : Graph;
       Unit : String) return Name_Lists.Vector;
+
+   --  The lines a declaration takes.
+   type Extent is record
+      First : Natural := 0;
+      Last  : Natural := 0;
+
+      --  Whether Last is where the declaration ends, as its language's
+      --  structure says -- its ; or its end NAME; for Ada, its closing
+      --  brace, its last indented line for Python -- or only as far as a
+      --  bounded run of lines reaches, where no end was found.
+      Structural : Boolean := False;
+   end record;
+
+   --  Where the declaration starting on a line ends, read with the same
+   --  scanner as the graph: Ada by its tokens, C, C++, Rust, Go, Java and
+   --  the like by braces, Python by indentation, anything else not at all.
+   --  First takes in the comment lines just above it, and a generic's
+   --  formal part.
+   --
+   --  @param Path The file, for its language.
+   --  @param Text Its text.
+   --  @param Line Where the declaration starts, as a symbol's Line says.
+   --  @param Most How many lines a run without a found end takes.
+   --  @return Its lines; First 0 where Line is past the text.
+   function Extent_Of
+     (Path : String;
+      Text : String;
+      Line : Positive;
+      Most : Positive := 40) return Extent;
+
+   --  The innermost declaration of a file holding a line -- the body a
+   --  call is made from -- or, where none of its symbols holds it, a run
+   --  of lines around it that is not Structural.
+   --
+   --  @param Path The file.
+   --  @param Text Its text.
+   --  @param Line The line.
+   --  @param Name The symbol whose declaration it is; "" for none.
+   --  @return The lines.
+   function Enclosing
+     (Path : String;
+      Text : String;
+      Line : Positive;
+      Name : out Ada.Strings.Unbounded.Unbounded_String) return Extent;
+
+   --  The lines an Ada text declares a name on -- a subprogram, package,
+   --  task, protected unit or entry of that simple name, at any depth, its
+   --  spec or its body, an expression function among them -- found by the
+   --  scanner's tokens, not by the graph: the bodies the graph does not
+   --  name.
+   --
+   --  @param Text The text.
+   --  @param Name The simple name, in any case.
+   --  @return The lines, in order.
+   function Declared_Lines (Text, Name : String) return Name_Lists.Vector;
+
+   --  One file read as a scan reads it: its symbols and relations, as its
+   --  language's adapter finds them in this text.
+   --
+   --  @param Path The file, within the project.
+   --  @param Text Its text.
+   --  @return A graph of that file alone.
+   function Read_One (Path, Text : String) return Graph;
 
    --  How many symbols a graph holds.
    --
