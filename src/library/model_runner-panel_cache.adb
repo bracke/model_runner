@@ -77,8 +77,15 @@ package body Model_Runner.Panel_Cache is
    end Sweep_Parts;
 
    --------------
-   -- Is_There --
+   -- Room_Now --
    --------------
+
+   function Room_Now return Interfaces.Unsigned_64
+   is (Model_Runner.Platform.Available_Memory);
+
+   -----------------
+   -- Keep_Newest --
+   -----------------
 
    procedure Keep_Newest (Prefix : String; Count : Natural) is
       use Ada.Directories;
@@ -139,6 +146,10 @@ package body Model_Runner.Panel_Cache is
       when others =>
          null;
    end Keep_Newest;
+
+   --------------
+   -- Is_There --
+   --------------
 
    function Is_There (Path : String) return Boolean is
    begin

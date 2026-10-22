@@ -3313,6 +3313,14 @@ begin
          --  on the model -- Gemma 2's mixed one -- and this told every model
          --  integers before it had seen one.
 
+         --  How deep a split mixture's tokens run on the processor, where
+         --  asked: 1 keeps them split at every depth, 100000 on the
+         --  processor at every depth -- the two the limit is measured
+         --  between.
+         if Option ("--host-depth", "") /= "" then
+            Model_Runner.Llama.Set_Host_Depth_Most (Count ("--host-depth", 1_536));
+         end if;
+
          declare
             --  One measurement of one prompt, with every other option as
             --  the command was given it.

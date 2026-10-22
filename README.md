@@ -99,7 +99,12 @@ option always wins.
   the cache: two hand-overs a layer cost a token more than the processor
   takes for the layers itself (Qwen3-30B-A3B Q4_K_M 17.4 tokens a second
   split, 19.0 so, its prompt 299 a second either way). Deeper, the device's
-  attention is the faster: 13.3 split against 7.2 at 8,315 positions. Not a hybrid, whose linear layers the device runs faster; a dense model that
+  attention is the faster: 13.3 split against 7.2 at 8,315 positions. Not a hybrid, whose linear layers the device runs faster, and not a mixture
+  whose other layers are in two- or three-bit k-quants, which the processor
+  reads several times slower than the panels the device's half is not
+  rewritten into (Qwen3-Coder-30B-A3B Q2_K: 9.9 on the processor whole,
+  23.7 split). The experts the processor runs are rewritten into its panels,
+  kept in the panel cache, as a processor run's are. A dense model that
   does not fit keeps the gate, up and down of enough of its top layers on the
   processor, in panels, for the rest to fit. The room such a model takes on
   the device is counted -- the device's memory less its context, a hybrid's

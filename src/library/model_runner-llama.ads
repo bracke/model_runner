@@ -3141,6 +3141,15 @@ private
       --  fit the device while everything but its experts does.
       Split_Feed : Boolean := False;
 
+      --  Whether a split mixture's front half reads as fast on the
+      --  processor as the file lays it out: no matrix of it in a format
+      --  the processor wants in panels it does not have there, the device
+      --  reading those. Where false a token stays on the split at every
+      --  depth (On_Host_Here): Qwen3-Coder-30B's Q2_K and Q3_K front half
+      --  generated 9.9 tokens a second on the processor whole against 23.7
+      --  split, 509 positions in.
+      Host_Front_Raw : Boolean := False;
+
       --  The context the device's room was counted for, where Prepare
       --  counted it: a session opened with none named is held to it, and
       --  one opened with more would grow into the matrices' room. Nought

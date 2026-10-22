@@ -30,6 +30,13 @@ is
    --  split: its top layers' feed-forward left to the processor.
    Dense_Split : Boolean := False;
 
+   --  Whether a mixture the device's room does not take whole is split:
+   --  its experts left to the processor, which reads them in panels where
+   --  its own default would (Panels_Unasked). Decided before the panels
+   --  are built, as a dense split is, and held to where the stacks are
+   --  placed below.
+   Mixture_Split : Boolean := False;
+
    --  The bytes a view's storage takes, or none where there is no view.
    function Bytes_Of (View : T.View) return Interfaces.Unsigned_64
    is (if T.Is_Present (View)
@@ -39,12 +46,28 @@ is
    --  Whether a view is the gate, up or down of a layer whose
    --  feed-forward the processor runs.
    function Host_Fed (Where : View_Access) return Boolean is
+
+      --  Whether a view is one expert's rows of a stack.
+      function Within (Stack : T.View) return Boolean
+      is (T.Is_Present (Stack)
+          and then Where.all.Base = Stack.Base
+          and then Where.all.Offset >= Stack.Offset
+          and then Where.all.Offset
+                   < Stack.Offset
+                     + B.Byte_Count (Stack.Rows) * T.Row_Bytes (Stack));
    begin
       if Item.Layers /= null then
          for Index in Item.Layers.all'Range loop
             declare
                L : Layer renames Item.Layers.all (Index);
             begin
+               if Mixture_Split
+                 and then (Within (L.Gate_Stack)
+                           or else Within (L.Up_Stack)
+                           or else Within (L.Down_Stack))
+               then
+                  return True;
+               end if;
                if L.Host_Feed
                  and then (Where = L.Gate'Unchecked_Access
                            or else Where = L.Up'Unchecked_Access
@@ -64,6 +87,96 @@ is
       Close (Item, Ignored);
       Status := Reason;
    end Fail;
+
+   --  A mixture's matrices, each storage counted once, and what of them
+   --  its feed-forward takes -- the stacks, the router and the shared
+   --  expert, which the processor's mixture reads where the device does
+   --  not hold them all.
+   procedure Mixture_Bytes
+     (Total : out Interfaces.Unsigned_64;
+      Feed  : out Interfaces.Unsigned_64)
+   is
+      Held : constant View_List := Matrices (Item);
+
+      procedure Count (View : T.View) is
+      begin
+         Feed := Feed + Bytes_Of (View);
+      end Count;
+   begin
+      Total := 0;
+      Feed := 0;
+      for Index in Held'Range loop
+         declare
+            Seen_Before : Boolean := False;
+         begin
+            for Earlier in Held'First .. Index - 1 loop
+               if Held (Earlier).all.Base = Held (Index).all.Base
+                 and then Held (Earlier).all.Offset = Held (Index).all.Offset
+               then
+                  Seen_Before := True;
+                  exit;
+               end if;
+            end loop;
+
+            if not Seen_Before then
+               Total := Total + Bytes_Of (Held (Index).all);
+            end if;
+         end;
+      end loop;
+
+      if Item.Layers /= null then
+         for L of Item.Layers.all loop
+            Count (L.Gate_Stack);
+            Count (L.Up_Stack);
+            Count (L.Down_Stack);
+            Count (L.Router);
+            Count (L.Shared_Gate);
+            Count (L.Shared_Up);
+            Count (L.Shared_Down);
+         end loop;
+      end if;
+   end Mixture_Bytes;
+
+   --  Whether a mixture whose matrices come to Total, Feed of them its
+   --  feed-forward, is split for a budget: the rest fits it, the whole
+   --  does not.
+   function Splits
+     (Total, Feed, Budget : Interfaces.Unsigned_64) return Boolean
+   is (Total > Budget
+       and then Feed > 0
+       and then Feed < Total
+       and then Total - Feed <= Budget);
+
+   --  Whether every matrix a split mixture's device runs -- all but the
+   --  experts -- reads as fast on the processor from the file's layout as
+   --  from panels: not a two- or three-bit k-quant, which the processor
+   --  reads several times slower so (TinyLlama's Q2_K 12 tokens a second
+   --  against 78 in panels), where Q4_K and up read as fast.
+   function Front_Reads_Raw return Boolean is
+      use type Model_Runner.GGUF.Tensor_Type;
+   begin
+      for Where of Matrices (Item) loop
+         if not Host_Fed (Where)
+           and then Where /= Item.Embeddings'Unchecked_Access
+           and then Where.all.Format in Model_Runner.GGUF.Type_Q2_K
+                                      | Model_Runner.GGUF.Type_Q3_K
+         then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Front_Reads_Raw;
+
+   --  Whether the mixture goes to the device as Prepare places it below.
+   function On_Device_Mixture return Boolean
+   is (Item.Settings.Experts > 0
+       and then Item.Settings.Experts_Used > 0
+       and then Item.Settings.Experts_Used
+                <= Model_Runner.Backend.Device.Max_Members
+       and then Item.Able.Memory_Bytes > 0
+       and then Model_Runner.Backend."="
+                  (Item.Able.Kind, Model_Runner.Backend.Backend_Device)
+       and then Item.Layers /= null);
 
 begin
    Close (Item, Ignored);
@@ -2600,11 +2713,37 @@ begin
       end;
    end if;
 
-   if Repack /= No_Repack or else Dense_Split then
+   --  A mixture to be split, its experts in panels for the processor:
+   --  bound for the device they were left as the file has them, and
+   --  Qwen3-Coder-30B's Q2_K generated 5.3 tokens a second split against
+   --  27 on the processor alone. The budget is the one the stacks are
+   --  placed by below, less a draft's share.
+   if Repack = No_Repack and then On_Device_Mixture then
+      declare
+         Total, Feed : Interfaces.Unsigned_64;
+         Budget      : Interfaces.Unsigned_64 := Item.Able.Memory_Bytes;
+      begin
+         if Beside > 0
+           and then not Model_Runner.Backend.Device.Is_Beside
+                          (Item.Device_Ticket)
+           and then Budget > Beside
+         then
+            Budget := Budget - Beside;
+         end if;
+         Mixture_Bytes (Total, Feed);
+         Mixture_Split :=
+           Splits (Total, Feed, Budget)
+           and then Panels_Unasked
+                      (Feed, Bounds.Max_Allocation_Bytes,
+                       Model_Runner.Panel_Cache.Room_Now);
+      end;
+   end if;
+
+   if Repack /= No_Repack or else Dense_Split or else Mixture_Split then
       Repack_Started := Model_Runner.Clocks.Now (Repack_Clock);
    end if;
 
-   if Repack = To_Rows or else Dense_Split then
+   if Repack = To_Rows or else Dense_Split or else Mixture_Split then
       P.Publish (Observer, P.Load_Progress (P.Repacking_Weights));
 
       --  The head as the file has it, before it may be written in panels.
@@ -2666,7 +2805,7 @@ begin
          function Panel_File (Total : B.Byte_Count) return String
          is (if Panel_Cache = "" then ""
              elsif Repack = To_Rows then Panel_Cache
-             elsif Dense_Split
+             elsif Dense_Split or else Mixture_Split
              then Panel_Cache & ".split-"
                   & Model_Runner.Text.Trim (B.Byte_Count'Image (Total))
              else "");
@@ -3612,46 +3751,18 @@ begin
    --  back and upload again a whole stack where it gave back a slice.
    Item.Stacked := False;
    Item.Split_Feed := Dense_Split;
+   Item.Host_Front_Raw := False;
 
-   if Item.Settings.Experts > 0
-     and then Item.Settings.Experts_Used > 0
-     and then Item.Settings.Experts_Used
-              <= Model_Runner.Backend.Device.Max_Members
-     and then Item.Able.Memory_Bytes > 0
-     and then Model_Runner.Backend."="
-                (Item.Able.Kind, Model_Runner.Backend.Backend_Device)
-   then
+   if On_Device_Mixture then
       declare
-         Held  : constant View_List := Matrices (Item);
-         Total : Interfaces.Unsigned_64 := 0;
+         Total, Feed : Interfaces.Unsigned_64;
 
          --  The budget before a draft's share came off it, and what the
          --  mixture's matrices take of it (Device.Claim).
          Whole_Budget : Interfaces.Unsigned_64 := Item.Able.Memory_Bytes;
          Taken        : Interfaces.Unsigned_64 := 0;
       begin
-         for Index in Held'Range loop
-            declare
-               Seen_Before : Boolean := False;
-            begin
-               for Earlier in Held'First .. Index - 1 loop
-                  if Held (Earlier).all.Base = Held (Index).all.Base
-                    and then Held (Earlier).all.Offset
-                             = Held (Index).all.Offset
-                  then
-                     Seen_Before := True;
-                     exit;
-                  end if;
-               end loop;
-
-               if not Seen_Before then
-                  Total := Total
-                    + Interfaces.Unsigned_64 (Held (Index).all.Rows)
-                      * Interfaces.Unsigned_64
-                          (T.Row_Bytes (Held (Index).all));
-               end if;
-            end;
-         end loop;
+         Mixture_Bytes (Total, Feed);
 
          --  Less a draft's share where one is to come, as a dense
          --  model's room is: the budget is what the mixture may take.
@@ -3666,7 +3777,10 @@ begin
             Item.Able := Model_Runner.Backend.Device.Describe;
          end if;
 
-         Item.Stacked := Total <= Item.Able.Memory_Bytes;
+         --  A split decided before the panels were built is held to:
+         --  its experts are now in the processor's layout, which the
+         --  device does not read.
+         Item.Stacked := not Mixture_Split and then Total <= Item.Able.Memory_Bytes;
 
          --  And the route kernel told whether this mixture's shares stay
          --  as the softmax gave them, so that one that does not
@@ -3681,41 +3795,13 @@ begin
          --  front half. A 21 GB mixture here holds 12.7: streamed, its
          --  experts read at 2.9 tokens a second on the device against
          --  13.9 on the processor alone.
-         if not Item.Stacked and then Item.Layers /= null then
-            declare
-               Feed_Bytes : Interfaces.Unsigned_64 := 0;
-
-               procedure Count (View : T.View) is
-               begin
-                  if T.Is_Present (View) then
-                     Feed_Bytes := Feed_Bytes
-                       + Interfaces.Unsigned_64 (View.Rows)
-                         * Interfaces.Unsigned_64 (T.Row_Bytes (View));
-                  end if;
-               end Count;
-            begin
-               for Index in Item.Layers.all'Range loop
-                  declare
-                     L : Layer renames Item.Layers.all (Index);
-                  begin
-                     Count (L.Gate_Stack);
-                     Count (L.Up_Stack);
-                     Count (L.Down_Stack);
-                     Count (L.Router);
-                     Count (L.Shared_Gate);
-                     Count (L.Shared_Up);
-                     Count (L.Shared_Down);
-                  end;
-               end loop;
-
-               Item.Split_Feed :=
-                 Feed_Bytes > 0
-                 and then Feed_Bytes < Total
-                 and then Total - Feed_Bytes <= Item.Able.Memory_Bytes;
-               if Item.Split_Feed then
-                  Taken := Total - Feed_Bytes;
-               end if;
-            end;
+         if not Item.Stacked then
+            Item.Split_Feed :=
+              Mixture_Split or else Splits (Total, Feed, Item.Able.Memory_Bytes);
+            if Item.Split_Feed then
+               Taken := Total - Feed;
+               Item.Host_Front_Raw := Front_Reads_Raw;
+            end if;
          end if;
 
          if not Model_Runner.Backend.Device.Is_Beside (Item.Device_Ticket)

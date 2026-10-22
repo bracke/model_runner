@@ -1,3 +1,4 @@
+with Interfaces;
 with System;
 with Ada.Strings.Unbounded;
 
@@ -43,6 +44,13 @@ package Model_Runner.Panel_Cache is
    --  @param Prefix The path the files' names begin with.
    --  @param Count How many of the newest to keep.
    procedure Keep_Newest (Prefix : String; Count : Natural);
+
+   --  What the host could hand out now without swapping, for panels a load
+   --  builds unasked (Llama.Panels_Unasked): asked here, where the model's
+   --  reader may not reach the host itself.
+   --
+   --  @return Bytes available, or 0 when unknown.
+   function Room_Now return Interfaces.Unsigned_64;
 
    --  A cache file being built where it will be read: made beside its
    --  final name with its header, and mapped for writing, so the panels

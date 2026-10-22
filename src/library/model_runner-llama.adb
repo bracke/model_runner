@@ -10977,6 +10977,7 @@ package body Model_Runner.Llama is
      (Item : Session; Source : Model'Class; Count : Element_Count)
       return Boolean
    is (Source.Split_Feed
+       and then Source.Host_Front_Raw
        and then Source.Settings.Experts > 0
        and then not Hybrid (Source.Settings.Kind)
        and then Count <= Host_Call_Most

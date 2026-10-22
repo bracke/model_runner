@@ -3965,6 +3965,9 @@ package body Tests.Inference_Cases is
       --  vocabulary and the same on every run.
       Tokens : Model_Runner.Tokenizer.Token_Array (1 .. Length);
 
+      --  The bytes the last model Logits_On prepared rewrote into panels.
+      Last_Panels : Interfaces.Unsigned_64 := 0;
+
       --  The last position's logits from one backend, in one batch or in
       --  chunks. Zero means the backend refused, and says why.
       procedure Logits_On
@@ -4011,6 +4014,7 @@ package body Tests.Inference_Cases is
             Containers.Close (Item);
             return;
          end if;
+         Last_Panels := L.Repacked_Bytes (Model);
 
          L.Open (Session, Model, Context => Room, Cache => Cache,
                  Workers => Team, Status => Status, Paged => Paged);
@@ -4484,6 +4488,14 @@ package body Tests.Inference_Cases is
                      Assert (Why = E.No_Error,
                              "the device refused " & Name & ": "
                              & E.Error_Code'Image (Why));
+                     --  The experts the processor reads, in the panels it
+                     --  reads them in alone, where its integer kernels take
+                     --  them (Panels_Unasked).
+                     Assert (Last_Panels > 0
+                             or else not L.Panels_Unasked
+                                           (Experts, Interfaces.Unsigned_64'Last,
+                                            Model_Runner.Panel_Cache.Room_Now),
+                             Name & " left its experts as the file has them");
                      if Whole_Host then
                         Assert (Model_Runner.Backend.Device.Layers_Split = 0
                                 and then Model_Runner.Backend.Device.Layers_Handed = 0,
@@ -4537,6 +4549,71 @@ package body Tests.Inference_Cases is
                B.Free (Image);
             end;
          end loop;
+
+         --  And one whose front half is in Q2_K, which the processor reads
+         --  several times slower as the file lays it out than in the panels
+         --  the device's half is not rewritten into: four positions at a
+         --  time in pages stay on the split, where Q8_0's went to the
+         --  processor whole above.
+         declare
+            Image   : B.Byte_Array_Access;
+            Host    : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+            Device  : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
+            Why     : E.Error_Code;
+            Worst   : N.Real := 0.0;
+            All_Of  : Interfaces.Unsigned_64 := 0;
+            Experts : Interfaces.Unsigned_64 := 0;
+            use type Interfaces.Unsigned_64;
+         begin
+            Tiny_Model.Build
+              (Image, Tiny_Model.Q2_K, Room => Room, Kind => Tiny_Model.Qwen3,
+               Experts => 20, Experts_Used => 4);
+            declare
+               Held   : aliased constant B.Byte_Array := Image.all;
+               Source : Model_Runner.Byte_Sources.Memory.Buffer_Source
+                 (Held'Access);
+               Item   : Containers.Container;
+               Status : E.Error_Info;
+            begin
+               Containers.Reader.Parse (Item, Source, Status => Status);
+               for Index in 1 .. Containers.Tensor_Count (Item) loop
+                  All_Of := All_Of + Containers.Tensor_Bytes (Item, Index);
+                  if Ada.Strings.Fixed.Index
+                       (Containers.Tensor_Name (Item, Index), "_exps.") > 0
+                  then
+                     Experts := Experts + Containers.Tensor_Bytes (Item, Index);
+                  end if;
+               end loop;
+               Containers.Close (Item);
+            end;
+
+            Logits_On
+              (Image, Model_Runner.Backend.Backend_CPU, Length, Host, Why,
+               Team => Team'Unchecked_Access);
+            Assert (Why = E.No_Error,
+                    "the processor refused the Q2_K mixture: "
+                    & E.Error_Code'Image (Why));
+            Model_Runner.Backend.Device.Close;
+            Model_Runner.Backend.Device.Open
+              (Awake, Budget => All_Of - Experts / 4);
+            Assert (Awake, "the device did not reopen for the Q2_K mixture");
+            Logits_On
+              (Image, Model_Runner.Backend.Backend_Device, 4, Device, Why,
+               Team => Team'Unchecked_Access, Paged => True);
+            Assert (Why = E.No_Error,
+                    "the device refused the Q2_K mixture: "
+                    & E.Error_Code'Image (Why));
+            Assert (Model_Runner.Backend.Device.Layers_Split > 0,
+                    "the Q2_K mixture four at a time in pages went to the"
+                    & " processor whole");
+            for Index in Host'Range loop
+               Worst := N.Real'Max (Worst, abs (Host (Index) - Device (Index)));
+            end loop;
+            B.Free (Image);
+            Assert (Worst <= Tolerance,
+                    "on the Q2_K mixture split the device's logits differ"
+                    & " from the processor's by " & N.Real'Image (Worst));
+         end;
          Model_Runner.Backend.CPU.Close (Team);
          Model_Runner.Backend.Device.Close;
          Model_Runner.Backend.Device.Open (Awake);
