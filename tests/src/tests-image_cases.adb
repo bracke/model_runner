@@ -689,14 +689,32 @@ package body Tests.Image_Cases is
       --  In binary32 throughout; in eight bits, the products reading the
       --  matrices a panel of rows at a time, in binary32 and with their
       --  activations rounded to eight bits too.
-      for Run in 1 .. 3 loop
-         Write_Denoiser (Blocks => [0, 1], Eight => Run > 1);
+      --  And in binary32 across a pool, the attention asking five of the
+      --  twelve image rows at a time, and the prompt's rows not kept: asked
+      --  beside the image's, causally through the tile loop.
+      for Run in 1 .. 4 loop
+         Write_Denoiser (Blocks => [0, 1], Eight => Run in 2 .. 3);
          Q.Open (Model, Path, Status);
          Assert (E.Is_Ok (Status), "the denoiser did not open");
          if Run = 3 then
             Model_Runner.Backend.CPU.Use_Integer_Activations (Model_Runner.Backend.CPU.Every_Role);
          end if;
-         Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status);
+         if Run = 4 then
+            Q.Set_Chunking (Rows => 20);
+            Q.Set_Prefix_Room (1);
+            declare
+               Team : aliased Model_Runner.Backend.CPU.Pool (3);
+            begin
+               Model_Runner.Backend.CPU.Open (Team);
+               Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, Team'Unchecked_Access,
+                           Answer, Status);
+               Model_Runner.Backend.CPU.Close (Team);
+            end;
+            Q.Set_Chunking;
+            Q.Set_Prefix_Room;
+         else
+            Q.Velocity (Model, Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, null, Answer, Status);
+         end if;
          Model_Runner.Backend.CPU.Use_Integer_Activations (Model_Runner.Backend.CPU.No_Role);
          Assert (E.Is_Ok (Status), "the step failed: " & E.Error_Code'Image (Status.Code));
          Reference_Velocity (Latent, Grid_Rows, Grid_Columns, 500.0, Text, Text_Rows, 2, Wanted);

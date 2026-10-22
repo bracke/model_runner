@@ -336,6 +336,93 @@ package body Model_Runner.Float_Panels is
       Into.Columns := Columns;
    end Pack;
 
+   --  A share of the panels of a matrix laid out from binary32 already
+   --  in memory: panel P's column K, lane L, is the element at Row_Step *
+   --  (P * Width + L) + Column_Step * K from the first.
+   type Pack_Work is new Model_Runner.Shares.Work with record
+      Source       : System.Address;
+      Span         : Element_Count;
+      Data         : System.Address;
+      Rows         : Element_Count;
+      Columns      : Element_Count;
+      Row_Step     : Element_Count;
+      Column_Step  : Element_Count;
+   end record;
+
+   overriding procedure Run (Item : in out Pack_Work; First : Element_Count; Last : Element_Count);
+
+   overriding procedure Run (Item : in out Pack_Work; First : Element_Count; Last : Element_Count) is
+      Source : constant Real_Array (0 .. Item.Span - 1) with Import, Address => Item.Source;
+      Data   : Real_Array (0 .. (Last + 1) * Item.Columns * Width - 1) with Import, Address => Item.Data;
+   begin
+      for P in First .. Last loop
+         declare
+            Lanes : constant Element_Count := Element_Count'Min (Width, Item.Rows - P * Width);
+            Base  : constant Element_Count := P * Item.Columns * Width;
+         begin
+            for K in 0 .. Item.Columns - 1 loop
+               for Lane in Element_Count range 0 .. Width - 1 loop
+                  Data (Base + K * Width + Lane) :=
+                    (if Lane < Lanes
+                     then Source ((P * Width + Lane) * Item.Row_Step + K * Item.Column_Step)
+                     else 0.0);
+               end loop;
+            end loop;
+         end;
+      end loop;
+   end Run;
+
+   procedure Pack
+     (Team        : Model_Runner.Shares.Team_Access;
+      Source      : Model_Runner.Numerics.Real_Array;
+      From        : Element_Count;
+      Rows        : Element_Count;
+      Columns     : Element_Count;
+      Row_Step    : Element_Count;
+      Column_Step : Element_Count;
+      Into        : in out Panel_Set;
+      Status      : out Model_Runner.Errors.Error_Info)
+   is
+      Panels : constant Element_Count := (Rows + Width - 1) / Width;
+      Whole  : Boolean := False;
+   begin
+      Status := E.Success;
+      if Rows = 0 or else Columns = 0 then
+         Free (Into);
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+      --  Kept where it is large enough: a set packed again and again, as
+      --  attention packs every head's keys, allocates once.
+      if Into.Data = null or else Into.Data'Length < Panels * Columns * Width then
+         Free (Into);
+         T.Allocate (Panels * Columns * Width, Into.Data);
+         if Into.Data = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+      end if;
+      declare
+         Work : aliased Pack_Work :=
+           (Source      => Source (From)'Address,
+            Span        => Source'Last - From + 1,
+            Data        => Into.Data.all'Address,
+            Rows        => Rows,
+            Columns     => Columns,
+            Row_Step    => Row_Step,
+            Column_Step => Column_Step);
+      begin
+         if Team /= null then
+            Team.Divide (Panels, Work'Unchecked_Access, Whole, Cost => Panels * Columns * Width);
+         end if;
+         if not Whole then
+            Work.Run (0, Panels - 1);
+         end if;
+      end;
+      Into.Rows := Rows;
+      Into.Columns := Columns;
+   end Pack;
+
    ----------
    -- Free --
    ----------
@@ -365,8 +452,12 @@ package body Model_Runner.Float_Panels is
       Columns : Element_Count;
       Count   : Element_Count;
       Chunks  : Element_Count;
+      --  The first vector's first element and the first answer's, and
+      --  how far apart two vectors and two answers lie, in elements.
       Vectors : System.Address;
       Target  : System.Address;
+      Across  : Element_Count;
+      Down    : Element_Count;
    end record;
 
    overriding procedure Run (Item : in out Product_Work; First : Element_Count; Last : Element_Count);
@@ -376,9 +467,11 @@ package body Model_Runner.Float_Panels is
       Rows    : constant Element_Count := Item.Rows;
       Panels  : constant Element_Count := (Rows + Width - 1) / Width;
       Step    : constant Element_Count := Tile_Vectors (Item.Kind);
-      Vectors : constant Real_Array (0 .. Item.Count * Columns - 1)
+      Across  : constant Element_Count := Item.Across;
+      Down    : constant Element_Count := Item.Down;
+      Vectors : constant Real_Array (0 .. (Item.Count - 1) * Across + Columns - 1)
         with Import, Address => Item.Vectors;
-      Target  : Real_Array (0 .. Item.Count * Rows - 1)
+      Target  : Real_Array (0 .. (Item.Count - 1) * Down + Rows - 1)
         with Import, Address => Item.Target;
       Data    : constant Real_Array (0 .. Panels * Columns * Width - 1)
         with Import, Address => Item.Data;
@@ -407,12 +500,12 @@ package body Model_Runner.Float_Panels is
                            begin
                               if Take = Step and then Lanes = Width then
                                  Tile (Item.Kind,
-                                       (Vectors => Vectors (Vector * Columns + Start)'Address,
+                                       (Vectors => Vectors (Vector * Across + Start)'Address,
                                         Panel   => Panel,
-                                        Answers => Target (Vector * Rows + P * Width)'Address,
-                                        Across  => Interfaces.Unsigned_64 (Columns * 4),
+                                        Answers => Target (Vector * Down + P * Width)'Address,
+                                        Across  => Interfaces.Unsigned_64 (Across * 4),
                                         Steps   => Interfaces.Unsigned_64 (Steps),
-                                        Down    => Interfaces.Unsigned_64 (Rows * 4),
+                                        Down    => Interfaces.Unsigned_64 (Down * 4),
                                         Add     => (if Start = 0 then 0 else 1)));
                               else
                                  --  A tile the vectors or the weight's rows
@@ -425,8 +518,8 @@ package body Model_Runner.Float_Panels is
                                  begin
                                     for R in 0 .. Take - 1 loop
                                        Spare_In (R * Steps .. R * Steps + Steps - 1) :=
-                                         Vectors ((Vector + R) * Columns + Start
-                                                  .. (Vector + R) * Columns + Start + Steps - 1);
+                                         Vectors ((Vector + R) * Across + Start
+                                                  .. (Vector + R) * Across + Start + Steps - 1);
                                     end loop;
                                     Tile (Item.Kind,
                                           (Vectors => Spare_In'Address,
@@ -440,7 +533,7 @@ package body Model_Runner.Float_Panels is
                                        for Lane in 0 .. Lanes - 1 loop
                                           declare
                                              At_Target : constant Element_Count :=
-                                               (Vector + R) * Rows + P * Width + Lane;
+                                               (Vector + R) * Down + P * Width + Lane;
                                           begin
                                              Target (At_Target) :=
                                                (if Start = 0 then Spare_Out (R * Width + Lane)
@@ -467,7 +560,22 @@ package body Model_Runner.Float_Panels is
       Item    : Panel_Set;
       Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
-      Target  : in out Model_Runner.Numerics.Real_Array)
+      Target  : in out Model_Runner.Numerics.Real_Array) is
+   begin
+      Multiply
+        (Team, Item, Vectors, Vectors'First, Item.Columns, Count, Target, Target'First, Item.Rows);
+   end Multiply;
+
+   procedure Multiply
+     (Team         : Model_Runner.Shares.Team_Access;
+      Item         : Panel_Set;
+      Vectors      : Model_Runner.Numerics.Real_Array;
+      Vectors_From : Element_Count;
+      Vector_Step  : Element_Count;
+      Count        : Element_Count;
+      Target       : in out Model_Runner.Numerics.Real_Array;
+      Target_From  : Element_Count;
+      Target_Step  : Element_Count)
    is
       Panels : constant Element_Count := (Item.Rows + Width - 1) / Width;
       Chunks : constant Element_Count := (Count + Chunk - 1) / Chunk;
@@ -485,8 +593,10 @@ package body Model_Runner.Float_Panels is
             Columns => Item.Columns,
             Count   => Count,
             Chunks  => Chunks,
-            Vectors => Vectors (Vectors'First)'Address,
-            Target  => Target (Target'First)'Address);
+            Vectors => Vectors (Vectors_From)'Address,
+            Target  => Target (Target_From)'Address,
+            Across  => Vector_Step,
+            Down    => Target_Step);
       begin
          if Team /= null then
             Team.Divide (Items, Work'Unchecked_Access, Whole, Cost => Count * Item.Rows * Item.Columns);

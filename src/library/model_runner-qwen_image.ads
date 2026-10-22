@@ -171,14 +171,26 @@ package Model_Runner.Qwen_Image is
    --  How large a picture's latent is before each block goes to the device
    --  a chunk of its rows at a time rather than in one sequence, and how
    --  large a chunk is: 8,192 rows and 4,096 unless said -- a 1440 picture
-   --  and half. A test sets them small to take the chunked way on a small
-   --  picture.
+   --  and half. The processor's attention asks a quarter of a chunk's
+   --  rows at a time. A test sets them small to take the chunked ways on a
+   --  small picture.
    --
    --  Task safety: set before the evaluations it should govern.
    --
    --  @param Past Rows past which the blocks go in chunks.
    --  @param Rows Rows a chunk holds.
    procedure Set_Chunking (Past : Positive := 8_192; Rows : Positive := 4_096);
+
+   --  How many bytes the prompt's keys and values, every block's, may take
+   --  before they are not kept between steps and every step reads the
+   --  prompt's rows beside the image's: 1 GiB unless said, which a prompt
+   --  of the longest the encoder reads does not reach. A test sets it
+   --  small to take the way a prompt past it takes.
+   --
+   --  Task safety: set before the evaluations it should govern.
+   --
+   --  @param Bytes The room.
+   procedure Set_Prefix_Room (Bytes : Positive := 1_073_741_824);
 
    --  The noise levels a picture is drawn through, as the reference's flow
    --  scheduler works them out for this model: t = 1 - i / Steps shifted by

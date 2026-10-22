@@ -55,6 +55,33 @@ package Model_Runner.Float_Panels is
       Into   : in out Panel_Set;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Lay out in panels a matrix already in binary32: its element at row
+   --  R, column K is Source (From + R * Row_Step + K * Column_Step), so a
+   --  matrix read across its rows is packed as readily as one read down
+   --  its columns -- an attention head's keys, and its values turned. The
+   --  set's memory is kept where it is large enough; the panels are laid
+   --  out across Team.
+   --
+   --  @param Team Tasks to share the panels out across, or null.
+   --  @param Source The elements.
+   --  @param From The first element's index.
+   --  @param Rows The matrix's rows: the answers a vector makes.
+   --  @param Columns Its columns: the elements a vector holds.
+   --  @param Row_Step Elements from one row's element to the next row's.
+   --  @param Column_Step Elements from one column's to the next.
+   --  @param Into Receives the panels.
+   --  @param Status Success, or the allocation failing or a shape of none.
+   procedure Pack
+     (Team        : Model_Runner.Shares.Team_Access;
+      Source      : Model_Runner.Numerics.Real_Array;
+      From        : Element_Count;
+      Rows        : Element_Count;
+      Columns     : Element_Count;
+      Row_Step    : Element_Count;
+      Column_Step : Element_Count;
+      Into        : in out Panel_Set;
+      Status      : out Model_Runner.Errors.Error_Info);
+
    --  Give back what Pack took. Nothing to give back is not an error.
    --
    --  @param Item The set.
@@ -83,6 +110,31 @@ package Model_Runner.Float_Panels is
       Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
       Target  : in out Model_Runner.Numerics.Real_Array)
+   with Pre => Is_Packed (Item);
+
+   --  The same, the vectors and the answers where they lie inside wider
+   --  rows: vector i from Vectors (Vectors_From + i * Vector_Step), its
+   --  answers into Target (Target_From + i * Target_Step) on.
+   --
+   --  @param Team Tasks to share the tiles out across, or null.
+   --  @param Item A packed set.
+   --  @param Vectors The vectors.
+   --  @param Vectors_From The first vector's first element.
+   --  @param Vector_Step Elements from one vector to the next.
+   --  @param Count How many vectors.
+   --  @param Target Receives the answers.
+   --  @param Target_From Where the first vector's go.
+   --  @param Target_Step Elements from one vector's answers to the next's.
+   procedure Multiply
+     (Team         : Model_Runner.Shares.Team_Access;
+      Item         : Panel_Set;
+      Vectors      : Model_Runner.Numerics.Real_Array;
+      Vectors_From : Element_Count;
+      Vector_Step  : Element_Count;
+      Count        : Element_Count;
+      Target       : in out Model_Runner.Numerics.Real_Array;
+      Target_From  : Element_Count;
+      Target_Step  : Element_Count)
    with Pre => Is_Packed (Item);
 
    --  Choose the kernel. The processor's backend asks the host once and

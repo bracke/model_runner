@@ -3,6 +3,7 @@ with System.Storage_Elements;
 
 with Model_Runner.Backend.Device;
 with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Float_Panels;
 with Model_Runner.Kernels;
 with Model_Runner.Philox;
 with Model_Runner.Platform.Device.Products;
@@ -686,6 +687,8 @@ package body Model_Runner.Qwen_Image is
    type Attention_Work is new Model_Runner.Shares.Work with record
       Q, K, V, A : T.Real_Array_Access;
       Image, Asking, Total, Width, Head, Heads : Element_Count := 0;
+      --  The first row asking: the rows before it are answered otherwise.
+      First_Row : Element_Count := 0;
    end record;
 
    overriding procedure Run (Item : in out Attention_Work; First : Element_Count; Last : Element_Count) is
@@ -694,7 +697,7 @@ package body Model_Runner.Qwen_Image is
       use type Wide;
       use type Real;
       Scale  : constant Real := Real (1.0 / N.Sqrt (Wide (Item.Head)));
-      Tiles  : constant Element_Count := (Item.Asking + Tile - 1) / Tile;
+      Tiles  : constant Element_Count := (Item.Asking - Item.First_Row + Tile - 1) / Tile;
       subtype Tile_Row is Element_Count range 0 .. Tile - 1;
       type Score_Rows is array (Tile_Row) of N.Real_Array (0 .. Item.Total - 1);
       type Sum_Rows is array (Tile_Row) of N.Real_Array (0 .. Item.Head - 1);
@@ -705,7 +708,7 @@ package body Model_Runner.Qwen_Image is
       for Which in First .. Last loop
          declare
             Head   : constant Element_Count := Which / Tiles;
-            Start  : constant Element_Count := (Which mod Tiles) * Tile;
+            Start  : constant Element_Count := Item.First_Row + (Which mod Tiles) * Tile;
             Rows   : constant Element_Count := Element_Count'Min (Tile, Item.Asking - Start);
             Column : constant Element_Count := Head * Item.Head;
             --  The nearest and the furthest key any row of the tile sees: a
@@ -773,6 +776,53 @@ package body Model_Runner.Qwen_Image is
                end;
             end loop;
          end;
+      end loop;
+   end Run;
+
+   --  A chunk of an attention head's scores, a share of rows at a time:
+   --  each row scaled, its largest taken off and raised, its sum kept --
+   --  or, once the weights have blended the values, each answer divided by
+   --  its row's sum.
+   type Soften_Work is new Model_Runner.Shares.Work with record
+      Scores, Answers, Sums : T.Real_Array_Access;
+      Scale         : N.Real := 0.0;
+      Keys, Across  : Element_Count := 0;
+      Answers_From  : Element_Count := 0;
+      Head          : Element_Count := 0;
+      Divide        : Boolean := False;
+   end record;
+
+   overriding procedure Run (Item : in out Soften_Work; First : Element_Count; Last : Element_Count) is
+      use type N.Real;
+      Keys : constant Element_Count := Item.Keys;
+   begin
+      for Row in First .. Last loop
+         if Item.Divide then
+            declare
+               At_Row : constant Element_Count := Item.Answers_From + Row * Item.Across;
+               Share  : constant N.Real := 1.0 / Item.Sums (Row);
+            begin
+               for I in 0 .. Item.Head - 1 loop
+                  Item.Answers (At_Row + I) := Item.Answers (At_Row + I) * Share;
+               end loop;
+            end;
+         else
+            declare
+               Scores : N.Real_Array renames Item.Scores (Row * Keys .. Row * Keys + Keys - 1);
+               Most   : N.Real := N.Real'First;
+               Total  : N.Real := 0.0;
+            begin
+               for Key in Scores'Range loop
+                  Scores (Key) := Scores (Key) * Item.Scale;
+                  Most := N.Real'Max (Most, Scores (Key));
+               end loop;
+               Model_Runner.Kernels.Exponentiate (Scores, Most);
+               for Key in Scores'Range loop
+                  Total := Total + Scores (Key);
+               end loop;
+               Item.Sums (Row) := Total;
+            end;
+         end if;
       end loop;
    end Run;
 
@@ -940,7 +990,12 @@ package body Model_Runner.Qwen_Image is
    end Forget;
 
    --  The most a prefix cache holds, keys and values together, in bytes.
-   Most_Kept : constant := 1_073_741_824;
+   Most_Kept : Long_Long_Integer := 1_073_741_824;
+
+   procedure Set_Prefix_Room (Bytes : Positive := 1_073_741_824) is
+   begin
+      Most_Kept := Long_Long_Integer (Bytes);
+   end Set_Prefix_Room;
 
    --------------
    -- Velocity --
@@ -1164,7 +1219,7 @@ package body Model_Runner.Qwen_Image is
             Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
             Job     : aliased Attention_Work :=
               (Q => Q, K => K, V => V, A => A, Image => 0, Asking => Prompt, Total => Prompt, Width => W,
-               Head => D, Heads => Heads);
+               Head => D, Heads => Heads, First_Row => 0);
          begin
             Share (Norm_Rows, Part => 0);
             Product (Layer.Query, H, Prompt, Q);
@@ -1237,8 +1292,8 @@ package body Model_Runner.Qwen_Image is
       --  step is given, which the step itself then says.
       if Item.Ready and then Text_Rows > 0 and then not Holds (Item, Prefix, Text, Text_Rows)
         and then Text'Length = Element_Count (Text_Rows) * Element_Count (Item.Shape.Context)
-        and then Element_Count (Item.Shape.Blocks) * Element_Count (Text_Rows) * Element_Count (Item.Shape.Width) * 8
-                 <= Most_Kept
+        and then Long_Long_Integer (Item.Shape.Blocks) * Long_Long_Integer (Text_Rows)
+                 * Long_Long_Integer (Item.Shape.Width) * 8 <= Most_Kept
       then
          Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status);
          if E.Is_Error (Status) then
@@ -1289,7 +1344,7 @@ package body Model_Runner.Qwen_Image is
         and then Prefix.Text'Length = Text'Length and then N."=" (Prefix.Text.all, Text)
         and then Prefix.Keys /= null and then Prefix.Keys'Length = Kept;
       Keep    : constant Boolean :=
-        not Reuse and then Prompt > 0 and then Kept * 8 <= Most_Kept;
+        not Reuse and then Prompt > 0 and then Long_Long_Integer (Kept) * 8 <= Most_Kept;
       Live    : constant Element_Count := (if Reuse then Image else Total);
       --  Whether the blocks ran on the device whole.
       Resident : Boolean := False;
@@ -1316,12 +1371,21 @@ package body Model_Runner.Qwen_Image is
       Chunk_Rows : constant Element_Count := Chunk_Size;
       Chunk_In, Chunk_Out : T.Real_Array_Access;
 
+      --  The processor's attention: a chunk of queries' scores against
+      --  every key, each row's sum, and a head's keys and its values
+      --  turned, laid out in panels.
+      Scores, Sums : T.Real_Array_Access;
+      Keys_Set, Values_Set : Model_Runner.Float_Panels.Panel_Set;
+
       procedure Release is
       begin
          T.Free (X); T.Free (H); T.Free (Q); T.Free (K); T.Free (V); T.Free (A); T.Free (G); T.Free (Y);
          T.Free (Times); T.Free (Hidden); T.Free (Modulation); T.Free (Final_Scale); T.Free (Gates);
          T.Free (Angles_Cos); T.Free (Angles_Sin);
          T.Free (Chunk_In); T.Free (Chunk_Out);
+         T.Free (Scores); T.Free (Sums);
+         Model_Runner.Float_Panels.Free (Keys_Set);
+         Model_Runner.Float_Panels.Free (Values_Set);
       end Release;
 
       --  Target := Weight's rows times each of Count vectors.
@@ -1401,17 +1465,76 @@ package body Model_Runner.Qwen_Image is
       --  blend through Way_Out as well, into Y, and Projected says so: the
       --  blend never comes back. The prompt's rows, where they ask, ask
       --  after, and theirs is projected from a copy of their few rows.
+      --  A's rows := each live row's attention on the processor, a head at
+      --  a time: the head's keys and its values turned laid out in panels,
+      --  then a chunk of the image's queries at a time against the keys,
+      --  the scores softened and the values blended by them -- passes over
+      --  the pool at the panels' rate, where the tile loop summed a dot
+      --  product a key at a time and spent three quarters of a 512 step
+      --  there. The prompt's rows, where they ask, ask causally through the
+      --  tile loop: a few dozen.
+      procedure Attend_By_Panels is
+         package FP renames Model_Runner.Float_Panels;
+         Team  : constant Model_Runner.Shares.Team_Access := CPU.Sharing (Pool);
+         Chunk : constant Element_Count := Element_Count'Max (1, Element_Count'Min (Image, Chunk_Rows / 4));
+         Scale : constant Real := Real (1.0 / N.Sqrt (Wide (D)));
+      begin
+         if Scores = null then
+            T.Allocate (Chunk * Total, Scores);
+            T.Allocate (Chunk, Sums);
+            if Scores = null or else Sums = null then
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+         end if;
+         for Head in 0 .. Heads - 1 loop
+            exit when E.Is_Error (Status);
+            FP.Pack (Team, K.all, Head * D, Total, D, W, 1, Keys_Set, Status);
+            if E.Is_Ok (Status) then
+               FP.Pack (Team, V.all, Head * D, D, Total, 1, W, Values_Set, Status);
+            end if;
+            declare
+               From : Element_Count := 0;
+            begin
+               while From < Image and then E.Is_Ok (Status) loop
+                  declare
+                     Take : constant Element_Count := Element_Count'Min (Chunk, Image - From);
+                     Job  : aliased Soften_Work :=
+                       (Scores => Scores, Answers => A, Sums => Sums, Scale => Scale, Keys => Total, Across => W,
+                        Answers_From => From * W + Head * D, Head => D, Divide => False);
+                  begin
+                     FP.Multiply (Team, Keys_Set, Q.all, From * W + Head * D, W, Take, Scores.all, 0, Total);
+                     CPU.Dispatch_Shares (Pool, Take, Job'Unchecked_Access, Status, Cost => Take * Total);
+                     if E.Is_Ok (Status) then
+                        FP.Multiply (Team, Values_Set, Scores.all, 0, Total, Take, A.all, From * W + Head * D, W);
+                        Job.Divide := True;
+                        CPU.Dispatch_Shares (Pool, Take, Job'Unchecked_Access, Status, Cost => Take * D);
+                     end if;
+                     From := From + Take;
+                  end;
+               end loop;
+            end;
+         end loop;
+         if Live > Image and then E.Is_Ok (Status) then
+            declare
+               Job : aliased Attention_Work :=
+                 (Q => Q, K => K, V => V, A => A, Image => Image, Asking => Live, Total => Total, Width => W,
+                  Head => D, Heads => Heads, First_Row => Image);
+            begin
+               CPU.Dispatch_Shares
+                 (Pool, Heads * ((Live - Image + Tile - 1) / Tile), Job'Unchecked_Access, Status,
+                  Cost => (Live - Image) * Total * W);
+            end;
+         end if;
+      end Attend_By_Panels;
+
       procedure Attend (Way_Out : T.View; Projected : out Boolean) is
-         Job : aliased Attention_Work :=
-           (Q => Q, K => K, V => V, A => A, Image => Image, Asking => Live, Total => Total, Width => W,
-            Head => D, Heads => Heads);
       begin
          Projected := False;
          if E.Is_Error (Status) then
             return;
          elsif not On_Device then
-            CPU.Dispatch_Shares
-              (Pool, Heads * ((Live + Tile - 1) / Tile), Job'Unchecked_Access, Status, Cost => Live * Total * W);
+            Attend_By_Panels;
             return;
          end if;
          declare
