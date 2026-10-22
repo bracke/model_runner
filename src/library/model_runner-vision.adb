@@ -400,6 +400,38 @@ package body Model_Runner.Vision is
       if E.Is_Ok (Status) then
          Bind_Vector (Item, "mm.2.bias", Text_Width, Item.Merge_Out_Bias, Status);
       end if;
+
+      --  And each deepstack merger, named by its block.
+      for Which in 1 .. Item.Deep_Count loop
+         exit when E.Is_Error (Status);
+         declare
+            Lead : constant String :=
+              "v.deepstack." & Model_Runner.Text.Image (Long_Long_Integer (Item.Deep_Blocks (Which))) & ".";
+            Deep : Deep_Merger renames Item.Deeps (Which);
+         begin
+            if Item.Deep_Blocks (Which) >= Item.Blocks then
+               Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+               E.Add_Text (Status, "tensor", Lead & "norm.weight", E.Param_Identifier);
+               return;
+            end if;
+            Bind_Vector (Item, Lead & "norm.weight", Joined, Deep.Norm_Weight, Status);
+            if E.Is_Ok (Status) then
+               Bind_Vector (Item, Lead & "norm.bias", Joined, Deep.Norm_Bias, Status);
+            end if;
+            if E.Is_Ok (Status) then
+               Bind (Item, Lead & "fc1.weight", Joined, Joined, Deep.Step_In, Status);
+            end if;
+            if E.Is_Ok (Status) then
+               Bind_Vector (Item, Lead & "fc1.bias", Joined, Deep.Step_In_Bias, Status);
+            end if;
+            if E.Is_Ok (Status) then
+               Bind (Item, Lead & "fc2.weight", Text_Width, Joined, Deep.Step_Out, Status);
+            end if;
+            if E.Is_Ok (Status) then
+               Bind_Vector (Item, Lead & "fc2.bias", Text_Width, Deep.Step_Out_Bias, Status);
+            end if;
+         end;
+      end loop;
    end Bind_Qwen;
 
    --  The MiniCPM-V resampler's tensors, over a SigLIP encoder read as
@@ -848,9 +880,8 @@ package body Model_Runner.Vision is
       end loop;
 
       --  What the Qwen encoder states of its own: the window a side, and
-      --  whether any block's state is stacked beside the projection --
-      --  Qwen3-VL's deepstack, which Qwen3.5's files do not carry and
-      --  this build does not read.
+      --  which blocks' states are stacked beside the projection --
+      --  Qwen3-VL's deepstack, which Qwen3.5's files do not carry.
       if Is_Qwen (Item) then
          Containers.Get_Integer
            (Item.Container, "clip.vision.spatial_merge_size", 1, 8, Number,
@@ -859,7 +890,6 @@ package body Model_Runner.Vision is
 
          declare
             Length  : Natural := 0;
-            Stacked : Boolean := False;
             Flag    : Boolean;
          begin
             Containers.Get_Array_Length
@@ -870,20 +900,19 @@ package body Model_Runner.Vision is
                   Containers.Get_Boolean_Element
                     (Item.Container, "clip.vision.is_deepstack_layers", Index,
                      Flag, Local);
-                  Stacked := Stacked or else (E.Is_Ok (Local) and then Flag);
+                  if E.Is_Ok (Local) and then Flag then
+                     if Item.Deep_Count = Most_Deep then
+                        Status := E.Make (E.Arch_Unsupported_Projector);
+                        E.Add_Text
+                          (Status, "format", Qwen_3 & " deepstack", E.Param_Identifier);
+                        E.Add_Text (Status, "supported", Qwen_3, E.Param_Identifier);
+                        Fail (Status);
+                        return;
+                     end if;
+                     Item.Deep_Count := Item.Deep_Count + 1;
+                     Item.Deep_Blocks (Item.Deep_Count) := Index - 1;
+                  end if;
                end loop;
-            end if;
-            if Stacked then
-               Status := E.Make (E.Arch_Unsupported_Projector);
-               E.Add_Text
-                 (Status, "format", Qwen_3 & " deepstack", E.Param_Identifier);
-               E.Add_Text
-                 (Status, "supported",
-               Gemma_3 & " " & Qwen_3 & " " & Resampler
-               & " " & Minicpm_46,
-               E.Param_Identifier);
-               Fail (Status);
-               return;
             end if;
          end;
       end if;
@@ -1271,6 +1300,16 @@ package body Model_Runner.Vision is
       Drop (Item.Patch_Pair);
       Drop (Item.Merge_In);
       Drop (Item.Merge_Out);
+      for Deep of Item.Deeps loop
+         Drop (Deep.Step_In);
+         Drop (Deep.Step_Out);
+         T.Free (Deep.Norm_Weight);
+         T.Free (Deep.Norm_Bias);
+         T.Free (Deep.Step_In_Bias);
+         T.Free (Deep.Step_Out_Bias);
+      end loop;
+      Item.Deep_Count := 0;
+      Item.Deep_Blocks := [others => 0];
       Drop (Item.Query_Rows);
       Drop (Item.Kv_Proj);
       Drop (Item.R_Attn_Q);
@@ -4293,6 +4332,11 @@ package body Model_Runner.Vision is
       K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access := null;
       Merged : T.Real_Array_Access := null;
 
+      --  The deepstack's rows, each merger's Windows rows of the text
+      --  width one after another, and the main merger's before they are
+      --  laid beside them.
+      Deep_Rows, Main_Rows : T.Real_Array_Access := null;
+
       --  Where each patch stands, in the walk's order: its row and column.
       type Patch_Place is record
          Row, Column : Element_Count := 0;
@@ -4319,6 +4363,8 @@ package body Model_Runner.Vision is
          T.Free (Scores);
          T.Free (Blended);
          T.Free (Merged);
+         T.Free (Deep_Rows);
+         T.Free (Main_Rows);
          Free (Places);
          Clear (Work);
          Model_Runner.Images.Free (Resampled);
@@ -4630,6 +4676,37 @@ package body Model_Runner.Vision is
                       Current.Feed_Out_Bias);
             exit when E.Is_Error (Work.Status);
             K.Add (X.all, Normed.all);
+
+            --  A deepstack block's state merged its own way: a window's
+            --  patches joined, then normed over the joined row, the square
+            --  step, the unit, and the way out to the text width.
+            for Which in 1 .. Item.Deep_Count loop
+               if Item.Deep_Blocks (Which) = Index and then E.Is_Ok (Work.Status) then
+                  declare
+                     Deep : Deep_Merger renames Item.Deeps (Which);
+                  begin
+                     if Deep_Rows = null then
+                        T.Allocate (Element_Count (Item.Deep_Count) * Windows * Text_Width, Deep_Rows);
+                        T.Allocate (Windows * Text_Width, Main_Rows);
+                        if Deep_Rows = null or else Main_Rows = null then
+                           Work.Status := E.Make (E.Memory_Allocation_Failed);
+                           E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
+                           exit;
+                        end if;
+                     end if;
+                     Rows_Through (Work, Normalize, Normed, Windows, Joined, Source => X,
+                                   Bias => Deep.Norm_Bias, Weight => Deep.Norm_Weight);
+                     Multiply (Work, Normed, Windows, Deep.Step_In, Merged, Deep.Step_In_Bias);
+                     Rows_Through (Work, Gaussian_Exact, Merged, Windows, Joined);
+                     Multiply (Work, Merged, Windows, Deep.Step_Out, Main_Rows, Deep.Step_Out_Bias);
+                     if E.Is_Ok (Work.Status) then
+                        Deep_Rows (Element_Count (Which - 1) * Windows * Text_Width
+                                   .. Element_Count (Which) * Windows * Text_Width - 1) :=
+                          Main_Rows (0 .. Windows * Text_Width - 1);
+                     end if;
+                  end;
+               end if;
+            end loop;
          end;
       end loop;
 
@@ -4660,6 +4737,38 @@ package body Model_Runner.Vision is
          end if;
       end if;
 
+      --  With a deepstack, each row widened: the merged row, then each
+      --  merger's row for the same window.
+      if Item.Deep_Count > 0 and then E.Is_Ok (Work.Status) then
+         declare
+            Stride : constant Element_Count := Text_Width * Element_Count (1 + Item.Deep_Count);
+            Wide   : T.Real_Array_Access;
+         begin
+            if Deep_Rows = null then
+               Work.Status := E.Make (E.Internal_Invariant_Violated);
+            else
+               T.Allocate (Windows * Stride, Wide);
+            end if;
+            if E.Is_Ok (Work.Status) and then Wide = null then
+               Work.Status := E.Make (E.Memory_Allocation_Failed);
+               E.Add_Text (Work.Status, "category", "vision", E.Param_Identifier);
+            end if;
+            if E.Is_Ok (Work.Status) then
+               for W in 0 .. Windows - 1 loop
+                  Wide (W * Stride .. W * Stride + Text_Width - 1) :=
+                    Rows (W * Text_Width .. (W + 1) * Text_Width - 1);
+                  for Which in 1 .. Element_Count (Item.Deep_Count) loop
+                     Wide (W * Stride + Which * Text_Width .. W * Stride + (Which + 1) * Text_Width - 1) :=
+                       Deep_Rows ((Which - 1) * Windows * Text_Width + W * Text_Width
+                                  .. (Which - 1) * Windows * Text_Width + (W + 1) * Text_Width - 1);
+                  end loop;
+               end loop;
+               T.Free (Rows);
+               Rows := Wide;
+            end if;
+         end;
+      end if;
+
       Status := Work.Status;
       Grid_Rows := Natural (Windows_Y);
       Grid_Columns := Natural (Windows_X);
@@ -4675,6 +4784,9 @@ package body Model_Runner.Vision is
    -----------------
    -- Reads_Video --
    -----------------
+
+   function Stacked_Rows (Item : Encoder) return Natural
+   is (Item.Deep_Count);
 
    function Reads_Video (Item : Encoder) return Boolean
    is (Item.Ready and then (Is_Qwen (Item) or else Is_Minicpm (Item)

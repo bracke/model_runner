@@ -469,7 +469,10 @@ package body Model_Runner.CLI.Pictures is
       Parts_Done : constant Natural := Into.Parts;
 
       Per   : constant Natural := Model_Runner.Vision.Rows_Per_Picture (Item.Eyes);
-      Width : constant N.Element_Count := N.Element_Count (Item.Width);
+      --  A row's elements: the embedding's width, and as many again for
+      --  each deepstack row beside it.
+      Width : constant N.Element_Count :=
+        N.Element_Count (Item.Width * (1 + Model_Runner.Vision.Stacked_Rows (Item.Eyes)));
 
       --  Whether the model reads the rows as a grid, each with a place
       --  of its own, which is also where a picture's rows are its own
@@ -509,6 +512,7 @@ package body Model_Runner.CLI.Pictures is
       --  causal text model as any text does, and read both ways each row
       --  saw the rows after it in the same picture.
       Into.Causal_Rows := not Model_Runner.Vision.Rows_Attend_Both_Ways (Item.Eyes);
+      Into.Stacked := Model_Runner.Vision.Stacked_Rows (Item.Eyes);
       Into.Marker_Text := Item.Marker_Text;
       Into.Marker_Alias := Item.Marker_Alias;
       Into.Frame_Before := Item.Before;

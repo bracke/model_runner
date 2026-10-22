@@ -1673,7 +1673,7 @@ package body Model_Runner.Generation is
             return (Token => Pictures.Soft, Second => Pictures.Video_Marker,
                     Rows => Pictures.Rows,
                     First => Before, Places => Pictures.Places,
-                    Causal => Pictures.Causal_Rows);
+                    Causal => Pictures.Causal_Rows, Stacked => Pictures.Stacked);
          end Given_Before;
       begin
          --  The pages the prompt and the reply will reach, dealt at once,

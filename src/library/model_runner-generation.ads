@@ -475,6 +475,10 @@ package Model_Runner.Generation is
       --  Whether a picture's rows attend to each other causally, as any
       --  text does and as Qwen's do, or both ways, as Gemma's do.
       Causal_Rows : Boolean := False;
+
+      --  How many deepstack rows stand beside each row -- Qwen3-VL's --
+      --  a row then that many embedding widths more.
+      Stacked     : Natural := 0;
       Marker_Text : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
 
       --  Other text the template may write where a picture stands, read as

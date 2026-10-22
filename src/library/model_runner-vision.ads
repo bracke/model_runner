@@ -121,6 +121,16 @@ package Model_Runner.Vision is
    --  @return Elements a row.
    function Row_Width (Item : Encoder) return Positive;
 
+   --  How many deepstack rows stand beside each of a picture's rows: Qwen3-
+   --  VL's are its blocks' states merged as the last block's is, each the
+   --  text width, handed to the text model's first layers one a layer.
+   --  A row Encode makes is then Row_Width times one more than this, the
+   --  merged row first; nought for every other projector.
+   --
+   --  @param Item Open encoder.
+   --  @return The count.
+   function Stacked_Rows (Item : Encoder) return Natural;
+
    --  The projector's kind, as the file names it: "gemma3" or
    --  "qwen3vl_merger".
    --
@@ -323,6 +333,19 @@ private
 
    type Padded_Set is array (1 .. 8 * Max_Blocks) of Padded_Weight;
 
+   --  The most deepstack mergers a projector may carry.
+   Most_Deep : constant := 4;
+
+   type Deep_Block_List is array (1 .. Most_Deep) of Natural;
+
+   type Deep_Merger is record
+      Norm_Weight, Norm_Bias : T.Real_Array_Access := null;
+      Step_In, Step_Out      : T.View := T.Empty_View;
+      Step_In_Bias, Step_Out_Bias : T.Real_Array_Access := null;
+   end record;
+
+   type Deep_Merger_List is array (1 .. Most_Deep) of Deep_Merger;
+
    type Encoder is tagged limited record
       Ready     : Boolean := False;
       File      : Model_Runner.Byte_Sources.Files.File_Source;
@@ -384,6 +407,15 @@ private
       Patch_Pair      : T.View := T.Empty_View;
       Merge_In, Merge_Out : T.View := T.Empty_View;
       Merge_In_Bias, Merge_Out_Bias : T.Real_Array_Access := null;
+
+      --  Qwen3-VL's deepstack: blocks whose state is merged a second way,
+      --  as the last block's is, and handed to the text model's first
+      --  layers beside the picture's rows -- each a norm over the joined
+      --  window, a square step, the Gaussian unit and the way out to the
+      --  text width. Deep_Count of them, at the blocks Deep_Blocks names.
+      Deep_Count  : Natural := 0;
+      Deep_Blocks : Deep_Block_List := [others => 0];
+      Deeps       : Deep_Merger_List;
       Least_Rows    : Positive := 64;
       Most_Rows     : Positive := 4096;
 

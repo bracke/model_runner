@@ -1963,6 +1963,13 @@ package Model_Runner.Llama is
       --  Whether the rows of a run attend causally, as text does, or
       --  both ways within the run, as Gemma 3's picture does.
       Causal : Boolean := False;
+
+      --  How many deepstack rows stand beside each row, Qwen3-VL's: a row
+      --  is then the embedding's width times one more than this, the row
+      --  the token stands as first, and the one after it added to the
+      --  position's state after the first layer, the next after the
+      --  second, and on.
+      Stacked : Natural := 0;
    end record;
 
    No_Given_Rows : constant Given_Rows := (others => <>);

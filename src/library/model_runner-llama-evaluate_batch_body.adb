@@ -26,6 +26,14 @@ is
    Sees_To   : array (0 .. Element_Count (Tokens'Length) - 1)
                  of Element_Count;
    Has_Runs  : Boolean := False;
+
+   --  Where each position's given row begins, where the rows carry a
+   --  deepstack to add after the first layers; No_Row for a position
+   --  standing as a token.
+   No_Row    : constant Element_Count := Element_Count'Last;
+   Deep_At   : array (0 .. Element_Count (Tokens'Length) - 1)
+                 of Element_Count := [others => Element_Count'Last];
+   Stride    : constant Element_Count := Width * Element_Count (1 + Given.Stacked);
    --  Zero for a mixture of experts: the batch never holds a
    --  feed-forward activation there, because that block runs a position
    --  at a time through the session's own buffers. Jamba is the exception
@@ -707,15 +715,18 @@ begin
                Mine   : constant Given_Rows := Given;
                Taken  : Element_Count renames Taken_By (Row_Owner (Which));
                Row_At : constant Element_Count :=
-                 (Mine.First + Taken) * Width;
+                 (Mine.First + Taken) * Stride;
             begin
-               if Row_At + Width > Mine.Rows.all'Length then
+               if Row_At + Stride > Mine.Rows.all'Length then
                   Status := E.Make (E.Tensor_Out_Of_Bounds);
                   E.Add_Integer
                     (Status, "index", Long_Long_Integer (Mine.First + Taken));
                else
                   Acts.all (Origin .. Origin + Width - 1) :=
                     Mine.Rows.all (Row_At .. Row_At + Width - 1);
+                  if Mine.Stacked > 0 then
+                     Deep_At (Which) := Row_At;
+                  end if;
 
                   --  Where the row stands in its picture, for a
                   --  rotation whose positions have three parts; a row
@@ -2969,6 +2980,46 @@ begin
          end if;
 
          <<Mamba_Done_Batch>>
+
+         --  Qwen3-VL's deepstack: after each of the first layers, the
+         --  picture's next row of the stack added to each of its
+         --  positions' states, here on the host -- a state the device
+         --  carried brought home first, and the next layer reading the
+         --  host's.
+         if Given.Stacked > 0
+           and then Natural (Index - Source.Layers.all'First) < Given.Stacked
+           and then (for some Row of Deep_At => Row /= No_Row)
+           and then E.Is_Ok (Status)
+         then
+            if Carried then
+               declare
+                  Ok : Boolean;
+               begin
+                  Bring_Carried_Home (Ok);
+                  if not Ok then
+                     Release;
+                     Status := E.Make (E.Backend_Worker_Failed);
+                     return;
+                  end if;
+               end;
+            end if;
+            declare
+               Slice : constant Element_Count :=
+                 Element_Count (Index - Source.Layers.all'First + 1) * Width;
+            begin
+               for Which in Deep_At'Range loop
+                  if Deep_At (Which) /= No_Row then
+                     declare
+                        Origin : constant Element_Count := Slot (Which, Width);
+                        From   : constant Element_Count := Deep_At (Which) + Slice;
+                     begin
+                        K.Add (Acts.all (Origin .. Origin + Width - 1),
+                               Given.Rows.all (From .. From + Width - 1));
+                     end;
+                  end if;
+               end loop;
+            end;
+         end if;
 
          --  What became of this layer, for the run's report; not a call
          --  on the processor whole, which the device was not handed back.

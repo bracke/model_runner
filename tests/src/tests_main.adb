@@ -678,9 +678,10 @@ begin
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          else
             declare
+               --  A row and the deepstack rows beside it, where it has them.
                Width : constant Model_Runner.Numerics.Element_Count :=
                  Model_Runner.Numerics.Element_Count
-                   (Model_Runner.Vision.Row_Width (Eyes));
+                   (Model_Runner.Vision.Row_Width (Eyes) * (1 + Model_Runner.Vision.Stacked_Rows (Eyes)));
                Sum : Model_Runner.Numerics.Wide_Real := 0.0;
                use type Model_Runner.Numerics.Wide_Real;
                use type Model_Runner.Numerics.Element_Count;

@@ -2339,6 +2339,14 @@ package body Tests.Vision_Cases is
       MM0_B   : N.Real_Array (0 .. Joined_Q - 1);
       MM2     : N.Real_Array (0 .. Text_Q * Joined_Q - 1);  --  Text rows of Joined
       MM2_B   : N.Real_Array (0 .. Text_Q - 1);
+
+      --  A deepstack merger, written only where a projector carries one:
+      --  a norm over the joined window, a square step, the way out.
+      Deep_Norm_W, Deep_Norm_B : N.Real_Array (0 .. Joined_Q - 1);
+      Deep_In     : N.Real_Array (0 .. Joined_Q * Joined_Q - 1);
+      Deep_In_B   : N.Real_Array (0 .. Joined_Q - 1);
+      Deep_Out    : N.Real_Array (0 .. Text_Q * Joined_Q - 1);
+      Deep_Out_B  : N.Real_Array (0 .. Text_Q - 1);
    end record;
 
    type Qwen_Weights_Access is access Qwen_Weights;
@@ -2380,12 +2388,23 @@ package body Tests.Vision_Cases is
       W.MM0_B := Random_Row (Joined_Q, 0.1);
       W.MM2 := Random_Row (Text_Q * Joined_Q, 0.2);
       W.MM2_B := Random_Row (Text_Q, 0.1);
+      --  Drawn last, so every other weight is what it was before.
+      W.Deep_Norm_W := Random_Row (Joined_Q, 0.3);
+      for Value of W.Deep_Norm_W loop
+         Value := Value + 1.0;
+      end loop;
+      W.Deep_Norm_B := Random_Row (Joined_Q, 0.1);
+      W.Deep_In := Random_Row (Joined_Q * Joined_Q, 0.2);
+      W.Deep_In_B := Random_Row (Joined_Q, 0.1);
+      W.Deep_Out := Random_Row (Text_Q * Joined_Q, 0.2);
+      W.Deep_Out_B := Random_Row (Text_Q, 0.1);
       return W;
    end Fresh_Qwen_Weights;
 
    procedure Write_Qwen_Projector
      (Path : String; W : Qwen_Weights;
-      Kind : String := "qwen3vl_merger") is
+      Kind : String := "qwen3vl_merger";
+      Deep_Block : Integer := -1) is
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
       use Ada.Streams.Stream_IO;
@@ -2426,7 +2445,7 @@ package body Tests.Vision_Cases is
       Fixtures.Begin_Array
         (Builder, "clip.vision.is_deepstack_layers", G.Value_Bool, Blocks_Q);
       for Index in 1 .. Blocks_Q loop
-         Fixtures.Bool_Element (Builder, False);
+         Fixtures.Bool_Element (Builder, Index - 1 = Deep_Block);
       end loop;
       Fixtures.End_Array (Builder);
 
@@ -2460,6 +2479,19 @@ package body Tests.Vision_Cases is
       Tensor ("mm.0.bias", [Joined_Q], W.MM0_B);
       Tensor ("mm.2.weight", [Joined_Q, Text_Q], W.MM2);
       Tensor ("mm.2.bias", [Text_Q], W.MM2_B);
+      if Deep_Block >= 0 then
+         declare
+            Lead : constant String :=
+              "v.deepstack." & Model_Runner.Text.Image (Long_Long_Integer (Deep_Block)) & ".";
+         begin
+            Tensor (Lead & "norm.weight", [Joined_Q], W.Deep_Norm_W);
+            Tensor (Lead & "norm.bias", [Joined_Q], W.Deep_Norm_B);
+            Tensor (Lead & "fc1.weight", [Joined_Q, Joined_Q], W.Deep_In);
+            Tensor (Lead & "fc1.bias", [Joined_Q], W.Deep_In_B);
+            Tensor (Lead & "fc2.weight", [Joined_Q, Text_Q], W.Deep_Out);
+            Tensor (Lead & "fc2.bias", [Text_Q], W.Deep_Out_B);
+         end;
+      end if;
 
       Fixtures.Build (Builder, File);
       Create (Handle, Out_File, Path);
@@ -2485,7 +2517,9 @@ package body Tests.Vision_Cases is
    --  a still is one frame through both.
    procedure Qwen_Reference_Rows
      (W : Qwen_Weights; Picture : Images.Raster; Rows : out N.Wide_Real_Array;
-      Second : Images.Raster := (others => <>))
+      Second : Images.Raster := (others => <>);
+      Deep_Block : Integer := -1;
+      Deep : access N.Wide_Real_Array := null)
    is
       Paired : constant Boolean := Second.Pixels /= null;
       subtype WR is N.Wide_Real;
@@ -2765,6 +2799,56 @@ package body Tests.Vision_Cases is
                end loop;
             end loop;
          end;
+
+         --  A deepstack block's state, before the post norm, each window
+         --  joined and normed over the whole joined row, then its two
+         --  steps with the exact unit between.
+         if Index = Deep_Block and then Deep /= null then
+            for Window in 0 .. Windows_Q - 1 loop
+               declare
+                  Joined, Middle : array (0 .. Joined_Q - 1) of WR;
+                  Mean, Variance : WR := 0.0;
+               begin
+                  for K in 0 .. Merge_Q * Merge_Q - 1 loop
+                     for D in 0 .. Width_Q - 1 loop
+                        Joined (K * Width_Q + D) := X (Window * Merge_Q * Merge_Q + K, D);
+                     end loop;
+                  end loop;
+                  for C in Joined'Range loop
+                     Mean := Mean + Joined (C);
+                  end loop;
+                  Mean := Mean / WR (Joined_Q);
+                  for C in Joined'Range loop
+                     Variance := Variance + (Joined (C) - Mean) ** 2;
+                  end loop;
+                  Variance := Variance / WR (Joined_Q);
+                  for C in Joined'Range loop
+                     Joined (C) := (Joined (C) - Mean) / Wide_Math.Sqrt (Variance + 1.0e-6)
+                       * WR (W.Deep_Norm_W (N.Element_Count (C))) + WR (W.Deep_Norm_B (N.Element_Count (C)));
+                  end loop;
+                  for R in 0 .. Joined_Q - 1 loop
+                     declare
+                        Sum : WR := WR (W.Deep_In_B (N.Element_Count (R)));
+                     begin
+                        for C in 0 .. Joined_Q - 1 loop
+                           Sum := Sum + Joined (C) * WR (W.Deep_In (N.Element_Count (R * Joined_Q + C)));
+                        end loop;
+                        Middle (R) := Exact_GELU (Sum);
+                     end;
+                  end loop;
+                  for J in 0 .. Text_Q - 1 loop
+                     declare
+                        Sum : WR := WR (W.Deep_Out_B (N.Element_Count (J)));
+                     begin
+                        for C in 0 .. Joined_Q - 1 loop
+                           Sum := Sum + Middle (C) * WR (W.Deep_Out (N.Element_Count (J * Joined_Q + C)));
+                        end loop;
+                        Deep (Deep'First + N.Element_Count (Window * Text_Q + J)) := Sum;
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end if;
       end loop;
 
       Layer_Norm (X, W.Post_W, W.Post_B, H);
@@ -2802,6 +2886,61 @@ package body Tests.Vision_Cases is
          end;
       end loop;
    end Qwen_Reference_Rows;
+
+   --  The small Qwen projector with a deepstack merger at its first block
+   --  makes rows twice the text width: the merged row as it is without
+   --  one, then the first block's state merged its own way, as the plain
+   --  computation gives both.
+   procedure The_Qwen_Deepstack_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W       : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Deep    : aliased N.Wide_Real_Array := [0 .. Windows_Q * Text_Q - 1 => 0.0];
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+      Stride  : constant N.Element_Count := 2 * Text_Q;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for At_Pixel in Data'Range loop
+            Data (At_Pixel) := B.Byte ((At_Pixel * 37) mod 251);
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6" & Natural'Image (Wide_Q) & Natural'Image (Tall_Q) & " 255 ") & Data,
+            "test", Picture, Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+      Qwen_Reference_Rows (W.all, Picture, Wanted, Deep_Block => 0, Deep => Deep'Access);
+      Write_Qwen_Projector ("obj/vision-qwen-deep.gguf", W.all, Deep_Block => 0);
+      Vision.Open (Eyes, "obj/vision-qwen-deep.gguf", Status);
+      Assert (E.Is_Ok (Status) and then Vision.Stacked_Rows (Eyes) = 1
+              and then Vision.Row_Width (Eyes) = Text_Q,
+              "the projector's deepstack was not read");
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns, Status => Status);
+      Assert (E.Is_Ok (Status) and then Rows /= null and then Rows.all'Length = Windows_Q * Stride,
+              "the rows were not as wide as the merged row and its stack");
+      for Window in 0 .. N.Element_Count (Windows_Q - 1) loop
+         for J in 0 .. N.Element_Count (Text_Q - 1) loop
+            declare
+               Main : constant N.Wide_Real := Wanted (Window * Text_Q + J);
+               Side : constant N.Wide_Real := Deep (Window * Text_Q + J);
+            begin
+               Assert (abs (N.Wide_Real (Rows (Window * Stride + J)) - Main) <= 1.0e-4 * (1.0 + abs Main)
+                       and then abs (N.Wide_Real (Rows (Window * Stride + Text_Q + J)) - Side)
+                                  <= 1.0e-4 * (1.0 + abs Side),
+                       "window" & Window'Image & " element" & J'Image & " is not the reference's");
+            end;
+         end loop;
+      end loop;
+      T.Free (Rows);
+      Vision.Close (Eyes);
+   end The_Qwen_Deepstack_Encodes_As_The_Reference;
 
    --  The small Qwen projector, written and opened, encodes a picture to
    --  the rows the plain computation gives, as a grid of the picture's
@@ -3508,6 +3647,126 @@ package body Tests.Vision_Cases is
 
       B.Free (Image);
    end Placed_Rows_Turn_By_Row_And_Column;
+
+   ----------------------------------------
+   -- Deepstack_Rows_Join_The_First_Layers --
+   ----------------------------------------
+
+   --  Qwen3-VL's picture rows carry a deepstack beside them: a row is the
+   --  embedding's width and as many again for each stacked row, the first
+   --  standing for the token and the next added to the position's state
+   --  after the first layer, the one after that after the second. A Qwen3
+   --  fixture of three blocks is given four rows three widths wide: with the stack all
+   --  noughts the logits are those of the plain rows to the bit; with a
+   --  stack they are not, and swapping its two rows changes them again --
+   --  each is added after its own layer; and rows too short for their
+   --  stride are refused, not read past.
+   procedure Deepstack_Rows_Join_The_First_Layers
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Image : B.Byte_Array_Access;
+   begin
+      --  Three blocks: a row added after the last would reach no later
+      --  position's attention, so changed no logit.
+      Tiny_Model.Build (Image, Kind => Tiny_Model.Qwen3, Room => 32, Depth => 3);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed : Model_Runner.GGUF.Containers.Container;
+         Ready  : L.Model;
+         Status : E.Error_Info;
+         Words  : access constant Vocab.Vocabulary;
+         Width  : constant N.Element_Count := Tiny_Model.Embedding;
+         Soft   : Vocab.Token_Id;
+         Plain, Zero, Deep, Swap, First_Only, Short : T.Real_Array_Access;
+         subtype Logits is N.Real_Array (0 .. N.Element_Count (Tiny_Model.Vocabulary) - 1);
+         Of_Plain, Of_Zero, Of_Deep, Of_Swap, Of_First : Logits;
+
+         procedure Run (Rows : T.Real_Array_Access; Stacked : Natural; Into : out Logits) is
+            Live   : L.Session;
+            Tokens : constant Vocab.Token_Array :=
+              [Vocab.Beginning_Token (Words.all), Soft, Soft, Soft, Soft, Vocab.Find (Words.all, "a")];
+         begin
+            L.Open (Live, Ready, 32, Status => Status);
+            L.Evaluate_Batch
+              (Live, Ready, Tokens, Into,
+               Given => (Token => Soft, Rows => Rows, First => 0, Places => null, Causal => True,
+                         Stacked => Stacked, others => <>),
+               Status => Status);
+            L.Close (Live);
+         end Run;
+
+         function Same (Left, Right : Logits) return Boolean
+         is (for all Index in Left'Range => Left (Index) = Right (Index));
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Parsed, Source, Status => Status);
+         L.Prepare (Ready, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the fixture did not prepare");
+         Words := L.Vocabulary (Ready);
+         Soft := Vocab.Find (Words.all, "<0x64>");
+
+         T.Allocate (4 * Width, Plain);
+         T.Allocate (4 * 3 * Width, Zero);
+         T.Allocate (4 * 3 * Width, Deep);
+         T.Allocate (4 * 3 * Width, Swap);
+         Seed := 3131;
+         for Value of Plain.all loop
+            Value := Next;
+         end loop;
+         Zero.all := [others => 0.0];
+         for Row in 0 .. N.Element_Count (3) loop
+            Zero (Row * 3 * Width .. Row * 3 * Width + Width - 1) := Plain (Row * Width .. Row * Width + Width - 1);
+         end loop;
+         Deep.all := Zero.all;
+         for Row in 0 .. N.Element_Count (3) loop
+            for Index in Row * 3 * Width + Width .. Row * 3 * Width + 3 * Width - 1 loop
+               Deep (Index) := Next;
+            end loop;
+         end loop;
+         T.Allocate (4 * 3 * Width, First_Only);
+         First_Only.all := Deep.all;
+         for Row in 0 .. N.Element_Count (3) loop
+            First_Only (Row * 3 * Width + 2 * Width .. Row * 3 * Width + 3 * Width - 1) := [others => 0.0];
+         end loop;
+         --  Long enough for the last row's own width, not for its stack.
+         T.Allocate (3 * 3 * Width + Width, Short);
+         Short.all := Deep (0 .. 3 * 3 * Width + Width - 1);
+         Swap.all := Deep.all;
+         for Row in 0 .. N.Element_Count (3) loop
+            Swap (Row * 3 * Width + Width .. Row * 3 * Width + 2 * Width - 1) :=
+              Deep (Row * 3 * Width + 2 * Width .. Row * 3 * Width + 3 * Width - 1);
+            Swap (Row * 3 * Width + 2 * Width .. Row * 3 * Width + 3 * Width - 1) :=
+              Deep (Row * 3 * Width + Width .. Row * 3 * Width + 2 * Width - 1);
+         end loop;
+
+         Run (Plain, 0, Of_Plain);
+         Assert (E.Is_Ok (Status), "the plain rows failed");
+         Run (Zero, 2, Of_Zero);
+         Assert (E.Is_Ok (Status), "the rows with a stack of noughts failed");
+         Assert (Same (Of_Plain, Of_Zero), "a stack of noughts changed the logits");
+         Run (Deep, 2, Of_Deep);
+         Assert (E.Is_Ok (Status) and then not Same (Of_Plain, Of_Deep), "the stack changed no logit");
+         Run (Swap, 2, Of_Swap);
+         Assert (E.Is_Ok (Status) and then not Same (Of_Deep, Of_Swap),
+                 "the stack's rows were not each added after their own layer");
+         Run (First_Only, 2, Of_First);
+         Assert (E.Is_Ok (Status) and then not Same (Of_Deep, Of_First),
+                 "the stack's second row was not added");
+         Run (Short, 2, Of_First);
+         Assert (Status.Code = E.Tensor_Out_Of_Bounds, "rows too short for their stack were read past");
+
+         T.Free (Plain);
+         T.Free (Zero);
+         T.Free (Deep);
+         T.Free (Swap);
+         T.Free (First_Only);
+         T.Free (Short);
+         L.Close (Ready, Status);
+         Model_Runner.GGUF.Containers.Close (Parsed);
+      end;
+      B.Free (Image);
+   end Deepstack_Rows_Join_The_First_Layers;
 
    ----------------------------------------
    -- A_Pictures_Rows_See_Each_Other --
@@ -5295,11 +5554,17 @@ package body Tests.Vision_Cases is
          & "windows, scales a small picture up to the least rows, and the "
          & "cubic filter resamples as PIL does");
       Register_Routine
+        (T, The_Qwen_Deepstack_Encodes_As_The_Reference'Access,
+         "a projector's deepstack merges its block's state as the plain computation does");
+      Register_Routine
         (T, Placed_Rows_Turn_By_Row_And_Column'Access,
          "a model whose positions have three parts turns a picture's rows "
          & "by its start, their row and their column, goes on after it from "
          & "the grid's longer side, and keeps the places through a rewind "
          & "and a snapshot");
+      Register_Routine
+        (T, Deepstack_Rows_Join_The_First_Layers'Access,
+         "a picture's deepstack rows join the state after the first layers, each after its own");
       Register_Routine
         (T, A_Pictures_Rows_See_Each_Other'Access,
          "a picture's rows attend to each other both ways, and a text "
