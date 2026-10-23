@@ -19657,6 +19657,26 @@ package body Tests.Framework_Cases is
                     "a file rewritten many times was not held once, read once a change");
          end;
          Put_File (Fresh_Root (Store) & "/docs/notes.txt", "Now it says wombat." & LF);
+
+         --  A file added after the graph was made is searched, its symbol
+         --  and its words; one removed after is not.
+         Put_File (Fresh_Root (Store) & "/src/wallaby.adb",
+                   "--  Bandicoot." & LF & "procedure Wallaby_Step is" & LF & "begin" & LF & "   null;" & LF
+                   & "end Wallaby_Step;" & LF);
+         Hits := Rv.Search (Store, Before, "", "Wallaby_Step", 20, Records => False);
+         Assert ((for some One of Hits => One.Kind = Rv.Symbol_Hit and then To_String (One.Path) = "src/wallaby.adb"),
+                 "a symbol in a file added after the graph was made was not found");
+         Hits := Rv.Search (Store, Before, "", "bandicoot", 20, Records => False);
+         Assert ((for some One of Hits => One.Kind = Rv.Text_Hit and then To_String (One.Path) = "src/wallaby.adb"),
+                 "the words of a file added after the graph was made were not found");
+         declare
+            With_It : constant Rp.Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         begin
+            Dirs.Delete_File (Fresh_Root (Store) & "/src/wallaby.adb");
+            Hits := Rv.Search (Store, With_It, "", "bandicoot Wallaby_Step", 20, Records => False);
+            Assert (not (for some One of Hits => To_String (One.Path) = "src/wallaby.adb"),
+                    "a file removed after the graph was made was still found");
+         end;
       end;
 
       Dirs.Rename (Fresh_Root (Store) & "/src/tool.py", Fresh_Root (Store) & "/src/counting.py");
@@ -19770,12 +19790,22 @@ package body Tests.Framework_Cases is
          Assert (Status.Code = E.Framework_Input_Invalid, "a reference with its lines backwards was read");
       end;
 
-      --  The graph made before the change: the declaration found where it
-      --  is now, and said to have moved.
+      --  The graph made before the change: brought up to the tree, the
+      --  declaration found where it is now.
       Rv.Declaration (Graph, Root, "Width", 80, Found, Status);
-      Assert (Found (1).Moved and then Found (1).First = 21
+      Assert (Found (1).First = 21
               and then Ada.Strings.Fixed.Index (To_String (Found (1).Text), "function Width") > 0,
               "a declaration that moved was not found where it is now");
+
+      --  A file added after the graph was made: its declaration found by
+      --  the graph made before it.
+      Put_File (Root & "/src/wallaby.adb",
+                "procedure Wallaby_Step is" & LF & "begin" & LF & "   null;" & LF & "end Wallaby_Step;" & LF);
+      Rv.Declaration (Graph, Root, "Wallaby_Step", 80, Found, Status);
+      Assert (E.Is_Ok (Status) and then not Found.Is_Empty
+              and then To_String (Found (1).Path) = "src/wallaby.adb" and then Found (1).First = 1,
+              "a declaration in a file added after the graph was made was not found");
+      Dirs.Delete_File (Root & "/src/wallaby.adb");
 
       declare
          Piece : Rv.Excerpt;

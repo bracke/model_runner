@@ -157,11 +157,10 @@ package body Model_Runner.Framework.Retrieval is
    procedure Sort is new Ada.Containers.Generic_Array_Sort (Positive, Posting, Posting_Array, Before);
 
    --  One file's words, sorted by term, held in the entry itself so that
-   --  replacing or deleting the entry frees them; the print the graph gave
-   --  and the file's own stamp when they were read.
+   --  replacing or deleting the entry frees them, and the print the graph
+   --  gave when they were read.
    type File_Words (Count : Natural) is record
       Print : Unbounded_String;
-      Stamp : Unbounded_String;
       Words : Posting_Array (1 .. Count);
    end record;
 
@@ -330,11 +329,9 @@ package body Model_Runner.Framework.Retrieval is
          E.Add_Text (Status, "name", Path);
    end Read_In;
 
-   --  The index brought up to the graph and to the files as they are: a
-   --  file read again where the graph's print for it changed, or its own
-   --  stamp did -- size, change time to the nanosecond, file number -- so
-   --  a graph made before an edit still finds the edit; one gone dropped.
-   --  Which files there are is the graph's to say. Called with Lock held.
+   --  The index brought up to the graph -- one brought up to the tree as
+   --  it is now, by Search -- a file read again where its print changed,
+   --  one gone dropped. Called with Lock held.
    procedure Bring_Up (Graph : Rp.Graph; Root : String) is
       Present : Name_Sets.Set;
    begin
@@ -347,10 +344,8 @@ package body Model_Runner.Framework.Retrieval is
             if Indexed (File) then
                Present.Include (Key);
                declare
-                  Now : constant String := Rp.Stamp_Of (Hostkit.Fs.Join (Root, Path));
                begin
                   if not Index.Contains (Key) or else Index.Constant_Reference (Key).Print /= File.Fingerprint
-                    or else Now = "" or else Index.Constant_Reference (Key).Stamp /= Now
                   then
                      declare
                         Text   : Unbounded_String;
@@ -374,8 +369,7 @@ package body Model_Runner.Framework.Retrieval is
                              (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else [1 .. 0 => <>]);
                         begin
                            Index.Include
-                             (Key, (Count => Words'Length, Print => File.Fingerprint,
-                                    Stamp => To_Unbounded_String (Now), Words => Words));
+                             (Key, (Count => Words'Length, Print => File.Fingerprint, Words => Words));
                            Read_Count := Read_Count + 1;
                         end;
                      end;
@@ -495,18 +489,17 @@ package body Model_Runner.Framework.Retrieval is
    function Ends_With (Text, Tail : String) return Boolean
    is (Text'Length > Tail'Length and then Text (Text'Last - Tail'Length + 1 .. Text'Last) = Tail);
 
-   function Search
+   --  Search, the graph already brought up to the tree.
+   function Search_Current
      (Store    : Stores.Store;
       Graph    : Repository.Graph;
-      Root     : String;
+      Tree     : String;
       Query    : String;
-      Most     : Positive := 20;
-      Near     : Name_Lists.Vector := Name_Lists.Empty_Vector;
-      May_Read : Path_Check := null;
-      Records  : Boolean := True) return Hit_Lists.Vector
+      Most     : Positive;
+      Near     : Name_Lists.Vector;
+      May_Read : Path_Check;
+      Records  : Boolean) return Hit_Lists.Vector
    is
-      Tree    : constant String :=
-        (if Root /= "" then Root else Ada.Directories.Containing_Directory (Stores.Root (Store)));
       Wholes  : constant Name_Lists.Vector := Wholes_Of (Query);
       Terms   : constant Name_Lists.Vector := Terms_Of (Query);
       Asks_Tests : constant Boolean := (for some Term of Terms => Term in "test" | "tests");
@@ -962,6 +955,30 @@ package body Model_Runner.Framework.Retrieval is
          Found.Delete_Last;
       end loop;
       return Found;
+   end Search_Current;
+
+   ------------
+   -- Search --
+   ------------
+
+   function Search
+     (Store    : Stores.Store;
+      Graph    : Repository.Graph;
+      Root     : String;
+      Query    : String;
+      Most     : Positive := 20;
+      Near     : Name_Lists.Vector := Name_Lists.Empty_Vector;
+      May_Read : Path_Check := null;
+      Records  : Boolean := True;
+      Fresh    : Boolean := False) return Hit_Lists.Vector
+   is
+      Tree : constant String :=
+        (if Root /= "" then Root else Ada.Directories.Containing_Directory (Stores.Root (Store)));
+   begin
+      --  The graph handed over brought up to the tree first: a file added,
+      --  changed or removed since it was made is searched as it is.
+      return Search_Current
+        (Store, (if Fresh then Graph else Rp.Brought_Up (Tree, Graph)), Tree, Query, Most, Near, May_Read, Records);
    end Search;
 
    ---------------------------------------------------------------------------
@@ -1006,18 +1023,15 @@ package body Model_Runner.Framework.Retrieval is
       Into.Text := Result;
    end Cut;
 
-   -----------------
-   -- Declaration --
-   -----------------
-
-   procedure Declaration
+   --  Declaration, the graph already brought up to the tree.
+   procedure Declaration_Current
      (Graph      : Repository.Graph;
       Root       : String;
       Name       : String;
       Most_Lines : Positive;
       Found      : out Excerpt_Lists.Vector;
       Status     : out Model_Runner.Errors.Error_Info;
-      May_Read   : Path_Check := null)
+      May_Read   : Path_Check)
    is
       Names : constant Name_Lists.Vector := Rp.Find_Symbols (Graph, Name);
 
@@ -1143,6 +1157,27 @@ package body Model_Runner.Framework.Retrieval is
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", Name);
       end if;
+   end Declaration_Current;
+
+   -----------------
+   -- Declaration --
+   -----------------
+
+   procedure Declaration
+     (Graph      : Repository.Graph;
+      Root       : String;
+      Name       : String;
+      Most_Lines : Positive;
+      Found      : out Excerpt_Lists.Vector;
+      Status     : out Model_Runner.Errors.Error_Info;
+      May_Read   : Path_Check := null;
+      Fresh      : Boolean := False)
+   is
+   begin
+      --  A symbol in a file added since the graph was made is found too.
+      Declaration_Current
+        ((if Fresh then Graph else Rp.Brought_Up ((if Root = "" then "." else Root), Graph)), Root, Name, Most_Lines,
+         Found, Status, May_Read);
    end Declaration;
 
    ------------

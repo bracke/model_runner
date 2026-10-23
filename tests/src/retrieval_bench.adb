@@ -346,6 +346,11 @@ package body Retrieval_Bench is
          Hits := Rv.Search (Store, Graph, Tree, "context budget settle", Most => 15, Records => False);
          Ada.Text_IO.Put_Line ("index: warm search " & Millis (Ada.Calendar.Clock - Began) & ", best "
                                & To_String (Hits.First_Element.Name));
+         --  The same with the graph taken as fresh, as a caller that made it
+         --  just now says: what bringing it up to the tree costs.
+         Began := Ada.Calendar.Clock;
+         Hits := Rv.Search (Store, Graph, Tree, "context budget settle", Most => 15, Records => False, Fresh => True);
+         Ada.Text_IO.Put_Line ("index: warm search, graph fresh " & Millis (Ada.Calendar.Clock - Began));
       end;
       S.Close (Store);
    end Run;

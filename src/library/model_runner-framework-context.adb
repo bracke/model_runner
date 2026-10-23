@@ -1344,7 +1344,7 @@ package body Model_Runner.Framework.Context is
                      begin
                         --  A name of many symbols says none of them: Next, Read.
                         if not Names.Is_Empty and then Natural (Names.Length) <= Rv.Declarations_Most then
-                           Rv.Declaration (Graph, Project, Word, Declaration_Lines, Found, Got);
+                           Rv.Declaration (Graph, Project, Word, Declaration_Lines, Found, Got, Fresh => True);
                            for Piece of Found loop
                               Offer_Excerpt (Piece, "the declaration the task names", High);
                            end loop;
@@ -1474,7 +1474,7 @@ package body Model_Runner.Framework.Context is
                     & " " & Records.Get (View, "definition.question");
                   Hits  : constant Rv.Hit_Lists.Vector :=
                     (if Whole_Only then Rv.Hit_Lists.Empty_Vector
-                     else Rv.Search (Item, Graph, Project, Asked, Most => 400, Records => False));
+                     else Rv.Search (Item, Graph, Project, Asked, Most => 400, Records => False, Fresh => True));
                   Order : Name_Lists.Vector;
                   Score : Remembered_Maps.Map;
 

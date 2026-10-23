@@ -311,6 +311,15 @@ package Model_Runner.Framework.Repository is
       Read_Again        : out Natural;
       Within            : Roots := Default_Roots) return Graph;
 
+   --  A graph brought up to date with a tree as it is now, by Refresh, with
+   --  the roots it was made with: what a reader handed a graph it did not
+   --  make asks, so that a file added, changed or removed since is seen.
+   --
+   --  @param Project_Directory The tree.
+   --  @param Kept The graph handed over.
+   --  @return The graph as the tree is now.
+   function Brought_Up (Project_Directory : String; Kept : Graph) return Graph;
+
    --  The project's graph as it is now: the kept one brought up to date,
    --  not kept -- for a reader that only reads the store.
    --
@@ -395,13 +404,6 @@ package Model_Runner.Framework.Repository is
    --  @param From The graph.
    --  @return Sixteen hexadecimal digits.
    function Graph_Fingerprint (From : Graph) return String;
-
-   --  A file's stamp as a scan takes it: its size, when it last changed,
-   --  and the host's own change record where it keeps one.
-   --
-   --  @param Full The file's path.
-   --  @return The stamp; "" where the file cannot be looked at.
-   function Stamp_Of (Full : String) return String;
 
    --  How source is read into the graph: a graph kept by another is read
    --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
@@ -592,6 +594,11 @@ private
       --  The files left out as bytes, not text -- a built program, an
       --  image -- each "PATH<tab>STAMP": not read again while unchanged.
       Skipped   : Name_Lists.Vector;
+
+      --  The roots it was walked with, for Brought_Up to walk with again;
+      --  Default_Roots where Known is false. Not kept with the graph.
+      Within       : Roots;
+      Within_Known : Boolean := False;
    end record;
 
 end Model_Runner.Framework.Repository;

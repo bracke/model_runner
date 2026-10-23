@@ -1628,6 +1628,8 @@ package body Model_Runner.Framework.Repository is
            (Paths (Index), Texts (Index), Result);
       end loop;
       Result.Reading := Null_Unbounded_String;
+      Result.Within := Within;
+      Result.Within_Known := True;
       return Result;
    end Scan_All;
 
@@ -2024,8 +2026,21 @@ package body Model_Runner.Framework.Repository is
          end loop;
       end;
       Result.Reading := Null_Unbounded_String;
+      Result.Within := Within;
+      Result.Within_Known := True;
       return Result;
    end Refresh;
+
+   ----------------
+   -- Brought_Up --
+   ----------------
+
+   function Brought_Up (Project_Directory : String; Kept : Graph) return Graph is
+      Read_Again : Natural;
+   begin
+      return Refresh (Project_Directory, Kept, Read_Again,
+                      (if Kept.Within_Known then Kept.Within else Default_Roots));
+   end Brought_Up;
 
    ------------
    -- Memory --

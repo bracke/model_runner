@@ -311,7 +311,8 @@ package body Model_Runner.Framework.Code_Queries is
          declare
             Hits : constant Rv.Hit_Lists.Vector :=
               Rv.Search (Store, Graph_Of (Store, Root), Tree, Asked, Most => 15,
-                         May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access, Records => Records);
+                         May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access, Records => Records,
+                         Fresh => True);
             Rank : Natural := 0;
          begin
             if Hits.Is_Empty then
@@ -374,7 +375,7 @@ package body Model_Runner.Framework.Code_Queries is
                   Found : Rv.Excerpt_Lists.Vector;
                begin
                   Rv.Declaration (Graph_Of (Store, Root), Tree, Asked, 120, Found, Status,
-                                  May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access);
+                                  May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access, Fresh => True);
                   if Found.Is_Empty then
                      Failed := True;
                      return "nothing in the project's graph declares " & Asked

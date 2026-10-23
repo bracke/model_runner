@@ -722,7 +722,7 @@ package body Model_Runner.CLI.Repo is
             else
                Opened := E.Make (E.Framework_Not_Found);
             end if;
-            Hits := Rv.Search (Store, Found, Top, Typed, Most => 15, Records => E.Is_Ok (Opened));
+            Hits := Rv.Search (Store, Found, Top, Typed, Most => 15, Records => E.Is_Ok (Opened), Fresh => True);
             if Hits.Is_Empty then
                if E.Is_Ok (Opened) then
                   S.Close (Store);
@@ -760,7 +760,7 @@ package body Model_Runner.CLI.Repo is
                   Got   : E.Error_Info;
                begin
                   if Best.Kind = Rv.Symbol_Hit then
-                     Rv.Declaration (Found, Top, To_String (Best.Name), 60, Found_Pieces, Got);
+                     Rv.Declaration (Found, Top, To_String (Best.Name), 60, Found_Pieces, Got, Fresh => True);
                      if not Found_Pieces.Is_Empty then
                         Piece := Found_Pieces.First_Element;
                      end if;
