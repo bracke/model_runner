@@ -13,10 +13,12 @@
 --  case is built twice: with excerpts, and as retrieval was before them
 --  (scalar context.retrieval = whole), the same tasks in the same rooms.
 --
---  Search is judged apart: each task's title and three shorter queries are
---  searched, with the symbols and files a developer would open for each
---  named beforehand, and recall at 5 and 10 hits and the mean reciprocal
---  rank of the first relevant hit are said.
+--  Search is judged apart: each task's title, three shorter queries and six
+--  more tasks as an agent is given them are searched, with the symbols and
+--  files a developer would open for each named beforehand, and recall at 5
+--  and 10 hits and the mean reciprocal rank of the first relevant hit are
+--  said. And what a warm search costs: its time, the middle and the 95th of
+--  forty, and the files it reads, on the fixture and on this repository.
 package Retrieval_Bench is
 
    --  Make the project, build every case's contexts and say what each held.

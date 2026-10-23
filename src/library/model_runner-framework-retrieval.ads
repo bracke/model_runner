@@ -52,7 +52,11 @@ with Model_Runner.Framework.Stores;
 --  was bounded, and the print of the text it was cut from.
 --
 --  Task safety: the index of the files' words is shared by every task and
---  held under a lock; each call reads the files it needs.
+--  held under a lock, taken only to find what is to be read, to install
+--  what was read and to score: files are read and their words counted
+--  without it, so one tree's reading does not hold up another's search.
+--  The index visits, for each word of a query, the files that hold it; a
+--  word no indexed file holds any more leaves it.
 package Model_Runner.Framework.Retrieval is
 
    package U renames Ada.Strings.Unbounded;
@@ -247,5 +251,19 @@ package Model_Runner.Framework.Retrieval is
    --
    --  @return The count.
    function Indexed_Held return Natural;
+
+   --  How many terms the index's dictionary holds now, of every tree: a
+   --  term no indexed file holds any more is let go with the last file
+   --  that held it.
+   --
+   --  @return The count.
+   function Indexed_Terms return Natural;
+
+   --  How many files searches and excerpts have read since the program
+   --  began, the index's reading among them: what a measure of a search's
+   --  cost takes the difference of.
+   --
+   --  @return The count.
+   function Files_Read return Natural;
 
 end Model_Runner.Framework.Retrieval;

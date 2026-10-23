@@ -8,6 +8,7 @@ with Hostkit;
 with Interfaces;
 with Ada.Environment_Variables;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -19701,6 +19702,130 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Word_Index_Follows_The_Tree;
 
+   --  The dictionary holds what the files hold: a file rewritten round
+   --  after round with words of its own, each found while it is there and
+   --  gone after, leaves the dictionary as it found it -- every term no file
+   --  holds let go, its number given again -- and a file deleted takes its
+   --  own words with it.
+   procedure The_Dictionary_Holds_What_The_Files_Hold
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+
+      function Texts (Query, Path : String) return Boolean
+      is (for some One of Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", Query, 20,
+                                     Records => False)
+          => One.Kind = Rv.Text_Hit and then To_String (One.Path) = Path);
+
+      Notes  : Unbounded_String;
+      Before : Natural;
+   begin
+      Task_Project (Store, "dictionary");
+      Retrieval_Files (Fresh_Root (Store));
+      Notes := To_Unbounded_String (Read_Whole (Fresh_Root (Store) & "/docs/notes.txt"));
+      Rv.Forget;
+      Assert (Texts ("quokka", "docs/notes.txt"), "a word was not found in its file");
+      Before := Rv.Indexed_Terms;
+      for Round in 1 .. 40 loop
+         declare
+            Word : constant String := "kiwi" & Ada.Strings.Fixed.Trim (Round'Image, Ada.Strings.Left);
+         begin
+            Put_File (Fresh_Root (Store) & "/docs/notes.txt",
+                      To_String (Notes) & Word & " " & Word & "_" & Word & Ada.Strings.Fixed."*" (Round, '.') & LF);
+            Assert (Texts (Word, "docs/notes.txt"), "round" & Round'Image & ": the file's new word was not found");
+            if Round > 1 then
+               Assert (not Texts ("kiwi" & Ada.Strings.Fixed.Trim (Natural'Image (Round - 1), Ada.Strings.Left),
+                                  "docs/notes.txt"),
+                       "round" & Round'Image & ": the word the file no longer holds was still found");
+            end if;
+            Assert (Rv.Indexed_Terms <= Before + 3,
+                    "round" & Round'Image & ": the dictionary kept words no file holds:" & Rv.Indexed_Terms'Image
+                    & " against" & Before'Image);
+         end;
+      end loop;
+      Put_File (Fresh_Root (Store) & "/docs/notes.txt", To_String (Notes));
+      Assert (Texts ("quokka", "docs/notes.txt") and then Rv.Indexed_Terms = Before,
+              "the dictionary did not come back to what the files hold:" & Rv.Indexed_Terms'Image & " against"
+              & Before'Image);
+
+      --  A file deleted: the words only it held go with it.
+      Put_File (Fresh_Root (Store) & "/docs/wombat.txt", "numbat bilby" & LF);
+      Assert (Texts ("bilby", "docs/wombat.txt") and then Rv.Indexed_Terms = Before + 2,
+              "a new file's own words were not added once each:" & Rv.Indexed_Terms'Image);
+      Dirs.Delete_File (Fresh_Root (Store) & "/docs/wombat.txt");
+      Assert (not Texts ("bilby", "docs/wombat.txt") and then Rv.Indexed_Terms = Before,
+              "a deleted file's own words were kept:" & Rv.Indexed_Terms'Image);
+      S.Close (Store);
+   end The_Dictionary_Holds_What_The_Files_Hold;
+
+   --  Searches of two trees at once, each from a task of its own, give what
+   --  each gives alone: the index's reading is done outside its lock, and
+   --  what is installed and scored under it is the same.
+   procedure Searches_At_Once_Agree
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+      Other : constant String := Fresh ("search-at-once");
+
+      --  Each tree's graph, made before the tasks: the store is no task's
+      --  to share, and the index is what is tried here.
+      Graph_A, Graph_B : Rp.Graph;
+
+      function Find (Root, Query : String) return Rv.Hit_Lists.Vector
+      is (Rv.Search (Store, (if Root = Other then Graph_B else Graph_A), Root, Query, 20, Records => False));
+
+      Queries : constant array (1 .. 3) of Unbounded_String :=
+        [To_Unbounded_String ("parse number"), To_Unbounded_String ("quokka total"),
+         To_Unbounded_String ("Width")];
+      Alone_A, Alone_B, Together_A, Together_B : array (Queries'Range) of Rv.Hit_Lists.Vector;
+      Failed : Unbounded_String;
+   begin
+      Task_Project (Store, "search-at-once");
+      Retrieval_Files (Fresh_Root (Store));
+      Retrieval_Files (Other);
+      Graph_A := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+      Graph_B := Rp.Scan (Other, Rp.Roots_Of (Store));
+      for Index in Queries'Range loop
+         Rv.Forget;
+         Alone_A (Index) := Find (Fresh_Root (Store), To_String (Queries (Index)));
+         Rv.Forget;
+         Alone_B (Index) := Find (Other, To_String (Queries (Index)));
+      end loop;
+      for Round in 1 .. 5 loop
+         Rv.Forget;
+         declare
+            task type Searcher (Which : Natural);
+            task body Searcher is
+            begin
+               for Index in Queries'Range loop
+                  if Which = 1 then
+                     Together_A (Index) := Find (Fresh_Root (Store), To_String (Queries (Index)));
+                  else
+                     Together_B (Index) := Find (Other, To_String (Queries (Index)));
+                  end if;
+               end loop;
+            exception
+               when Error : others =>
+                  Append (Failed, Ada.Exceptions.Exception_Information (Error));
+            end Searcher;
+            First  : Searcher (1);
+            Second : Searcher (2);
+         begin
+            null;
+         end;
+         Assert (Length (Failed) = 0, "a search at once with another failed: " & To_String (Failed));
+         for Index in Queries'Range loop
+            Assert (Rv.Hit_Lists."=" (Together_A (Index), Alone_A (Index))
+                    and then Rv.Hit_Lists."=" (Together_B (Index), Alone_B (Index)),
+                    "round" & Round'Image & ": a search at once with another gave otherwise than alone for "
+                    & To_String (Queries (Index)));
+         end loop;
+      end loop;
+      S.Close (Store);
+   end Searches_At_Once_Agree;
+
    --  A graph is checked against its tree, not taken on its maker's word:
    --  current while nothing is added, changed or removed, and not once a
    --  file is.
@@ -20558,6 +20683,12 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Word_Index_Follows_The_Tree'Access,
          "the index of the files' words follows the tree and ranks as one made anew");
+      Register_Routine
+        (T, The_Dictionary_Holds_What_The_Files_Hold'Access,
+         "the index's dictionary holds what the files hold, a term no file holds let go");
+      Register_Routine
+        (T, Searches_At_Once_Agree'Access,
+         "searches of two trees at once give what each gives alone");
       Register_Routine
         (T, Graphs_Are_Checked_Current'Access,
          "a graph is checked against its tree, current only while nothing changed since");

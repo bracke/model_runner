@@ -319,10 +319,85 @@ package body Retrieval_Bench is
       Judge ("crate::fnv::fnv1a", [R (Src & "repository.adb"), R ("tests/repository_tests.adb")]);
       Judge ("Impact_Of", [R ("Model_Runner.Framework.Traceability.Impact_Of")]);
       Judge ("uncertain relations", [R (Src & "traceability.adb")]);
+      --  Tasks as an agent is given them, judged from the sources before
+      --  they were searched.
+      Judge ("Graph_Fingerprint should also change when a file is only renamed",
+             [R ("Model_Runner.Framework.Repository.Graph_Fingerprint"), R (Src & "repository.adb")]);
+      Judge ("References_To misses calls made through a package renaming",
+             [R ("Model_Runner.Framework.Repository.References_To"), R (Src & "repository.adb")]);
+      Judge ("Users_Of_File lists a dependent twice",
+             [R ("Model_Runner.Framework.Code_Queries.Users_Of_File"), R (Src & "code_queries.adb")]);
+      Judge ("Language_Of does not know .hpp headers",
+             [R ("Model_Runner.Framework.Repository.Language_Of"), R (Src & "repository.adb")]);
+      Judge ("Refresh reads a file again though its stamp is unchanged",
+             [R ("Model_Runner.Framework.Repository.Refresh"), R (Src & "repository.adb")]);
+      Judge ("the context Budget leaves no room for the model's reply",
+             [R ("Model_Runner.Framework.Context.Budget"), R (Src & "context.adb")]);
       Ada.Text_IO.Put_Line
         ("search all: recall@5 " & Share (Within_5, Judged_Named) & ", recall@10 "
          & Share (Within_10, Judged_Named) & ", MRR " & Share (Reciprocals, Queries * 1000) & " over "
          & Image (Queries) & " queries, " & Image (Judged_Named) & " judged");
+
+      --  What a search costs, warm: each judged query five times over, on
+      --  the fixture's tree and on this repository's own, its time and the
+      --  files it read -- the index's reading and the lines read again for
+      --  the line shown. The middle and the 95th of the times are said.
+      declare
+         type Times is array (Positive range <>) of Duration;
+         procedure Sort_Times (Item : in out Times) is
+            Held : Duration;
+         begin
+            for I in Item'First + 1 .. Item'Last loop
+               Held := Item (I);
+               declare
+                  J : Natural := I - 1;
+               begin
+                  while J >= Item'First and then Item (J) > Held loop
+                     Item (J + 1) := Item (J);
+                     J := J - 1;
+                  end loop;
+                  Item (J + 1) := Held;
+               end;
+            end loop;
+         end Sort_Times;
+
+         Queries : constant array (1 .. 8) of Unbounded_String :=
+           [R (Lookup_Title), R (Callers_Title), R (Estimate_Title), R (Impact_Title), R (Tests_Title),
+            R ("crate::fnv::fnv1a"), R ("Impact_Of"), R ("uncertain relations")];
+
+         procedure Latency (Label, Tree : String) is
+            Graph  : constant Rp.Graph := Rp.Scan (Tree, Rp.Default_Roots);
+            Took   : Times (1 .. Queries'Length * 5);
+            Taken  : Natural := 0;
+            Read_Before : Natural;
+            Hits   : Rv.Hit_Lists.Vector;
+         begin
+            --  Warm: the index brought up once before any is timed.
+            Hits := Rv.Search (Store, Graph, Tree, To_String (Queries (1)), Most => 10, Records => False);
+            Read_Before := Rv.Files_Read;
+            for Round in 1 .. 5 loop
+               for Query of Queries loop
+                  declare
+                     Began : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                  begin
+                     Hits := Rv.Search (Store, Graph, Tree, To_String (Query), Most => 10, Records => False);
+                     Taken := Taken + 1;
+                     Took (Taken) := Ada.Calendar.Clock - Began;
+                  end;
+               end loop;
+            end loop;
+            Sort_Times (Took);
+            Ada.Text_IO.Put_Line
+              ("latency " & Label & ": p50 " & Image (Natural (Took ((Took'Length + 1) / 2) * 1000.0)) & " ms, p95 "
+               & Image (Natural (Took ((Took'Length * 95 + 99) / 100) * 1000.0)) & " ms over "
+               & Image (Took'Length) & " warm searches; "
+               & Share (Rv.Files_Read - Read_Before, Took'Length) & " files read a search, the last giving "
+               & Image (Natural (Hits.Length)) & " hits");
+         end Latency;
+      begin
+         Latency ("fixture", To_String (Root));
+         Latency ("repository", Dirs.Full_Name (".."));
+      end;
 
       --  The index of the words over a tree of some size: this repository's
       --  own, scanned, then searched cold, warm, and with a file changed.
