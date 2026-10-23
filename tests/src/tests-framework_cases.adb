@@ -19712,10 +19712,31 @@ package body Tests.Framework_Cases is
       Graph : Rp.Graph;
    begin
       Retrieval_Files (Root);
-      --  Older than a change of the same moment could still follow.
-      delay 2.1;
+      --  Just written: the stamps are not yet to be trusted, and the text
+      --  is looked at instead -- current, and nothing read again.
       Graph := Rp.Scan (Root, Rp.Default_Roots);
       Assert (Rp.Is_Current (Root, Graph), "a graph of a tree untouched since was not current");
+      declare
+         Read_Again : Natural;
+         Again      : constant Rp.Graph := Rp.Refresh (Root, Graph, Read_Again, Rp.Default_Roots);
+      begin
+         Assert (Read_Again = 0 and then Rp.Graph_Fingerprint (Again) = Rp.Graph_Fingerprint (Graph),
+                 "files just written were read again though unchanged:" & Read_Again'Image);
+      end;
+
+      --  Rewritten to the same size, its time of change set back as an
+      --  unpacker or a mutation script sets it: still another file.
+      declare
+         Notes : constant String := Root & "/docs/notes.txt";
+         Was   : constant GNAT.OS_Lib.OS_Time := GNAT.OS_Lib.File_Time_Stamp (Notes);
+         Text  : constant String := Read_Whole (Notes);
+      begin
+         Put_File (Notes, Ada.Strings.Fixed."*" (Text'Length, 'x'));
+         GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp (Notes, Was);
+         Assert (not Rp.Is_Current (Root, Graph), "a file rewritten to its size and time was taken as it was");
+         Put_File (Notes, Text);
+         Graph := Rp.Brought_Up (Root, Graph);
+      end;
       Put_File (Root & "/src/wallaby.adb", "procedure Wallaby is" & LF & "begin" & LF & "   null;" & LF
                 & "end Wallaby;" & LF);
       Assert (not Rp.Is_Current (Root, Graph), "a graph was current with a file added since");

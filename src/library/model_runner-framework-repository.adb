@@ -60,8 +60,9 @@ package body Model_Runner.Framework.Repository is
       Fine    : Boolean;
       Changed : constant String := Hostkit.Metadata.Change_Stamp (Full, Fine);
 
-      --  The words of the record: its modification time, its change time,
-      --  its size and its file number, a space between.
+      --  The words of the record, a space between: its modification time's
+      --  seconds with their point, its nanoseconds, its change time's the
+      --  same, its size and its file number.
       function Word (Which : Positive) return String is
          Count : Natural := 0;
          Start : Natural := 0;
@@ -83,8 +84,8 @@ package body Model_Runner.Framework.Repository is
       --  One look where the record says it all: its size, and its whole
       --  seconds -- what a stamp leads with -- are in it. Each file a scan
       --  walks was looked at three times for its stamp.
-      if Fine and then Word (3) /= "" and then Ada.Strings.Fixed.Index (Word (1), ".") > 1 then
-         return Word (3) & ":" & Word (1) (Word (1)'First .. Ada.Strings.Fixed.Index (Word (1), ".") - 1)
+      if Fine and then Word (5) /= "" and then Ada.Strings.Fixed.Index (Word (1), ".") > 1 then
+         return Word (5) & ":" & Word (1) (Word (1)'First .. Ada.Strings.Fixed.Index (Word (1), ".") - 1)
            & ":" & Changed;
       end if;
       declare
@@ -120,6 +121,18 @@ package body Model_Runner.Framework.Repository is
       when others =>
          return True;
    end Recent;
+
+   --  A stamp as a graph records it: as it is where it can be trusted to
+   --  move with any later write -- the host's own change record, taken two
+   --  seconds or more after the change it shows, so a write after has a
+   --  later time -- and marked "?" where it cannot: taken within those two
+   --  seconds, with no change record, or none at all. A marked stamp says
+   --  only that the file's text must be looked at to know it unchanged.
+   function Recorded (Stamp : String) return String is
+      Colons : constant Natural := Ada.Strings.Fixed.Count (Stamp, ":");
+   begin
+      return (if Colons >= 2 and then not Recent (Stamp) then Stamp else "?" & Stamp);
+   end Recorded;
 
    function Lower (Text : String) return String
    renames Ada.Characters.Handling.To_Lower;
@@ -658,6 +671,8 @@ package body Model_Runner.Framework.Repository is
      (Key_Type => String, Element_Type => Name_Lists.Vector,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=",
       "=" => Name_Lists."=");
+   package Stamp_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
    --  Add a place under a key.
    procedure Add_Place (Into : in out Word_Places.Map; Key : String; Place : Positive) is
@@ -1591,7 +1606,7 @@ package body Model_Runner.Framework.Repository is
                          Role        => (if Says_Generated (To_String (Text)) then Generated
                                          else Role_Of (Relative, Within)),
                          Fingerprint => Print,
-                         Stamp       => To_Unbounded_String (Stamp)));
+                         Stamp       => To_Unbounded_String (Recorded (Stamp))));
                      declare
                         Reader : constant Adapter'Class :=
                           Languages.Adapter_For (Language_Of (Relative));
@@ -1814,6 +1829,46 @@ package body Model_Runner.Framework.Repository is
           then not Named_By (Within.Generated, Path) and then not Says_Generated (Text_Of (Path))
           else Was /= Role_Of (Path, Within));
 
+      --  The files whose stamp was marked and whose text was found the same:
+      --  their stamps as they are recorded now, by path.
+      Confirmed : Stamp_Maps.Map;
+
+      --  Whether a kept file is the text it was: by its stamp where the
+      --  stamp can be trusted, else by its text's print against the kept
+      --  one -- read, not parsed -- and its stamp recorded anew.
+      function Same_Text (Held, Index : Positive) return Boolean is
+         Was : constant String := To_String (Kept.Files (Held).Stamp);
+         Now : constant String := Now_Stamps (Index);
+      begin
+         if Now /= "" and then Was = Now then
+            return True;
+         elsif Was /= "?" & Now then
+            return False;
+         end if;
+         declare
+            Path : constant String := Now_Paths (Index);
+            Same : constant Boolean :=
+              Print_Of (Path, Text_Of (Path)) = To_String (Kept.Files (Held).Fingerprint)
+              and then not Unreadable (Path);
+         begin
+            if Same then
+               Confirmed.Include (Path, Recorded (Now));
+            end if;
+            return Same;
+         end;
+      end Same_Text;
+
+      --  A kept file's entry, its stamp as confirmed where it was.
+      function Kept_Entry (Held : Positive) return File_Entry is
+         Path : constant String := To_String (Kept.Files (Held).Path);
+      begin
+         return Item : File_Entry := Kept.Files (Held) do
+            if Confirmed.Contains (Path) then
+               Item.Stamp := To_Unbounded_String (Confirmed (Path));
+            end if;
+         end return;
+      end Kept_Entry;
+
       Gone : Name_Lists.Vector;
 
       Symbols_Of   : Word_Places.Map;
@@ -1837,9 +1892,7 @@ package body Model_Runner.Framework.Repository is
          begin
             if Held = 0 and then Skipped_Set.Contains (Skip_Line) and then not Recent (Now_Stamps (Index)) then
                Result.Skipped.Append (Skip_Line);
-            elsif Held = 0 or else Length (Kept.Files (Held).Stamp) = 0
-              or else To_String (Kept.Files (Held).Stamp) /= Now_Stamps (Index)
-              or else Recent (Now_Stamps (Index))
+            elsif Held = 0 or else not Same_Text (Held, Index)
               or else Role_Moved (Kept.Files (Held).Role, Now_Paths (Index))
             then
                Changed.Append (Now_Paths (Index));
@@ -1868,6 +1921,11 @@ package body Model_Runner.Framework.Repository is
             Same.Skipped := Result.Skipped;
             Same.Within := Within;
             Same.Within_Known := True;
+            for Index in 1 .. Natural (Same.Files.Length) loop
+               if Confirmed.Contains (To_String (Same.Files (Index).Path)) then
+                  Same.Files (Index) := Kept_Entry (Index);
+               end if;
+            end loop;
          end return;
       end if;
 
@@ -1914,7 +1972,7 @@ package body Model_Runner.Framework.Repository is
                          Role        => (if Says_Generated (Text) then Generated
                                          else Role_Of (Path, Within)),
                          Fingerprint => To_Unbounded_String (Print),
-                         Stamp       => To_Unbounded_String (Now_Stamps (Index))));
+                         Stamp       => To_Unbounded_String (Recorded (Now_Stamps (Index)))));
                      begin
                         Languages.Adapter_For (Language_Of (Path)).Read (Path, Text, Result);
                      exception
@@ -1929,7 +1987,7 @@ package body Model_Runner.Framework.Repository is
                --  again (Result.Skipped has it), with nothing to carry.
                null;
             else
-               Add_File (Result, Kept.Files (Kept_Index (Path)));
+               Add_File (Result, Kept_Entry (Kept_Index (Path)));
                if Symbols_Of.Contains (Path) then
                   for Place of Symbols_Of.Constant_Reference (Path) loop
                      Result.Symbols.Append (Kept.Symbols (Place));
