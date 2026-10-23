@@ -14,6 +14,7 @@ with Model_Runner.Tools.Builtin;
 with Model_Runner.Output.Harmony;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Tools.Constraint;
+with Model_Runner.Grammar.Rooms;
 
 package body Model_Runner.Agent is
 
@@ -202,7 +203,8 @@ package body Model_Runner.Agent is
 
       --  The grammar, compiled once: the tools do not change between steps,
       --  so neither does what a call may look like.
-      Rules_Grammar : aliased Model_Runner.Grammar.Compiled;
+      Grammar_Room  : Model_Runner.Grammar.Rooms.Holder;
+      Rules_Grammar : Model_Runner.Grammar.Compiled renames Grammar_Room.Data.all;
       Rules         : Gen.Grammar_Reference := null;
 
       --  A generation request the loop owns the discipline of. The caller's

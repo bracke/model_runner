@@ -19,6 +19,9 @@ with Model_Runner.Qwen_Image.Prompts;
 with Model_Runner.Tensors;
 with Model_Runner.Vision;
 with Model_Runner.CLI.Execute.Acquisition;
+with Model_Runner.Qwen_Image.Decoder.Rooms;
+with Model_Runner.CLI.Options.Rooms;
+with Model_Runner.Vision.Rooms;
 
 package body Model_Runner.CLI.Execute.Image_Command is
 
@@ -173,11 +176,13 @@ package body Model_Runner.CLI.Execute.Image_Command is
          --  by the encoder, let go after -- on the device where one opens
          --  and the encoder fits it, as run takes a model -- and kept.
          declare
-            Asked     : Opt.Command := Item;
+            Asked_Room : Model_Runner.CLI.Options.Rooms.Holder;
+            Asked     : Opt.Command renames Asked_Room.Data.all;
             Encoder   : constant String := Path_Of (T.To_String (Item.Text_Encoder_Path), Text_Encoder_Name);
             Leaning   : constant Boolean := N."/=" (Item.Image_Guidance, 1.0);
             Negative  : constant String := T.To_String (Item.Image_Negative);
          begin
+            Asked := Item;
             Asked.Model_Path := T.To_Bounded (Encoder);
             declare
                Chosen    : constant Opt.Command := Resolved_Backend (Asked, Screen);
@@ -230,7 +235,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
                         --  The prompt and the negative alike read beside the
                         --  pictures, each through the vision tower.
                         declare
-                           Eyes  : Model_Runner.Vision.Encoder;
+                           Eyes_Room : Model_Runner.Vision.Rooms.Holder;
+                           Eyes  : Model_Runner.Vision.Encoder renames Eyes_Room.Data.all;
                            Shown : Q.Prompts.Picture_List (Sized'Range);
                         begin
                            for Index in Sized'Range loop
@@ -286,7 +292,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
             exit when E.Is_Error (Condition);
             declare
                Planes : Tk.Real_Array_Access;
-               VAE    : Dec.Picture_Decoder;
+               VAE_Room : Model_Runner.Qwen_Image.Decoder.Rooms.Holder;
+               VAE      : Dec.Picture_Decoder renames VAE_Room.Data.all;
                Tall   : constant Positive := Sized (Index).Height;
                Wide   : constant Positive := Sized (Index).Width;
             begin
@@ -316,7 +323,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
          if Model_Runner.Bytes."/=" (Init_Picture.Pixels, null) then
             declare
                Planes : Tk.Real_Array_Access;
-               VAE    : Dec.Picture_Decoder;
+               VAE_Room : Model_Runner.Qwen_Image.Decoder.Rooms.Holder;
+               VAE      : Dec.Picture_Decoder renames VAE_Room.Data.all;
             begin
                Tk.Allocate (N.Element_Count (Dec.Picture_Channels * Height * Width), Planes);
                Tk.Allocate (N.Element_Count (Dec.Latent_Channels * Rows * Columns), Init_Latent);
@@ -410,7 +418,8 @@ package body Model_Runner.CLI.Execute.Image_Command is
          --  The pictures, written: one where one is asked for, under the
          --  name given; FILE-1.png and on where more are.
          declare
-            VAE     : Dec.Picture_Decoder;
+            VAE_Room : Model_Runner.Qwen_Image.Decoder.Rooms.Holder;
+            VAE      : Dec.Picture_Decoder renames VAE_Room.Data.all;
             Planes  : Tk.Real_Array_Access;
             Width   : constant Positive := Columns * Dec.Upscale;
             Height  : constant Positive := Rows * Dec.Upscale;

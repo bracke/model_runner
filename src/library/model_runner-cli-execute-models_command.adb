@@ -9,6 +9,7 @@ with Model_Runner.Hub;
 with Model_Runner.Hub.Store;
 with Model_Runner.Platform;
 with Model_Runner.Config;
+with Model_Runner.Heap_Buffers;
 
 package body Model_Runner.CLI.Execute.Models_Command is
 
@@ -33,6 +34,12 @@ package body Model_Runner.CLI.Execute.Models_Command is
       new String'(".part.revision"), new String'(".part.joining"),
       new String'(".part.cut"), new String'(".lock")];
 
+   --  The models found, by the name shown and the whole path: five hundred
+   --  of each, a quarter of a megabyte apiece, held on the heap rather
+   --  than in the frame that lists them.
+   type Name_Array is array (1 .. 500) of Model_Runner.Text.Bounded;
+   package Name_Rooms is new Model_Runner.Heap_Buffers.Holders (Name_Array);
+
    procedure Choose_Model
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;
@@ -41,9 +48,11 @@ package body Model_Runner.CLI.Execute.Models_Command is
       use Ada.Directories;
 
       Dir : constant String := Model_Runner.Platform.Models_Directory;
-      Max : constant := 500;
-      Shown : array (1 .. Max) of Model_Runner.Text.Bounded;
-      Full  : array (1 .. Max) of Model_Runner.Text.Bounded;
+      Max : constant Positive := Name_Array'Last;
+      Shown_Room : Name_Rooms.Holder;
+      Full_Room  : Name_Rooms.Holder;
+      Shown : Name_Array renames Shown_Room.Data.all;
+      Full  : Name_Array renames Full_Room.Data.all;
       Sizes : array (1 .. Max) of Long_Long_Integer := [others => 0];
       Count : Natural := 0;
 

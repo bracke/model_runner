@@ -1,3 +1,7 @@
+with Model_Runner.Grammar.Rooms;
+with Model_Runner.CLI.Pictures.Rooms;
+with Model_Runner.CLI.Options.Rooms;
+
 separate (Model_Runner.CLI.Execute.Run_Command)
 procedure Do_Run
   (Item    : Opt.Command;
@@ -171,7 +175,8 @@ is
 
    --  The grammar the run must obey, when one was named. Held here so it
    --  outlives the generation that reads it.
-   Rules       : aliased Model_Runner.Grammar.Compiled;
+   Rules_Room  : Model_Runner.Grammar.Rooms.Holder;
+   Rules       : Model_Runner.Grammar.Compiled renames Rules_Room.Data.all;
    Rules_Ready : Boolean := False;
 
    --  The tools offered to the model. Read before anything is generated,
@@ -196,7 +201,8 @@ is
    --  them. The projector is opened once a picture is named and kept,
    --  since a later turn may add one.
    Pictures  : Gen.Picture_Set;
-   Seer      : Model_Runner.CLI.Pictures.Seer;
+   Seer_Room : Model_Runner.CLI.Pictures.Rooms.Holder;
+   Seer      : Model_Runner.CLI.Pictures.Seer renames Seer_Room.Data.all;
 
    procedure Cleanup is
    begin
@@ -309,6 +315,19 @@ is
    procedure Run_With (Team : Workers_CPU.Pool_Reference) is separate;
 
    Team_Size : constant Natural := Selected_Workers (Item);
+
+   --  The run again on the processor, where the device had no room and
+   --  nobody asked for it: in a frame of its own, as the two copies of a
+   --  command's options it takes -- 160 KB -- were Do_Run's whole run long.
+   procedure Retry_On_Processor with No_Inline is
+      Again_Room : Model_Runner.CLI.Options.Rooms.Holder;
+      Again      : Opt.Command renames Again_Room.Data.all;
+   begin
+      Again := Item;
+      Again.Backend := Model_Runner.Backend.Backend_CPU;
+      Pres.Put_Note (Screen, "cli.note.backend_fit_cpu");
+      Do_Run (With_Panels (Again), Screen, Catalog, Status);
+   end Retry_On_Processor;
 
 begin
    --  More workers asked than the run takes -- the machine's cores, or one
@@ -450,13 +469,7 @@ begin
    --  and nobody asked for the device: the processor, which has room,
    --  runs it instead of the run ending in a refusal nobody chose.
    if Retry_On_CPU then
-      declare
-         Again : Opt.Command := Item;
-      begin
-         Again.Backend := Model_Runner.Backend.Backend_CPU;
-         Pres.Put_Note (Screen, "cli.note.backend_fit_cpu");
-         Do_Run (With_Panels (Again), Screen, Catalog, Status);
-      end;
+      Retry_On_Processor;
    end if;
 exception
    --  A run that raised -- past the pool, which is closed on the way out

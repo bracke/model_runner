@@ -39,6 +39,7 @@ with Model_Runner.Localization;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Text;
+with Model_Runner.Heap_Buffers;
 
 package body Model_Runner.Framework.Work is
    use type Tasks.Core_State;
@@ -325,7 +326,8 @@ package body Model_Runner.Framework.Work is
       Value     : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
       Result    : String (1 .. 16);
       File      : Ada.Streams.Stream_IO.File_Type;
-      Piece     : Ada.Streams.Stream_Element_Array (1 .. 1_048_576);
+      Room      : Model_Runner.Heap_Buffers.Bytes (1_048_576);
+      Piece     : Ada.Streams.Stream_Element_Array renames Room.Data.all;
       Last      : Ada.Streams.Stream_Element_Offset;
    begin
       if not Ada.Directories.Exists (Path) then

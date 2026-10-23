@@ -1,3 +1,5 @@
+with Model_Runner.Conversation.Rooms;
+
 separate (Model_Runner.CLI.Execute.Run_Command.Do_Run)
 procedure Run_With (Team : Workers_CPU.Pool_Reference) is
 
@@ -590,7 +592,8 @@ begin
       end if;
 
       declare
-         Messages     : aliased Conv.History;
+         Messages_Room : Model_Runner.Conversation.Rooms.Holder;
+         Messages     : Conv.History renames Messages_Room.Data.all;
          Agent_Tools  : aliased Model_Runner.Tools.Definitions;
          Built_Runner : aliased Model_Runner.Tools.Builtin.Instance;
          Cmd_Runner   : aliased Command_Runner (Item.Tool_Command);
@@ -1322,7 +1325,8 @@ begin
             end if;
 
             declare
-               Messages : Conv.History;
+               Messages_Room : Model_Runner.Conversation.Rooms.Holder;
+               Messages      : Conv.History renames Messages_Room.Data.all;
                --  The render buffer is bounded by the session limit and is
                --  allocated rather than declared: the limit is large enough
                --  that a stack object of that size would not fit.

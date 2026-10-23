@@ -33,12 +33,16 @@ project Model_Runner is
 
    package Compiler is
       --  The build profile's switches come first, then this project's own.
+      --  -fstack-usage writes each unit's frame sizes beside its object,
+      --  which the release gate reads: no frame of the library may be a
+      --  quarter of a megabyte, so a task's two megabytes hold a chain of
+      --  them.
       --  Leaving them out, as this did, silently discards the optimization
       --  level: every profile compiled at -O0, so measurements comparing
       --  profiles compared nothing.
       for Default_Switches ("Ada") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage",
            --  This project documents a 120 column limit; the
            --  generated profile would otherwise impose 79.
            "-gnatyM120");
@@ -69,12 +73,12 @@ project Model_Runner is
       --  nothing; the code is the same.
       for Switches ("model_runner-platform-device-products.adb") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
            "-fno-var-tracking-assignments");
 
       for Switches ("model_runner-quantization-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
            "-march=x86-64-v3", "-ffp-contract=off");
 
 
@@ -101,16 +105,16 @@ project Model_Runner is
       --  for bit.
       for Switches ("model_runner-vision-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
            "-march=x86-64-v3", "-ffp-contract=off");
       for Switches ("model_runner-delta_rule-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
            "-march=x86-64-v3", "-ffp-contract=off");
 
       for Switches ("model_runner-quantization-integers-wide.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
            "-march=x86-64-v3", "-ffp-contract=off");
 
       --  And the third, for the set that carries the byte dot product. The
@@ -119,7 +123,7 @@ project Model_Runner is
       --  asks for all of it before this is ever entered.
       for Switches ("model_runner-quantization-integers-deep.ads") use
         Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-gnatyM120",
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
            "-march=x86-64-v4", "-ffp-contract=off");
    end Compiler;
 

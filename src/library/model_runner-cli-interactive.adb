@@ -35,6 +35,8 @@ with Model_Runner.Numerics;
 with Model_Runner.UTF8;
 with Model_Runner.CLI.Pictures;
 with Model_Runner.Vision;
+with Model_Runner.Conversation.Rooms;
+with Model_Runner.CLI.Pictures.Rooms;
 
 package body Model_Runner.CLI.Interactive is
 
@@ -369,7 +371,8 @@ package body Model_Runner.CLI.Interactive is
       Words  : constant access constant Vocab.Vocabulary :=
         L.Vocabulary (Prepared);
 
-      Messages : Conv.History;
+      Messages_Room : Model_Runner.Conversation.Rooms.Holder;
+      Messages      : Conv.History renames Messages_Room.Data.all;
 
       --  The project's revision the conversation last saw: what it moved by
       --  since is said before the next turn.
@@ -415,7 +418,8 @@ package body Model_Runner.CLI.Interactive is
       --  from the turns as they stand; a picture named with /image goes
       --  into the next turn typed, as a part beside its words.
       Pictures     : Gen.Picture_Set;
-      Seer         : Model_Runner.CLI.Pictures.Seer;
+      Seer_Room    : Model_Runner.CLI.Pictures.Rooms.Holder;
+      Seer         : Model_Runner.CLI.Pictures.Seer renames Seer_Room.Data.all;
 
       --  A message's content as the template is to see it: a control
       --  marker someone wrote in it is text, not a turn, and a picture's

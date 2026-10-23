@@ -15,6 +15,7 @@ with Hostkit.Metadata;
 with Hostkit.Metadata_Copy;
 
 with Model_Runner.Durable_Syncs;
+with Model_Runner.Heap_Buffers;
 
 package body Model_Runner.Tools.Editing is
 
@@ -171,7 +172,8 @@ package body Model_Runner.Tools.Editing is
       --  Held to a mebibyte: a line is one string, on a worker's stack.
       Line_Most : constant := 1024 * 1024;
       File    : Stream_IO.File_Type;
-      Block   : Stream_Element_Array (1 .. 1024 * 1024);
+      Room    : Model_Runner.Heap_Buffers.Bytes (1024 * 1024);
+      Block   : Stream_Element_Array renames Room.Data.all;
       Last    : Stream_Element_Offset;
       Pending : U.Unbounded_String;
       Number  : Positive := 1;
@@ -464,11 +466,11 @@ package body Model_Runner.Tools.Editing is
       --  it was or as it is now, never cut short -- as the project's own
       --  state is written.
       declare
-         Block : Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length));
+         --  The text as its bytes, where it lies: a copy as long as the
+         --  file was a frame as long as the file.
+         Block : constant Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length))
+         with Import, Address => Content'Address;
       begin
-         for Index in Block'Range loop
-            Block (Index) := Stream_Element (Character'Pos (Content (Content'First + Natural (Index) - 1)));
-         end loop;
          Stream_IO.Create (File, Stream_IO.Out_File, Partial);
          Stream_IO.Write (File, Block);
          Stream_IO.Close (File);
@@ -528,11 +530,9 @@ package body Model_Runner.Tools.Editing is
       if There and then Shared_By_Names then
          declare
             Copy  : Stream_IO.File_Type;
-            Block : Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length));
+            Block : constant Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length))
+            with Import, Address => Content'Address;
          begin
-            for Index in Block'Range loop
-               Block (Index) := Stream_Element (Character'Pos (Content (Content'First + Natural (Index) - 1)));
-            end loop;
             --  Made empty to be written: opened for output, a file keeps
             --  what it held past the new text, and a shorter one kept the
             --  old tail. Created over, it is the same file emptied, its

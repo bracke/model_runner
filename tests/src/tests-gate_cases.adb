@@ -4,6 +4,7 @@ with AUnit.Test_Cases;
 with AUnit.Assertions; use AUnit.Assertions;
 
 with Ada.Directories;
+with Ada.Text_IO;
 with Ada.Strings.Fixed;
 
 with Project_Tools.Files;
@@ -405,6 +406,71 @@ package body Tests.Gate_Cases is
               & "(a build older than its sources leaves old ones: build first)");
    end The_Tree_Holds_Its_Two_Cheap_Bounds;
 
+   --  No frame of the library is a quarter of a megabyte. A task's stack
+   --  is two megabytes unless it says otherwise, and a read buffer of four
+   --  megabytes, a list's room of one at every level of a template, ran
+   --  stacks out. The compiler writes each unit's frame sizes beside its
+   --  object (-fstack-usage); every one under the library's object trees
+   --  is read, and none found is a failure too: a build that stopped
+   --  writing them would pass a gate that reads nothing.
+   procedure No_Frame_Is_A_Quarter_Megabyte
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Most    : constant := 262_144;
+      Read    : Natural := 0;
+      Over    : Ada.Strings.Unbounded.Unbounded_String;
+
+      procedure Look (Directory : String) is
+         Search : Dirs.Search_Type;
+         Item   : Dirs.Directory_Entry_Type;
+      begin
+         Dirs.Start_Search (Search, Directory, "");
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Item);
+            declare
+               Simple : constant String := Dirs.Simple_Name (Item);
+            begin
+               if Simple in "." | ".." then
+                  null;
+               elsif Dirs."=" (Dirs.Kind (Item), Dirs.Directory) then
+                  Look (Dirs.Full_Name (Item));
+               elsif Simple'Length > 3 and then Simple (Simple'Last - 2 .. Simple'Last) = ".su" then
+                  Read := Read + 1;
+                  declare
+                     File : Ada.Text_IO.File_Type;
+                  begin
+                     Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Dirs.Full_Name (Item));
+                     while not Ada.Text_IO.End_Of_File (File) loop
+                        declare
+                           Line  : constant String := Ada.Text_IO.Get_Line (File);
+                           First : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                           Second : constant Natural :=
+                             (if First = 0 then 0
+                              else Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), [1 => ASCII.HT]));
+                        begin
+                           if Second > First + 1
+                             and then Natural'Value (Line (First + 1 .. Second - 1)) >= Most
+                           then
+                              Ada.Strings.Unbounded.Append (Over, ASCII.LF & "  " & Line);
+                           end if;
+                        end;
+                     end loop;
+                     Ada.Text_IO.Close (File);
+                  end;
+               end if;
+            end;
+         end loop;
+         Dirs.End_Search (Search);
+      end Look;
+   begin
+      Look (Dirs.Full_Name ("../obj"));
+      Assert (Read > 0, "no frame sizes were written under obj: the library is to be built with -fstack-usage");
+      Assert (Ada.Strings.Unbounded.Length (Over) = 0,
+              "frames of a quarter of a megabyte or more -- hold what makes them so on the heap"
+              & " (Model_Runner.Heap_Buffers):" & Ada.Strings.Unbounded.To_String (Over));
+   end No_Frame_Is_A_Quarter_Megabyte;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -416,6 +482,9 @@ package body Tests.Gate_Cases is
         (T, The_Tree_Holds_Its_Two_Cheap_Bounds'Access,
          "the build left no warnings and no file of the tree is past two "
          & "mebibytes");
+      Register_Routine
+        (T, No_Frame_Is_A_Quarter_Megabyte'Access,
+         "no frame of the library is a quarter of a megabyte, so a task's stack holds a chain of them");
       Register_Routine
         (T, The_Specification_Is_A_Gate'Access,
          "the specification is a gate: every requirement met, by a test there is");

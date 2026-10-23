@@ -29,6 +29,7 @@ with Hostkit.Locks;
 with Model_Runner.Config;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Platform;
+with Model_Runner.Heap_Buffers;
 
 package body Model_Runner.Hub is
 
@@ -380,6 +381,13 @@ package body Model_Runner.Hub is
    -- Read_Listing --
    ------------------
 
+   --  An empty listing and file set, held once: cleared from an aggregate,
+   --  each was built whole in the frame that cleared it -- a listing is
+   --  280 KB -- and a listing held as a local was one too.
+   No_Listing : constant Listing := [others => <>];
+   No_Files   : constant File_Set := [others => <>];
+   package Listing_Rooms is new Model_Runner.Heap_Buffers.Holders (Listing);
+
    procedure Read_Listing
      (Text   : String;
       Files  : out Listing;
@@ -394,7 +402,7 @@ package body Model_Runner.Hub is
       Document : J.Document;
       Error    : Jsonlib.Errors.Error_Info;
    begin
-      Files := [others => <>];
+      Files := No_Listing;
       Count := 0;
       Ok := False;
       Reason := T.Empty;
@@ -521,7 +529,7 @@ package body Model_Runner.Hub is
         Get (URL => Host & "/api/models/" & Repo & "?blobs=true", Result => Result);
       Code   : Natural := 0;
    begin
-      Files := [others => <>];
+      Files := No_Listing;
       Count := 0;
       Ok := False;
       if not HE.Is_Success (Status) then
@@ -600,7 +608,7 @@ package body Model_Runner.Hub is
          end loop;
       end Sort_By_Name;
    begin
-      Files := [others => <>];
+      Files := No_Files;
       Ok := False;
       Count := 0;
       Reason := T.Empty;
@@ -742,7 +750,7 @@ package body Model_Runner.Hub is
       Chosen      : Natural := 0;
       None_Fit    : Boolean := False;
    begin
-      Files := [others => <>];
+      Files := No_Files;
       Ok := False;
       Count := 0;
       Reason := T.Empty;
@@ -825,10 +833,11 @@ package body Model_Runner.Hub is
       Reason    : out Model_Runner.Text.Bounded)
    is
       Quant        : T.Bounded;
-      Listed       : Listing;
+      Listed_Room  : Listing_Rooms.Holder;
+      Listed       : Listing renames Listed_Room.Data.all;
       Listed_Count : Natural;
    begin
-      Files := [others => <>];
+      Files := No_Files;
       Count := 0;
       Split (Reference, Repo, Quant);
       Fetch_Listing (T.To_String (Repo), Listed, Listed_Count, Ok, Reason);
@@ -853,10 +862,11 @@ package body Model_Runner.Hub is
       Ok        : out Boolean;
       Reason    : out Model_Runner.Text.Bounded)
    is
-      Listed       : Listing;
+      Listed_Room  : Listing_Rooms.Holder;
+      Listed       : Listing renames Listed_Room.Data.all;
       Listed_Count : Natural;
    begin
-      Files := [others => <>];
+      Files := No_Files;
       Ok := False;
       Count := 0;
       Reason := T.Empty;
@@ -986,7 +996,8 @@ package body Model_Runner.Hub is
       use Ada.Streams;
       Context : CryptoLib.Hashes.SHA256_Context;
       In_File : Stream_IO.File_Type;
-      Buffer  : Stream_Element_Array (1 .. 4 * 1024 * 1024);
+      Room    : Model_Runner.Heap_Buffers.Bytes (4 * 1024 * 1024);
+      Buffer  : Stream_Element_Array renames Room.Data.all;
       Last    : Stream_Element_Offset;
       Digest  : CryptoLib.Hashes.SHA256_Digest;
       Hex     : constant String := "0123456789abcdef";
@@ -1155,7 +1166,8 @@ package body Model_Runner.Hub is
       then
          declare
             In_File, Out_File : Stream_IO.File_Type;
-            Buffer : Stream_Element_Array (1 .. 1024 * 1024);
+            Room   : Model_Runner.Heap_Buffers.Bytes (1024 * 1024);
+            Buffer : Stream_Element_Array renames Room.Data.all;
             Last   : Stream_Element_Offset;
             Left   : Interfaces.Unsigned_64 := Keep;
          begin
@@ -1413,7 +1425,8 @@ package body Model_Runner.Hub is
       declare
          use Ada.Streams;
          Out_File : Stream_IO.File_Type;
-         Buffer   : Stream_Element_Array (1 .. 1024 * 1024);
+         Room     : Model_Runner.Heap_Buffers.Bytes (1024 * 1024);
+         Buffer   : Stream_Element_Array renames Room.Data.all;
          Last     : Stream_Element_Offset;
       begin
          if Ada.Directories.Exists (Dest_Path) then
