@@ -212,6 +212,10 @@ const uint DM = 80u;
 const uint DM = 64u;
 #endif
 
+//  Two subgroups answer a pair's rows together where a workgroup has
+//  them: see pacc below. Not for a few at once, whose rows are records.
+const bool PAIRED = SUBS >= 2u && FEW == 0u && BR == 16u && (DM % 32u) == 0u;
+
 //  IN_PLACE keeps the answer in the instruction's accumulators across the
 //  tiles, rescaled where it sits; see the head of the file. The heads of
 //  sixty-four keep the older way, a product a tile added into registers:
@@ -508,16 +512,21 @@ void main() {
     //  and added into registers: twenty-eight kilobytes of shared memory a
     //  workgroup at a head of 256, two workgroups to a compute unit, and
     //  attention at a fraction of the rate the products run at.
+    //  Paired, two subgroups share their thirty-two rows' answer: each
+    //  holds both subgroups' rows for half the components, so a tile of
+    //  values read feeds two products where it fed one -- the same
+    //  registers, half the reads.
     coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
-        pacc[BR / 16u][DM / 16u];
+        pacc[(BR / 16u) * (DM / 16u)];
 
-    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-        [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
-            pacc[m][t] =
-                coopmat<float, gl_ScopeSubgroup, 16, 16,
-                        gl_MatrixUseAccumulator>(0.0);
-        }
+    [[unroll]] for (uint i = 0u; i < (BR / 16u) * (DM / 16u); i++) {
+        pacc[i] =
+            coopmat<float, gl_ScopeSubgroup, 16, 16,
+                    gl_MatrixUseAccumulator>(0.0);
     }
+
+    uint pair0 = sub & ~1u;
+    uint half_of = sub & 1u;
 
     uint mine_rows[8];
     {
@@ -697,7 +706,55 @@ void main() {
 #ifdef IN_PLACE
         //  What this tile weighs, every component at once, added into
         //  the answer after the answer is rescaled.
-        {
+        if (PAIRED) {
+            float scale_of[2][8];
+
+            [[unroll]] for (uint m = 0u; m < 2u; m++) {
+                for (uint e = 0u; e < 8u; ++e) {
+                    scale_of[m][e] = rowscale[(pair0 + m) * BR + mine_rows[e]];
+                }
+            }
+
+            [[unroll]] for (uint m = 0u; m < 2u; m++) {
+                [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
+                    if ((half_of * (DM / 32u) + t) * 16u < dv) {
+                        for (int e = 0; e < pacc[m * (DM / 32u) + t].length(); ++e) {
+                            pacc[m * (DM / 32u) + t][e] *= scale_of[m][e];
+                        }
+                    }
+                }
+            }
+
+            [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseA> pm[2];
+
+                [[unroll]] for (uint m = 0u; m < 2u; m++) {
+                    coopMatLoad (pm[m], ps, (pair0 + m) * BR * BC + n0, BC,
+                                 gl_CooperativeMatrixLayoutRowMajor);
+                }
+
+                [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
+                    uint tg = half_of * (DM / 32u) + t;
+                    if (tg * 16u < dv) {
+                        coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseB> vm;
+
+                        coopMatLoad (vm, vh,
+                                     place_of (base + n0, shape.v_base,
+                                               shape.v_width)
+                                     + v_at + tg * 16u,
+                                     shape.v_width,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+
+                        [[unroll]] for (uint m = 0u; m < 2u; m++) {
+                            pacc[m * (DM / 32u) + t] =
+                                coopMatMulAdd (pm[m], vm, pacc[m * (DM / 32u) + t]);
+                        }
+                    }
+                }
+            }
+        } else {
             float scale_of[BR / 16u][8];
 
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
@@ -709,8 +766,8 @@ void main() {
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
                     if (t * 16u < dv) {
-                        for (int e = 0; e < pacc[m][t].length(); ++e) {
-                            pacc[m][t][e] *= scale_of[m][e];
+                        for (int e = 0; e < pacc[m * (DM / 16u) + t].length(); ++e) {
+                            pacc[m * (DM / 16u) + t][e] *= scale_of[m][e];
                         }
                     }
                 }
@@ -738,7 +795,8 @@ void main() {
                                      gl_CooperativeMatrixLayoutRowMajor);
 
                         [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                            pacc[m][t] = coopMatMulAdd (pm[m], vm, pacc[m][t]);
+                            pacc[m * (DM / 16u) + t] =
+                                coopMatMulAdd (pm[m], vm, pacc[m * (DM / 16u) + t]);
                         }
                     }
                 }
@@ -758,32 +816,46 @@ void main() {
     }
     barrier();
 
-    float final_of[BR / 16u][8];
+    //  Paired, the rows are the pair's -- each sixteen its subgroup's,
+    //  whose block they are in -- and the components this one's half.
+    const uint OUT_M = PAIRED ? 2u : BR / 16u;
+    const uint OUT_T = PAIRED ? DM / 32u : DM / 16u;
 
-    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+    float final_of[2][8];
+
+    [[unroll]] for (uint m = 0u; m < OUT_M; m++) {
         for (uint e = 0u; e < 8u; ++e) {
-            final_of[m][e] = rowscale[RS0 + m * 16u + mine_rows[e]];
+            final_of[m][e] = PAIRED ? rowscale[(pair0 + m) * BR + mine_rows[e]]
+                                    : rowscale[RS0 + m * 16u + mine_rows[e]];
         }
     }
 
     //  And out sixteen components at a time, through the scores' room,
     //  dropping the rows the block invented and the components a narrower
     //  head does not have.
-    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-        [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
+    [[unroll]] for (uint m = 0u; m < OUT_M; m++) {
+        [[unroll]] for (uint t = 0u; t < OUT_T; t++) {
+            uint tg = PAIRED ? half_of * OUT_T + t : t;
+            //  Uniform across the workgroup, for the barriers: a pair's
+            //  halves may differ in whether their components are real.
             if (t * 16u < dv) {
-                for (int e = 0; e < pacc[m][t].length(); ++e) {
-                    pacc[m][t][e] *= final_of[m][e];
-                }
+                bool real = tg * 16u < dv;
 
-                coopMatStore (pacc[m][t], ss, SS0 + 0u, 16u,
-                              gl_CooperativeMatrixLayoutRowMajor);
+                if (real) {
+                    for (int e = 0; e < pacc[m * OUT_T + t].length(); ++e) {
+                        pacc[m * OUT_T + t][e] *= final_of[m][e];
+                    }
+
+                    coopMatStore (pacc[m * OUT_T + t], ss, SS0 + 0u, 16u,
+                                  gl_CooperativeMatrixLayoutRowMajor);
+                }
                 barrier();
 
-                for (uint at = lane; at < 256u; at += 64u) {
-                    uint r    = m * 16u + at / 16u;
-                    uint c    = t * 16u + at % 16u;
-                    uint slot = block * BR + r;
+                for (uint at = lane; at < 256u && real; at += 64u) {
+                    uint r    = PAIRED ? at / 16u : m * 16u + at / 16u;
+                    uint c    = tg * 16u + at % 16u;
+                    uint slot = (PAIRED ? gl_WorkGroupID.x * SUBS + pair0 + m
+                                        : block) * BR + r;
 
                     if (FEW != 0u) {
                         if (c < dv && row_real (sub, block, r)) {

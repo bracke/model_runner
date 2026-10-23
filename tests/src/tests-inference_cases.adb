@@ -18944,14 +18944,16 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end A_Wrapped_Window_Reads_Alike_On_The_Device;
 
-   --  A batch attending past Deep_Span positions with heads of sixty-four
-   --  or fewer: the deep matrix kernel, eight subgroups a workgroup, each
-   --  putting its block's answer down in shared memory and reading it
-   --  back. The narrow kernel put every subgroup's down in the first
-   --  subgroup's room and read its own, so seven of eight blocks read
-   --  another's answer, or its own scores. The Q8_0 fixture's heads of
-   --  sixteen take that kernel; the processor says what the rows are.
-   procedure A_Narrow_Head_Attends_Deep_On_The_Device
+   --  A batch attending past Deep_Span positions: the deep matrix kernel,
+   --  several subgroups a workgroup. With heads of sixty-four or fewer each
+   --  puts its block's answer down in shared memory and reads it back; the
+   --  narrow kernel put every subgroup's down in the first subgroup's room
+   --  and read its own, so seven of eight blocks read another's answer, or
+   --  its own scores. With heads of 128 and 256 two subgroups answer a pair
+   --  of blocks together, each half of the components of both, from the
+   --  weights both laid down. The Q8_0 fixture's heads of sixteen, the
+   --  Q4_K one's of 128 and of 256; the processor says what the rows are.
+   procedure Heads_Attend_Deep_On_The_Device
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T2);
@@ -18974,77 +18976,81 @@ package body Tests.Inference_Cases is
             "note: no device to attend deep on");
          return;
       end if;
-      Tiny_Model.Build (Image, Tiny_Model.Q8_0, Room => 4096);
-      declare
-         Held : aliased constant B.Byte_Array := Image.all;
-         Host_Rows, Device_Rows : T.Real_Array_Access;
-         Worst : Long_Float := 0.0;
+      for Width in 1 .. 3 loop
+         Tiny_Model.Build
+           (Image, (if Width = 1 then Tiny_Model.Q8_0 else Tiny_Model.Q4_K), Room => 4096,
+            Head_Factor => (if Width = 3 then 2 else 1));
+         declare
+            Held : aliased constant B.Byte_Array := Image.all;
+            Host_Rows, Device_Rows : T.Real_Array_Access;
+            Worst : Long_Float := 0.0;
 
-         --  Every position's row, read in batches as a run reads a prompt.
-         procedure Run
-           (Backend : Model_Runner.Backend.Backend_Kind;
-            Rows    : out T.Real_Array_Access)
-         is
-            Pass   : T.Real_Array_Access;
-            Under  : Harness (Held'Access);
-            Able   : Boolean;
-            Live   : L.Session;
-            Last   : Logit_Vector;
-            Status : E.Error_Info;
-            From   : Positive := Prompt'First;
+            --  Every position's row, read in batches as a run reads a prompt.
+            procedure Run
+              (Backend : Model_Runner.Backend.Backend_Kind;
+               Rows    : out T.Real_Array_Access)
+            is
+               Pass   : T.Real_Array_Access;
+               Under  : Harness (Held'Access);
+               Able   : Boolean;
+               Live   : L.Session;
+               Last   : Logit_Vector;
+               Status : E.Error_Info;
+               From   : Positive := Prompt'First;
+            begin
+               T.Allocate (Element_Count (Count) * Tiny_Model.Vocabulary, Rows);
+               T.Allocate (Batch * Element_Count (Tiny_Model.Vocabulary), Pass);
+               Start (Under, Backend, Able);
+               Assert (Able, "the model did not prepare on "
+                       & Model_Runner.Backend.Backend_Kind'Image (Backend));
+               L.Open (Live, Under.Ready, 4096, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+               while From <= Prompt'Last loop
+                  declare
+                     Upto : constant Positive :=
+                       Positive'Min (Prompt'Last, From + Batch - 1);
+                     Wide : constant Element_Count :=
+                       Element_Count (Upto - From + 1) * Tiny_Model.Vocabulary;
+                     At_Row : constant Element_Count :=
+                       Element_Count (From - Prompt'First)
+                       * Tiny_Model.Vocabulary;
+                  begin
+                     L.Evaluate_Batch
+                       (Live, Under.Ready, Prompt (From .. Upto), Last,
+                        Every => Pass, Status => Status);
+                     Assert (E.Is_Ok (Status),
+                             "the batch failed: "
+                             & E.Error_Code'Image (Status.Code));
+                     Rows.all (At_Row .. At_Row + Wide - 1) :=
+                       Pass.all (Pass.all'First .. Pass.all'First + Wide - 1);
+                     From := Upto + 1;
+                  end;
+               end loop;
+               L.Close (Live);
+               T.Free (Pass);
+            end Run;
          begin
-            T.Allocate (Element_Count (Count) * Tiny_Model.Vocabulary, Rows);
-            T.Allocate (Batch * Element_Count (Tiny_Model.Vocabulary), Pass);
-            Start (Under, Backend, Able);
-            Assert (Able, "the model did not prepare on "
-                    & Model_Runner.Backend.Backend_Kind'Image (Backend));
-            L.Open (Live, Under.Ready, 4096, Status => Status);
-            Assert (E.Is_Ok (Status), "the session did not open");
-            while From <= Prompt'Last loop
-               declare
-                  Upto : constant Positive :=
-                    Positive'Min (Prompt'Last, From + Batch - 1);
-                  Wide : constant Element_Count :=
-                    Element_Count (Upto - From + 1) * Tiny_Model.Vocabulary;
-                  At_Row : constant Element_Count :=
-                    Element_Count (From - Prompt'First)
-                    * Tiny_Model.Vocabulary;
-               begin
-                  L.Evaluate_Batch
-                    (Live, Under.Ready, Prompt (From .. Upto), Last,
-                     Every => Pass, Status => Status);
-                  Assert (E.Is_Ok (Status),
-                          "the batch failed: "
-                          & E.Error_Code'Image (Status.Code));
-                  Rows.all (At_Row .. At_Row + Wide - 1) :=
-                    Pass.all (Pass.all'First .. Pass.all'First + Wide - 1);
-                  From := Upto + 1;
-               end;
+            Run (Model_Runner.Backend.Backend_CPU, Host_Rows);
+            Run (Model_Runner.Backend.Backend_Device, Device_Rows);
+            for Index in Host_Rows'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  abs (Long_Float (Host_Rows (Index) - Device_Rows (Index))));
             end loop;
-            L.Close (Live);
-            T.Free (Pass);
-         end Run;
-      begin
-         Run (Model_Runner.Backend.Backend_CPU, Host_Rows);
-         Run (Model_Runner.Backend.Backend_Device, Device_Rows);
-         for Index in Host_Rows'Range loop
-            Worst := Long_Float'Max
-              (Worst,
-               abs (Long_Float (Host_Rows (Index) - Device_Rows (Index))));
-         end loop;
-         T.Free (Host_Rows);
-         T.Free (Device_Rows);
-         --  Two thousand positions of a half-precision cache leave a
-         --  hundredth between the two; the blocks read from another
-         --  subgroup's room were eight logits out.
-         Assert (Worst < 5.0E-2,
-                 "attending past the deep span, the device answers "
-                 & "otherwise than the processor, by"
-                 & Long_Float'Image (Worst));
-      end;
-      B.Free (Image);
+            T.Free (Host_Rows);
+            T.Free (Device_Rows);
+            --  Two thousand positions of a half-precision cache leave a
+            --  hundredth between the two; the blocks read from another
+            --  subgroup's room were eight logits out.
+            Assert (Worst < 5.0E-2,
+                    "attending past the deep span, the device answers "
+                    & "otherwise than the processor, by"
+                    & Long_Float'Image (Worst) & " at head width" & Width'Image);
+         end;
+         B.Free (Image);
+      end loop;
       Model_Runner.Backend.Device.Close;
-   end A_Narrow_Head_Attends_Deep_On_The_Device;
+   end Heads_Attend_Deep_On_The_Device;
 
    --  A mixture's gate and up stacks, Q4_K and a short way apart in the
    --  file, go to the device once, as one region: the load holds it, the
@@ -20642,9 +20648,9 @@ package body Tests.Inference_Cases is
          "a hybrid's batch as long as its ring keeps its first positions' "
          & "states on the device");
       Register_Routine
-        (T, A_Narrow_Head_Attends_Deep_On_The_Device'Access,
-         "a batch of narrow heads attending past the deep span reads alike "
-         & "on the device and the processor");
+        (T, Heads_Attend_Deep_On_The_Device'Access,
+         "a batch attending past the deep span reads alike on the device and "
+         & "the processor, heads of 16, 128 and 256");
       Register_Routine
         (T, A_Rewind_Below_The_Owed_Rows_Is_Fetched'Access,
          "a turn rewound below the rows the device owes the host is fetched "
