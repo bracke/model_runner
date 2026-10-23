@@ -7705,6 +7705,14 @@ against 0.770 for the tile before it alternated beside it in the same
 sitting. The rows of 110 tokens never reach that tile, and the processor's
 and llama.cpp's do not run it.
 
+**Where the two tables stand** (2026-10-23): this program's processor reads a
+prompt 1.66 times llama.cpp's rate at 110 tokens and 1.51 times at 1419, and
+generates level with it (39.9 against 39.6); its device reads a prompt 1.13
+times llama.cpp's device at 110 and 1.15 times at 1419, and generates 1.05
+times as fast (58.6 against 56.0). The paragraphs below are this section's
+record, sitting by sitting, each in the tense of its own day: where a figure
+in them differs from the tables, the tables are the reading that stands.
+
 **The processor's rows are now taken the way `run` takes them, in the
 eight-row layout, and its prompts are ahead.** `run` on the processor
 repacks a model into panels unasked (`### The eight-row weight layout,
@@ -7789,9 +7797,9 @@ history. A median of three inside one window is not a defence against a
 window that is itself unusual, which is the second time this section has had
 to say that in one day.
 
-**The processor's long prompt is ahead of llama.cpp -- 275.6 tokens a
-second against 254.5 at 1419 -- and its short one is behind, 361.8 against
-378.9 at 110.** The short row
+**In an earlier sitting the processor's long prompt was ahead of llama.cpp --
+275.6 tokens a second against 254.5 at 1419 -- and its short one behind, 361.8
+against 378.9 at 110.** The short row
 has now been ahead in two of seven sittings and behind in five, with
 llama-bench's own spread on it thirty tokens a second; the rows that repeat
 are the long prompt and the two generating ones. Read the short rows knowing the spread on both sides: llama-bench's
@@ -7806,7 +7814,7 @@ before any of them started`, below -- eleven per cent of a prompt lost to
 waiting for the slowest of eight fixed ranges. Three commits before that it
 was 1.16 behind.
 
-**And the generating row is 1.08 behind on the processor and 1.07 on the
+**And the generating row was then 1.08 behind on the processor and 1.07 on the
 device**, after `### The share count a generated token was tuned to` found
 that constant had been chosen against the pool the same change replaced.
 
@@ -7832,9 +7840,9 @@ across windows are. The row now says 233.7 and 1.16.
 long to publish because nobody asked it to.** Two things it says that the
 short one does not.
 
-The processor is **ahead at the longer prompt** -- 1.08 at 1419 tokens --
-and 1.05 behind at 110; the device is 1.04 behind at 1419 and 1.08 behind at
-110. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
+In that sitting the processor was **ahead at the longer prompt** -- 1.08 at
+1419 tokens -- and 1.05 behind at 110; the device was 1.04 behind at 1419 and
+1.08 behind at 110. The two short rows read 1.15 and 1.53 until 2026-09-02, and both of those
 were the machine's clock rather than the code's; `### A prompt too short to
 wake the machine` is what they were. Attention grows with the square of the
 context and it is the part of a layer this program is furthest behind on, so a
@@ -7855,7 +7863,7 @@ section were taken on and dropping it would throw that away, and a reader
 comparing against somebody else's `pp110` needs it. But **the long one is the
 figure to argue about**.
 
-On the processor at 110 tokens: **1.1 times slower generating and 1.1 times
+On the processor at 110 tokens it once read **1.1 times slower generating and 1.1 times
 slower reading a prompt** -- the generating figure has read 1.1 four times, 1.2 eight times, 1.3 and 1.4 across sittings, the first four of them
 after `### The wake, not the work`, which is what a ratio does when both
 of its sides sit within a per cent of a rounding boundary -- where the first
@@ -7878,7 +7886,7 @@ number in it moved, and it cannot ask the second question without knowing
 which numbers belong to which figure. Reading the table against its own
 prose is what caught it, which is a thing only a person does.
 
-**The device row is now clear of llama.cpp's processor row** -- 50.3 against
+**The device row came clear of llama.cpp's processor row** -- 50.3 against
 39.2 in this sitting, more than a quarter ahead, where for twenty-one
 sittings the two sat on top of each other: 50.6 against 39.2, 50.3 against 38.8, 50.3 against 38.8, 50.3 against 39.2, 50.4 against 39.2, 50.0 against 39.5, 49.9 against 39.4, 50.6 against
 39.2, 50.6 against
@@ -7891,8 +7899,9 @@ against 40.0, 38.9 against 40.0, 40.9 against 40.4, 41.0 against 40.4, 40.7
 against 40.7, and 41.6 against 40.0. Most of those put this program's device
 ahead and a few put it behind, by under three per cent either way, which was
 a pair of figures sitting on top of each other rather than a lead in either
-direction; the last three readings are the first that are not. What is left
-between it and llama.cpp's own device figure is 1.2 times.
+direction; the last three readings are the first that are not. What was left
+then between it and llama.cpp's own device figure was 1.2 times; the tables
+above have it ahead.
 
 The processor's generating row is the other kind of gap. It reads every
 weight once a token and does one multiply with each, so above three workers
@@ -7917,10 +7926,11 @@ hand-written kernels -- AVX-512 with integer dot products on this processor,
 cooperative matrices on this device -- so its prompt figure was never
 eighteen times a better loop, it was a different shape of work.
 
-**On the device that shape is now this program's shape too**, and the gap
-went from eight times to four. On the processor it is not: a prompt there is
+**On the device that shape became this program's shape too**, and the gap
+went from eight times to four. On the processor it was not, then -- the panels
+since have made it so: a prompt there was
 still a row product per token, against the other runtime's matrix kernels,
-and closing that needs the same change made in a different place.
+and closing that needed the same change made in a different place.
 
 The runs are
 
@@ -7971,7 +7981,7 @@ the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
 The device generating row was the noisiest here for a long time: 50.3 t/s
-now, against 50.6, 50.8, 51.4, 50.2, 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
+in that sitting, against 50.6, 50.8, 51.4, 50.2, 50.5, 50.6, 50.3, 49.5, 52.6, 52.5, 50.6, 54.2, 50.3, 50.3, 50.3, 50.4, 50.0, 49.9, 50.6, 50.6, 46.6, 47.8, 47.0, 48.5, 48.0, 47.7, 48.3, 48.2, 48.4, 47.3, 48.0, 46.2, 44.4, 48.5, 44.5, 44.4, 45.8, 43.8, 42.3, 40.1, 40.3, 39.8, 39.4, 40.6, 40.6, 40.5, 40.4, 40.2, 40.1, 40.7, 38.9, 40.9, 41.0, 40.7, 41.6, 41.3, 40.6, 41.0, 41.5, 41.2, 40.8, 28.1, 30.9, 27.1, 31.0, 30.9, 27.3, 26.9, 31.0, 31.2, 28.1,
 31.8, 32.0, 31.1, 30.7, 30.5, 22.0, 21.1, 23.3, 24.2, 18.2, 15.9, 17.7,
 14.9, 14.1, 14.1, 13.7, 16.9, 16.2 and 13.3 in twelve earlier sittings at
 comparable loads. Every reading between 26.9 and 32.0 is the same code; the

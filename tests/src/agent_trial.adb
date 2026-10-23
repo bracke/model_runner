@@ -1,9 +1,11 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
+with Ada.Calendar.Time_Zones;
 with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Streams;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
@@ -665,8 +667,21 @@ package body Agent_Trial is
                      --  and again at fifteen, so the two say whether anything
                      --  moved -- as the one stall seen (a helper silent 28
                      --  minutes, 2026-10-16) was recorded by hand, and by
-                     --  then its run had been written over.
+                     --  then its run had been written over. Named for the
+                     --  time the run began, so a later trial's stall does not
+                     --  write over it either -- one of 2026-10-17 outlived its
+                     --  run's record and could say only where it waited.
                      Grew    : Ada.Calendar.Time := Ada.Calendar.Clock;
+
+                     --  A time as the host's clock on the wall reads it.
+                     function Local (At_Time : Ada.Calendar.Time) return String
+                     is (Ada.Calendar.Formatting.Image
+                           (At_Time, Time_Zone => Ada.Calendar.Time_Zones.UTC_Time_Offset (At_Time)));
+
+                     Stall_Name : constant String :=
+                       Root & "-stall-"
+                       & Ada.Strings.Fixed.Translate
+                           (Local (Began), Ada.Strings.Maps.To_Mapping (" :", "_-"));
                      Stalls  : Natural := 0;
                      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
                      Last    : Ada.Streams.Stream_Element_Offset;
@@ -713,7 +728,7 @@ package body Agent_Trial is
                         if Stalls = 1 then
                            Append (Display_Faults,
                                    "  display: the session showed nothing for five minutes;"
-                                   & " its threads' waits are in " & Root & "-stall.txt" & ASCII.LF);
+                                   & " its threads' waits are in " & Stall_Name & ".txt" & ASCII.LF);
                         end if;
                         if not Exists (Tasks_At) then
                            return;
@@ -722,10 +737,15 @@ package body Agent_Trial is
                         --  file the work had changed, and the task failed for it.
                         Ada.Text_IO.Create
                           (Out_File, Ada.Text_IO.Out_File,
-                           Root & "-stall"
+                           Stall_Name
                            & (if Stalls = 1 then ""
                               else "-" & Ada.Strings.Fixed.Trim (Natural'Image (Stalls), Ada.Strings.Both))
                            & ".txt");
+                        --  What ran, since when, and how long it has shown
+                        --  nothing.
+                        Ada.Text_IO.Put_Line
+                          (Out_File, "model " & Model & "; began " & Local (Began)
+                           & "; quiet since " & Local (Grew));
                         Start_Search (Search, Tasks_At, "", [Directory => True, others => False]);
                         while More_Entries (Search) loop
                            Get_Next_Entry (Search, Item);
@@ -763,6 +783,14 @@ package body Agent_Trial is
                               end loop;
                               End_Search (Search);
                            end if;
+                        end;
+                        --  And what the screen showed before it went quiet.
+                        declare
+                           Shown : constant String := Plain (To_String (Seen));
+                        begin
+                           Ada.Text_IO.Put_Line (Out_File, "screen, its last 4000 characters:");
+                           Ada.Text_IO.Put_Line
+                             (Out_File, Shown (Integer'Max (Shown'First, Shown'Last - 3_999) .. Shown'Last));
                         end;
                         Ada.Text_IO.Close (Out_File);
                      exception
