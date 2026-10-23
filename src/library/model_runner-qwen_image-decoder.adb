@@ -278,7 +278,40 @@ package body Model_Runner.Qwen_Image.Decoder is
         (Name : String; Inputs, Outputs, Size : Positive; Result : out Convolution; Encoding : Boolean := False) is
       begin
          Laid_Out (Name, Inputs, Outputs, Size, Result, With_Taps => On_Device and then not Encoding);
-         if (Encoding or else not On_Device) and then E.Is_Ok (Status) and then T.Is_Present (Result.Kernel) then
+         if E.Is_Error (Status) or else not T.Is_Present (Result.Kernel) then
+            return;
+         end if;
+         if Size = 3 and then not Encoding and then not On_Device and then Result.Owned /= null then
+            --  Its rows' taps apart: the kernel's columns are tap after
+            --  tap, so a row's three are a run of three inputs' widths.
+            declare
+               Rows    : constant Element_Count := Result.Kernel.Rows;
+               Across  : constant Element_Count := Result.Kernel.Columns;
+               Ins     : constant Element_Count := Element_Count (Inputs);
+               Plain   : T.Real_Array_Access;
+            begin
+               T.Allocate (Rows * Across, Plain);
+               if Plain = null then
+                  Status := E.Make (E.Memory_Allocation_Failed);
+                  return;
+               end if;
+               for Row in 0 .. Rows - 1 loop
+                  exit when E.Is_Error (Status);
+                  declare
+                     Into : N.Real_Array (0 .. Across - 1) with Import, Address => Plain (Row * Across)'Address;
+                  begin
+                     T.Dequantize_Row (Result.Kernel, Row, Into, Status);
+                  end;
+               end loop;
+               for Dy in Result.Row_Panels'Range loop
+                  exit when E.Is_Error (Status);
+                  Model_Runner.Float_Panels.Pack
+                    (null, Plain.all, Element_Count (Dy) * 3 * Ins, Rows, 3 * Ins, Across, 1, Result.Row_Panels (Dy),
+                     Status);
+               end loop;
+               T.Free (Plain);
+            end;
+         elsif Encoding or else not On_Device then
             Model_Runner.Float_Panels.Pack (Result.Kernel, Result.Panels, Status);
          end if;
       end Convolve;
@@ -483,6 +516,9 @@ package body Model_Runner.Qwen_Image.Decoder is
          B.Free (C.Owned);
          B.Free (C.Tap_Owned);
          Model_Runner.Float_Panels.Free (C.Panels);
+         for Set of C.Row_Panels loop
+            Model_Runner.Float_Panels.Free (Set);
+         end loop;
          T.Free (C.Fit);
          C := (others => <>);
       end Let_Go;
@@ -683,6 +719,9 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  Putting answers: pixels laid out as Target's, each added to its
       --  answer as it is put -- a residual block's input -- or none.
       Plus : T.Real_Array_Access;
+      --  And two more answers laid out as Source's, added to it before the
+      --  bias: a 3x3's second and third kernel rows on the processor.
+      Second, Third : T.Real_Array_Access;
    end record;
 
    overriding procedure Run (Item : in out Pixel_Work; First : Element_Count; Last : Element_Count) is
@@ -880,7 +919,22 @@ package body Model_Runner.Qwen_Image.Decoder is
                   Put_In : N.Real_Array renames Item.Target (Into .. Into + Ins - 1);
                   Bias   : N.Real_Array renames Item.Gain (Item.Gain'First .. Item.Gain'First + Ins - 1);
                begin
-                  if Item.Plus = null then
+                  if Item.Second /= null then
+                     declare
+                        Two   : N.Real_Array renames Item.Second (From .. From + Ins - 1);
+                        Three : N.Real_Array renames Item.Third (From .. From + Ins - 1);
+                     begin
+                        for C in 0 .. Ins - 1 loop
+                           Put_In (Into + C) :=
+                             Answer (From + C) + Two (From + C) + Three (From + C) + Bias (Item.Gain'First + C);
+                        end loop;
+                        if Item.Plus /= null then
+                           for C in 0 .. Ins - 1 loop
+                              Put_In (Into + C) := Put_In (Into + C) + Item.Plus (Into + C);
+                           end loop;
+                        end if;
+                     end;
+                  elsif Item.Plus = null then
                      for C in 0 .. Ins - 1 loop
                         Put_In (Into + C) := Answer (From + C) + Bias (Item.Gain'First + C);
                      end loop;
@@ -1240,6 +1294,67 @@ package body Model_Runner.Qwen_Image.Decoder is
          Device.Finish_All (Ok);
       end Apply_Taps;
 
+      --  Target := C, a 3x3, applied to Source's pixels on the processor,
+      --  a band of rows at a time: the band laid out padded, as for the
+      --  device's taps, and each kernel row's three taps a product reading
+      --  it where its pixels lie -- three after three, a pixel's channels
+      --  from the next -- the three answers summed as they are put. The
+      --  nine gathered into each pixel's neighbourhood wrote the band nine
+      --  times over, a ninth of a 512 decode.
+      procedure Apply_Rows
+        (C : Convolution; Source : T.Real_Array_Access; Target : T.Real_Array_Access;
+         Plus : T.Real_Array_Access := null) is
+         package FP renames Model_Runner.Float_Panels;
+         Ins    : constant Element_Count := Element_Count (C.Inputs);
+         Outs   : constant Element_Count := Element_Count (C.Outputs);
+         Fitted : constant Element_Count := C.Kernel.Rows;
+         Wide   : constant Element_Count := Width + 2;
+         --  About 64 MB of band and answers.
+         Band   : constant Element_Count :=
+           Element_Count'Max (1, Element_Count'Min (Height, 16_777_216 / (Wide * (Ins + 3 * Fitted))));
+         Padded : T.Real_Array_Access;
+         Answers : array (0 .. 2) of T.Real_Array_Access;
+         Row    : Element_Count := 0;
+      begin
+         T.Allocate ((Band + 2) * Wide * Ins, Padded);
+         for Each of Answers loop
+            T.Allocate (Band * Wide * Fitted, Each);
+         end loop;
+         if Padded = null or else (for some Each of Answers => Each = null) then
+            Status := E.Make (E.Memory_Allocation_Failed);
+         end if;
+         while Row < Height and then E.Is_Ok (Status) loop
+            declare
+               Rows_Here : constant Element_Count := Element_Count'Min (Band, Height - Row);
+               Count     : constant Element_Count := Rows_Here * Wide - 2;
+               Lay       : aliased Pixel_Work :=
+                 (Kind => Pad_Rows, Source => Source, Target => Padded, Gain => null, Silu => False, Row => Row,
+                  Height => Height, Width => Width, Channels => Ins, Across => Ins, others => <>);
+               Put       : aliased Pixel_Work :=
+                 (Kind => Put_Answers, Source => Answers (0), Target => Target, Gain => C.Bias, Silu => False,
+                  Row => Row * Width, Height => Height, Width => Width, Channels => Outs, Across => Fitted,
+                  Padded => Wide, Plus => Plus, Second => Answers (1), Third => Answers (2), others => <>);
+            begin
+               CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
+                                    Cost => (Rows_Here + 2) * Wide * Ins);
+               for Dy in Answers'Range loop
+                  exit when E.Is_Error (Status);
+                  FP.Multiply (CPU.Sharing (Pool), C.Row_Panels (Dy), Padded.all, Element_Count (Dy) * Wide * Ins, Ins,
+                               Count, Answers (Dy).all, 0, Fitted);
+               end loop;
+               if E.Is_Ok (Status) then
+                  CPU.Dispatch_Shares (Pool, Rows_Here * Width, Put'Unchecked_Access, Status,
+                                       Cost => Rows_Here * Width * Outs);
+               end if;
+               Row := Row + Rows_Here;
+            end;
+         end loop;
+         T.Free (Padded);
+         for Each of Answers loop
+            T.Free (Each);
+         end loop;
+      end Apply_Rows;
+
       --  Target := C applied to Source's Height by Width pixels: a 1x1 as a
       --  product, a 3x3 as a product over each pixel's neighbourhood,
       --  gathered a band of rows at a time, zero past the edges; the bias
@@ -1295,6 +1410,10 @@ package body Model_Runner.Qwen_Image.Decoder is
          end if;
          if On_Device and then C.Tap_Owned /= null then
             Apply_Taps (C, Source, Target, Plus => Plus);
+            return;
+         end if;
+         if Model_Runner.Float_Panels.Is_Packed (C.Row_Panels (0)) then
+            Apply_Rows (C, Source, Target, Plus);
             return;
          end if;
          declare
@@ -1520,7 +1639,8 @@ package body Model_Runner.Qwen_Image.Decoder is
                        (Kind => Shortcut_Pixels, Source => Input, Target => X, Gain => null, Silu => False, Row => 0,
                         Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
                         Factor => Factor, Repeats => Outs * Factor / Ins,
-                        Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0, Plus => null);
+                        Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0, Plus => null, Second => null,
+                        Third => null);
                   begin
                      Height := 2 * Height;
                      Width := 2 * Width;
@@ -1973,7 +2093,8 @@ package body Model_Runner.Qwen_Image.Decoder is
                   Job : aliased Pixel_Work :=
                     (Kind => Average_Pixels, Source => Kept, Target => Y, Gain => null, Silu => False, Row => 0,
                      Height => H, Width => W, Channels => Outs, Across => 0, Inputs => Ins,
-                     Factor => Element_Count (Level_Of.Temporal), Repeats => 0, Frame => 0, Padded => 0, Plus => null);
+                     Factor => Element_Count (Level_Of.Temporal), Repeats => 0, Frame => 0, Padded => 0, Plus => null,
+                     Second => null, Third => null);
                begin
                   Share (Job, H / 2 * (W / 2), H / 2 * (W / 2) * Outs * 4);
                end;

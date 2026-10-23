@@ -209,6 +209,9 @@ private
    --  A 3x3's nine taps, each a matrix of its own.
    type Tap_Views is array (0 .. 8) of T.View;
 
+   --  A 3x3's kernel rows, one panel set each.
+   type Row_Panel_Sets is array (0 .. 2) of Model_Runner.Float_Panels.Panel_Set;
+
    type Convolution is record
       Kernel   : T.View;
       Owned    : Model_Runner.Bytes.Byte_Array_Access;
@@ -230,6 +233,11 @@ private
       --  The kernel in panels, where the decoder was opened with no device
       --  to run it: what the processor's products read.
       Panels   : Model_Runner.Float_Panels.Panel_Set;
+      --  A 3x3's on the processor instead, a kernel row's three taps a
+      --  set: each reads a padded band's pixels where they lie, three
+      --  after three, where the whole kernel read each pixel's
+      --  neighbourhood gathered nine times over.
+      Row_Panels : Row_Panel_Sets;
       Bias     : T.Real_Array_Access;
       Inputs   : Natural := 0;
       Outputs  : Natural := 0;
