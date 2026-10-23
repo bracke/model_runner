@@ -700,6 +700,17 @@ package body Model_Runner.Qwen_Image.Decoder is
      (Gather_Rows, Norm_Pixels, Put_Answers, Add_Pixels, Double_Pixels, Shortcut_Pixels, Pad_Rows, Lay_Rows,
       Gather_Halved, Average_Pixels);
 
+   --  An up level's shortcut, added as its 3x3's answers are put: the
+   --  level's input at half the height and width, its Inputs channels
+   --  repeated over the doubled pixels' -- as Shortcut_Pixels lays it --
+   --  or none.
+   type Shortcut_Source is record
+      Input                          : T.Real_Array_Access;
+      Inputs, Factor, Repeats, Frame : Element_Count := 0;
+   end record;
+
+   No_Shortcut : constant Shortcut_Source := (Input => null, others => 0);
+
    type Pixel_Work is new Model_Runner.Shares.Work with record
       Kind            : Pixel_Kind := Gather_Rows;
       Source, Target  : T.Real_Array_Access;
@@ -722,6 +733,11 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  And two more answers laid out as Source's, added to it before the
       --  bias: a 3x3's second and third kernel rows on the processor.
       Second, Third : T.Real_Array_Access;
+      --  Laying a band out padded: Source is the picture at half the
+      --  height and width, each pixel read for the 2x2 it doubles to.
+      Doubled : Boolean := False;
+      --  Putting answers: a shortcut added as they are put.
+      Short : Shortcut_Source := No_Shortcut;
    end record;
 
    overriding procedure Run (Item : in out Pixel_Work; First : Element_Count; Last : Element_Count) is
@@ -854,7 +870,9 @@ package body Model_Runner.Qwen_Image.Decoder is
                      Item.Target (Into .. Into + Item.Across - 1) := [others => 0.0];
                   else
                      declare
-                        From : constant Element_Count := ((Y - 1) * Item.Width + X - 1) * Ins;
+                        From : constant Element_Count :=
+                          (if Item.Doubled then (((Y - 1) / 2) * (Item.Width / 2) + (X - 1) / 2) * Ins
+                           else ((Y - 1) * Item.Width + X - 1) * Ins);
                      begin
                         if Item.Gain /= null then
                            Norm_Into (From, Into);
@@ -944,6 +962,21 @@ package body Model_Runner.Qwen_Image.Decoder is
                      begin
                         for C in 0 .. Ins - 1 loop
                            Put_In (Into + C) := Answer (From + C) + Bias (Item.Gain'First + C) + Added (Into + C);
+                        end loop;
+                     end;
+                  end if;
+                  if Item.Short.Input /= null then
+                     declare
+                        Row  : constant Element_Count := (Item.Row + Pixel) / Item.Width;
+                        Col  : constant Element_Count := (Item.Row + Pixel) rem Item.Width;
+                        Sub  : constant Element_Count := Item.Short.Frame * 4 + (Row rem 2) * 2 + Col rem 2;
+                        Base : constant Element_Count :=
+                          ((Row / 2) * (Item.Width / 2) + Col / 2) * Item.Short.Inputs;
+                     begin
+                        for C in 0 .. Ins - 1 loop
+                           Put_In (Into + C) :=
+                             Put_In (Into + C)
+                             + Item.Short.Input (Base + (C * Item.Short.Factor + Sub) / Item.Short.Repeats);
                         end loop;
                      end;
                   end if;
@@ -1100,7 +1133,8 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  it is put: the residual block's input, without a pass of its own.
       procedure Apply_Taps
         (C : Convolution; Source : T.Real_Array_Access; Target : T.Real_Array_Access;
-         Gain : T.Real_Array_Access := null; Plus : T.Real_Array_Access := null) is
+         Gain : T.Real_Array_Access := null; Plus : T.Real_Array_Access := null; Doubled : Boolean := False;
+         Short : Shortcut_Source := No_Shortcut) is
          package P renames Model_Runner.Platform.Device.Products;
          Single  : constant Boolean := C.Size = 1;
          Ins     : constant Element_Count := Element_Count (C.Inputs);
@@ -1154,7 +1188,8 @@ package body Model_Runner.Qwen_Image.Decoder is
                  (Kind => (if Single then Lay_Rows else Pad_Rows), Source => Source,
                   Target => Padded'Unrestricted_Access, Gain => (if On_Device_Norm then null else Gain),
                   Silu => True, Row => (if Single then From * Width else From), Height => Height,
-                  Width => Width, Channels => Ins, Across => Ins_To, others => <>);
+                  Width => Width, Channels => Ins, Across => Ins_To, Doubled => Doubled and then not Single,
+                  others => <>);
             begin
                CPU.Dispatch_Shares (Pool, Values_Of (From) / Ins_To, Job'Unchecked_Access, Status,
                                     Cost => Values_Of (From));
@@ -1246,7 +1281,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                  (Kind => Put_Answers, Source => Answers'Unrestricted_Access, Target => Target,
                   Gain => C.Bias, Silu => False, Row => From * Width, Height => Height, Width => Width,
                   Channels => Outs, Across => Fitted, Padded => (if Single then 0 else Wide), Plus => Plus,
-                  others => <>);
+                  Short => Short, others => <>);
             begin
                CPU.Dispatch_Shares (Pool, Rows_Of (From) * Width, Job'Unchecked_Access, Status,
                                     Cost => Rows_Of (From) * Width * Outs);
@@ -1303,7 +1338,8 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  times over, a ninth of a 512 decode.
       procedure Apply_Rows
         (C : Convolution; Source : T.Real_Array_Access; Target : T.Real_Array_Access;
-         Plus : T.Real_Array_Access := null) is
+         Plus : T.Real_Array_Access := null; Doubled : Boolean := False;
+         Short : Shortcut_Source := No_Shortcut) is
          package FP renames Model_Runner.Float_Panels;
          Ins    : constant Element_Count := Element_Count (C.Inputs);
          Outs   : constant Element_Count := Element_Count (C.Outputs);
@@ -1329,11 +1365,13 @@ package body Model_Runner.Qwen_Image.Decoder is
                Count     : constant Element_Count := Rows_Here * Wide - 2;
                Lay       : aliased Pixel_Work :=
                  (Kind => Pad_Rows, Source => Source, Target => Padded, Gain => null, Silu => False, Row => Row,
-                  Height => Height, Width => Width, Channels => Ins, Across => Ins, others => <>);
+                  Height => Height, Width => Width, Channels => Ins, Across => Ins, Doubled => Doubled,
+                  others => <>);
                Put       : aliased Pixel_Work :=
                  (Kind => Put_Answers, Source => Answers (0), Target => Target, Gain => C.Bias, Silu => False,
                   Row => Row * Width, Height => Height, Width => Width, Channels => Outs, Across => Fitted,
-                  Padded => Wide, Plus => Plus, Second => Answers (1), Third => Answers (2), others => <>);
+                  Padded => Wide, Plus => Plus, Second => Answers (1), Third => Answers (2), Short => Short,
+                  others => <>);
             begin
                CPU.Dispatch_Shares (Pool, (Rows_Here + 2) * Wide, Lay'Unchecked_Access, Status,
                                     Cost => (Rows_Here + 2) * Wide * Ins);
@@ -1359,9 +1397,18 @@ package body Model_Runner.Qwen_Image.Decoder is
       --  product, a 3x3 as a product over each pixel's neighbourhood,
       --  gathered a band of rows at a time, zero past the edges; the bias
       --  added and the padding's channels dropped as the answers are put.
+      --  Whether Apply takes C's band from a picture of half the height and
+      --  width, doubled as it is laid out: a 3x3 on the device's taps or the
+      --  processor's kernel rows.
+      function Doubles (C : Convolution) return Boolean
+      is (C.Size = 3
+          and then ((On_Device and then C.Tap_Owned /= null)
+                    or else Model_Runner.Float_Panels.Is_Packed (C.Row_Panels (0))));
+
       procedure Apply
         (C : Convolution; Source : T.Real_Array_Access; Target : in out T.Real_Array_Access;
-         Plus : T.Real_Array_Access := null) is
+         Plus : T.Real_Array_Access := null; Doubled : Boolean := False;
+         Short : Shortcut_Source := No_Shortcut) is
          Pixels : constant Element_Count := Height * Width;
          Outs   : constant Element_Count := Element_Count (C.Outputs);
          Ins    : constant Element_Count := Element_Count (C.Inputs);
@@ -1409,13 +1456,14 @@ package body Model_Runner.Qwen_Image.Decoder is
             return;
          end if;
          if On_Device and then C.Tap_Owned /= null then
-            Apply_Taps (C, Source, Target, Plus => Plus);
+            Apply_Taps (C, Source, Target, Plus => Plus, Doubled => Doubled, Short => Short);
             return;
          end if;
          if Model_Runner.Float_Panels.Is_Packed (C.Row_Panels (0)) then
-            Apply_Rows (C, Source, Target, Plus);
+            Apply_Rows (C, Source, Target, Plus, Doubled, Short);
             return;
          end if;
+         pragma Assert (not Doubled and then Short.Input = null);
          declare
             --  A band of rows: what one device product takes, or on the
             --  processor patches of about 64 MB.
@@ -1608,27 +1656,41 @@ package body Model_Runner.Qwen_Image.Decoder is
             begin
                if Level_Of.Up.Outputs > 0 then
                   Room (Input, Height * Width * Ins);
-                  if E.Is_Ok (Status) then
-                     Input (0 .. Height * Width * Ins - 1) := X (0 .. Height * Width * Ins - 1);
-                  end if;
+                  --  Across the pool: one task's copy of the level before the
+                  --  last was 0.4 s of a 1024 decode.
+                  declare
+                     Job : aliased Pixel_Work :=
+                       (Kind => Lay_Rows, Source => X, Target => Input, Gain => null, Silu => False, Row => 0,
+                        Height => Height, Width => Width, Channels => Ins, Across => Ins, others => <>);
+                  begin
+                     if E.Is_Ok (Status) then
+                        CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
+                                             Cost => Height * Width * Ins);
+                     end if;
+                  end;
                end if;
                for R of Level_Of.Blocks loop
                   exit when E.Is_Error (Status);
                   Block (R);
                end loop;
                if Level_Of.Up.Outputs > 0 and then E.Is_Ok (Status) then
-                  --  Doubled, nearest; then its 3x3.
-                  Room (Y, 4 * Height * Width * Outs);
-                  declare
-                     Job : aliased Pixel_Work :=
-                       (Kind => Double_Pixels, Source => X, Target => Y, Gain => null, Silu => False, Row => 0,
-                        Height => Height, Width => Width, Channels => Outs, others => <>);
-                  begin
-                     if E.Is_Ok (Status) then
-                        CPU.Dispatch_Shares (Pool, 4 * Height * Width, Job'Unchecked_Access, Status,
-                                             Cost => 4 * Height * Width * Outs);
-                     end if;
-                  end;
+                  --  Doubled, nearest; then its 3x3 -- or the 3x3 reading the
+                  --  pixels doubled as it lays its bands out, where it can:
+                  --  the doubled picture was the largest buffer a decode
+                  --  wrote, a pass of its own over four times the pixels.
+                  if not Doubles (Level_Of.Up) then
+                     Room (Y, 4 * Height * Width * Outs);
+                     declare
+                        Job : aliased Pixel_Work :=
+                          (Kind => Double_Pixels, Source => X, Target => Y, Gain => null, Silu => False, Row => 0,
+                           Height => Height, Width => Width, Channels => Outs, others => <>);
+                     begin
+                        if E.Is_Ok (Status) then
+                           CPU.Dispatch_Shares (Pool, 4 * Height * Width, Job'Unchecked_Access, Status,
+                                                Cost => 4 * Height * Width * Outs);
+                        end if;
+                     end;
+                  end if;
                   declare
                      Factor : constant Element_Count := Element_Count (Level_Of.Temporal) * 4;
                      --  The shortcut: the level's input, its channels repeated
@@ -1640,15 +1702,25 @@ package body Model_Runner.Qwen_Image.Decoder is
                         Height => 2 * Height, Width => Width, Channels => Outs, Across => 0, Inputs => Ins,
                         Factor => Factor, Repeats => Outs * Factor / Ins,
                         Frame => Element_Count (Level_Of.Temporal) - 1, Padded => 0, Plus => null, Second => null,
-                        Third => null);
+                        Third => null, Doubled => False, Short => No_Shortcut);
                   begin
                      Height := 2 * Height;
                      Width := 2 * Width;
-                     Apply (Level_Of.Up, Y, X);
-                     Job.Target := X;
-                     if E.Is_Ok (Status) then
-                        CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
-                                             Cost => Height * Width * Outs);
+                     --  The shortcut added as the 3x3's answers are put, where it
+                     --  reads the pixels doubled; a pass of its own otherwise.
+                     if Doubles (Level_Of.Up) then
+                        Apply (Level_Of.Up, X, Y, Doubled => True,
+                               Short => (Input => Input, Inputs => Ins, Factor => Factor,
+                                         Repeats => Outs * Factor / Ins,
+                                         Frame => Element_Count (Level_Of.Temporal) - 1));
+                        Swap (X, Y);
+                     else
+                        Apply (Level_Of.Up, Y, X);
+                        Job.Target := X;
+                        if E.Is_Ok (Status) then
+                           CPU.Dispatch_Shares (Pool, Height * Width, Job'Unchecked_Access, Status,
+                                                Cost => Height * Width * Outs);
+                        end if;
                      end if;
                   end;
                end if;
@@ -2094,7 +2166,7 @@ package body Model_Runner.Qwen_Image.Decoder is
                     (Kind => Average_Pixels, Source => Kept, Target => Y, Gain => null, Silu => False, Row => 0,
                      Height => H, Width => W, Channels => Outs, Across => 0, Inputs => Ins,
                      Factor => Element_Count (Level_Of.Temporal), Repeats => 0, Frame => 0, Padded => 0, Plus => null,
-                     Second => null, Third => null);
+                     Second => null, Third => null, Doubled => False, Short => No_Shortcut);
                begin
                   Share (Job, H / 2 * (W / 2), H / 2 * (W / 2) * Outs * 4);
                end;
