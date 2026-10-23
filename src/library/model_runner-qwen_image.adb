@@ -2010,8 +2010,8 @@ package body Model_Runner.Qwen_Image is
       References : Reference_List := No_References;
       Slots      : Slot_List := No_Slots)
    is
-      --  The step run beside the prompt's rows, where the device is open:
-      --  each block's prompt rows just before its image's.
+      --  The step run beside the prompt's rows: each block's prompt rows
+      --  just before its image's.
       Stepped     : Boolean := False;
       Step_Status : E.Error_Info := E.Success;
 
@@ -2022,15 +2022,11 @@ package body Model_Runner.Qwen_Image is
          Stepped := True;
       end Beside;
 
-      --  The prompt's rows into Prefix, and the step beside them where the
-      --  device is open; Stepped then says the step ran and Status is its.
+      --  The prompt's rows into Prefix, and the step beside them; Stepped
+      --  then says the step ran and Status is its.
       procedure Fill (Refs : Reference_List; Kinds : Slot_List) is
       begin
-         if Model_Runner.Backend.Device.Is_Ready then
-            Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, Refs, Kinds, Beside => Beside'Access);
-         else
-            Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, Refs, Kinds);
-         end if;
+         Fill_Prefix (Item, Text, Text_Rows, Pool, Prefix, Status, Refs, Kinds, Beside => Beside'Access);
          if E.Is_Ok (Status) and then Stepped then
             Status := Step_Status;
          end if;
@@ -3042,20 +3038,23 @@ package body Model_Runner.Qwen_Image is
       if On_Device and then Reuse and then E.Is_Ok (Status) then
          Resident_Blocks (Resident);
       end if;
-      --  The prompt's rows through every block left, before the host's
-      --  blocks read them.
-      if Fill_To /= null and then not Resident and then E.Is_Ok (Status) then
-         declare
-            Filled : Boolean;
-         begin
-            Fill_To (Item.Layers'Last, Filled);
-            if not Filled then
-               Status := E.Make (E.Backend_Capability_Missing);
-            end if;
-         end;
-      end if;
       for Index in Item.Layers'Range loop
          exit when E.Is_Error (Status) or else Resident;
+         --  The prompt's rows through this block, just before the image's
+         --  read them: a cold panel file's blocks land one after another,
+         --  and every prompt row first had the image's waiting for the
+         --  whole file, a first step 7.4 s where the reading took 4.6.
+         if Fill_To /= null then
+            declare
+               Filled : Boolean;
+            begin
+               Fill_To (Index, Filled);
+               if not Filled then
+                  Status := E.Make (E.Backend_Capability_Missing);
+                  exit;
+               end if;
+            end;
+         end if;
          Wait_Panels (Item, Index);
          declare
             Layer  : Block renames Item.Layers (Index);
