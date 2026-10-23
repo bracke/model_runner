@@ -62,6 +62,7 @@ begin
 
                Shut := Closes_At (Text, Opens);
                if Shut = 0 or else Group_Depth >= Max_Depth then
+                  Too_Deep := Too_Deep or else Shut /= 0;
                   return;
                end if;
 

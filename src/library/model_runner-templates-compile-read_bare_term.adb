@@ -28,6 +28,7 @@ begin
          Read  : Boolean;
       begin
          if Shut = 0 or else Group_Depth >= Max_Depth then
+            Too_Deep := Too_Deep or else Shut /= 0;
             return;
          end if;
 
@@ -108,10 +109,10 @@ begin
             end if;
             Shut := Shut + 1;
          end loop;
-         --  Nested no deeper than half of what groups may be: each level
-         --  holds its elements on the stack while the next is read, and a
-         --  file's list of lists twenty deep was past the stack.
+         --  Nested no deeper than half of what groups may be: a file's
+         --  list of lists twenty deep says nothing a template means.
          if Shut > Text'Last or else Group_Depth >= Max_Depth / 2 then
+            Too_Deep := Too_Deep or else Shut <= Text'Last;
             return;
          end if;
 
@@ -123,7 +124,8 @@ begin
             Scan   : Natural := Inside'First;
             Given  : Natural := 0;
             Start  : Natural := 0;
-            Held   : Operand_List;
+            Room   : List_Rooms.Room;
+            Held   : Operand_List renames Room.Held.all;
          begin
             while Skip_Spaces (Inside, Scan) <= Inside'Last loop
                declare
@@ -207,6 +209,7 @@ begin
             Shut := Shut + 1;
          end loop;
          if Shut > Text'Last or else Group_Depth >= Max_Depth / 2 then
+            Too_Deep := Too_Deep or else Shut <= Text'Last;
             return;
          end if;
 
@@ -215,7 +218,8 @@ begin
             Scan   : Natural := Inside'First;
             Pairs  : Natural := 0;
             Start  : Natural := 0;
-            Held   : Operand_List;
+            Room   : List_Rooms.Room;
+            Held   : Operand_List renames Room.Held.all;
          begin
             while Skip_Spaces (Inside, Scan) <= Inside'Last loop
                declare
@@ -471,7 +475,8 @@ begin
                --  after, all in a row, for the reason a list's
                --  elements are.
                declare
-                  Held  : Operand_List;
+                  Room  : List_Rooms.Room;
+                  Held  : Operand_List renames Room.Held.all;
                begin
                   while Skip_Spaces (Inside, Cursor_At) <= Inside'Last
                   loop

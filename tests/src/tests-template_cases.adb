@@ -3,6 +3,7 @@ with Ada.Unchecked_Deallocation;
 with AUnit.Assertions;
 with Ada.Calendar.Formatting;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Strings.Unbounded;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
@@ -1244,6 +1245,57 @@ package body Tests.Template_Cases is
       begin
          Assert (Got'Length >= 8 and then Got (Got'First .. Got'First + 6) in "compile" | "render:",
                  "a list nested twenty-four deep was not refused: " & Got);
+      end;
+      --  The deepest a template may nest -- groups, lists, conditions --
+      --  compiled within a stack of two megabytes: a level of a recursion
+      --  is a small frame, not a list's room of a megabyte, so the bound on
+      --  the levels is reached long before the stack is. And past the
+      --  bound, refused: a list too deep in a group was read again as a
+      --  condition, and printed True.
+      declare
+         use Ada.Strings.Unbounded;
+
+         function Times (Count : Natural; Text : String) return String
+         is (if Count = 0 then "" else Text & Times (Count - 1, Text));
+
+         type Pair is record
+            Source, Wanted : Unbounded_String;
+         end record;
+
+         function P (Source, Wanted : String) return Pair
+         is (To_Unbounded_String (Source), To_Unbounded_String (Wanted));
+
+         Refused : constant String := "compile: TEMPLATE_NESTING_TOO_DEEP";
+         Cases   : constant array (1 .. 6) of Pair :=
+           [P ("{{ " & Times (8, "[") & "1" & Times (8, "]") & " }}", Times (8, "[") & "1" & Times (8, "]")),
+            P ("{{ " & Times (15, "(") & "1" & Times (15, ")") & " }}", "1"),
+            P ("{% if " & Times (15, "(") & "1 == 1" & Times (15, ")") & " %}y{% endif %}", "y"),
+            P ("{{ " & Times (6, "(") & "[[(1 if 2 else 3)]]" & Times (6, ")") & " }}", "[[1]]"),
+            P ("{{ " & Times (7, "(") & "[[1]]" & Times (7, ")") & " }}", Refused),
+            P ("{{ " & Times (17, "(") & "1" & Times (17, ")") & " }}", Refused)];
+         Said : array (Cases'Range) of Unbounded_String;
+      begin
+         declare
+            task Small_Stack with Storage_Size => 2 * 1024 * 1024;
+            task body Small_Stack is
+            begin
+               for Index in Cases'Range loop
+                  begin
+                     Said (Index) := To_Unbounded_String (Rendered (To_String (Cases (Index).Source)));
+                  exception
+                     when Failure : others =>
+                        Said (Index) := To_Unbounded_String ("raised " & Ada.Exceptions.Exception_Name (Failure));
+                  end;
+               end loop;
+            end Small_Stack;
+         begin
+            null;
+         end;
+         for Index in Cases'Range loop
+            Assert (Said (Index) = Cases (Index).Wanted,
+                    To_String (Cases (Index).Source) & " gave " & To_String (Said (Index)) & ", not "
+                    & To_String (Cases (Index).Wanted));
+         end loop;
       end;
       --  Nothing however often is nothing, at once; a width past any a
       --  template means is held to one, not put on the stack.

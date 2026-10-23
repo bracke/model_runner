@@ -7,7 +7,8 @@ is
    At_If   : constant Natural := Top_Level_Word (Held, "if");
    At_Else : constant Natural :=
      (if At_If = 0 then 0 else Top_Level_Word (Held, "else"));
-   Test    : Condition;
+   Room    : Condition_Rooms.Room;
+   Test    : Condition renames Room.Held.all;
    Valid   : Boolean;
    Kept    : Natural;
 begin

@@ -1,3 +1,6 @@
+with Ada.Finalization;
+with Ada.Unchecked_Deallocation;
+
 separate (Model_Runner.Templates)
 procedure Compile
   (Item   : in out Compiled;
@@ -15,10 +18,43 @@ is
    --  than the stack running out.
    Group_Depth : Natural := 0;
 
+   --  Whether any reading stopped at that bound. A group refused there
+   --  must not be read again some other way -- a list too deep in a group
+   --  was read again as a condition, and printed True -- so the template
+   --  is refused whole, after it is read.
+   Too_Deep : Boolean := False;
+
    --  Jump instructions that must be patched to the end of the enclosing
    --  if. Chained through the Target field so that no extra storage grows
    --  with the template.
    Exit_Chain : array (1 .. Max_Depth) of Natural := [others => 0];
+
+   --  Room for a value read at each level of a recursion -- a list's
+   --  elements, a bracketed condition -- held on the heap, not in the
+   --  level's frame: a list's room is 64 operands, a megabyte, and the
+   --  levels a template may nest, each a frame of that, ran the stack out
+   --  before the bound on them was reached. Let go when the level ends,
+   --  however it ends.
+   generic
+      type Element is private;
+   package Rooms is
+      type Element_Access is access Element;
+      type Room is new Ada.Finalization.Limited_Controlled with record
+         Held : Element_Access := new Element;
+      end record;
+      overriding procedure Finalize (Item : in out Room);
+   end Rooms;
+
+   package body Rooms is
+      procedure Free is new Ada.Unchecked_Deallocation (Element, Element_Access);
+
+      overriding procedure Finalize (Item : in out Room) is
+      begin
+         Free (Item.Held);
+      end Finalize;
+   end Rooms;
+
+   package Condition_Rooms is new Rooms (Condition);
 
    --  A statement's text as a refusal names it: after its keyword,
    --  trimmed, and cut to a line's worth so a long condition does not
@@ -607,6 +643,7 @@ is
    --  the room they are read into before they are kept.
    Max_Literal_Elements : constant := 64;
    type Operand_List is array (1 .. Max_Literal_Elements) of Operand;
+   package List_Rooms is new Rooms (Operand_List);
 
    procedure Read_Bare_Term
      (Text   : String;
@@ -675,7 +712,7 @@ is
       Ok     : out Boolean)
    is
    begin
-      Result := (others => <>);
+      Result := No_Condition;
       Ok := False;
 
       Result.Group_Used := 1;
@@ -720,11 +757,13 @@ is
                           or else Text (Next) not in '.' | '|' | '[')
             then
                if Level >= Max_Depth then
+                  Too_Deep := True;
                   return;
                end if;
 
                declare
-                  Inner : Condition;
+                  Room  : Condition_Rooms.Room;
+                  Inner : Condition renames Room.Held.all;
                   Good  : Boolean;
                   Held  : Natural;
                begin
@@ -771,7 +810,7 @@ is
                         return;
                      end if;
                      if Current.Operator = Compare_None then
-                        Current.Left := (others => <>);
+                        Current.Left := No_Operand;
                         Current.Sub_At := Held;
                      end if;
                   end if;
@@ -814,7 +853,8 @@ is
                  or else Result.Clause_Used >= Max_Clauses - 1
                then
                   declare
-                     Inner : Condition;
+                     Room  : Condition_Rooms.Room;
+                     Inner : Condition renames Room.Held.all;
                      Good  : Boolean;
                      Held  : Natural;
                   begin
@@ -1554,6 +1594,11 @@ begin
 
    if Depth /= 0 then
       Fail (E.Template_Unbalanced_Block, "eof");
+      return;
+   end if;
+
+   if Too_Deep then
+      Fail (E.Template_Nesting_Too_Deep, "expression");
       return;
    end if;
 

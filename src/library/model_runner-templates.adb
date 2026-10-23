@@ -861,6 +861,12 @@ package body Model_Runner.Templates is
       return False;
    end Is_Tuple_At;
 
+   --  An empty condition and operand, held once here: assigned from an
+   --  aggregate, each was built in the frame of the recursion that cleared
+   --  one -- a condition a quarter of a megabyte at every level.
+   No_Condition : constant Condition := (others => <>);
+   No_Operand   : constant Operand := (others => <>);
+
    procedure Compile
      (Item   : in out Compiled;
       Source : String;
