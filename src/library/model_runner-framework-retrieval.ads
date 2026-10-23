@@ -41,8 +41,10 @@ with Model_Runner.Framework.Stores;
 --  line shown is the first holding the most of the words. Every file that
 --  150 more could lift among the first asked for is read for it.
 --
---  A file is read only where it lies in the tree once every link on the
---  way is followed, and is itself no link.
+--  A file is read by walking its path down from the tree, following no
+--  link on the way (Hostkit.Fs.Read_Beneath): a link, or a directory on
+--  the way that is one -- even one swapped in during the read -- is not
+--  read through.
 --
 --  An excerpt is the lines a declaration takes, as Repository.Extent_Of
 --  finds them in the file as it is now -- the symbol found again where the

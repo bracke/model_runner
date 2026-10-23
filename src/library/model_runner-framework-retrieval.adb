@@ -260,7 +260,9 @@ package body Model_Runner.Framework.Retrieval is
 
    --  Whether a path, every link on the way followed, lies in a tree as
    --  the tree resolves: a directory on the way may be a link out of it
-   --  where the file itself is none.
+   --  where the file itself is none. Only for a host that cannot read
+   --  beneath a root: a check before the read, which a link swapped in
+   --  between the two still passes.
    function Resolves_Within (Root, Full : String) return Boolean is
       Base : constant String := Hostkit.Fs.Real_Path (if Root = "" then "." else Root);
       Real : constant String := Hostkit.Fs.Real_Path (Full);
@@ -272,14 +274,17 @@ package body Model_Runner.Framework.Retrieval is
 
    --  A path within a tree read as text, refused where it reaches outside
    --  the tree or through a link: the file itself a link, or a directory on
-   --  the way one leading out.
+   --  the way one, whenever it became one. The host walks the path from the
+   --  tree a part at a time and follows no link, so no check can be passed
+   --  by one path and the read made through another.
    procedure Read_In
      (Root   : String;
       Path   : String;
       Text   : out Unbounded_String;
       Status : out E.Error_Info)
    is
-      Full : constant String := Hostkit.Fs.Join (Root, Path);
+      use type Hostkit.Fs.Read_Beneath_Outcome;
+      Outcome : Hostkit.Fs.Read_Beneath_Outcome;
    begin
       Text := Null_Unbounded_String;
       if Path'Length = 0 or else Path (Path'First) in '/' | '\'
@@ -290,17 +295,37 @@ package body Model_Runner.Framework.Retrieval is
          E.Add_Text (Status, "value", Path);
          E.Add_Text (Status, "detail", "a path within the project, as src/x.adb, is wanted");
          return;
-      elsif not Ada.Directories.Exists (Full) or else Hostkit.Fs.Is_Link (Full)
-        or else Ada.Directories."/=" (Ada.Directories.Kind (Full), Ada.Directories.Ordinary_File)
-        or else not Resolves_Within (Root, Full)
-      then
-         Status := E.Make (E.Framework_Not_Found);
-         E.Add_Text (Status, "name", Path);
-         return;
       end if;
-      Files.Read_Text (Full, Text, Status);
+      Hostkit.Fs.Read_Beneath (Root, Path, Records.Max_Bytes, Text, Outcome);
+      case Outcome is
+         when Hostkit.Fs.Read_Done =>
+            Status := E.Success;
+         when Hostkit.Fs.Read_Too_Large =>
+            Status := E.Make (E.IO_File_Too_Large);
+            E.Add_Text (Status, "path", Path, E.Param_Path);
+            E.Add_Integer (Status, "limit", Long_Long_Integer (Records.Max_Bytes), E.Param_Bytes);
+         when Hostkit.Fs.Read_Unsupported =>
+            declare
+               Full : constant String := Hostkit.Fs.Join (Root, Path);
+            begin
+               if not Ada.Directories.Exists (Full) or else Hostkit.Fs.Is_Link (Full)
+                 or else Ada.Directories."/=" (Ada.Directories.Kind (Full), Ada.Directories.Ordinary_File)
+                 or else not Resolves_Within (Root, Full)
+               then
+                  Status := E.Make (E.Framework_Not_Found);
+                  E.Add_Text (Status, "name", Path);
+               else
+                  Files.Read_Text (Full, Text, Status);
+               end if;
+            end;
+         when Hostkit.Fs.Read_Outside | Hostkit.Fs.Read_Missing | Hostkit.Fs.Read_Not_File
+            | Hostkit.Fs.Read_Failed =>
+            Status := E.Make (E.Framework_Not_Found);
+            E.Add_Text (Status, "name", Path);
+      end case;
    exception
       when others =>
+         Text := Null_Unbounded_String;
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", Path);
    end Read_In;
