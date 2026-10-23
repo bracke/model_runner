@@ -1,3 +1,5 @@
+with Ada.Unchecked_Deallocation;
+with Interfaces;
 with Model_Runner.Platform.Mapped_Ranges;
 with Interfaces.C;
 with Interfaces.C.Strings;
@@ -316,5 +318,46 @@ package body Model_Runner.Platform.Pages is
          pragma Unreferenced (Answer);
       end;
    end Fetch_Soon;
+
+   function Mincore
+     (Start  : System.Address;
+      Length : Interfaces.C.size_t;
+      Vector : System.Address) return Interfaces.C.int
+     with Import, Convention => C, External_Name => "mincore";
+
+   function Held_Percent
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count) return Natural
+   is
+      use type Interfaces.C.int;
+      First : constant Integer_Address := To_Integer (Start) / Page * Page;
+      Pages : constant Integer_Address :=
+        (To_Integer (Start) + Integer_Address (Length) - First + Page - 1) / Page;
+      type Flags is array (1 .. Pages) of Interfaces.Unsigned_8;
+      type Flags_Access is access Flags;
+      procedure Free is new Ada.Unchecked_Deallocation (Flags, Flags_Access);
+      Vector : Flags_Access;
+      Held   : Integer_Address := 0;
+   begin
+      if Length = 0 or else Pages = 0 then
+         return 100;
+      end if;
+      Vector := new Flags;
+      if Mincore (To_Address (First), Interfaces.C.size_t (Pages * Page), Vector.all'Address) /= 0 then
+         Free (Vector);
+         return 100;
+      end if;
+      for Flag of Vector.all loop
+         if Interfaces."/=" (Interfaces."and" (Flag, 1), 0) then
+            Held := Held + 1;
+         end if;
+      end loop;
+      Free (Vector);
+      return Natural (Held * 100 / Pages);
+   exception
+      when others =>
+         Free (Vector);
+         return 100;
+   end Held_Percent;
 
 end Model_Runner.Platform.Pages;

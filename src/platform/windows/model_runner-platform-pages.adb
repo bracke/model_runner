@@ -57,4 +57,13 @@ package body Model_Runner.Platform.Pages is
       null;
    end Fetch_Soon;
 
+   function Held_Percent
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count) return Natural
+   is
+      pragma Unreferenced (Start, Length);
+   begin
+      return 100;
+   end Held_Percent;
+
 end Model_Runner.Platform.Pages;

@@ -468,7 +468,8 @@ package body Tests.Accounting_Cases is
    --  A run of a file's mapping read past the host's cache is the run, from
    --  an offset no block begins at and across several of the reads it is
    --  taken in; the process's own memory and a run too small to be worth
-   --  it are left to the caller to copy. Linux reads them; a host without
+   --  it are left to the caller to copy. And how much of it the host holds,
+   --  which for a file just written is most of it. Linux reads them; a host without
    --  such reads says so and is not held to the bytes.
    procedure A_Mapping_Reads_Past_The_Cache
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -514,6 +515,15 @@ package body Tests.Accounting_Cases is
 
       Map.Open (Region, Path, Available);
       if Available then
+         --  A file just written is the host's to hold, and it says so:
+         --  Linux by asking, a host that cannot say by answering 100.
+         declare
+            Held : constant Natural := Model_Runner.Platform.Pages.Held_Percent (Map.Base (Region), Size);
+         begin
+            Assert (Held <= 100, "a share of a mapping held came out past a hundred");
+            Assert (Held >= 50, "a file just written was said not to be held:" & Held'Image);
+         end;
+
          --  Too small to be worth a second opening.
          Model_Runner.Platform.Pages.Read_Direct
            (Map.Base (Region), Back.all (1)'Address, 4096, Done);

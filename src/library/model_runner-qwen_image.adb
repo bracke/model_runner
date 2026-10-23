@@ -1,4 +1,5 @@
 with Ada.Unchecked_Deallocation;
+with GNAT.OS_Lib;
 with System.Storage_Elements;
 
 with Model_Runner.Backend.Device;
@@ -8,6 +9,7 @@ with Model_Runner.Kernels;
 with Model_Runner.Philox;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Pages;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Shares;
 
@@ -146,6 +148,165 @@ package body Model_Runner.Qwen_Image is
    type View_Access is access all T.View;
    type View_List is array (Positive range <>) of View_Access;
 
+   --  Bytes of a panel cache file before its panels.
+   Panel_Header_Bytes : constant := 4_096;
+
+   --  How far the panel cache's file has been read ahead: in parts, taken
+   --  in order by several readers, as far as the first part not yet read.
+   Panel_Parts_Most : constant := 4_096;
+
+   type Part_Flags is array (1 .. Panel_Parts_Most) of Boolean;
+
+   protected type Panel_Landing is
+      procedure Set_Up (Length : B.Byte_Count);
+      --  The next part to read, or nought.
+      procedure Take (Index : out Natural);
+      --  A part done.
+      procedure Mark (Index : Positive);
+      function Reached return B.Byte_Count;
+      function Finished return Boolean;
+      function Part_Bytes return B.Byte_Count;
+      function Total return B.Byte_Count;
+      entry Wait_Finished;
+   private
+      Size   : B.Byte_Count := 0;
+      Part   : B.Byte_Count := 1;
+      Parts  : Natural := 0;
+      Next   : Positive := 1;
+      Marked : Natural := 0;
+      Upto   : Natural := 0;
+      Landed : Part_Flags := [others => False];
+      Ready  : Boolean := False;
+   end Panel_Landing;
+
+   protected body Panel_Landing is
+      procedure Set_Up (Length : B.Byte_Count) is
+      begin
+         Size := Length;
+         Part := B.Byte_Count'Max (32 * 1024 * 1024, (Length + Panel_Parts_Most - 1) / Panel_Parts_Most);
+         Parts := Natural ((Length + Part - 1) / Part);
+         Ready := True;
+      end Set_Up;
+
+      procedure Take (Index : out Natural) is
+      begin
+         if Next > Parts then
+            Index := 0;
+         else
+            Index := Next;
+            Next := Next + 1;
+         end if;
+      end Take;
+
+      procedure Mark (Index : Positive) is
+      begin
+         Landed (Index) := True;
+         Marked := Marked + 1;
+         while Upto < Parts and then Landed (Upto + 1) loop
+            Upto := Upto + 1;
+         end loop;
+      end Mark;
+
+      function Reached return B.Byte_Count is (B.Byte_Count'Min (Size, B.Byte_Count (Upto) * Part));
+      function Finished return Boolean is (Ready and then Marked = Parts);
+      function Part_Bytes return B.Byte_Count is (Part);
+      function Total return B.Byte_Count is (Size);
+
+      entry Wait_Finished when Ready and then Marked = Parts is
+      begin
+         null;
+      end Wait_Finished;
+   end Panel_Landing;
+
+   --  Reads parts of the panel file until none are left, into a buffer of
+   --  its own that is let go: what is wanted is the host's cache holding
+   --  them when a step reads them through the mapping.
+   task type Panel_Reader (Owner : not null access Panel_Reading) is
+      entry Start;
+   end Panel_Reader;
+
+   type Panel_Reader_Access is access Panel_Reader;
+
+   --  Eight: a cold 7.5 GB panel file read 1.35 GB a second four reads of
+   --  32 MB at once and 3.3 eight at once, and through the mapping's faults
+   --  about 1.2 -- the host's read-ahead the bound, not the drive.
+   type Panel_Readers is array (1 .. 8) of Panel_Reader_Access;
+
+   type String_Access is access String;
+
+   type Panel_Reading is limited record
+      Landing : aliased Panel_Landing;
+      Readers : Panel_Readers;
+      Path    : String_Access;
+   end record;
+
+   task body Panel_Reader is
+      use GNAT.OS_Lib;
+      Handle : File_Descriptor := Invalid_FD;
+      Index  : Natural;
+      Buffer : B.Byte_Array_Access;
+   begin
+      select
+         accept Start;
+      or
+         terminate;
+      end select;
+      Handle := Open_Read (Owner.Path.all, Binary);
+      Buffer := new B.Byte_Array (1 .. Owner.Landing.Part_Bytes);
+      loop
+         Owner.Landing.Take (Index);
+         exit when Index = 0;
+         declare
+            First : constant B.Byte_Count := B.Byte_Count (Index - 1) * Owner.Landing.Part_Bytes;
+            Take  : constant B.Byte_Count :=
+              B.Byte_Count'Min (Owner.Landing.Part_Bytes, Owner.Landing.Total - First);
+            Got   : B.Byte_Count := 0;
+            Now   : Integer;
+         begin
+            if Handle /= Invalid_FD then
+               Lseek (Handle, Long_Integer (Panel_Header_Bytes + First), Seek_Set);
+               while Got < Take loop
+                  Now := Read (Handle, Buffer (Buffer'First + Got)'Address, Integer (Take - Got));
+                  exit when Now <= 0;
+                  Got := Got + B.Byte_Count (Now);
+               end loop;
+            end if;
+         end;
+         --  Read or not, the part is the mapping's to read now.
+         Owner.Landing.Mark (Index);
+      end loop;
+      if Handle /= Invalid_FD then
+         Close (Handle);
+      end if;
+      B.Free (Buffer);
+   exception
+      when others =>
+         B.Free (Buffer);
+   end Panel_Reader;
+
+   --  See Set_Panels_Read.
+   Panels_Held_Least : Natural := 50;
+
+   procedure Set_Panels_Read (Held_Least : Natural := 50) is
+   begin
+      Panels_Held_Least := Held_Least;
+   end Set_Panels_Read;
+
+   --  Wait until the panels of block Layer -- nought for the matrices every
+   --  step reads first -- are in the host's cache, where the panel file is
+   --  still being read ahead into it.
+   procedure Wait_Panels (Item : Denoiser; Layer : Natural) is
+   begin
+      if Item.Panel_Reader = null or else Item.Ends = null or else Layer not in Item.Ends'Range then
+         return;
+      end if;
+      while not Item.Panel_Reader.Landing.Finished
+        and then Item.Panel_Reader.Landing.Reached < Item.Ends (Layer)
+      loop
+         delay 0.002;
+      end loop;
+   end Wait_Panels;
+
    --  Every matrix a block or the model holds that the panel layout takes,
    --  rewritten into one arena and its view remade over it: the processor's
    --  integer products read a panel's rows together, where the file's
@@ -234,23 +395,30 @@ package body Model_Runner.Qwen_Image is
             function Reason return E.Error_Info is (Bad);
          end Shared;
       begin
+         Item.Ends := new Panel_Ends (0 .. Item.Layers'Last);
          for V of All_Views loop
             Add (V);
          end loop;
-         for Layer of Item.Layers.all loop
-            Add (Layer.Query'Unchecked_Access);
-            Add (Layer.Key'Unchecked_Access);
-            Add (Layer.Value'Unchecked_Access);
-            Add (Layer.Attention_Out'Unchecked_Access);
-            Add (Layer.Gate_Up'Unchecked_Access);
-            Add (Layer.Feed_Out'Unchecked_Access);
+         Item.Ends (0) := Size;
+         for Index in Item.Layers'Range loop
+            declare
+               Layer : Block renames Item.Layers (Index);
+            begin
+               Add (Layer.Query'Unchecked_Access);
+               Add (Layer.Key'Unchecked_Access);
+               Add (Layer.Value'Unchecked_Access);
+               Add (Layer.Attention_Out'Unchecked_Access);
+               Add (Layer.Gate_Up'Unchecked_Access);
+               Add (Layer.Feed_Out'Unchecked_Access);
+               Item.Ends (Index) := Size;
+            end;
          end loop;
          --  The panel cache's file: a header of Header_Bytes -- a mark, the
          --  layout's version, the panels' bytes, how many matrices and a
          --  digest of each one's format and shape -- and then the panels
          --  in Held's order, as they are laid out here.
          declare
-            Header_Bytes : constant := 4_096;
+            Header_Bytes : constant := Panel_Header_Bytes;
 
             function Word (Value : Interfaces.Unsigned_64) return String is
                Result : String (1 .. 8);
@@ -360,6 +528,23 @@ package body Model_Runner.Qwen_Image is
                end loop;
                Item.Panel_Map := Map;
                Model_Runner.Panel_Cache.Mark_Used (Cache);
+               --  A file the host does not hold read ahead into its cache,
+               --  several reads at once, a step waiting only for the blocks
+               --  it has come to (Wait_Panels): through the mapping's faults
+               --  a cold file's 7.5 GB took a first step 9.2-9.6 s against
+               --  3.0 with the file held, and asking the host to read the
+               --  mapping ahead read nothing.
+               if Model_Runner.Platform.Pages.Held_Percent (Files.Base (Map.all), Files.Size (Map.all))
+                  < Panels_Held_Least
+               then
+                  Item.Panel_Reader := new Panel_Reading;
+                  Item.Panel_Reader.Path := new String'(Cache);
+                  Item.Panel_Reader.Landing.Set_Up (Size);
+                  for One of Item.Panel_Reader.Readers loop
+                     One := new Panel_Reader (Item.Panel_Reader);
+                     One.Start;
+                  end loop;
+               end if;
                return True;
             exception
                when others =>
@@ -710,6 +895,30 @@ package body Model_Runner.Qwen_Image is
               (Model_Runner.Panel_Cache.Writing, Panel_Writing_Access);
          begin
             Release (Item.Panel_Writer);
+         end;
+      end if;
+      if Item.Panel_Reader /= null then
+         declare
+            procedure Release is new Ada.Unchecked_Deallocation (Panel_Reading, Panel_Reading_Access);
+            procedure Release is new Ada.Unchecked_Deallocation (Panel_Reader, Panel_Reader_Access);
+            procedure Release is new Ada.Unchecked_Deallocation (String, String_Access);
+         begin
+            Item.Panel_Reader.Landing.Wait_Finished;
+            for One of Item.Panel_Reader.Readers loop
+               while One /= null and then not One'Terminated loop
+                  delay 0.001;
+               end loop;
+               Release (One);
+            end loop;
+            Release (Item.Panel_Reader.Path);
+            Release (Item.Panel_Reader);
+         end;
+      end if;
+      if Item.Ends /= null then
+         declare
+            procedure Release is new Ada.Unchecked_Deallocation (Panel_Ends, Panel_Ends_Access);
+         begin
+            Release (Item.Ends);
          end;
       end if;
       B.Free (Item.Panels);
@@ -1448,6 +1657,7 @@ package body Model_Runner.Qwen_Image is
       Next_Place : Integer := 0;
    begin
       Status := E.Success;
+      Wait_Panels (Item, 0);
       Forget (Prefix);
       if Prompt = 0 then
          Status := E.Make (E.Tensor_Shape_Mismatch);
@@ -1712,6 +1922,7 @@ package body Model_Runner.Qwen_Image is
          begin
             for Index in Done + 1 .. Last loop
                exit when E.Is_Error (Status);
+               Wait_Panels (Item, Index);
                declare
                   Layer   : Block renames Item.Layers (Index);
                   Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;
@@ -2643,6 +2854,7 @@ package body Model_Runner.Qwen_Image is
    begin
       Result := [others => 0.0];
       Status := E.Success;
+      Wait_Panels (Item, 0);
       if not Item.Ready
         or else Latent'Length /= Element_Count (Shape.In_Channels) * Image
         or else Result'Length /= Element_Count (Shape.Out_Channels) * Image
@@ -2844,6 +3056,7 @@ package body Model_Runner.Qwen_Image is
       end if;
       for Index in Item.Layers'Range loop
          exit when E.Is_Error (Status) or else Resident;
+         Wait_Panels (Item, Index);
          declare
             Layer  : Block renames Item.Layers (Index);
             Kept_At : constant Element_Count := Element_Count (Index - Item.Layers'First) * Prompt * W;

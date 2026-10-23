@@ -223,6 +223,11 @@ package body Library_Surface is
       new String'("Set_Band_Rows"),
       new String'("Set_Prefix_Room"),
 
+      --  Where a kept panel file is read in rather than mapped: the engine's
+      --  own share is the one a run wants; a test sets it past a hundred so
+      --  a file just written, which the host holds, is read in too.
+      new String'("Set_Panels_Read"),
+
       --  Whether a picture decoder was opened with its encoder. The command
       --  opens it so where it encodes and knows; a caller handed a decoder
       --  asks before encoding with it.

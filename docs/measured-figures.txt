@@ -27542,4 +27542,5 @@ panels B9A8C4F2A166CCB4 src/library/model_runner-quantization-interleave.ads src
 # first step's upload beside the device's work (Products.Hold Ahead): text paths take Ahead => False; image paragraph re-measured after the decoder work
 # image paragraph re-measured: 1024 Turbo 2:21, 512 in forty steps 2:16, decoder about 6 s
 # processor decoder's 3x3 by kernel rows: the device paths take Second => null, figures as re-measured in 1ddd7072
-image 292A1433AEC22F62 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# processor panel read-ahead (Held_Percent, Panel_Reader): the device picture paths take neither; figures as re-measured in 1ddd7072
+image CCDD74B2F51415B5 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb

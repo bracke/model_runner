@@ -75,6 +75,18 @@ package Model_Runner.Platform.Pages is
      (Start  : System.Address;
       Length : Model_Runner.Bytes.Byte_Count);
 
+   --  How much of a run of a file's mapping the host holds now, in whole
+   --  percent of its pages: whether reading it through the mapping is
+   --  reading memory or the drive. A host that cannot say answers 100, so
+   --  that a caller choosing goes on as it would have.
+   --
+   --  @param Start The first byte.
+   --  @param Length Bytes in the run.
+   --  @return 0 .. 100.
+   function Held_Percent
+     (Start  : System.Address;
+      Length : Model_Runner.Bytes.Byte_Count) return Natural;
+
    --  Copy a run of a file's read-only mapping from the file itself, in
    --  large reads that pass the host's cache by, rather than through the
    --  mapping's faults.

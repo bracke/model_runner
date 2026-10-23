@@ -743,7 +743,8 @@ package body Tests.Image_Cases is
    end Reference_Velocity;
 
    --  The processor's panels kept between opens: an open with a panel
-   --  cache builds them and writes them beside it, the next maps them,
+   --  cache builds them and writes them beside it, the next maps them --
+   --  or reads them in, as a file the host does not hold --
    --  and one whose file was damaged inside a panel it checks builds them
    --  afresh -- each step the same to the bit as the first.
    procedure Panels_Are_Kept_Between_Opens (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -787,6 +788,12 @@ package body Tests.Image_Cases is
       Assert (Ada.Directories.Exists (Cache), "the panels were not kept");
       Step (Again, Mapped => True, What => "with the panels kept");
       Assert (Again = First, "a step on the kept panels differs from one on panels built");
+      --  And read into memory of their own, as a file the host does not
+      --  hold is, a step waiting for each block's.
+      Q.Set_Panels_Read (Held_Least => 101);
+      Step (Again, Mapped => True, What => "with the kept panels read in");
+      Q.Set_Panels_Read;
+      Assert (Again = First, "a step on the kept panels read in differs from one on panels built");
 
       --  A byte of the first panel changed where the open checks it.
       declare

@@ -242,6 +242,17 @@ package Model_Runner.Qwen_Image is
    --  @param Rows Rows a chunk holds.
    procedure Set_Chunking (Past : Positive := 8_192; Rows : Positive := 4_096);
 
+   --  How much of a kept panel file, in percent, the host must hold for an
+   --  open to leave it to the mapping's faults; less, and it is read ahead
+   --  into the host's cache in the background, several reads at once, a
+   --  step waiting for each block's. Half unless said; a test sets it past
+   --  a hundred to take the reading way on a file just written.
+   --
+   --  Task safety: set before the opens it should govern.
+   --
+   --  @param Held_Least The percent.
+   procedure Set_Panels_Read (Held_Least : Natural := 50);
+
    --  How many bytes the prompt's keys and values, every block's, may take
    --  before they are not kept between steps and every step reads the
    --  prompt's rows beside the image's: 1 GiB unless said, which a prompt
@@ -382,6 +393,16 @@ private
    type Panel_Map_Access is access Model_Runner.Byte_Sources.Files.File_Source;
    type Panel_Writing_Access is access Model_Runner.Panel_Cache.Writing;
 
+   --  The panel cache's file read ahead into the host's cache in the
+   --  background, where the host did not hold it, and how far it has come.
+   type Panel_Reading;
+   type Panel_Reading_Access is access Panel_Reading;
+
+   --  Where each block's panels end, the matrices every step reads first
+   --  at nought: what a step waits for while the file is still read.
+   type Panel_Ends is array (Natural range <>) of Model_Runner.Bytes.Byte_Count;
+   type Panel_Ends_Access is access Panel_Ends;
+
    type Denoiser is tagged limited record
       File      : Model_Runner.Byte_Sources.Files.File_Source;
       Container : Model_Runner.GGUF.Containers.Container;
@@ -408,6 +429,8 @@ private
       Panels       : Model_Runner.Bytes.Byte_Array_Access;
       Panel_Map    : Panel_Map_Access;
       Panel_Writer : Panel_Writing_Access;
+      Panel_Reader : Panel_Reading_Access;
+      Ends         : Panel_Ends_Access;
 
       Layers : Block_Array_Access;
    end record;
