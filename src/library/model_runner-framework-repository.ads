@@ -396,6 +396,13 @@ package Model_Runner.Framework.Repository is
    --  @return Sixteen hexadecimal digits.
    function Graph_Fingerprint (From : Graph) return String;
 
+   --  A file's stamp as a scan takes it: its size, when it last changed,
+   --  and the host's own change record where it keeps one.
+   --
+   --  @param Full The file's path.
+   --  @return The stamp; "" where the file cannot be looked at.
+   function Stamp_Of (Full : String) return String;
+
    --  How source is read into the graph: a graph kept by another is read
    --  again. 2: Ada bodies declare their subprograms too. 3: a generic's
    --  formal part is not its unit. 7: a block's begin opens a level in a

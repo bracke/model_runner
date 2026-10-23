@@ -19628,6 +19628,37 @@ package body Tests.Framework_Cases is
               and then Rv.Indexed_Reads = Read_Before + 1,
               "a changed file was not read again alone");
 
+      --  A graph made before an edit: the file's own stamp tells the index
+      --  the words changed, though the graph's print does not.
+      declare
+         Before : constant Rp.Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         Read_Then : constant Natural := Rv.Indexed_Reads;
+         Hits : Rv.Hit_Lists.Vector;
+      begin
+         Put_File (Fresh_Root (Store) & "/docs/notes.txt", "Now it says numbat instead." & LF);
+         Hits := Rv.Search (Store, Before, "", "numbat", 20, Records => False);
+         Assert ((for some One of Hits => One.Kind = Rv.Text_Hit and then To_String (One.Path) = "docs/notes.txt")
+                 and then Rv.Indexed_Reads = Read_Then + 1,
+                 "a file edited after its graph was made was searched as it had been");
+
+         --  Rewritten over and over, a file is held once: what it held
+         --  before is let go each time.
+         declare
+            Held_Then : constant Natural := Rv.Indexed_Held;
+         begin
+            for Round in 1 .. 50 loop
+               Put_File (Fresh_Root (Store) & "/docs/notes.txt",
+                         "Round" & Natural'Image (Round) & " says word_" & Ada.Strings.Fixed.Trim
+                           (Natural'Image (Round), Ada.Strings.Both) & " and wombat"
+                         & Ada.Strings.Fixed."*" (Round, '.') & LF);
+               Hits := Rv.Search (Store, Before, "", "wombat", 20, Records => False);
+            end loop;
+            Assert (Rv.Indexed_Held = Held_Then and then Rv.Indexed_Reads = Read_Then + 51,
+                    "a file rewritten many times was not held once, read once a change");
+         end;
+         Put_File (Fresh_Root (Store) & "/docs/notes.txt", "Now it says wombat." & LF);
+      end;
+
       Dirs.Rename (Fresh_Root (Store) & "/src/tool.py", Fresh_Root (Store) & "/src/counting.py");
       Assert (Texts ("total", "src/counting.py") and then not Texts ("total", "src/tool.py"),
               "a renamed file was not found under its new path only");
@@ -19649,6 +19680,34 @@ package body Tests.Framework_Cases is
       end;
       S.Close (Store);
    end Word_Index_Follows_The_Tree;
+
+   --  The words of a query in a row lift a file its counts ranked below
+   --  the first Most: every file the bonus could lift among them is read,
+   --  not only the first Most.
+   procedure Phrase_Lifts_Past_The_First
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+      Hits  : Rv.Hit_Lists.Vector;
+      Many  : Unbounded_String;
+   begin
+      Task_Project (Store, "phrase-lift");
+      Dirs.Create_Path (Fresh_Root (Store) & "/docs");
+      for Line in 1 .. 8 loop
+         Append (Many, "alpha here" & LF & "beta there" & LF);
+      end loop;
+      for Name in Character range 'a' .. 'e' loop
+         Put_File (Fresh_Root (Store) & "/docs/" & Name & ".txt", To_String (Many));
+      end loop;
+      Put_File (Fresh_Root (Store) & "/docs/z.txt", "once: alpha beta" & LF);
+      Hits := Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", "alpha beta", 3,
+                         Records => False);
+      Assert (Natural (Hits.Length) = 3 and then To_String (Hits.First_Element.Path) = "docs/z.txt"
+              and then Ada.Strings.Fixed.Index (To_String (Hits.First_Element.Why), "in a row") > 0,
+              "the words in a row in a file ranked below the first by counts were not found first");
+      S.Close (Store);
+   end Phrase_Lifts_Past_The_First;
 
    --  An excerpt is a declaration's lines, cut from its file as it is now,
    --  saying where it is from: each of an overloaded name's, a spec's
@@ -19727,6 +19786,51 @@ package body Tests.Framework_Cases is
                  "a use was not shown in the body holding it");
          Rv.Around (Root, "src/none.adb", 1, 40, Piece, Status);
          Assert (Status.Code = E.Framework_Not_Found, "a file not there was shown");
+      end;
+
+      --  A body longer than asked, cut around its first line, its last,
+      --  and one between: never before its start or past its end.
+      declare
+         Long  : Unbounded_String := To_Unbounded_String ("procedure Long is" & LF & "begin" & LF);
+         Piece : Rv.Excerpt;
+      begin
+         for Line in 1 .. 150 loop
+            Append (Long, "   null;" & LF);
+         end loop;
+         Append (Long, "end Long;" & LF);
+         Put_File (Root & "/src/long.adb", To_String (Long));
+         Rv.Around (Root, "src/long.adb", 1, 100, Piece, Status);
+         Assert (E.Is_Ok (Status) and then Piece.Truncated and then Piece.First = 1 and then Piece.Last = 100,
+                 "a long body cut at its first line was not its first lines:" & Piece.First'Image
+                 & Piece.Last'Image);
+         Rv.Around (Root, "src/long.adb", 153, 100, Piece, Status);
+         Assert (E.Is_Ok (Status) and then Piece.Truncated and then Piece.Last = 153 and then Piece.First = 54,
+                 "a long body cut at its last line was not its last lines:" & Piece.First'Image
+                 & Piece.Last'Image);
+         Rv.Around (Root, "src/long.adb", 80, 4, Piece, Status);
+         Assert (E.Is_Ok (Status) and then Piece.First = 79 and then Piece.Last = 82,
+                 "a long body cut around a line between was not around it:" & Piece.First'Image
+                 & Piece.Last'Image);
+      end;
+
+      --  A directory on the way that is a link out of the tree: the file
+      --  in it is no link, and still not read.
+      declare
+         Away  : constant String := Fresh ("excerpts-away");
+         Link  : constant String := Root & "/src/external";
+         Piece : Rv.Excerpt;
+         Gone  : Boolean;
+      begin
+         Put_File (Away & "/leak.adb", "procedure Leak is" & LF & "begin" & LF & "   null;" & LF & "end Leak;" & LF);
+         if Hostkit.Fs.Create_Link (Dirs.Full_Name (Away), Link) then
+            Rv.Around (Root, "src/external/leak.adb", 1, 40, Piece, Status);
+            Assert (Status.Code = E.Framework_Not_Found, "a file through a linked directory out of the tree was read");
+            Rv.Expand (Root, "src/external/leak.adb:1-2@0000000000000000", 80, Piece, Status);
+            Assert (not E.Is_Ok (Status), "a reference through a linked directory out of the tree was read");
+            Gone := Hostkit.Fs.Delete_Link (Link);
+            pragma Unreferenced (Gone);
+         end if;
+         Remove_Tree (Away);
       end;
    end Excerpts_Say_Where_They_Are_From;
 
@@ -20377,6 +20481,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Word_Index_Follows_The_Tree'Access,
          "the index of the files' words follows the tree and ranks as one made anew");
+      Register_Routine
+        (T, Phrase_Lifts_Past_The_First'Access,
+         "the words of a query in a row lift a file its counts ranked below the first");
       Register_Routine
         (T, Excerpts_Say_Where_They_Are_From'Access,
          "an excerpt is a declaration's lines as the file is now, and says where it is from");

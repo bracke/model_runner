@@ -9,7 +9,14 @@
 --  tokens. What is said of each is how many of those lines the context
 --  holds (recall), what its source sections cost, and what it costs in
 --  all, with the time the build took: the same figures for every build of
---  the harness, so that one retrieval can be held against another.
+--  the harness, so that one retrieval can be held against another. Each
+--  case is built twice: with excerpts, and as retrieval was before them
+--  (scalar context.retrieval = whole), the same tasks in the same rooms.
+--
+--  Search is judged apart: each task's title and three shorter queries are
+--  searched, with the symbols and files a developer would open for each
+--  named beforehand, and recall at 5 and 10 hits and the mean reciprocal
+--  rank of the first relevant hit are said.
 package Retrieval_Bench is
 
    --  Make the project, build every case's contexts and say what each held.

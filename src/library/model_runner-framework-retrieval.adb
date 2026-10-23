@@ -150,17 +150,19 @@ package body Model_Runner.Framework.Retrieval is
    end record;
 
    type Posting_Array is array (Positive range <>) of Posting;
-   type Posting_Access is access Posting_Array;
 
    function Before (Left, Right : Posting) return Boolean
    is (Left.Term < Right.Term);
 
    procedure Sort is new Ada.Containers.Generic_Array_Sort (Positive, Posting, Posting_Array, Before);
 
-   --  One file's words, sorted by term, and the print they were read at.
-   type File_Words is record
+   --  One file's words, sorted by term, held in the entry itself so that
+   --  replacing or deleting the entry frees them; the print the graph gave
+   --  and the file's own stamp when they were read.
+   type File_Words (Count : Natural) is record
       Print : Unbounded_String;
-      Words : Posting_Access;
+      Stamp : Unbounded_String;
+      Words : Posting_Array (1 .. Count);
    end record;
 
    package Term_Maps is new Ada.Containers.Indefinite_Hashed_Maps
@@ -198,7 +200,7 @@ package body Model_Runner.Framework.Retrieval is
    is (Root & ASCII.NUL & Path);
 
    --  A file's words, counted.
-   function Words_Of (Text : String) return Posting_Access is
+   function Words_Of (Text : String) return Posting_Array is
       package Count_Maps is new Ada.Containers.Indefinite_Hashed_Maps
         (Key_Type => String, Element_Type => Posting, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
       Counted : Count_Maps.Map;
@@ -218,20 +220,20 @@ package body Model_Runner.Framework.Retrieval is
    begin
       Each_Word (Text, Take'Access);
       declare
-         Result : constant Posting_Access := new Posting_Array (1 .. Natural (Counted.Length));
+         Result : Posting_Array (1 .. Natural (Counted.Length));
          At_Index : Natural := 0;
       begin
          for Held of Counted loop
             At_Index := At_Index + 1;
             Result (At_Index) := Held;
          end loop;
-         Sort (Result.all);
+         Sort (Result);
          return Result;
       end;
    end Words_Of;
 
    --  What a file holds of a term: its posting, or a count of nought.
-   function Find (Words : Posting_Access; Term : Positive) return Posting is
+   function Find (Words : Posting_Array; Term : Positive) return Posting is
       Low  : Positive := Words'First;
       High : Natural := Words'Last;
    begin
@@ -256,8 +258,21 @@ package body Model_Runner.Framework.Retrieval is
    function Indexed (File : Rp.File_Entry) return Boolean
    is (File.Role in Rp.Source | Rp.Test | Rp.Documentation);
 
+   --  Whether a path, every link on the way followed, lies in a tree as
+   --  the tree resolves: a directory on the way may be a link out of it
+   --  where the file itself is none.
+   function Resolves_Within (Root, Full : String) return Boolean is
+      Base : constant String := Hostkit.Fs.Real_Path (if Root = "" then "." else Root);
+      Real : constant String := Hostkit.Fs.Real_Path (Full);
+   begin
+      return Base /= "" and then Real'Length > Base'Length
+        and then Real (Real'First .. Real'First + Base'Length - 1) = Base
+        and then (Base (Base'Last) in '/' | '\' or else Real (Real'First + Base'Length) in '/' | '\');
+   end Resolves_Within;
+
    --  A path within a tree read as text, refused where it reaches outside
-   --  the tree or through a link.
+   --  the tree or through a link: the file itself a link, or a directory on
+   --  the way one leading out.
    procedure Read_In
      (Root   : String;
       Path   : String;
@@ -277,6 +292,7 @@ package body Model_Runner.Framework.Retrieval is
          return;
       elsif not Ada.Directories.Exists (Full) or else Hostkit.Fs.Is_Link (Full)
         or else Ada.Directories."/=" (Ada.Directories.Kind (Full), Ada.Directories.Ordinary_File)
+        or else not Resolves_Within (Root, Full)
       then
          Status := E.Make (E.Framework_Not_Found);
          E.Add_Text (Status, "name", Path);
@@ -289,8 +305,11 @@ package body Model_Runner.Framework.Retrieval is
          E.Add_Text (Status, "name", Path);
    end Read_In;
 
-   --  The index brought up to the graph: a file whose print changed read
-   --  again, one gone dropped. Called with Lock held.
+   --  The index brought up to the graph and to the files as they are: a
+   --  file read again where the graph's print for it changed, or its own
+   --  stamp did -- size, change time to the nanosecond, file number -- so
+   --  a graph made before an edit still finds the edit; one gone dropped.
+   --  Which files there are is the graph's to say. Called with Lock held.
    procedure Bring_Up (Graph : Rp.Graph; Root : String) is
       Present : Name_Sets.Set;
    begin
@@ -302,34 +321,41 @@ package body Model_Runner.Framework.Retrieval is
          begin
             if Indexed (File) then
                Present.Include (Key);
-               if not Index.Contains (Key) or else Index.Element (Key).Print /= File.Fingerprint then
-                  declare
-                     Text   : Unbounded_String;
-                     Status : E.Error_Info;
-                     Size_Ok : Boolean := True;
-                  begin
-                     begin
-                        Size_Ok := Ada.Directories.Size (Hostkit.Fs.Join (Root, Path))
-                                     <= Ada.Directories.File_Size (Indexed_Most);
-                     exception
-                        when others =>
-                           Size_Ok := False;
-                     end;
-                     if Size_Ok then
-                        Read_In (Root, Path, Text, Status);
-                     else
-                        Status := E.Make (E.Framework_Not_Found);
-                     end if;
+               declare
+                  Now : constant String := Rp.Stamp_Of (Hostkit.Fs.Join (Root, Path));
+               begin
+                  if not Index.Contains (Key) or else Index.Constant_Reference (Key).Print /= File.Fingerprint
+                    or else Now = "" or else Index.Constant_Reference (Key).Stamp /= Now
+                  then
                      declare
-                        Words : constant Posting_Access :=
-                          (if E.Is_Ok (Status) then Words_Of (To_String (Text))
-                           else new Posting_Array (1 .. 0));
+                        Text   : Unbounded_String;
+                        Status : E.Error_Info;
+                        Size_Ok : Boolean := True;
                      begin
-                        Index.Include (Key, (Print => File.Fingerprint, Words => Words));
-                        Read_Count := Read_Count + 1;
+                        begin
+                           Size_Ok := Ada.Directories.Size (Hostkit.Fs.Join (Root, Path))
+                                        <= Ada.Directories.File_Size (Indexed_Most);
+                        exception
+                           when others =>
+                              Size_Ok := False;
+                        end;
+                        if Size_Ok then
+                           Read_In (Root, Path, Text, Status);
+                        else
+                           Status := E.Make (E.Framework_Not_Found);
+                        end if;
+                        declare
+                           Words : constant Posting_Array :=
+                             (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else [1 .. 0 => <>]);
+                        begin
+                           Index.Include
+                             (Key, (Count => Words'Length, Print => File.Fingerprint,
+                                    Stamp => To_Unbounded_String (Now), Words => Words));
+                           Read_Count := Read_Count + 1;
+                        end;
                      end;
-                  end;
-               end if;
+                  end if;
+               end;
             end if;
          end;
       end loop;
@@ -773,7 +799,9 @@ package body Model_Runner.Framework.Retrieval is
                   if Index.Contains (Key) then
                      Files := Files + 1;
                      for At_Term in Ids'Range loop
-                        if Ids (At_Term) > 0 and then Find (Index.Element (Key).Words, Ids (At_Term)).Count > 0 then
+                        if Ids (At_Term) > 0
+                          and then Find (Index.Constant_Reference (Key).Words, Ids (At_Term)).Count > 0
+                        then
                            Spread (At_Term) := Spread (At_Term) + 1;
                         end if;
                      end loop;
@@ -793,7 +821,7 @@ package body Model_Runner.Framework.Retrieval is
                      for At_Term in Ids'Range loop
                         if Ids (At_Term) > 0 then
                            declare
-                              One : constant Posting := Find (Index.Element (Key).Words, Ids (At_Term));
+                              One : constant Posting := Find (Index.Constant_Reference (Key).Words, Ids (At_Term));
                            begin
                               if One.Count > 0 then
                                  Held := Held + 1;
@@ -829,64 +857,79 @@ package body Model_Runner.Framework.Retrieval is
 
          --  The best of them read again for the line to show: the first
          --  holding most of the words, and a bonus where it holds them in
-         --  a row.
+         --  a row. Every one the bonus could still lift among the first
+         --  Most is read, not only the first Most: the words in a row may
+         --  be in a file their counts ranked lower.
          Hit_Sorting.Sort (Candidates);
-         for Index_At in 1 .. Natural'Min (Natural (Candidates.Length), Most) loop
-            declare
-               Item   : Hit renames Candidates (Index_At);
-               Text   : Unbounded_String;
-               Read   : E.Error_Info;
-               Phrase : constant String := Lower (Ada.Strings.Fixed.Trim (Query, Ada.Strings.Both));
-            begin
-               Read_In (Tree, To_String (Item.Path), Text, Read);
-               if E.Is_Ok (Read) then
-                  declare
-                     Whole   : constant String := To_String (Text);
-                     Start   : Positive := Whole'First;
-                     Row     : Positive := 1;
-                     Best    : Natural := 0;
-                     Rows    : constant Natural := Natural (Terms.Length);
-                  begin
-                     for At_Char in Whole'First .. Whole'Last + 1 loop
-                        if At_Char > Whole'Last or else Whole (At_Char) = ASCII.LF then
-                           declare
-                              Said  : constant String := Lower (Whole (Start .. At_Char - 1));
-                              Holds : Natural := 0;
-                           begin
-                              for Term of Terms loop
-                                 if Has (Said, Term) then
-                                    Holds := Holds + 1;
+         declare
+            Phrase : constant String := Lower (Ada.Strings.Fixed.Trim (Query, Ada.Strings.Both));
+            Reach  : constant Natural := (if Natural (Terms.Length) >= 2 and then Phrase'Length >= 5 then 150 else 0);
+            Kept   : Natural := 0;
+            Floor  : Natural := 0;
+         begin
+            for Index_At in 1 .. Natural (Candidates.Length) loop
+               exit when Kept >= Most and then (Reach = 0 or else Candidates (Index_At).Score + Reach < Floor);
+               declare
+                  Item   : Hit renames Candidates (Index_At);
+                  Text   : Unbounded_String;
+                  Read   : E.Error_Info;
+               begin
+                  Read_In (Tree, To_String (Item.Path), Text, Read);
+                  --  Past the first Most, only one holding the words in a row
+                  --  could take a place.
+                  if E.Is_Ok (Read) and then (Kept < Most or else Has (Lower (To_String (Text)), Phrase)) then
+                     Kept := Kept + 1;
+                     if Kept = Most then
+                        Floor := Item.Score;
+                     end if;
+                     declare
+                        Whole   : constant String := To_String (Text);
+                        Start   : Positive := Whole'First;
+                        Row     : Positive := 1;
+                        Best    : Natural := 0;
+                        Rows    : constant Natural := Natural (Terms.Length);
+                     begin
+                        for At_Char in Whole'First .. Whole'Last + 1 loop
+                           if At_Char > Whole'Last or else Whole (At_Char) = ASCII.LF then
+                              declare
+                                 Said  : constant String := Lower (Whole (Start .. At_Char - 1));
+                                 Holds : Natural := 0;
+                              begin
+                                 for Term of Terms loop
+                                    if Has (Said, Term) then
+                                       Holds := Holds + 1;
+                                    end if;
+                                 end loop;
+                                 if Holds > Best then
+                                    Best := Holds;
+                                    Item.Line := Row;
+                                    Item.What := To_Unbounded_String
+                                      (Ada.Strings.Fixed.Trim (Whole (Start .. At_Char - 1), Ada.Strings.Both));
                                  end if;
-                              end loop;
-                              if Holds > Best then
-                                 Best := Holds;
-                                 Item.Line := Row;
-                                 Item.What := To_Unbounded_String
-                                   (Ada.Strings.Fixed.Trim (Whole (Start .. At_Char - 1), Ada.Strings.Both));
-                              end if;
-                              if Rows >= 2 and then Phrase'Length >= 5 and then Has (Said, Phrase)
-                                and then Ada.Strings.Fixed.Index (To_String (Item.Why), "in a row") = 0
-                              then
-                                 Item.Score := Natural'Min (500, Item.Score + 150);
-                                 Item.Line := Row;
-                                 Item.What := To_Unbounded_String
-                                   (Ada.Strings.Fixed.Trim (Whole (Start .. At_Char - 1), Ada.Strings.Both));
-                                 Append (Item.Why, "; the words in a row");
-                                 Best := Natural'Last;
-                              end if;
-                           end;
-                           Row := Row + 1;
-                           Start := At_Char + 1;
-                        end if;
-                     end loop;
-                  end;
-                  if Length (Item.What) > 160 then
-                     Item.What := Head (Item.What, 160);
+                                 if Rows >= 2 and then Phrase'Length >= 5 and then Has (Said, Phrase)
+                                   and then Ada.Strings.Fixed.Index (To_String (Item.Why), "in a row") = 0
+                                 then
+                                    Item.Score := Natural'Min (500, Item.Score + 150);
+                                    Item.Line := Row;
+                                    Item.What := To_Unbounded_String
+                                      (Ada.Strings.Fixed.Trim (Whole (Start .. At_Char - 1), Ada.Strings.Both));
+                                    Append (Item.Why, "; the words in a row");
+                                    Best := Natural'Last;
+                                 end if;
+                              end;
+                              Row := Row + 1;
+                              Start := At_Char + 1;
+                           end if;
+                        end loop;
+                     end;
+                     if Length (Item.What) > 160 then
+                        Item.What := Head (Item.What, 160);
+                     end if;
+                     Found.Append (Item);
                   end if;
-                  Found.Append (Item);
-               end if;
-            end;
-         end loop;
+               end;
+            end loop;
+         end;
       end;
 
       Hit_Sorting.Sort (Found);
@@ -918,7 +961,9 @@ package body Model_Runner.Framework.Retrieval is
          Into.Truncated := True;
          --  The line that matters kept in sight: the declaration's start,
          --  or the use it is shown for.
-         Low := Natural'Max (Into.First, Natural'Min (Keep - Most / 4, Into.Last - Most + 1));
+         --  Saturating: a line near the file's start leads with fewer.
+         Low := Positive'Max
+           (Into.First, Positive'Min ((if Keep > Most / 4 then Keep - Most / 4 else 1), Into.Last - Most + 1));
          High := Low + Most - 1;
       end if;
       for At_Char in Text'First .. Text'Last + 1 loop

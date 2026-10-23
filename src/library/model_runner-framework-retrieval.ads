@@ -38,7 +38,11 @@ with Model_Runner.Framework.Stores;
 --  it, at most 8, times how rare it is across the files -- 10 times the
 --  log2 of 1 + files over files holding it -- a quarter of that, and 150
 --  more where a line holds the query's words in a row; at most 500. The
---  line shown is the first holding the most of the words.
+--  line shown is the first holding the most of the words. Every file that
+--  150 more could lift among the first asked for is read for it.
+--
+--  A file is read only where it lies in the tree once every link on the
+--  way is followed, and is itself no link.
 --
 --  An excerpt is the lines a declaration takes, as Repository.Extent_Of
 --  finds them in the file as it is now -- the symbol found again where the
@@ -93,7 +97,9 @@ package Model_Runner.Framework.Retrieval is
    --
    --  @param Store The store, for its records; its project's tree for
    --    text where Root is "".
-   --  @param Graph The repository's graph, as it is now.
+   --  @param Graph The repository's graph: which files there are. A file
+   --    changed since it was made is read again by its own stamp, so the
+   --    words searched are the file's as it is now.
    --  @param Root The tree text is read from.
    --  @param Query Names, paths, identifiers, words.
    --  @param Most How many hits at most.
