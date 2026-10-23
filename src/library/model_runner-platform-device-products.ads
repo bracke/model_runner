@@ -3727,6 +3727,12 @@ private
       Wider_Line      : System.Address := System.Null_Address;
       Wider_More_Line : System.Address := System.Null_Address;
       Wider_Low_Line  : System.Address := System.Null_Address;
+
+      --  And the taps' two heights of the first tile; see Tap_Line.
+      Tap_Short      : System.Address := System.Null_Address;
+      Tap_Tall       : System.Address := System.Null_Address;
+      Tap_Short_Line : System.Address := System.Null_Address;
+      Tap_Tall_Line  : System.Address := System.Null_Address;
       Narrow_More : System.Address := System.Null_Address;
       Listed_Tile : System.Address := System.Null_Address;
       Listed_Tile_More : System.Address := System.Null_Address;

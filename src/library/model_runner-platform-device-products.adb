@@ -234,6 +234,18 @@ package body Model_Runner.Platform.Device.Products is
    --  What a matrix's rows must divide by to be tiled: half a tile, the
    --  last tile of such a matrix covering the half it has.
    Tile_Grain   : constant := 32;
+
+   --  The rows of the taps' two tiles (matrix_product.comp's TAP_ROWS).
+   --  A VAE's 3x3s on the first tile, Qwen-Image's decoder at 1024 on the
+   --  device's timeline, a tap product's microseconds at 64 / 32 / 96 rows:
+   --  160 by 160 5641 / 4495 / 5550, 160 by 288 5535 / 4520 / 5411, 32 by
+   --  160 10121 / 6233 / 13577; 288 by 288 7862 / 7383 / 7199, 288 by 576
+   --  7966 / 7786 / 7106, 576 by 576 9360 / 9610 / 8934, 1152 by 1152
+   --  19091 / 20400 / 18386. Its vectors come from the cache however many
+   --  tiles of rows read them, so the rows past a matrix's end are what a
+   --  height that does not divide it costs.
+   Tap_Short_Rows : constant := 32;
+   Tap_Tall_Rows  : constant := 96;
    Tile_Vectors : constant := 128;
 
    --  And the tile a listed product's runs are cut into -- thirty-two
@@ -4223,6 +4235,10 @@ package body Model_Runner.Platform.Device.Products is
                              Item.Wider_More);
                      Module (Model_Runner.Shaders.Low_Tiles.Matrix_Wider_Low,
                              Item.Wider_Low);
+                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Tap_Short,
+                             Item.Tap_Short);
+                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Tap_Tall,
+                             Item.Tap_Tall);
                   end;
 
                   declare
@@ -5462,6 +5478,8 @@ package body Model_Runner.Platform.Device.Products is
                      Line (Item.Wider, Item.Wider_Line);
                      Line (Item.Wider_More, Item.Wider_More_Line);
                      Line (Item.Wider_Low, Item.Wider_Low_Line);
+                     Line (Item.Tap_Short, Item.Tap_Short_Line);
+                     Line (Item.Tap_Tall, Item.Tap_Tall_Line);
                      Wider_Ready :=
                        Item.Wider_Line /= Null_Handle
                        and then Item.Wider_More_Line /= Null_Handle
@@ -6082,6 +6100,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wider_Line, "vkDestroyPipeline");
       Give_Back (Item.Wider_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Wider_Low_Line, "vkDestroyPipeline");
+      Give_Back (Item.Tap_Short_Line, "vkDestroyPipeline");
+      Give_Back (Item.Tap_Tall_Line, "vkDestroyPipeline");
       Wider_Ready := False;
       Give_Back (Item.Narrow_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Low_Line, "vkDestroyPipeline");
@@ -6117,6 +6137,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Wider, "vkDestroyShaderModule");
       Give_Back (Item.Wider_More, "vkDestroyShaderModule");
       Give_Back (Item.Wider_Low, "vkDestroyShaderModule");
+      Give_Back (Item.Tap_Short, "vkDestroyShaderModule");
+      Give_Back (Item.Tap_Tall, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_Low, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_Low, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
@@ -8355,6 +8377,24 @@ package body Model_Runner.Platform.Device.Products is
            and then Tile_Pipeline (Item, Packing, Rest) /= Null_Handle;
          Aligned : constant Natural := Count - (if Split then Rest else 0);
 
+         --  A 3x3's taps on the first tile take the taps' own height
+         --  where its rows are not a whole number of sixty-fours, or are of
+         --  ninety-sixes: see Tap_Short_Rows.
+         function Chosen (Pipeline : Address) return Address
+         is (if Tap_Row = 0 or else Pipeline /= Item.Matrix_Line then Pipeline
+             elsif Rows mod Tap_Tall_Rows = 0
+               and then Item.Tap_Tall_Line /= Null_Handle
+             then Item.Tap_Tall_Line
+             elsif Rows mod Tile_Rows /= 0
+               and then Item.Tap_Short_Line /= Null_Handle
+             then Item.Tap_Short_Line
+             else Pipeline);
+
+         function Height (Pipeline : Address) return Natural
+         is (if Pipeline = Item.Tap_Short_Line then Tap_Short_Rows
+             elsif Pipeline = Item.Tap_Tall_Line then Tap_Tall_Rows
+             else Tile_Rows);
+
          procedure Run_Tiles
            (Pipeline : Address; Vectors, Start, Groups : Natural)
          is
@@ -8386,21 +8426,21 @@ package body Model_Runner.Platform.Device.Products is
                      Product_Bytes, Shape'Address);
                Dispatch
                  (Item.Buffer,
-                  C.unsigned ((Rows + Tile_Rows - 1) / Tile_Rows),
+                  C.unsigned ((Rows + Height (Pipeline) - 1) / Height (Pipeline)),
                   C.unsigned (Groups), 1);
             end;
          end Run_Tiles;
       begin
          if Split then
             Run_Tiles
-              (Tile_Pipeline (Item, Packing, Count), Aligned, 0,
+              (Chosen (Tile_Pipeline (Item, Packing, Count)), Aligned, 0,
                Aligned / Tile_Width (Count));
             Run_Tiles
-              (Tile_Pipeline (Item, Packing, Rest), Rest, Aligned,
+              (Chosen (Tile_Pipeline (Item, Packing, Rest)), Rest, Aligned,
                (Rest + Tile_Width (Rest) - 1) / Tile_Width (Rest));
          else
             Run_Tiles
-              (Tile_Pipeline (Item, Packing, Count), Count, 0,
+              (Chosen (Tile_Pipeline (Item, Packing, Count)), Count, 0,
                Room / Tile_Width (Count));
          end if;
       end;

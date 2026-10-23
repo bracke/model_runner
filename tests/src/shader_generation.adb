@@ -306,13 +306,15 @@ package body Shader_Generation is
 
       --  And the matrix tile's LOW_BITS compilations to a third, once the
       --  generating kernels' few-vector walks put the low-bit child past
-      --  that size in turn.
+      --  that size in turn; and the taps' tiles beside them, which the
+      --  parent had no room for.
       function Is_Low_Tile (Pair : Shader_Pair) return Boolean is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
-         return Ada.Strings.Fixed.Index (Name, "Matrix") = Name'First
-           and then Name'Length >= 4
-           and then Name (Name'Last - 3 .. Name'Last) = "_Low";
+         return Ada.Strings.Fixed.Index (Name, "Matrix_Tap_") = Name'First
+           or else (Ada.Strings.Fixed.Index (Name, "Matrix") = Name'First
+                    and then Name'Length >= 4
+                    and then Name (Name'Last - 3 .. Name'Last) = "_Low");
       end Is_Low_Tile;
 
       --  And the attention kernels to another, for the same reason: with
@@ -461,7 +463,7 @@ package body Shader_Generation is
 
       Write_Child
         (Root & "/src/library/model_runner-shaders-low_tiles.ads",
-         "Model_Runner.Shaders.Low_Tiles", "The low-bit matrix tiles'",
+         "Model_Runner.Shaders.Low_Tiles", "The low-bit matrix tiles' and the taps'",
          Is_Low_Tile'Access, Good);
       if not Good then
          return;

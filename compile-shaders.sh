@@ -160,6 +160,8 @@ compile matrix_listed_low            matrix_product.comp   vulkan1.3 LOW_BITS LI
 compile matrix_wider                 matrix_product.comp   vulkan1.3 WIDER
 compile matrix_wider_extra           matrix_product.comp   vulkan1.3 MORE_FORMATS WIDER
 compile matrix_wider_low             matrix_product.comp   vulkan1.3 LOW_BITS WIDER
+compile matrix_tap_short             matrix_product.comp   vulkan1.3 TAP_ROWS=32u
+compile matrix_tap_tall              matrix_product.comp   vulkan1.3 TAP_ROWS=96u
 compile attention_matrix             attention_matrix.comp vulkan1.3
 compile attention_matrix_wide        attention_matrix.comp vulkan1.3 WIDE_HEAD
 compile attention_matrix_mid         attention_matrix.comp vulkan1.3 MID_HEAD

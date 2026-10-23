@@ -6888,6 +6888,28 @@ package body Checks is
          end;
       end loop;
 
+      --  And the taps' two heights of the first tile.
+      for Which in 1 .. 2 loop
+         declare
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/matrix_product.comp", Found);
+
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (if Which = 1 then Model_Runner.Shaders.Low_Tiles.Matrix_Tap_Short_Digest
+               else Model_Runner.Shaders.Low_Tiles.Matrix_Tap_Tall_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Found and then Digest /= Recorded then
+               Fail ("a TAP_ROWS compilation of src/shaders/matrix_product.comp"
+                     & " is older than the source; run ./compile-shaders.sh");
+            end if;
+         end;
+      end loop;
+
       --  And the compilations of the low-bit generating kernel, one a
       --  format from the one source -- the twelve low-bit formats, Q8_0, the
       --  two IQ4 formats, Q2_K, Q3_K and the four older formats -- each asked

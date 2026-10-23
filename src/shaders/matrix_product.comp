@@ -223,8 +223,17 @@ float gaussian_tanh(float v) {
 //  are never stored.
 #ifdef LISTED
 const uint TILE_R = 64u;
-#else
+#elif !defined(TAP_ROWS)
 const uint TILE_R = 64u;
+#else
+//  And a 3x3's taps on a tile of their own height, TAP_ROWS: a third of
+//  the tile on a matrix of 160 rows -- a VAE's full-size level -- was
+//  rows past its end, decoded and multiplied, and a tap's vectors are read
+//  from the cache however many tiles of rows read them. Thirty-two for a
+//  height no tile of sixty-four or ninety-six divides, ninety-six for one
+//  it does. The engine's Tap_Short_Rows and Tap_Tall_Rows carry the
+//  measurements.
+const uint TILE_R = TAP_ROWS;
 #endif
 
 //  A tile is as wide as it is whether the batch filling it is a hundred and

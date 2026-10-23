@@ -3933,7 +3933,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Product_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Product : constant Word_Array :=
@@ -6595,7 +6595,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Extra : constant Word_Array :=
@@ -9413,7 +9413,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Narrow_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Narrow : constant Word_Array :=
@@ -12135,7 +12135,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Narrow_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Narrow_Extra : constant Word_Array :=
@@ -15025,7 +15025,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Listed_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Listed : constant Word_Array :=
@@ -17545,7 +17545,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Listed_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Listed_Extra : constant Word_Array :=
@@ -20722,7 +20722,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Listed_Wide_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Listed_Wide : constant Word_Array :=
@@ -23242,7 +23242,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Listed_Wide_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Listed_Wide_Extra : constant Word_Array :=
@@ -26419,7 +26419,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Wider_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Wider : constant Word_Array :=
@@ -29081,7 +29081,7 @@ package Model_Runner.Shaders is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Wider_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#45A6A09C3FF4BCBA#;
+     16#2C06C8FAC27CF4A0#;
 
    --  The compiled words, as the device is given them.
    Matrix_Wider_Extra : constant Word_Array :=

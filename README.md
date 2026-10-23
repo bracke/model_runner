@@ -892,9 +892,9 @@ model_runner image --prompt "make the apple green" --ref-image apple.png --out g
 
 Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
-Radeon 780M a 1024 Turbo picture takes 2 min 21 s (steps of 15 s, the
-first 17.6 s with the weights' upload beside it, the decoder about 6 s)
-and a 512 picture in forty steps 2 min 16 s (steps of 3.0-3.2 s)
+Radeon 780M a 1024 Turbo picture takes 2 min 14-19 s (steps of 15 s, the
+first 17.3 s with the weights' upload beside it, the decoder about 6.5 s)
+and a 512 picture in forty steps 2 min 18 s (steps of 3.2-3.3 s)
 -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1
 s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
 image).

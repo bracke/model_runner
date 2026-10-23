@@ -2142,177 +2142,188 @@ package body Tests.Image_Cases is
    --  the wrong pixels.
    procedure Shifted_Taps_On_The_Device_Are_The_Plain_Sum (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
-      package P renames Model_Runner.Platform.Device.Products;
-      package Device renames Model_Runner.Backend.Device;
-      use type Interfaces.Unsigned_32;
-      use type B.Byte_Count;
-      Outs  : constant := 64;
-      Ins   : constant := 64;
-      Wide  : constant := 20;
-      Band  : constant := 6;
-      Count : constant := Band * Wide - 2;
-      Tap_Bytes : constant := Outs * Ins * 2;
-      Padded : N.Real_Array (0 .. (Band + 2) * Wide * Ins - 1);
-      --  The band as a normed tap product reads it: each pixel by the root
-      --  of its mean square, times the gain, through the SiLU.
-      Normed : N.Real_Array (Padded'Range);
-      Gains  : N.Real_Array (0 .. Ins - 1);
-      Owned  : B.Byte_Array_Access;
-      Kept_W : N.Real_Array (0 .. 9 * Outs * Ins - 1);
-      Taps   : array (0 .. 8) of Model_Runner.Tensors.View;
-      Stack  : Model_Runner.Tensors.View;
-      Status : E.Error_Info;
-      Seed   : Natural := 5;
-      Ready  : Boolean;
-      Tiled_Before : Natural;
-      Worst, Largest : Long_Float := 0.0;
 
-      function Bits is new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, Float);
-      function Word is new Ada.Unchecked_Conversion (Float, Interfaces.Unsigned_32);
-   begin
-      Device.Open (Ready);
-      if not Ready then
-         return;
-      end if;
-      for Value of Padded loop
-         Seed := (Seed * 1_103 + 12_345) mod 65_521;
-         Value := N.Real (Seed mod 401 - 200) / 200.0;
-      end loop;
-      for Value of Gains loop
-         Seed := (Seed * 1_103 + 12_345) mod 65_521;
-         Value := N.Real (Seed mod 401) / 200.0 + 0.25;
-      end loop;
-      for Pixel in 0 .. Padded'Length / Ins - 1 loop
-         declare
-            Squares : Long_Float := 0.0;
-            Scale   : Long_Float;
-         begin
-            for Channel in 0 .. Ins - 1 loop
-               Squares := Squares + Long_Float (Padded (N.Element_Count (Pixel * Ins + Channel))) ** 2;
-            end loop;
-            Scale := 1.0 / Ada.Numerics.Long_Elementary_Functions.Sqrt (Squares / Long_Float (Ins) + 1.0E-12);
-            for Channel in 0 .. Ins - 1 loop
-               declare
-                  X : constant Long_Float :=
-                    Long_Float (Padded (N.Element_Count (Pixel * Ins + Channel))) * Scale
-                    * Long_Float (Gains (N.Element_Count (Channel)));
-               begin
-                  Normed (N.Element_Count (Pixel * Ins + Channel)) :=
-                    N.Real (X / (1.0 + Ada.Numerics.Long_Elementary_Functions.Exp (-X)));
-               end;
-            end loop;
-         end;
-      end loop;
-      --  The nine, and past them the gain a normed product reads: a
-      --  binary32 a column, two rows of a tap in BF16.
-      Assert (P.Gain_Rows (P.Values_BF16, Ins) = 2, "a BF16 tap's gain is not two of its rows");
-      B.Allocate (B.Byte_Count (9 * Tap_Bytes + Ins * 4), Owned);
-      declare
-         Past : N.Real_Array (Gains'Range)
-           with Import, Address => Owned (Owned'First + B.Byte_Count (9 * Tap_Bytes))'Address;
+      --  At rows the first tile divides, and at the taps' two heights: 288
+      --  on their tall tile, 160 on their short one.
+      type Heights is array (1 .. 3) of N.Element_Count;
+
+      procedure Check (Outs : N.Element_Count) is
+         package P renames Model_Runner.Platform.Device.Products;
+         package Device renames Model_Runner.Backend.Device;
+         use type Interfaces.Unsigned_32;
+         use type B.Byte_Count;
+         Ins   : constant := 64;
+         Wide  : constant := 20;
+         Band  : constant := 6;
+         Count : constant := Band * Wide - 2;
+         Tap_Bytes : constant N.Element_Count := Outs * Ins * 2;
+         Padded : N.Real_Array (0 .. (Band + 2) * Wide * Ins - 1);
+         --  The band as a normed tap product reads it: each pixel by the root
+         --  of its mean square, times the gain, through the SiLU.
+         Normed : N.Real_Array (Padded'Range);
+         Gains  : N.Real_Array (0 .. Ins - 1);
+         Owned  : B.Byte_Array_Access;
+         Kept_W : N.Real_Array (0 .. 9 * Outs * Ins - 1);
+         Taps   : array (0 .. 8) of Model_Runner.Tensors.View;
+         Stack  : Model_Runner.Tensors.View;
+         Status : E.Error_Info;
+         Seed   : Natural := 5;
+         Ready  : Boolean;
+         Tiled_Before : Natural;
+         Worst, Largest : Long_Float := 0.0;
+
+         function Bits is new Ada.Unchecked_Conversion (Interfaces.Unsigned_32, Float);
+         function Word is new Ada.Unchecked_Conversion (Float, Interfaces.Unsigned_32);
       begin
-         Past := Gains;
-      end;
-      for Index in Kept_W'Range loop
-         Seed := (Seed * 1_103 + 12_345) mod 65_521;
-         declare
-            High : constant Interfaces.Unsigned_32 :=
-              Interfaces.Shift_Right (Word (Float (Seed mod 401 - 200) / 4_000.0), 16);
-            At_Byte : constant B.Byte_Count := Owned'First + B.Byte_Count (Index) * 2;
-         begin
-            Kept_W (Index) := N.Real (Bits (Interfaces.Shift_Left (High, 16)));
-            Owned (At_Byte) := Interfaces.Unsigned_8 (High and 16#FF#);
-            Owned (At_Byte + 1) := Interfaces.Unsigned_8 (Interfaces.Shift_Right (High, 8));
-         end;
-      end loop;
-      for Tap in Taps'Range loop
-         Model_Runner.Tensors.Make
-           (G.Type_BF16, Outs, Ins, Owned, B.Byte_Count (Tap) * Tap_Bytes, Taps (Tap), Status);
-         Assert (E.Is_Ok (Status), "a tap's view was not made");
-      end loop;
-      Model_Runner.Tensors.Make (G.Type_BF16, 9 * Outs, Ins, Owned, 0, Stack, Status);
-      Assert (E.Is_Ok (Status), "the nine's view was not made");
-      for Arm in 1 .. 3 loop
-         declare
-            As_One : constant Boolean := Arm >= 2;
-            Normed_In : constant Boolean := Arm = 3;
-            function Read (At_Value : N.Element_Count) return N.Real
-            is (if Normed_In then Normed (At_Value) else Padded (At_Value));
-            Steps : P.Sequence;
-            Added : Boolean := True;
-            Sum   : Natural := 0;
-            Label : constant String :=
-              (case Arm is
-                 when 1 => "as nine products",
-                 when 2 => "as one product",
-                 when others => "as one product normed on the way in");
-         begin
-            Worst := 0.0;
-            Largest := 0.0;
-            P.Open_Sequence (Steps);
-            if As_One then
-               Assert (Device.Takes_Taps (Stack, Count), "the tile did not take the nine as one");
-               Device.Add_View_Taps (Steps, Stack, Wide * Ins, Added, Kept => True, Normed => Normed_In);
-            else
-               for Tap in Taps'Range loop
-                  exit when not Added;
-                  Device.Add_View_Product_At (Steps, Taps (Tap), ((Tap / 3) * Wide + Tap rem 3) * Ins, Added);
-                  if Added and then Tap > 0 then
-                     P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum, Kept => Tap = 8);
-                  end if;
-                  Sum := P.Length (Steps);
+         Device.Open (Ready);
+         if not Ready then
+            return;
+         end if;
+         for Value of Padded loop
+            Seed := (Seed * 1_103 + 12_345) mod 65_521;
+            Value := N.Real (Seed mod 401 - 200) / 200.0;
+         end loop;
+         for Value of Gains loop
+            Seed := (Seed * 1_103 + 12_345) mod 65_521;
+            Value := N.Real (Seed mod 401) / 200.0 + 0.25;
+         end loop;
+         for Pixel in 0 .. Padded'Length / Ins - 1 loop
+            declare
+               Squares : Long_Float := 0.0;
+               Scale   : Long_Float;
+            begin
+               for Channel in 0 .. Ins - 1 loop
+                  Squares := Squares + Long_Float (Padded (N.Element_Count (Pixel * Ins + Channel))) ** 2;
                end loop;
-            end if;
-            Assert (Added, "the taps were not taken " & Label);
-            Tiled_Before := P.Tiled_Products;
-            declare
-               Room_At : System.Address;
-               Ok      : Boolean;
-            begin
-               Device.Activation_Room (Padded'Length, Room_At, Ok);
-               Assert (Ok, "the device gave no room for the band");
-               declare
-                  Room : N.Real_Array (Padded'Range) with Import, Address => Room_At;
-               begin
-                  Room := Padded;
-                  Device.Run_Steps (Steps, Room, Count, System.Null_Address, Status, In_Place => True);
-               end;
+               Scale := 1.0 / Ada.Numerics.Long_Elementary_Functions.Sqrt (Squares / Long_Float (Ins) + 1.0E-12);
+               for Channel in 0 .. Ins - 1 loop
+                  declare
+                     X : constant Long_Float :=
+                       Long_Float (Padded (N.Element_Count (Pixel * Ins + Channel))) * Scale
+                       * Long_Float (Gains (N.Element_Count (Channel)));
+                  begin
+                     Normed (N.Element_Count (Pixel * Ins + Channel)) :=
+                       N.Real (X / (1.0 + Ada.Numerics.Long_Elementary_Functions.Exp (-X)));
+                  end;
+               end loop;
             end;
-            Assert (E.Is_Ok (Status), "the taps did not run " & Label & ": " & E.Error_Code'Image (Status.Code));
-            Assert (P.Tiled_Products > Tiled_Before, "the taps did not go to the tile " & Label);
-            Assert (Device.Kept_Answer /= System.Null_Address, "the taps' sum was not kept " & Label);
+         end loop;
+         --  The nine, and past them the gain a normed product reads: a
+         --  binary32 a column, two rows of a tap in BF16.
+         Assert (P.Gain_Rows (P.Values_BF16, Ins) = 2, "a BF16 tap's gain is not two of its rows");
+         B.Allocate (B.Byte_Count (9 * Tap_Bytes + Ins * 4), Owned);
+         declare
+            Past : N.Real_Array (Gains'Range)
+              with Import, Address => Owned (Owned'First + B.Byte_Count (9 * Tap_Bytes))'Address;
+         begin
+            Past := Gains;
+         end;
+         for Index in Kept_W'Range loop
+            Seed := (Seed * 1_103 + 12_345) mod 65_521;
             declare
-               Answers : N.Real_Array (0 .. Count * Outs - 1) with Import, Address => Device.Kept_Answer;
+               High : constant Interfaces.Unsigned_32 :=
+                 Interfaces.Shift_Right (Word (Float (Seed mod 401 - 200) / 4_000.0), 16);
+               At_Byte : constant B.Byte_Count := Owned'First + B.Byte_Count (Index) * 2;
             begin
-               for Position in N.Element_Count range 0 .. Count - 1 loop
-                  for Row in N.Element_Count range 0 .. Outs - 1 loop
-                     declare
-                        Wanted : Long_Float := 0.0;
-                     begin
-                        for Tap in N.Element_Count range 0 .. 8 loop
-                           for Column in N.Element_Count range 0 .. Ins - 1 loop
-                              Wanted := Wanted
-                                + Long_Float (Kept_W (Tap * Outs * Ins + Row * Ins + Column))
-                                  * Long_Float (Read ((Position + (Tap / 3) * Wide + Tap rem 3) * Ins + Column));
-                           end loop;
-                        end loop;
-                        Worst := Long_Float'Max (Worst, abs (Long_Float (Answers (Position * Outs + Row)) - Wanted));
-                        Largest := Long_Float'Max (Largest, abs Wanted);
-                     end;
+               Kept_W (Index) := N.Real (Bits (Interfaces.Shift_Left (High, 16)));
+               Owned (At_Byte) := Interfaces.Unsigned_8 (High and 16#FF#);
+               Owned (At_Byte + 1) := Interfaces.Unsigned_8 (Interfaces.Shift_Right (High, 8));
+            end;
+         end loop;
+         for Tap in Taps'Range loop
+            Model_Runner.Tensors.Make
+              (G.Type_BF16, Outs, Ins, Owned, B.Byte_Count (Tap) * B.Byte_Count (Tap_Bytes), Taps (Tap), Status);
+            Assert (E.Is_Ok (Status), "a tap's view was not made");
+         end loop;
+         Model_Runner.Tensors.Make (G.Type_BF16, 9 * Outs, Ins, Owned, 0, Stack, Status);
+         Assert (E.Is_Ok (Status), "the nine's view was not made");
+         for Arm in 1 .. 3 loop
+            declare
+               As_One : constant Boolean := Arm >= 2;
+               Normed_In : constant Boolean := Arm = 3;
+               function Read (At_Value : N.Element_Count) return N.Real
+               is (if Normed_In then Normed (At_Value) else Padded (At_Value));
+               Steps : P.Sequence;
+               Added : Boolean := True;
+               Sum   : Natural := 0;
+               Label : constant String :=
+                 (case Arm is
+                    when 1 => "as nine products",
+                    when 2 => "as one product",
+                    when others => "as one product normed on the way in")
+                 & " at" & Outs'Image & " rows";
+            begin
+               Worst := 0.0;
+               Largest := 0.0;
+               P.Open_Sequence (Steps);
+               if As_One then
+                  Assert (Device.Takes_Taps (Stack, Count), "the tile did not take the nine as one");
+                  Device.Add_View_Taps (Steps, Stack, Wide * Ins, Added, Kept => True, Normed => Normed_In);
+               else
+                  for Tap in Taps'Range loop
+                     exit when not Added;
+                     Device.Add_View_Product_At (Steps, Taps (Tap), ((Tap / 3) * Wide + Tap rem 3) * Ins, Added);
+                     if Added and then Tap > 0 then
+                        P.Add_Join (Steps, Added, From_Step => P.Length (Steps), Residual_Step => Sum, Kept => Tap = 8);
+                     end if;
+                     Sum := P.Length (Steps);
                   end loop;
-               end loop;
+               end if;
+               Assert (Added, "the taps were not taken " & Label);
+               Tiled_Before := P.Tiled_Products;
+               declare
+                  Room_At : System.Address;
+                  Ok      : Boolean;
+               begin
+                  Device.Activation_Room (Padded'Length, Room_At, Ok);
+                  Assert (Ok, "the device gave no room for the band");
+                  declare
+                     Room : N.Real_Array (Padded'Range) with Import, Address => Room_At;
+                  begin
+                     Room := Padded;
+                     Device.Run_Steps (Steps, Room, Count, System.Null_Address, Status, In_Place => True);
+                  end;
+               end;
+               Assert (E.Is_Ok (Status), "the taps did not run " & Label & ": " & E.Error_Code'Image (Status.Code));
+               Assert (P.Tiled_Products > Tiled_Before, "the taps did not go to the tile " & Label);
+               Assert (Device.Kept_Answer /= System.Null_Address, "the taps' sum was not kept " & Label);
+               declare
+                  Answers : N.Real_Array (0 .. Count * Outs - 1) with Import, Address => Device.Kept_Answer;
+               begin
+                  for Position in N.Element_Count range 0 .. Count - 1 loop
+                     for Row in N.Element_Count range 0 .. Outs - 1 loop
+                        declare
+                           Wanted : Long_Float := 0.0;
+                        begin
+                           for Tap in N.Element_Count range 0 .. 8 loop
+                              for Column in N.Element_Count range 0 .. Ins - 1 loop
+                                 Wanted := Wanted
+                                   + Long_Float (Kept_W (Tap * Outs * Ins + Row * Ins + Column))
+                                     * Long_Float (Read ((Position + (Tap / 3) * Wide + Tap rem 3) * Ins + Column));
+                              end loop;
+                           end loop;
+                           Worst := Long_Float'Max (Worst, abs (Long_Float (Answers (Position * Outs + Row)) - Wanted));
+                           Largest := Long_Float'Max (Largest, abs Wanted);
+                        end;
+                     end loop;
+                  end loop;
+               end;
+               Assert (Largest > 1.0E-2 and then Worst <= 5.0E-3 * Largest,
+                       "the taps' sum on the device " & Label & " differs from the plain sum by" & Worst'Image
+                       & " of" & Largest'Image);
             end;
-            Assert (Largest > 1.0E-2 and then Worst <= 5.0E-3 * Largest,
-                    "the taps' sum on the device " & Label & " differs from the plain sum by" & Worst'Image
-                    & " of" & Largest'Image);
-         end;
+         end loop;
+         for Tap of Taps loop
+            Device.Forget (Tap);
+         end loop;
+         Device.Forget (Stack);
+         B.Free (Owned);
+         Device.Close;
+      end Check;
+   begin
+      for Outs of Heights'[64, 288, 160] loop
+         Check (Outs);
       end loop;
-      for Tap of Taps loop
-         Device.Forget (Tap);
-      end loop;
-      Device.Forget (Stack);
-      B.Free (Owned);
-      Device.Close;
    end Shifted_Taps_On_The_Device_Are_The_Plain_Sum;
 
    --  A step with the prompt's rows kept from an earlier one is the plain
