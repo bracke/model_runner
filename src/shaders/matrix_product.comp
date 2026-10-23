@@ -223,8 +223,17 @@ float gaussian_tanh(float v) {
 //  are never stored.
 #ifdef LISTED
 const uint TILE_R = 64u;
-#elif !defined(TAP_ROWS)
+#elif !defined(TAP_ROWS) && !defined(WIDER)
 const uint TILE_R = 64u;
+#elif defined(WIDER)
+//  The wider tile ninety-six: its two hundred and fifty-six vectors read
+//  a third less often for its rows, at twelve accumulators a subgroup.
+//  Prompts of 500 and 4,500 tokens, sixty-four rows against ninety-six:
+//  gemma-3-4b 631 / 658 and 595 / 620 tokens a second, qwen3-8b 308 /
+//  325 and 291 / 288; Qwen-Image's denoiser block at 1024 459 / 449 ms.
+//  A hundred and twenty-eight is past what a workgroup's shared memory
+//  holds. The engine's Wider_Rows says the same.
+const uint TILE_R = 96u;
 #else
 //  And a 3x3's taps on a tile of their own height, TAP_ROWS: a third of
 //  the tile on a matrix of 160 rows -- a VAE's full-size level -- was

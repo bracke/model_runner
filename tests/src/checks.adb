@@ -6403,6 +6403,10 @@ package body Checks is
               Number_After (Shader, "const uint TILE_R = ");
             Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ", Skip => 1);
+            Wider_Rows_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_R = ", Skip => 2);
+            Wider_Rows_Asked : constant Natural :=
+              Number_After (Engine, "Wider_Rows : constant := ");
             Thin_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ");
             Wide_Said : constant Natural :=
@@ -6437,6 +6441,7 @@ package body Checks is
               or else Listed_Said = 0 or else Listed_Asked = 0
               or else Wide_Said = 0 or else Wide_Asked = 0
               or else Listed_Rows_Said = 0 or else Listed_Rows_Asked = 0
+              or else Wider_Rows_Said = 0 or else Wider_Rows_Asked = 0
             then
                Fail ("one of the matrix tile's numbers could not be "
                      & "read: the shader states TILE_R and TILE_V for each "
@@ -6449,6 +6454,7 @@ package body Checks is
               or else Listed_Said /= Listed_Asked
               or else Wide_Said /= Wide_Asked
               or else Listed_Rows_Said /= Listed_Rows_Asked
+              or else Wider_Rows_Said /= Wider_Rows_Asked
             then
                Fail ("src/shaders/matrix_product.comp answers a tile of"
                      & Natural'Image (Rows_Said) & " rows by"
@@ -6456,13 +6462,15 @@ package body Checks is
                      & Natural'Image (Thin_Said) & " under NARROW, or"
                      & Natural'Image (Listed_Rows_Said) & " by"
                      & Natural'Image (Listed_Said) & " under LISTED or"
-                     & Natural'Image (Wide_Said) & " with LISTED_WIDE, and "
+                     & Natural'Image (Wide_Said) & " with LISTED_WIDE, or"
+                     & Natural'Image (Wider_Rows_Said) & " rows under WIDER, and "
                      & "the engine dispatches for" & Natural'Image (Rows_Asked)
                      & " by" & Natural'Image (Vecs_Asked) & " or"
                      & Natural'Image (Thin_Asked) & " or"
                      & Natural'Image (Listed_Rows_Asked) & " by"
                      & Natural'Image (Listed_Asked) & " or"
-                     & Natural'Image (Wide_Asked)
+                     & Natural'Image (Wide_Asked) & " or"
+                     & Natural'Image (Wider_Rows_Asked) & " rows"
                      & "; whatever a workgroup does not reach is left "
                      & "uncomputed, which is noise and not an error");
             end if;
@@ -6493,6 +6501,7 @@ package body Checks is
             --  of thirty-two.
             if Rows_Said mod 32 /= 0 or else Step_Said /= 32
               or else Listed_Rows_Said mod 32 /= 0
+              or else Wider_Rows_Said mod 32 /= 0
             then
                Fail ("src/shaders/matrix_product.comp states TILE_R"
                      & Natural'Image (Rows_Said) & " and"

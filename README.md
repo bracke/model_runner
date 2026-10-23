@@ -892,9 +892,9 @@ model_runner image --prompt "make the apple green" --ref-image apple.png --out g
 
 Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
-Radeon 780M a 1024 Turbo picture takes 2 min 14-16 s (steps of 15 s, the
+Radeon 780M a 1024 Turbo picture takes 2 min 14-21 s (steps of 15 s, the
 first 17-18 s with the weights' upload beside it, the decoder about 5.2 s)
-and a 512 picture in forty steps 2 min 19 s (steps of 3.1-3.3 s)
+and a 512 picture in forty steps 2 min 18 s (steps of 3.2 s)
 -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1
 s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
 image).
@@ -7695,8 +7695,15 @@ every change in this section is actually judged on:
 | --- | ---: | ---: |
 | model_runner, processor | **432.4 t/s** | 39.9 t/s |
 | llama.cpp, processor | 286.2 t/s | 39.6 t/s |
-| model_runner, device | **1779.8 t/s** | **58.6 t/s** |
+| model_runner, device | **2022.7 t/s** | **58.6 t/s** |
 | llama.cpp, device | 1757.4 t/s | 56.0 t/s |
+
+The device's prompt row read 1779.8 until 2026-10-23, when the wider matrix
+tile -- the one a batch past 128 positions takes -- became ninety-six rows
+tall rather than sixty-four: 0.702 s for the 1419 tokens, median of three,
+against 0.770 for the tile before it alternated beside it in the same
+sitting. The rows of 110 tokens never reach that tile, and the processor's
+and llama.cpp's do not run it.
 
 **The processor's rows are now taken the way `run` takes them, in the
 eight-row layout, and its prompts are ahead.** `run` on the processor

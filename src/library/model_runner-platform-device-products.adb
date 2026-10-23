@@ -245,6 +245,9 @@ package body Model_Runner.Platform.Device.Products is
    --  tiles of rows read them, so the rows past a matrix's end are what a
    --  height that does not divide it costs.
    Tap_Short_Rows : constant := 32;
+
+   --  And the wider tile's (matrix_product.comp's WIDER).
+   Wider_Rows : constant := 96;
    Tap_Tall_Rows  : constant := 96;
    Tile_Vectors : constant := 128;
 
@@ -8393,6 +8396,9 @@ package body Model_Runner.Platform.Device.Products is
          function Height (Pipeline : Address) return Natural
          is (if Pipeline = Item.Tap_Short_Line then Tap_Short_Rows
              elsif Pipeline = Item.Tap_Tall_Line then Tap_Tall_Rows
+             elsif Pipeline = Item.Wider_Line or else Pipeline = Item.Wider_More_Line
+               or else Pipeline = Item.Wider_Low_Line
+             then Wider_Rows
              else Tile_Rows);
 
          procedure Run_Tiles
