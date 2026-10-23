@@ -133,6 +133,14 @@ package Model_Runner.CLI.Project_Commands is
    --  @return True when it is.
    function Is_Project_Command (Word : String) return Boolean;
 
+   --  Whether a project command runs the session's model: /work does, and
+   --  waits for its weights' first reading; the rest are the project's
+   --  records and its tree, and do not.
+   --
+   --  @param Word The word as typed, slash included.
+   --  @return True when it does.
+   function Runs_Model (Word : String) return Boolean;
+
    --  Every project command's name, a space before and after each: what
    --  completion offers, from the one table the commands are run from.
    --

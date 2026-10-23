@@ -17891,6 +17891,13 @@ package body Tests.Framework_Cases is
                        and then not Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/init")
                        and then not Model_Runner.CLI.Project_Commands.Runs_Mid_Message ("/nonsense"),
                        "a command ran mid-message against its table, or one that starts a run did");
+               --  And which wait for the model's first reading: /work alone,
+               --  so /init on a cold model is not a model's upload late.
+               Assert (Model_Runner.CLI.Project_Commands.Runs_Model ("/work")
+                       and then not Model_Runner.CLI.Project_Commands.Runs_Model ("/init")
+                       and then not Model_Runner.CLI.Project_Commands.Runs_Model ("/task")
+                       and then not Model_Runner.CLI.Project_Commands.Runs_Model ("/nonsense"),
+                       "a project command waits for the model's reading against its table");
                Assert (Ada.Strings.Fixed.Index (Text, "more than one matches: TASK-") > 0,
                        "an ambiguous work selector off a terminal did not fail with its matches");
                Assert (Ada.Strings.Fixed.Index (Text, """matches"": ""TASK-") > 0,

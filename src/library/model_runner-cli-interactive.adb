@@ -563,6 +563,34 @@ package body Model_Runner.CLI.Interactive is
       Turn_Taken : Boolean := False;
       Turns_Asked : Natural := 0;
 
+      --  The weights read once while the first line is typed: a token run
+      --  through a session that holds nothing, which uploads what the
+      --  device keeps and brings into memory what the processor reads,
+      --  and the session given back empty. ThinkingCap's first prompt
+      --  carried eleven gigabytes of uploads otherwise. What uses the
+      --  session waits for it -- a turn, a command other than the project's
+      --  own, /work -- and finds it done after the first; the project's
+      --  other commands do not: /init waited behind a cold model's reading,
+      --  past half a minute where the drive was slow.
+      protected Warming is
+         procedure Finish;
+         entry Settled;
+      private
+         Done : Boolean := False;
+      end Warming;
+
+      protected body Warming is
+         procedure Finish is
+         begin
+            Done := True;
+         end Finish;
+
+         entry Settled when Done is
+         begin
+            null;
+         end Settled;
+      end Warming;
+
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
          Asked : constant Parsed_Command := Parse (Line);
@@ -572,6 +600,12 @@ package body Model_Runner.CLI.Interactive is
       begin
          if Asked.Kind = Not_A_Command then
             return False;
+         end if;
+
+         if not Model_Runner.CLI.Project_Commands.Is_Project_Command (First)
+           or else Model_Runner.CLI.Project_Commands.Runs_Model (First)
+         then
+            Warming.Settled;
          end if;
 
          --  The project's own commands, between turns.
@@ -1407,6 +1441,7 @@ package body Model_Runner.CLI.Interactive is
          if Pending (Typing) = "" then
             return;
          end if;
+         Warming.Settled;
 
          declare
             Prompt : constant String := Pending (Typing);
@@ -1444,31 +1479,6 @@ package body Model_Runner.CLI.Interactive is
             end if;
          end;
       end Submit;
-
-      --  The weights read once while the first line is typed: a token run
-      --  through a session that holds nothing, which uploads what the
-      --  device keeps and brings into memory what the processor reads,
-      --  and the session given back empty. ThinkingCap's first prompt
-      --  carried eleven gigabytes of uploads otherwise. The first line
-      --  waits for it, and every line after finds it done.
-      protected Warming is
-         procedure Finish;
-         entry Settled;
-      private
-         Done : Boolean := False;
-      end Warming;
-
-      protected body Warming is
-         procedure Finish is
-         begin
-            Done := True;
-         end Finish;
-
-         entry Settled when Done is
-         begin
-            null;
-         end Settled;
-      end Warming;
 
       Toucher : Toucher_Guard;
 
@@ -1726,10 +1736,6 @@ package body Model_Runner.CLI.Interactive is
                   Model_Runner.Platform.Signals.Waiting.Stop_Wait (Wait_Held);
                   exit Read_Loop;
             end;
-
-            --  The weights' first reading, done by now unless this is the
-            --  first line and it came quickly.
-            Warming.Settled;
 
             --  A line longer than the buffer arrives in pieces. Joining them
             --  would be the same turn; treating each as a line would put line

@@ -2516,6 +2516,9 @@ package body Model_Runner.CLI.Project_Commands is
       return To_String (Result);
    end Command_Names;
 
+   function Runs_Model (Word : String) return Boolean
+   is (for some Known of Commands => Known.Name.all = Word and then Known.Route = Work_Route);
+
    function Runs_Mid_Message (Word : String) return Boolean
    is (for some Known of Commands => Known.Name.all = Word and then Known.Mid_Message);
 
