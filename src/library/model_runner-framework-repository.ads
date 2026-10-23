@@ -320,6 +320,16 @@ package Model_Runner.Framework.Repository is
    --  @return The graph as the tree is now.
    function Brought_Up (Project_Directory : String; Kept : Graph) return Graph;
 
+   --  Whether a graph is the tree as it is now: what Brought_Up would find
+   --  to read again, nothing -- asked without copying the graph, the most
+   --  of what bringing it up costs when nothing changed. A file changed in
+   --  the last two seconds is taken as changed.
+   --
+   --  @param Project_Directory The tree.
+   --  @param Kept The graph handed over.
+   --  @return True when nothing was added, changed or removed since.
+   function Is_Current (Project_Directory : String; Kept : Graph) return Boolean;
+
    --  The project's graph as it is now: the kept one brought up to date,
    --  not kept -- for a reader that only reads the store.
    --

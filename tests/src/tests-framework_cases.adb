@@ -19701,6 +19701,32 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Word_Index_Follows_The_Tree;
 
+   --  A graph is checked against its tree, not taken on its maker's word:
+   --  current while nothing is added, changed or removed, and not once a
+   --  file is.
+   procedure Graphs_Are_Checked_Current
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Root  : constant String := Fresh ("graph-current");
+      Graph : Rp.Graph;
+   begin
+      Retrieval_Files (Root);
+      --  Older than a change of the same moment could still follow.
+      delay 2.1;
+      Graph := Rp.Scan (Root, Rp.Default_Roots);
+      Assert (Rp.Is_Current (Root, Graph), "a graph of a tree untouched since was not current");
+      Put_File (Root & "/src/wallaby.adb", "procedure Wallaby is" & LF & "begin" & LF & "   null;" & LF
+                & "end Wallaby;" & LF);
+      Assert (not Rp.Is_Current (Root, Graph), "a graph was current with a file added since");
+      Dirs.Delete_File (Root & "/src/wallaby.adb");
+      Put_File (Root & "/docs/notes.txt", "Changed since." & LF);
+      Assert (not Rp.Is_Current (Root, Graph), "a graph was current with a file changed since");
+      Graph := Rp.Brought_Up (Root, Graph);
+      Dirs.Delete_File (Root & "/docs/notes.txt");
+      Assert (not Rp.Is_Current (Root, Graph), "a graph was current with a file removed since");
+   end Graphs_Are_Checked_Current;
+
    --  The words of a query in a row lift a file its counts ranked below
    --  the first Most: every file the bonus could lift among them is read,
    --  not only the first Most.
@@ -20511,6 +20537,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Word_Index_Follows_The_Tree'Access,
          "the index of the files' words follows the tree and ranks as one made anew");
+      Register_Routine
+        (T, Graphs_Are_Checked_Current'Access,
+         "a graph is checked against its tree, current only while nothing changed since");
       Register_Routine
         (T, Phrase_Lifts_Past_The_First'Access,
          "the words of a query in a row lift a file its counts ranked below the first");

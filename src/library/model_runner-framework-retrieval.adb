@@ -969,16 +969,18 @@ package body Model_Runner.Framework.Retrieval is
       Most     : Positive := 20;
       Near     : Name_Lists.Vector := Name_Lists.Empty_Vector;
       May_Read : Path_Check := null;
-      Records  : Boolean := True;
-      Fresh    : Boolean := False) return Hit_Lists.Vector
+      Records  : Boolean := True) return Hit_Lists.Vector
    is
       Tree : constant String :=
         (if Root /= "" then Root else Ada.Directories.Containing_Directory (Stores.Root (Store)));
    begin
-      --  The graph handed over brought up to the tree first: a file added,
-      --  changed or removed since it was made is searched as it is.
-      return Search_Current
-        (Store, (if Fresh then Graph else Rp.Brought_Up (Tree, Graph)), Tree, Query, Most, Near, May_Read, Records);
+      --  The graph handed over checked against the tree, and brought up to
+      --  it where it is not the tree: a file added, changed or removed since
+      --  it was made is searched as it is. Checked, not copied, where it is.
+      if Rp.Is_Current (Tree, Graph) then
+         return Search_Current (Store, Graph, Tree, Query, Most, Near, May_Read, Records);
+      end if;
+      return Search_Current (Store, Rp.Brought_Up (Tree, Graph), Tree, Query, Most, Near, May_Read, Records);
    end Search;
 
    ---------------------------------------------------------------------------
@@ -1170,14 +1172,16 @@ package body Model_Runner.Framework.Retrieval is
       Most_Lines : Positive;
       Found      : out Excerpt_Lists.Vector;
       Status     : out Model_Runner.Errors.Error_Info;
-      May_Read   : Path_Check := null;
-      Fresh      : Boolean := False)
+      May_Read   : Path_Check := null)
    is
+      Tree : constant String := (if Root = "" then "." else Root);
    begin
       --  A symbol in a file added since the graph was made is found too.
-      Declaration_Current
-        ((if Fresh then Graph else Rp.Brought_Up ((if Root = "" then "." else Root), Graph)), Root, Name, Most_Lines,
-         Found, Status, May_Read);
+      if Rp.Is_Current (Tree, Graph) then
+         Declaration_Current (Graph, Root, Name, Most_Lines, Found, Status, May_Read);
+      else
+         Declaration_Current (Rp.Brought_Up (Tree, Graph), Root, Name, Most_Lines, Found, Status, May_Read);
+      end if;
    end Declaration;
 
    ------------

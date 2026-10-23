@@ -1637,11 +1637,16 @@ package body Model_Runner.Framework.Repository is
    -- Refresh --
    -------------
 
-   function Refresh
+   --  Refresh, or with Check_Only only whether it would change anything:
+   --  then the graph given back is empty, and nothing of Kept is copied --
+   --  the copy, not the walk, was most of a refresh that found nothing.
+   function Refresh_Or_Check
      (Project_Directory : String;
       Kept              : Graph;
       Read_Again        : out Natural;
-      Within            : Roots := Default_Roots) return Graph
+      Within            : Roots;
+      Check_Only        : Boolean;
+      Unchanged         : out Boolean) return Graph
    is
       Result   : Graph;
 
@@ -1854,10 +1859,15 @@ package body Model_Runner.Framework.Repository is
             end if;
          end loop;
       end;
-      if Changed.Is_Empty and then Gone.Is_Empty then
+      Unchanged := Changed.Is_Empty and then Gone.Is_Empty;
+      if Check_Only then
+         return Empty : Graph;
+      elsif Unchanged then
          return Same : Graph := Kept do
             Same.Unread := Result.Unread;
             Same.Skipped := Result.Skipped;
+            Same.Within := Within;
+            Same.Within_Known := True;
          end return;
       end if;
 
@@ -2029,7 +2039,33 @@ package body Model_Runner.Framework.Repository is
       Result.Within := Within;
       Result.Within_Known := True;
       return Result;
+   end Refresh_Or_Check;
+
+   function Refresh
+     (Project_Directory : String;
+      Kept              : Graph;
+      Read_Again        : out Natural;
+      Within            : Roots := Default_Roots) return Graph
+   is
+      Unchanged : Boolean;
+   begin
+      return Refresh_Or_Check (Project_Directory, Kept, Read_Again, Within, False, Unchanged);
    end Refresh;
+
+   ----------------
+   -- Is_Current --
+   ----------------
+
+   function Is_Current (Project_Directory : String; Kept : Graph) return Boolean is
+      Read_Again : Natural;
+      Unchanged  : Boolean;
+      Ignored    : constant Graph :=
+        Refresh_Or_Check (Project_Directory, Kept, Read_Again,
+                          (if Kept.Within_Known then Kept.Within else Default_Roots), True, Unchanged);
+      pragma Unreferenced (Ignored);
+   begin
+      return Unchanged;
+   end Is_Current;
 
    ----------------
    -- Brought_Up --

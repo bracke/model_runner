@@ -99,9 +99,10 @@ package Model_Runner.Framework.Retrieval is
    --
    --  @param Store The store, for its records; its project's tree for
    --    text where Root is "".
-   --  @param Graph The repository's graph; brought up to the tree first
-   --    (Repository.Brought_Up), so a file added, changed or removed since
-   --    it was made is searched as it is now.
+   --  @param Graph The repository's graph; checked against the tree first
+   --    (Repository.Is_Current) and brought up to it where it is not, so a
+   --    file added, changed or removed since it was made is searched as it
+   --    is now, whoever made the graph and when.
    --  @param Root The tree text is read from.
    --  @param Query Names, paths, identifiers, words.
    --  @param Most How many hits at most.
@@ -110,9 +111,6 @@ package Model_Runner.Framework.Retrieval is
    --  @param May_Read Whether a path may be shown; null for every path.
    --  @param Records Whether records are searched: false for one who may
    --    not read the specifications.
-   --  @param Fresh Whether the caller made Graph from the tree just now
-   --    (Scan, Now, Brought_Up) in the same piece of work: then it is not
-   --    brought up again, a walk of the whole tree saved.
    --  @return The hits, best first.
    function Search
      (Store    : Stores.Store;
@@ -122,8 +120,7 @@ package Model_Runner.Framework.Retrieval is
       Most     : Positive := 20;
       Near     : Name_Lists.Vector := Name_Lists.Empty_Vector;
       May_Read : Path_Check := null;
-      Records  : Boolean := True;
-      Fresh    : Boolean := False) return Hit_Lists.Vector;
+      Records  : Boolean := True) return Hit_Lists.Vector;
 
    --  The words a query is taken as: each word lowered, and the parts of a
    --  dotted or underscored one; the same words a file's text is indexed
@@ -178,8 +175,6 @@ package Model_Runner.Framework.Retrieval is
    --  @param Status Framework_Not_Found where the name is no symbol's, or
    --    its file will not read.
    --  @param May_Read Whether a path may be shown; null for every path.
-   --  @param Fresh Whether the caller made Graph from the tree just now,
-   --    as for Search.
    procedure Declaration
      (Graph      : Repository.Graph;
       Root       : String;
@@ -187,8 +182,7 @@ package Model_Runner.Framework.Retrieval is
       Most_Lines : Positive;
       Found      : out Excerpt_Lists.Vector;
       Status     : out Model_Runner.Errors.Error_Info;
-      May_Read   : Path_Check := null;
-      Fresh      : Boolean := False);
+      May_Read   : Path_Check := null);
 
    --  The declaration holding a line of a file -- the body a use is in --
    --  or a run of lines around it where no declaration holds it.
