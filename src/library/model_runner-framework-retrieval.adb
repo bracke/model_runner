@@ -1,7 +1,9 @@
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Indefinite_Hashed_Sets;
+with Ada.Containers.Indefinite_Ordered_Sets;
 with Ada.Containers.Generic_Array_Sort;
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Ordered_Maps;
 with Ada.Directories;
 with Ada.Numerics.Elementary_Functions;
@@ -74,6 +76,33 @@ package body Model_Runner.Framework.Retrieval is
       end loop;
       return Result;
    end Wholes_Of;
+
+   --  The words a query of three or more says in small letters, as it
+   --  says them: words of a sentence, not names, where a name is written
+   --  otherwise -- "the context" is not the package Context.
+   function Plain_Words (Query : String) return Name_Sets.Set is
+      Result : Name_Sets.Set;
+      Said   : Natural := 0;
+      Start  : Natural := 0;
+   begin
+      for Index in Query'First .. Query'Last + 1 loop
+         if Index <= Query'Last and then Identifier_Char (Query (Index)) then
+            if Start = 0 then
+               Start := Index;
+            end if;
+         elsif Start > 0 then
+            Said := Said + 1;
+            if (for all Char of Query (Start .. Index - 1) => Char in 'a' .. 'z') then
+               Result.Include (Query (Start .. Index - 1));
+            end if;
+            Start := 0;
+         end if;
+      end loop;
+      if Said < 3 then
+         Result.Clear;
+      end if;
+      return Result;
+   end Plain_Words;
 
    --  The identifiers of a text and their parts, as an index takes them.
    procedure Each_Word
@@ -151,20 +180,197 @@ package body Model_Runner.Framework.Retrieval is
 
    type Posting_Array is array (Positive range <>) of Posting;
 
+   package Number_Lists is new Ada.Containers.Vectors (Positive, Positive);
+
    function Before (Left, Right : Posting) return Boolean
    is (Left.Term < Right.Term);
 
    procedure Sort is new Ada.Containers.Generic_Array_Sort (Positive, Posting, Posting_Array, Before);
 
+   --  What a comment just before a declaration says -- the declaration
+   --  on the line after it -- or a Python docstring just after one: its
+   --  words up to the first @param or @return, which name the
+   --  declaration's parts rather than what it does.
+   type Description is record
+      Describes : Positive := 1;
+      Words     : Name_Lists.Vector;
+   end record;
+
+   package Description_Lists is new Ada.Containers.Vectors (Positive, Description);
+
+   --  How a line of a language's source opens a comment: the length of
+   --  the mark; nought where the line is none; Natural'Last for a line
+   --  inside a C-like block comment opened on an earlier line, which has
+   --  no mark of its own.
+   function Comment_Mark (Trimmed, Language : String; In_Block : Boolean) return Natural is
+      function Opens (Mark : String) return Boolean
+      is (Trimmed'Length >= Mark'Length and then Trimmed (Trimmed'First .. Trimmed'First + Mark'Length - 1) = Mark);
+   begin
+      if Language in "Ada" | "GPR" then
+         return (if Opens ("--") then 2 else 0);
+      elsif Language in "Python" | "Shell" | "TOML" then
+         return (if Opens ("#") then 1 else 0);
+      elsif Language in "C" | "C++" | "Go" | "Rust" then
+         if Opens ("///") or else Opens ("//!") or else Opens ("/**") then
+            return 3;
+         elsif Opens ("//") or else Opens ("/*") or else Opens ("*/") then
+            return 2;
+         elsif In_Block and then Opens ("*") then
+            return 1;
+         elsif In_Block then
+            return Natural'Last;
+         end if;
+      end if;
+      return 0;
+   end Comment_Mark;
+
+   --  The descriptions of a file's declarations, as Description says them.
+   function Descriptions_Of (Text, Language : String) return Description_Lists.Vector is
+      Triple   : constant String := """""""";
+      Result   : Description_Lists.Vector;
+      Current  : Description;
+      Open     : Boolean := False;
+      Cut      : Boolean := False;
+      In_Block : Boolean := False;
+      In_Doc   : Boolean := False;
+      Doc_Of   : Positive := 1;
+      Quote    : String (1 .. 3) := Triple;
+      Previous : Unbounded_String;
+      Start    : Positive := Text'First;
+      Row      : Positive := 1;
+
+      procedure Take (Word : String; Line : Positive) is
+         pragma Unreferenced (Line);
+      begin
+         if not Says_Nothing (Word) and then not Current.Words.Contains (Word) then
+            Current.Words.Append (Word);
+         end if;
+      end Take;
+
+      procedure Said (Words : String) is
+         Plain : constant String := Ada.Strings.Fixed.Trim (Words, Ada.Strings.Both);
+      begin
+         if Plain'Length > 0 and then Plain (Plain'First) = '@' then
+            Cut := True;
+         elsif not Cut then
+            Each_Word (Words, Take'Access);
+         end if;
+      end Said;
+
+      procedure Reset is
+      begin
+         Current := (others => <>);
+         Open := False;
+         Cut := False;
+      end Reset;
+
+      procedure Close (Describes : Positive) is
+      begin
+         if not Current.Words.Is_Empty then
+            Current.Describes := Describes;
+            Result.Append (Current);
+         end if;
+         Reset;
+      end Close;
+   begin
+      for At_Char in Text'First .. Text'Last + 1 loop
+         if At_Char > Text'Last or else Text (At_Char) = ASCII.LF then
+            declare
+               Blank   : constant Ada.Strings.Maps.Character_Set :=
+                 Ada.Strings.Maps.To_Set (" " & ASCII.HT & ASCII.CR);
+               Trimmed : constant String := Ada.Strings.Fixed.Trim (Text (Start .. At_Char - 1), Blank, Blank);
+               Mark    : constant Natural := Comment_Mark (Trimmed, Language, In_Block);
+               Before  : constant String := To_String (Previous);
+            begin
+               if In_Doc then
+                  if Has (Trimmed, Quote) then
+                     Said (Trimmed (Trimmed'First .. Ada.Strings.Fixed.Index (Trimmed, Quote) - 1));
+                     In_Doc := False;
+                     Close (Doc_Of);
+                  else
+                     Said (Trimmed);
+                  end if;
+               elsif Language = "Python" and then Trimmed'Length >= 3
+                 and then (Trimmed (Trimmed'First .. Trimmed'First + 2) = Triple
+                           or else Trimmed (Trimmed'First .. Trimmed'First + 2) = "'''")
+                 and then (Has (Before, "def ") or else Has (Before, "class "))
+               then
+                  --  A docstring: what the def or class on the line before is.
+                  Reset;
+                  Doc_Of := Row - 1;
+                  Quote := Trimmed (Trimmed'First .. Trimmed'First + 2);
+                  declare
+                     Rest : constant String := Trimmed (Trimmed'First + 3 .. Trimmed'Last);
+                  begin
+                     if Has (Rest, Quote) then
+                        Said (Rest (Rest'First .. Ada.Strings.Fixed.Index (Rest, Quote) - 1));
+                        Close (Doc_Of);
+                     else
+                        Said (Rest);
+                        In_Doc := True;
+                     end if;
+                  end;
+               elsif Mark > 0 then
+                  Open := True;
+                  if Mark = Natural'Last then
+                     Said (Trimmed);
+                  else
+                     Said (Trimmed (Trimmed'First + Mark .. Trimmed'Last));
+                  end if;
+                  if Language in "C" | "C++" | "Go" | "Rust" then
+                     if Trimmed'Length >= 2 and then Trimmed (Trimmed'First .. Trimmed'First + 1) = "/*" then
+                        In_Block := True;
+                     end if;
+                     if Has (Trimmed, "*/") then
+                        In_Block := False;
+                     end if;
+                  end if;
+               elsif Open then
+                  --  The line after a comment: what it describes, where
+                  --  anything is there; a blank line describes nothing.
+                  if Trimmed'Length > 0 then
+                     Close (Row);
+                  else
+                     Reset;
+                  end if;
+               end if;
+               Previous := To_Unbounded_String (Trimmed);
+            end;
+            Row := Row + 1;
+            Start := At_Char + 1;
+         end if;
+      end loop;
+      return Result;
+   end Descriptions_Of;
+
+   --  Whether a word of a query and one of a description are the same
+   --  word said two ways: the same, or one beginning the other where the
+   --  shorter has four letters or more -- unit and units, depend and
+   --  dependents, edit and edited.
+   function Alike (Term, Word : String) return Boolean
+   is (Term = Word
+       or else (Natural'Min (Term'Length, Word'Length) >= 4
+                and then (if Term'Length < Word'Length
+                          then Word (Word'First .. Word'First + Term'Length - 1) = Term
+                          else Term (Term'First .. Term'First + Word'Length - 1) = Word)));
+
    --  One file's words, sorted by term, held in the entry itself so that
    --  replacing or deleting the entry frees them; the print the graph gave
    --  when they were read; and the file's number in the lists of the files
-   --  each term is in.
-   type File_Words (Count : Natural) is record
-      Print : Unbounded_String;
-      Doc   : Positive := 1;
-      Words : Posting_Array (1 .. Count);
+   --  each term is in; and what its declarations' comments say: each
+   --  description's line and how many words it has, by its number, and
+   --  its words as postings sorted by term, a posting's count the number
+   --  of the description holding it, its line the line described.
+   type File_Words (Count, Said_Count : Natural) is record
+      Print   : Unbounded_String;
+      Doc     : Positive := 1;
+      Lengths : Number_Lists.Vector;
+      Words   : Posting_Array (1 .. Count);
+      Said    : Posting_Array (1 .. Said_Count);
    end record;
+
+   --  The dictionary's words in order, for the words a word begins.
+   package Word_Sets is new Ada.Containers.Indefinite_Ordered_Sets (String);
 
    package Term_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Positive, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
@@ -172,7 +378,6 @@ package body Model_Runner.Framework.Retrieval is
    package Word_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => File_Words, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
-   package Number_Lists is new Ada.Containers.Vectors (Positive, Positive);
    package Doc_List_Vectors is new Ada.Containers.Vectors (Positive, Number_Lists.Vector, Number_Lists."=");
 
    --  The index, held under Lock. Each term's number, and the files it is
@@ -184,6 +389,7 @@ package body Model_Runner.Framework.Retrieval is
    --  long a session edits them. A live number is never renumbered, so no
    --  posting names a term it did not.
    Dictionary : Term_Maps.Map;
+   Spelled    : Word_Sets.Set;
    Term_Names : Name_Lists.Vector;
    Term_Docs  : Doc_List_Vectors.Vector;
    Free_Terms : Number_Lists.Vector;
@@ -210,6 +416,16 @@ package body Model_Runner.Framework.Retrieval is
          Held := False;
       end Release;
    end Lock;
+
+   --  What a declaration's description says of a query: its points, and
+   --  how many of the query's words it holds.
+   type Said_Of is record
+      Score : Natural := 0;
+      Held  : Natural := 0;
+   end record;
+
+   package Said_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Said_Of, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
    function Key_Of (Root, Path : String) return String
    is (Root & ASCII.NUL & Path);
@@ -254,6 +470,7 @@ package body Model_Runner.Framework.Retrieval is
       end if;
       if Docs.Is_Empty then
          Dictionary.Delete (Term_Names (Term));
+         Spelled.Delete (Term_Names (Term));
          Term_Names.Replace_Element (Term, "");
          Free_Terms.Append (Term);
       end if;
@@ -274,7 +491,11 @@ package body Model_Runner.Framework.Retrieval is
 
    --  A file's counted words into the index, in place of what it held of
    --  the file before. Called with Lock held.
-   procedure Install (Key, Print : String; Counted : Count_Maps.Map) is
+   procedure Install
+     (Key, Print : String;
+      Counted    : Count_Maps.Map;
+      Described  : Description_Lists.Vector)
+   is
       Doc   : Positive;
       Words : Posting_Array (1 .. Natural (Counted.Length));
       At_Word : Natural := 0;
@@ -295,6 +516,7 @@ package body Model_Runner.Framework.Retrieval is
             Term := Term_Names.Last_Index;
          end if;
          Dictionary.Insert (Word, Term);
+         Spelled.Insert (Word);
          return Term;
       end Term_Of;
    begin
@@ -322,7 +544,32 @@ package body Model_Runner.Framework.Retrieval is
          end;
       end loop;
       Sort (Words);
-      Index.Include (Key, (Count => Words'Length, Print => To_Unbounded_String (Print), Doc => Doc, Words => Words));
+      declare
+         Said_Count : Natural := 0;
+      begin
+         for One of Described loop
+            Said_Count := Said_Count + Natural (One.Words.Length);
+         end loop;
+         declare
+            Said    : Posting_Array (1 .. Said_Count);
+            Lengths : Number_Lists.Vector;
+            At_Said : Natural := 0;
+         begin
+            for At_Block in 1 .. Natural (Described.Length) loop
+               Lengths.Append (Natural (Described (At_Block).Words.Length));
+               for Word of Described (At_Block).Words loop
+                  --  Every word a comment says is a word of its file.
+                  At_Said := At_Said + 1;
+                  Said (At_Said) :=
+                    (Term => Dictionary.Element (Word), Count => At_Block, Line => Described (At_Block).Describes);
+               end loop;
+            end loop;
+            Sort (Said);
+            Index.Include
+              (Key, (Count => Words'Length, Said_Count => Said'Length, Print => To_Unbounded_String (Print),
+                     Doc => Doc, Lengths => Lengths, Words => Words, Said => Said));
+         end;
+      end;
    end Install;
 
    --  What a file holds of a term: its posting, or a count of nought.
@@ -509,12 +756,15 @@ package body Model_Runner.Framework.Retrieval is
             --  its path before it is opened.
             Read_In (Root, Path, Text, Status, Most => Indexed_Most);
             declare
-               Counted : constant Count_Maps.Map :=
+               Counted   : constant Count_Maps.Map :=
                  (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else Count_Maps.Empty_Map);
+               Described : constant Description_Lists.Vector :=
+                 (if E.Is_Ok (Status) then Descriptions_Of (To_String (Text), Rp.Language_Of (Path))
+                  else Description_Lists.Empty_Vector);
             begin
                Lock.Seize;
                begin
-                  Install (Key_Of (Root, Path), Prints (At_Stale), Counted);
+                  Install (Key_Of (Root, Path), Prints (At_Stale), Counted, Described);
                   Read_Count := Read_Count + 1;
                   Lock.Release;
                exception
@@ -536,6 +786,7 @@ package body Model_Runner.Framework.Retrieval is
       Lock.Seize;
       Index.Clear;
       Dictionary.Clear;
+      Spelled.Clear;
       Term_Names.Clear;
       Term_Docs.Clear;
       Free_Terms.Clear;
@@ -651,6 +902,7 @@ package body Model_Runner.Framework.Retrieval is
       Records  : Boolean) return Hit_Lists.Vector
    is
       Wholes  : constant Name_Lists.Vector := Wholes_Of (Query);
+      Plain   : constant Name_Sets.Set := Plain_Words (Query);
       Terms   : constant Name_Lists.Vector := Terms_Of (Query);
       Asks_Tests : constant Boolean := (for some Term of Terms => Term in "test" | "tests");
       Found   : Hit_Lists.Vector;
@@ -667,6 +919,11 @@ package body Model_Runner.Framework.Retrieval is
 
       --  The test files, as the project's roots say them.
       Test_Files : Name_Sets.Set;
+
+      --  The tree's indexed files, and what each declaration's comment
+      --  says of the query, by path and line.
+      Files     : Natural := 0;
+      Described : Said_Maps.Map;
 
       function Closeness (Path : String) return Natural is
          Best : Natural := 0;
@@ -739,6 +996,165 @@ package body Model_Runner.Framework.Retrieval is
          end;
       end loop;
 
+      --  The index brought up to the tree, and the declarations' comments
+      --  weighed: for each query word a description holds -- the word, or
+      --  one Alike it -- ten times the log2 of 1 + descriptions over those
+      --  holding it; the sum twice, times the share of the query's words it
+      --  holds, times 2 over 1 + its length over the mean length; at most
+      --  350. One holding only one of two or more words is not counted. A
+      --  search visits the files that hold the words, as the text's does.
+      Bring_Up (Graph, Tree, Files);
+      if not Terms.Is_Empty then
+         Lock.Seize;
+         begin
+            declare
+               Prefix   : constant String := Tree & ASCII.NUL;
+               Count_Of : constant Positive := Natural (Terms.Length);
+               Spread   : array (1 .. Count_Of) of Natural := [others => 0];
+               Blocks   : Natural := 0;
+               Words    : Natural := 0;
+
+               --  A description's place, path and line, with its length and
+               --  which of the query's words it holds.
+               type Mark (Count : Positive) is record
+                  Length : Natural := 0;
+                  Holds  : String (1 .. Count);
+               end record;
+               type Place is record
+                  Doc, Line : Positive := 1;
+               end record;
+               function "<" (Left, Right : Place) return Boolean
+               is (Left.Doc < Right.Doc or else (Left.Doc = Right.Doc and then Left.Line < Right.Line));
+               package Mark_Maps is new Ada.Containers.Indefinite_Ordered_Maps
+                 (Key_Type => Place, Element_Type => Mark);
+               Marks : Mark_Maps.Map;
+
+               function In_Tree (Key : String) return Boolean
+               is (Key'Length > Prefix'Length and then Key (Key'First .. Key'First + Prefix'Length - 1) = Prefix);
+
+               function Path_Of (Doc : Positive) return String is
+                  Key : constant String := Doc_Keys (Doc);
+               begin
+                  return Key (Key'First + Prefix'Length .. Key'Last);
+               end Path_Of;
+            begin
+               for Position in Index.Iterate loop
+                  if In_Tree (Word_Maps.Key (Position)) then
+                     for Length of Index.Constant_Reference (Position).Lengths loop
+                        Blocks := Blocks + 1;
+                        Words := Words + Length;
+                     end loop;
+                  end if;
+               end loop;
+               for At_Term in 1 .. Count_Of loop
+                  declare
+                     Term : constant String := Terms (At_Term);
+                     Ids  : Number_Lists.Vector;
+                  begin
+                     --  The word itself, the words it begins, and those of
+                     --  four letters or more that begin it.
+                     if Term'Length >= 4 then
+                        declare
+                           Next : Word_Sets.Cursor := Spelled.Ceiling (Term);
+                        begin
+                           while Word_Sets.Has_Element (Next) and then Alike (Term, Word_Sets.Element (Next))
+                             and then Word_Sets.Element (Next)'Length >= Term'Length
+                           loop
+                              Ids.Append (Dictionary.Element (Word_Sets.Element (Next)));
+                              Word_Sets.Next (Next);
+                           end loop;
+                        end;
+                        for Length in 4 .. Term'Length - 1 loop
+                           if Dictionary.Contains (Term (Term'First .. Term'First + Length - 1)) then
+                              Ids.Append (Dictionary.Element (Term (Term'First .. Term'First + Length - 1)));
+                           end if;
+                        end loop;
+                     elsif Dictionary.Contains (Term) then
+                        Ids.Append (Dictionary.Element (Term));
+                     end if;
+                     for Id of Ids loop
+                        for Doc of Term_Docs (Id) loop
+                           declare
+                              Key  : constant String := Doc_Keys (Doc);
+                              Path : constant String := Key (Key'First + Prefix'Length .. Key'Last);
+                           begin
+                              if In_Tree (Key) and then Shown (Path) then
+                                 declare
+                                    Held : File_Words renames Index.Constant_Reference (Key).Element.all;
+                                    Low  : Positive := Held.Said'First;
+                                    High : Natural := Held.Said'Last;
+                                 begin
+                                    --  The first of the term's postings, then each.
+                                    while Low <= High loop
+                                       declare
+                                          Middle : constant Positive := (Low + High) / 2;
+                                       begin
+                                          if Held.Said (Middle).Term < Id then
+                                             Low := Middle + 1;
+                                          else
+                                             High := Middle - 1;
+                                          end if;
+                                       end;
+                                    end loop;
+                                    for At_Said in Low .. Held.Said'Last loop
+                                       exit when Held.Said (At_Said).Term /= Id;
+                                       declare
+                                          One   : constant Posting := Held.Said (At_Said);
+                                          Where : constant Place := (Doc => Doc, Line => One.Line);
+                                          At_Mark  : Mark_Maps.Cursor := Marks.Find (Where);
+                                          Inserted : Boolean;
+                                       begin
+                                          if not Mark_Maps.Has_Element (At_Mark) then
+                                             Marks.Insert
+                                               (Where, (Count => Count_Of, Length => Held.Lengths (One.Count),
+                                                        Holds => [others => '0']), At_Mark, Inserted);
+                                          end if;
+                                          if Marks.Reference (At_Mark).Holds (At_Term) = '0' then
+                                             Marks.Reference (At_Mark).Holds (At_Term) := '1';
+                                             Spread (At_Term) := Spread (At_Term) + 1;
+                                          end if;
+                                       end;
+                                    end loop;
+                                 end;
+                              end if;
+                           end;
+                        end loop;
+                     end loop;
+                  end;
+               end loop;
+               for Position in Marks.Iterate loop
+                  declare
+                     Got  : Mark renames Mark_Maps.Constant_Reference (Marks, Position).Element.all;
+                     Held : constant Natural := Ada.Strings.Fixed.Count (Got.Holds, "1");
+                     Mean : constant Float := Float (Words) / Float (Natural'Max (1, Blocks));
+                     Sum  : Float := 0.0;
+                  begin
+                     if Held >= 2 or else Count_Of = 1 then
+                        for At_Term in Got.Holds'Range loop
+                           if Got.Holds (At_Term) = '1' then
+                              Sum := Sum + 10.0 * Ada.Numerics.Elementary_Functions.Log
+                                                    (1.0 + Float (Blocks) / Float (Spread (At_Term)), 2.0);
+                           end if;
+                        end loop;
+                        Described.Include
+                          (Path_Of (Mark_Maps.Key (Position).Doc) & ASCII.NUL & Image (Mark_Maps.Key (Position).Line),
+                           (Score => Natural'Min
+                                       (350, Natural (Float'Floor
+                                                        (2.0 * Sum * Float (Held) / Float (Count_Of)
+                                                         * 2.0 / (1.0 + Float (Got.Length) / Mean)))),
+                            Held  => Held));
+                     end if;
+                  end;
+               end loop;
+            end;
+            Lock.Release;
+         exception
+            when others =>
+               Lock.Release;
+               raise;
+         end;
+      end if;
+
       --  Symbols.
       for Index_At in 1 .. Rp.Symbol_Count (Graph) loop
          declare
@@ -746,6 +1162,7 @@ package body Model_Runner.Framework.Retrieval is
             Path  : constant String := To_String (One.Path);
             Full  : constant String := Lower (To_String (One.Name));
             Short : constant String := Lower (Last_Part (To_String (One.Name)));
+            Spelt : constant String := Last_Part (To_String (One.Name));
             Parts : constant Name_Lists.Vector := Parts_Of (To_String (One.Name));
             Score : Natural := 0;
             Why   : Unbounded_String;
@@ -758,7 +1175,10 @@ package body Model_Runner.Framework.Retrieval is
             end Count;
          begin
             for Word of Wholes loop
-               if Full = Word then
+               if Plain.Contains (Word) and then Spelt /= Word then
+                  --  A word of a sentence: its name's parts count, as below.
+                  null;
+               elsif Full = Word then
                   Count (1000, "its full name");
                   Named := True;
                elsif Ends_With (Full, "." & Word) or else Ends_With (Full, "::" & Word) then
@@ -780,6 +1200,15 @@ package body Model_Runner.Framework.Retrieval is
                   Named := True;
                end if;
             end loop;
+            declare
+               Place : constant Said_Maps.Cursor := Described.Find (Path & ASCII.NUL & Image (One.Line));
+            begin
+               if Said_Maps.Has_Element (Place) and then Said_Maps.Element (Place).Score > 0 then
+                  Count (Said_Maps.Element (Place).Score,
+                         "its comment says " & Image (Said_Maps.Element (Place).Held) & " of the words");
+                  Named := True;
+               end if;
+            end;
             if Named and then Shown (Path) then
                for Term of Terms loop
                   if Has (Lower (Path), Term) then
@@ -948,7 +1377,6 @@ package body Model_Runner.Framework.Retrieval is
          type Term_Array is array (Positive range <>) of Natural;
          Ids    : Term_Array (1 .. Natural (Terms.Length)) := [others => 0];
          Spread : Term_Array (1 .. Natural (Terms.Length)) := [others => 0];
-         Files  : Natural := 0;
          Candidates : Hit_Lists.Vector;
 
          --  The files that may hold the query's words in a row: each word
@@ -959,7 +1387,6 @@ package body Model_Runner.Framework.Retrieval is
          Inner_Known : Boolean := False;
          May_Hold    : Name_Sets.Set;
       begin
-         Bring_Up (Graph, Tree, Files);
          Lock.Seize;
          begin
             for At_Term in Ids'Range loop

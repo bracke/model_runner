@@ -2,6 +2,7 @@ with Ada.Calendar;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Environment_Variables;
 with Ada.Text_IO;
 
 with Model_Runner.Errors;
@@ -292,6 +293,12 @@ package body Retrieval_Bench is
          Queries := Queries + 1;
          --  In thousandths, summed: the mean taken at the end.
          Reciprocals := Reciprocals + (if First = 0 then 0 else 1000 / First);
+         if Ada.Environment_Variables.Exists ("BENCH_TOP") then
+            for Index in 1 .. Natural'Min (6, Natural (Hits.Length)) loop
+               Ada.Text_IO.Put_Line ("   " & Image (Hits (Index).Score) & " " & To_String (Hits (Index).Name) & " | "
+                                     & To_String (Hits (Index).Why));
+            end loop;
+         end if;
          Ada.Text_IO.Put_Line
            ("search " & Image (Queries) & ": ranks" & To_String (Ranks) & "; first relevant "
             & (if First = 0 then "none" else Image (First)) & "; best " & To_String (Hits.First_Element.Name));
@@ -333,6 +340,99 @@ package body Retrieval_Bench is
              [R ("Model_Runner.Framework.Repository.Refresh"), R (Src & "repository.adb")]);
       Judge ("the context Budget leaves no room for the model's reply",
              [R ("Model_Runner.Framework.Context.Budget"), R (Src & "context.adb")]);
+      --  Tasks said without the name of what they are about, as a
+      --  developer new to the code says them: judged from the specs'
+      --  comments before they were searched, and tallied apart as well.
+      declare
+         Named_5 : constant Natural := Within_5;
+         Named_10 : constant Natural := Within_10;
+         Named_Reciprocals : constant Natural := Reciprocals;
+         Named_Judged : constant Natural := Judged_Named;
+         Named_Queries : constant Natural := Queries;
+         Rp_Name : constant String := "Model_Runner.Framework.Repository.";
+         Tc_Name : constant String := "Model_Runner.Framework.Traceability.";
+         Cx_Name : constant String := "Model_Runner.Framework.Context.";
+      begin
+         Judge ("a file that says a tool made it and it is not to be edited",
+                [R (Rp_Name & "Says_Generated"), R (Src & "repository.adb")]);
+         Judge ("what a file is for, from its place in the project",
+                [R (Rp_Name & "Role_Of"), R (Src & "repository.adb")]);
+         Judge ("a typed path that climbs out of the project is to be refused",
+                [R (Rp_Name & "Relative_Path"), R (Src & "repository.adb")]);
+         Judge ("whether a path is under a folder the roots name, or matches a pattern",
+                [R (Rp_Name & "Under_Roots"), R (Src & "repository.adb")]);
+         Judge ("a binary fixture replaced is a change a snapshot must see",
+                [R (Rp_Name & "Binary_Files"), R (Src & "repository.adb")]);
+         Judge ("the paths the walk could not read",
+                [R (Rp_Name & "Unread_Paths"), R (Src & "repository.adb")]);
+         Judge ("the units that depend on a unit",
+                [R (Rp_Name & "Dependents_Of"), R (Src & "repository.adb")]);
+         Judge ("narrow escalation tests only what is certainly affected",
+                [R (Tc_Name & "Select_Tests"), R (Src & "traceability.adb")]);
+         Judge ("the edges that touch a node",
+                [R (Tc_Name & "Touching"), R (Src & "traceability.adb")]);
+         Judge ("the model's room and reserve as the configuration plans them",
+                [R (Cx_Name & "Within_Configured"), R (Cx_Name & "Profile"), R (Src & "context.adb")]);
+         Judge ("why an item was left out of the context",
+                [R (Cx_Name & "Excluded_Why"), R (Src & "context.adb")]);
+         Judge ("whether every index was built from the repository as it is now",
+                [R ("Model_Runner.Framework.Indexes.Current"), R (Src & "indexes.adb")]);
+         Judge ("which adapter reads a language",
+                [R (Rp_Name & "Languages.Adapter_For"), R (Src & "repository-languages.adb")]);
+         Judge ("the fingerprint of the graph kept in the project state",
+                [R (Rp_Name & "Kept_Fingerprint"), R (Src & "repository.adb")]);
+         declare
+            Dev_5 : constant Natural := Within_5;
+            Dev_10 : constant Natural := Within_10;
+            Dev_Reciprocals : constant Natural := Reciprocals;
+            Dev_Judged : constant Natural := Judged_Named;
+            Dev_Queries : constant Natural := Queries;
+            Ix_Name : constant String := "Model_Runner.Framework.Indexes.";
+         begin
+            --  Held out: written with the ones above, before the weights
+            --  for descriptions were set, and not looked at while setting
+            --  them; said in other words than the comments say.
+            Judge ("the text given to the model",
+                   [R (Cx_Name & "Rendered"), R (Src & "context.adb")]);
+            Judge ("observations a context did not offer and why",
+                   [R (Cx_Name & "Knowledge_Left"), R (Src & "context.adb")]);
+            Judge ("was the context built with the graph or the textual fallback",
+                   [R (Cx_Name & "Semantic"), R (Src & "context.adb")]);
+            Judge ("keeping the same context twice stages nothing",
+                   [R (Cx_Name & "Keep"), R (Src & "context.adb")]);
+            Judge ("build every index from the state and the graph",
+                   [R (Ix_Name & "Build"), R (Src & "indexes.adb")]);
+            Judge ("choose the tests a change calls for",
+                   [R (Tc_Name & "Select_For"), R (Src & "traceability.adb")]);
+            Judge ("where a component's files are declared in the configuration",
+                   [R (Rp_Name & "Component_Roots"), R (Src & "repository.adb")]);
+            Judge ("whether a file belongs to a component by its roots",
+                   [R (Rp_Name & "In_Component"), R (Src & "repository.adb")]);
+            Judge ("how many things the walk could not read",
+                   [R (Rp_Name & "Unread_Count"), R (Src & "repository.adb")]);
+            Judge ("a question to the graph asked as a tool call",
+                   [R ("Model_Runner.Framework.Code_Queries.Answer"), R (Src & "code_queries.adb")]);
+            Ada.Text_IO.Put_Line
+              ("search held out: recall@5 " & Share (Within_5 - Dev_5, Judged_Named - Dev_Judged)
+               & ", recall@10 " & Share (Within_10 - Dev_10, Judged_Named - Dev_Judged) & ", MRR "
+               & Share (Reciprocals - Dev_Reciprocals, (Queries - Dev_Queries) * 1000) & " over "
+               & Image (Queries - Dev_Queries) & " queries");
+            Within_5 := Dev_5;
+            Within_10 := Dev_10;
+            Reciprocals := Dev_Reciprocals;
+            Judged_Named := Dev_Judged;
+            Queries := Dev_Queries;
+         end;
+         Ada.Text_IO.Put_Line
+           ("search named: recall@5 " & Share (Named_5, Named_Judged) & ", recall@10 "
+            & Share (Named_10, Named_Judged) & ", MRR " & Share (Named_Reciprocals, Named_Queries * 1000)
+            & " over " & Image (Named_Queries) & " queries");
+         Ada.Text_IO.Put_Line
+           ("search descriptions: recall@5 " & Share (Within_5 - Named_5, Judged_Named - Named_Judged)
+            & ", recall@10 " & Share (Within_10 - Named_10, Judged_Named - Named_Judged) & ", MRR "
+            & Share (Reciprocals - Named_Reciprocals, (Queries - Named_Queries) * 1000) & " over "
+            & Image (Queries - Named_Queries) & " queries");
+      end;
       Ada.Text_IO.Put_Line
         ("search all: recall@5 " & Share (Within_5, Judged_Named) & ", recall@10 "
          & Share (Within_10, Judged_Named) & ", MRR " & Share (Reciprocals, Queries * 1000) & " over "

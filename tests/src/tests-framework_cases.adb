@@ -19901,6 +19901,95 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Phrase_Lifts_Past_The_First;
 
+   --  A declaration is found by what its comment says, in each language's
+   --  way of saying it: the words before its @param counted, not those
+   --  after; one word alone of several not enough; a word of a sentence
+   --  typed small not taken for a name written otherwise, and the name
+   --  typed as it is written still a name.
+   procedure Declarations_Are_Found_By_What_They_Say
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+
+      function First (Query : String) return Rv.Hit is
+         Hits : constant Rv.Hit_Lists.Vector :=
+           Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", Query, 5, Records => False);
+      begin
+         Assert (not Hits.Is_Empty, "nothing was found for " & Query);
+         return Hits.First_Element;
+      end First;
+
+      function Said_By_Comment (Query, Name : String) return Boolean is
+         Hits : constant Rv.Hit_Lists.Vector :=
+           Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", Query, 20, Records => False);
+      begin
+         return (for some One of Hits => To_String (One.Name) = Name
+                   and then Ada.Strings.Fixed.Index (To_String (One.Why), "its comment says") > 0);
+      end Said_By_Comment;
+   begin
+      Task_Project (Store, "described");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/burrows.ads",
+                "package Burrows is" & LF & LF
+                & "   --  Counts the wombats sleeping in a burrow." & LF
+                & "   --" & LF
+                & "   --  @param Depth How deep" & LF
+                & "   --    the tunnel goes." & LF
+                & "   function Tally (Depth : Natural) return Natural;" & LF & LF
+                & "   --  The tunnel's length in metres." & LF
+                & "   function Length (Depth : Natural) return Natural;" & LF & LF
+                & "   --  A place to hide." & LF
+                & "   type Shelter is null record;" & LF & LF
+                & "   --  The shelter nearest a burrow, found by its depth." & LF
+                & "   function Find_Cover (Depth : Natural) return Shelter;" & LF & LF
+                & "end Burrows;" & LF);
+      Put_File (Fresh_Root (Store) & "/src/dig.py",
+                "import os" & LF & LF & "def scoop(amount):" & LF
+                & "    """"""Moves the loose earth out of a burrow.""""""" & LF
+                & "    return amount" & LF);
+      Put_File (Fresh_Root (Store) & "/src/pump.c",
+                "// Pumps the floodwater away from the nest." & LF
+                & "int drain(void) { return 0; }" & LF);
+
+      declare
+         Found : constant Rv.Hit := First ("how many wombats sleep in a burrow");
+      begin
+         Assert (To_String (Found.Name) = "Burrows.Tally"
+                 and then Ada.Strings.Fixed.Index (To_String (Found.Why), "its comment says") > 0,
+                 "a declaration was not found first by its comment: " & To_String (Found.Name) & " | "
+                 & To_String (Found.Why));
+      end;
+      Assert (not Said_By_Comment ("how deep the tunnel goes", "Burrows.Tally"),
+              "the words after @param were taken for what a declaration does");
+      Assert (not Said_By_Comment ("metres of wombats", "Burrows.Length"),
+              "one word of two found a declaration by its comment");
+      declare
+         Hits : constant Rv.Hit_Lists.Vector :=
+           Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", "the shelter nearest a burrow", 20,
+                      Records => False);
+         Cover, Kind : Natural := 0;
+      begin
+         for Index in 1 .. Natural (Hits.Length) loop
+            if To_String (Hits (Index).Name) = "Burrows.Find_Cover" and then Cover = 0 then
+               Cover := Index;
+            elsif To_String (Hits (Index).Name) = "Burrows.Shelter" and then Kind = 0 then
+               Kind := Index;
+            end if;
+         end loop;
+         Assert (Cover > 0 and then (Kind = 0 or else Cover < Kind),
+                 "a word of a sentence typed small was taken for a name written otherwise:" & Cover'Image
+                 & Kind'Image);
+      end;
+      Assert (To_String (First ("Shelter").Name) = "Burrows.Shelter",
+              "a name typed as it is written was not found by its name");
+      Assert (Ada.Strings.Fixed.Index (To_String (First ("moves loose earth out").Name), "scoop") > 0,
+              "a Python function was not found by its docstring");
+      Assert (Ada.Strings.Fixed.Index (To_String (First ("pumps floodwater away").Name), "drain") > 0,
+              "a C function was not found by the comment before it");
+      S.Close (Store);
+   end Declarations_Are_Found_By_What_They_Say;
+
    --  An excerpt is a declaration's lines, cut from its file as it is now,
    --  saying where it is from: each of an overloaded name's, a spec's
    --  before its body; an expression function's body found by its text;
@@ -20695,6 +20784,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Phrase_Lifts_Past_The_First'Access,
          "the words of a query in a row lift a file its counts ranked below the first");
+      Register_Routine
+        (T, Declarations_Are_Found_By_What_They_Say'Access,
+         "a declaration is found by what its comment says, not by its parameters' words");
       Register_Routine
         (T, Excerpts_Say_Where_They_Are_From'Access,
          "an excerpt is a declaration's lines as the file is now, and says where it is from");

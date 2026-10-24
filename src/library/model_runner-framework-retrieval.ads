@@ -17,7 +17,17 @@ with Model_Runner.Framework.Stores;
 --  A symbol: 1000 for its full name; 800 for a dotted or :: ending of it;
 --  400 for its last part; 150 for a last part a query word begins (three
 --  letters or more); 60 for each query word that is one of the parts of its
---  name (split at dots, :: and underscores). One of those it must have.
+--  name (split at dots, :: and underscores). In a query of three words or
+--  more, a word typed in small letters is a word of a sentence: where the
+--  name is written otherwise, it counts only as one of the name's parts.
+--  Then for what its comment says -- the comment just before it, or a
+--  Python docstring just after the line, up to its first @param or
+--  @return: for each query word the comment holds, or one beginning the
+--  other where the shorter has four letters or more, ten times the log2
+--  of 1 + the tree's comments over those holding it; the sum twice, times
+--  the share of the query's words it holds, times 2 over 1 + its length
+--  over the mean; at most 350, none where it holds one word of several.
+--  One of those it must have.
 --  Then 20 for each query word in its file's path, 15 for a declaration
 --  in an Ada spec, less 20 for a test file's where the query does not say
 --  test, and closeness to the units the work is about: 100 for one of
