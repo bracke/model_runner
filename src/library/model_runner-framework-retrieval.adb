@@ -1376,6 +1376,10 @@ package body Model_Runner.Framework.Retrieval is
       Records  : Boolean) return Hit_Lists.Vector
    is
       Wholes  : constant Name_Lists.Vector := Wholes_Of (Query);
+      --  The most words a query may have and a symbol's name still count
+      --  whole (see the symbols' points); chosen on the dev set of commit
+      --  subjects.
+      Name_Reach : constant := 4;
       Plain   : constant Name_Sets.Set := Plain_Words (Query);
       Terms   : constant Name_Lists.Vector := Terms_Of (Query);
       Asks_Tests : constant Boolean := (for some Term of Terms => Term in "test" | "tests");
@@ -1670,6 +1674,14 @@ package body Model_Runner.Framework.Retrieval is
                   Named := True;
                end if;
             end loop;
+            --  Its name's points as the share of the query its name is: a
+            --  name a query of four words or fewer says counts whole, one
+            --  word of a sentence of twenty a fifth -- a symbol named for
+            --  one word of a described change outranked every file holding
+            --  the rest of it.
+            if Natural (Wholes.Length) > Name_Reach then
+               Score := Score * Name_Reach / Natural (Wholes.Length);
+            end if;
             declare
                Place : constant Said_Maps.Cursor := Described.Find (Path & ASCII.NUL & Image (One.Line));
             begin
@@ -2026,7 +2038,14 @@ package body Model_Runner.Framework.Retrieval is
                   begin
                      Candidates.Append
                        (Hit'(Kind => Text_Hit, Name => Path, What => Null_Unbounded_String, Path => Path,
-                         Line => Got.Line, Score => Natural'Min (500, Natural (Float'Floor (Got.Score / 4.0))),
+                         Line => Got.Line,
+                         --  Past 400 drawn toward 500 rather than cut at it:
+                         --  a long query's words took many files to the cap,
+                         --  and those at it were ranked by nothing.
+                         Score => (if Got.Score / 4.0 > 400.0
+                                   then 400 + Natural (Float'Floor (100.0 * (Got.Score / 4.0 - 400.0)
+                                                                     / (Got.Score / 4.0 - 400.0 + 400.0)))
+                                   else Natural (Float'Floor (Got.Score / 4.0))),
                          Why => To_Unbounded_String (Image (Got.Held) & " of the words"),
                          Authority => To_Unbounded_String ("the file as it is")));
                   end;

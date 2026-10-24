@@ -1,0 +1,62 @@
+# Retrieval fresh held-out set: as retrieval-commits.tsv, from the 60 qualifying commits older than the dev set's.
+# Not looked at while tuning; scored once a change is made.
+503065f3	Repository scan finds references through an index of each file's words: 290 files 49 s -> 1.1 s, same graph	src/library/model_runner-framework-repository.adb
+78749e26	model_runner alone at a terminal chooses a model and opens one, and a model named first is run; usage, help and README say so	resources/messages/catalog.txt src/library/model_runner-cli-driver.adb tests/src/tests-cli_cases.adb
+c906dedb	A helper's unspent budget goes back to its parent when it ends	src/library/model_runner-framework-agents.adb
+f4b8167a	Session reads a line as soon as it is typed: no End_Of_File look-ahead at a terminal, and no wait on the descriptor	src/library/model_runner-cli-interactive.adb
+3c7f7d49	repo says what opening recovered; tests for shell recovery, JSON matches and multi-word reconfigure	src/library/model_runner-cli-repo.adb tests/src/tests-cli_cases.adb tests/src/tests-framework_cases.adb
+cb5f9d4b	composition decided once all templates are in; init writes files before state	src/library/model_runner-framework-configurations.adb src/library/model_runner-framework-templates.adb tests/src/tests-framework_cases.adb
+11def8df	unstarted helper undone; retried task abandons its earlier workspace	src/library/model_runner-framework-work.adb tests/src/tests-framework_cases.adb
+85bde69d	events consumed with their actions; marked journal finished before staging over it	src/library/model_runner-framework-orchestration.adb src/library/model_runner-framework-stores.adb tests/src/tests-framework_cases.adb
+e9f1d1da	git workspaces from the working copy; all-or-nothing integration, tree released after commit; automatic integration reported	src/library/model_runner-framework-work.adb src/library/model_runner-framework-workspaces.adb src/library/model_runner-framework-workspaces.ads tests/src/tests-framework_cases.adb
+5e25d9e5	rejected children done; readiness by agreed requirements; /accept ID; identifiers only; implemented when all tasks complete	src/library/model_runner-cli-project_commands.adb src/library/model_runner-framework-tasks.adb src/library/model_runner-framework-verification.adb tests/src/tests-framework_cases.adb
+2178f37d	coloured error labels; requirements judged after completion is kept; scoped evidence currency; templates verify every kind	resources/templates/alire.template resources/templates/aunit.template src/library/model_runner-framework-verification.adb src/library/model_runner-framework-work.adb src/library/model_runner-presentation.adb tests/src/tests-cli_cases.adb tests/src/tests-framework_cases.adb
+ec66b254	least privilege and implementation_present by kind; agent proposals' provenance; references with their certainty	resources/messages/catalog.txt resources/templates/standard-development.template src/library/model_runner-cli-repo.adb src/library/model_runner-framework-repository.adb src/library/model_runner-framework-work.adb tests/src/tests-cli_cases.adb tests/src/tests-framework_cases.adb
+324e8924	structured errors carry their named values as fields	src/library/model_runner-presentation.adb tests/src/tests-cli_cases.adb
+4ed4ce1c	consistency sees evidence-less completion, schema-breaking values and widening roles; bootstrap moves the project along	src/library/model_runner-cli-intents.ads src/library/model_runner-cli-project_commands.adb src/library/model_runner-framework-consistency.adb tests/src/tests-framework_cases.adb
+c9fcdadc	the selector redraws on a resize while idle; secret inputs are typed unseen	src/library/model_runner-cli-choosers.adb src/library/model_runner-cli-choosers.ads src/library/model_runner-cli-init.adb tests/src/tests-framework_cases.adb
+a0341c2e	read a memory file whole or not at all	src/library/model_runner-tools-builtin.adb tests/src/tests-tools_cases.adb
+532837dd	answer every picture failure with a status, and check PNG checksums	src/library/model_runner-images.adb src/library/model_runner-images.ads tests/src/tests-vision_cases.adb
+b5ec3746	refuse metadata an architecture has no use for, by name	src/library/model_runner-llama.adb tests/src/tests-inference_cases.adb tests/src/tiny_model.ads
+38688e87	load Mamba, Mamba2 and RWKV6 without a feed-forward; centre RWKV6's output	src/library/model_runner-llama.adb tests/src/reference_transformer.adb tests/src/tiny_model.adb
+18a980db	host differences, no device, and a gate that ends	.gitattributes .github/workflows/ci.yml src/library/model_runner-cli-execute.adb src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers.ads tests/src/checks.adb tests/src/conformance.adb tests/src/conformance.ads tests/src/speed_run.adb tests/src/tests-backend_cases.adb tests/src/tests-cli_cases.adb tests/src/tests-inference_cases.adb tests/src/tests_main.adb tests/src/tool_commands.adb tools/src/check_all.adb
+58a9fcd8	let a draft model's rounds follow what the rounds before kept	src/library/model_runner-cli-execute.adb src/library/model_runner-generation.adb src/library/model_runner-generation.ads tests/src/tests-inference_cases.adb
+2461233a	bundle a group of five, six or seven heads whole in a token's attention	src/library/model_runner-platform-device-products.adb src/library/model_runner-platform-device-products.ads tests/src/tests-backend_cases.adb
+4d078527	deal a short tile's positions round every subgroup in attention	src/library/model_runner-shaders-attend.ads src/shaders/attention.comp
+a0cc213e	pass over the tokens that cannot be chosen when choosing one	src/library/model_runner-sampling.adb tests/src/tests-sampling_cases.adb
+6880dc27	grow a device cache with room to spare rather than to the byte	src/library/model_runner-platform-device-products.adb tests/src/tests-backend_cases.adb
+726821db	read a Q4_K row a kilobyte ahead in the one- and two-vector kernels	src/library/model_runner-quantization-integers-kernels.adb
+c38304a5	make the blocked top-k pass cheaper	src/library/model_runner-sampling.adb
+61f219d5	carry a sampled round's residual into the next round	src/library/model_runner-generation.adb
+0f4587e4	read a Q8_0 block's scale in one load	src/library/model_runner-shaders-low.ads src/library/model_runner-shaders.ads src/shaders/matrix_product.comp
+588bd98b	read a listed tile's Q4_K a step ahead of its products	src/library/model_runner-shaders-low.ads src/library/model_runner-shaders.ads src/shaders/matrix_product.comp tests/src/tests-backend_cases.adb
+0ae8449c	take a split mixture's prompt in batches of 2048	src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads
+cf0b19b9	let the output head follow the last layer on the device	src/library/model_runner-backend-device.adb src/library/model_runner-backend-device.ads src/library/model_runner-llama.adb
+6f74ac11	read a wide head's values eight positions a round	src/library/model_runner-shaders-attend.ads src/shaders/attention.comp
+f930642b	read a normalization's row once and wait once	compile-shaders.sh src/library/model_runner-shaders.ads src/shaders/heads.comp src/shaders/norm.comp
+1b00142b	keep prompt attention's answer in the matrix accumulators	src/library/model_runner-shaders.ads src/shaders/attention_matrix.comp
+53fb78c8	look vkDestroyDevice up through its instance	src/platform/posix/model_runner-platform-device.adb
+d46f3b2e	let --max-tokens 0 read the prompt and stop	src/library/model_runner-cli-options.adb src/library/model_runner-generation.adb src/library/model_runner-generation.ads tests/src/speed_run.adb tests/src/speed_run.ads tests/src/tests-cli_cases.adb tests/src/tests_main.adb
+d5a7e04a	re-record the figures behind the device commits, and tidy what they left	src/library/model_runner-backend-device.ads src/library/model_runner-platform-device-products.ads tests/src/checks.adb tests/src/tests-backend_cases.adb
+d429d561	read MiniCPM-V 4.6's windowed-merger projector	src/library/model_runner-cli-pictures.adb src/library/model_runner-vision.adb src/library/model_runner-vision.ads
+31f1bb97	keep a Functionary reply's words apart from its calls	src/library/model_runner-conversation.adb src/library/model_runner-tools.adb src/library/model_runner-tools.ads tests/src/tests-tools_cases.adb
+0dc45086	constrain Functionary recipients; excuse RWKV6 from the bf16 sweep	src/library/model_runner-platform-device-products.ads src/library/model_runner-tools-constraint.adb tests/src/conformance.adb tests/src/tests-tools_cases.adb
+0a69c2f7	read a value's prompt text the one way for filters and methods	src/library/model_runner-templates.adb tests/src/tests-template_cases.adb
+e63fcc44	render content parts inline through a text filter too	src/library/model_runner-templates.adb tests/src/tests-template_cases.adb
+e7c5a5e5	lower the default sampling temperature to 0.4	src/library/model_runner-sampling.ads
+62a72130	run the resampler cross-attention on the pool	src/library/model_runner-vision.adb
+9eebc087	gate MiniCPM-V slice framing to version 3 and later	src/library/model_runner-cli-pictures.adb src/library/model_runner-vision.adb src/library/model_runner-vision.ads tests/src/tests-vision_cases.adb
+929915c6	plan MiniCPM-V's llava-uhd slices	src/library/model_runner-vision.adb src/library/model_runner-vision.ads tests/src/library_surface.adb tests/src/tests-vision_cases.adb
+5e3f8b3d	grow the device sink room with the model	src/library/model_runner-backend-device.ads src/library/model_runner-llama.adb
+98c8af7e	add a top-a truncation sampler	resources/messages/catalog.txt src/library/model_runner-cli-options.adb src/library/model_runner-sampling.adb src/library/model_runner-sampling.ads tests/src/tests-sampling_cases.adb
+28cd34e1	open the device with the features its shaders declare	src/platform/posix/model_runner-platform-device.adb
+d37c1d97	tell a full disk from a stopped download	src/library/model_runner-hub.adb
+113da69b	test that a large session write is not bounded by the stack	src/library/model_runner-cli-execute.ads tests/src/tests-cli_cases.adb
+fe957205	name a gated repository when a download is refused	src/library/model_runner-hub.adb
+ee614b21	stage two (d1): the round's per-row table out of the backend attention	src/library/model_runner-backend-device.adb src/library/model_runner-backend-device.ads src/library/model_runner-llama.adb
+25d89cbe	the device's rule in chunks of sixteen positions, each count its own copy of the kernel	src/library/model_runner-platform-device-products.ads src/library/model_runner-shaders.ads src/shaders/rule.comp
+f08bbefb	a file edited in place is refused, and the Danish locale is whole	resources/messages/catalog.txt src/library/model_runner-byte_sources-files.adb src/library/model_runner-byte_sources-files.ads tests/src/checks.adb tests/src/tests-catalog_cases.adb tests/src/tests-cli_cases.adb
+8300af8e	read MiniCPM's function/param tool calls as a selectable syntax	src/library/model_runner-tools.adb src/library/model_runner-tools.ads tests/src/tests-tools_cases.adb
+84b77b5f	checkpoint at the close of each step, so an interrupted run resumes too	src/library/model_runner-agent.adb src/library/model_runner-agent.ads src/library/model_runner-cli-execute.adb
+e558b80d	compaction folds a digest of the dropped turns into the task	src/library/model_runner-conversation.adb tests/src/tests-template_cases.adb
+60f74a1a	an over-long tool result keeps its head and its tail, not only its head	src/library/model_runner-tools-builtin.adb tests/src/tests-tools_cases.adb

@@ -676,6 +676,7 @@ package body Retrieval_Bench is
       begin
          Judge_Commits ("fixtures/retrieval-commits-dev.tsv", "dev");
          Judge_Commits ("fixtures/retrieval-commits.tsv", "held out");
+         Judge_Commits ("fixtures/retrieval-commits-fresh.tsv", "fresh");
       end;
 
       --  The index of the words over a tree of some size: this repository's
