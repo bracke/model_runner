@@ -1130,10 +1130,15 @@ package body Model_Runner.Agent is
          --  began: that call is cut short, not malformed, and is told so as
          --  a reply cut short is -- told to write it again in the format, a
          --  model wrote it again as long, and was cut again.
+         --  In the open form a bare object in an answer is no broken call;
+         --  one marked in its tags is, as in the tagged form -- /work reads
+         --  a JSON template's calls in the open form, and a marked call that
+         --  would not read failed the work at the first.
          if E.Is_Error (Reading)
            and then not (Last_Result.Reason in Gen.Maximum_Tokens | Gen.Context_Full
                          and then Ends_Inside_Call (Reply_Text))
-           and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Open_JSON)
+           and then (Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Open_JSON)
+                     or else Ada.Strings.Fixed.Index (Reply_Text, "</tool_call>") > 0)
            and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
            and then Result.Steps < Max_Steps
            and then Recovery_For (Class_Of (Reading), Compact, Retries_Left, Chances_Left)

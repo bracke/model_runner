@@ -414,6 +414,38 @@ package body Tests.Agent_Loop_Cases is
                  "a whole call that would not read, cut in the words after it, was not told unreadable");
       end;
 
+      --  In the open form /work reads a JSON template's calls in, a call
+      --  marked in its tags that will not read -- an expression where a
+      --  number is wanted -- is given back to the model to write again,
+      --  as in the tagged form: it failed the work at the first.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("<tool_call>" & ASCII.LF
+                                 & "{""name"": ""read_file"", ""arguments"": {""path"": ""a.txt"","
+                                 & " ""last_line"": 1 + 2}}"
+                                 & ASCII.LF & "</tool_call>");
+         Replies.Replies.Append (Write ("open-again.txt", "w"));
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (Told_Unreadable and then Ada.Directories.Exists (Dir & "/open-again.txt"),
+                 "a marked call that would not read in the open form was not given back: " & Ended.Reason'Image);
+      end;
+
+      --  And an answer showing broken JSON, no call marked, is still the
+      --  answer: not given back as a call.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("status: done" & ASCII.LF & "summary: the object is {""a"": 1 +} as written");
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (not Told_Unreadable and then Ended.Reason = Ag.Answered,
+                 "an answer showing broken JSON was given back as a call: " & Ended.Reason'Image);
+      end;
+
       --  In the open form, a whole call and then one cut: the whole one
       --  runs and the cut one is said -- taken for the last call read, the
       --  whole one was not run and the cut one never named.
