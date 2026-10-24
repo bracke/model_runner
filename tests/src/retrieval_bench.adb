@@ -717,6 +717,7 @@ package body Retrieval_Bench is
          Judge_Commits ("fixtures/retrieval-commits-dev.tsv", "dev");
          Judge_Commits ("fixtures/retrieval-commits.tsv", "held out");
          Judge_Commits ("fixtures/retrieval-commits-fresh.tsv", "fresh");
+         Judge_Commits ("fixtures/retrieval-commits-older-dev.tsv", "older dev");
          Judge_Commits ("fixtures/retrieval-commits-older.tsv", "older");
          if Dirs.Exists ("../../hostkit") then
             Judge_Commits ("fixtures/retrieval-commits-hostkit.tsv", "hostkit", Other_Tree => "../../hostkit");

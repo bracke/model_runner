@@ -1,0 +1,33 @@
+# Retrieval dev set for older code: as retrieval-commits.tsv, from the 60 qualifying commits older than the older set's -- tuned on.
+# Not looked at while tuning; scored once a change is made.
+ead81766	Record what the sweep for per-element calls found	src/library/model_runner-numerics.ads
+42d76895	Measure the vector kernels, and inline the finiteness test	src/library/model_runner-numerics.ads tests/src/benchmarks.adb
+21ca4dd4	Widen half precision without branching	src/library/model_runner-numerics.adb
+6619c110	Put half precision widening back the way it was	src/library/model_runner-numerics.adb
+15a7a09b	Decode six-bit blocks one stream at a time	src/library/model_runner-quantization.adb tests/src/tests-gguf_cases.adb
+7661f2d9	Read a binary32 weight as a binary32	src/library/model_runner-quantization.adb tests/src/tests-accounting_cases.adb
+297efcaa	Take the documentation and layering rules from project_tools too	src/library/model_runner-gguf-containers.ads tests/src/checks.adb
+35212197	Say why the system clock's guard is not held	src/library/model_runner-clocks.adb
+7866258a	Close the rest of the parse slowdown	src/library/model_runner-gguf-containers-reader.adb
+b6b4d4e9	Refuse a branch that has already been closed	src/library/model_runner-templates.adb tests/src/tests-template_cases.adb
+e4651889	Stop compiling a template into twenty-six megabytes	src/library/model_runner-templates.adb src/library/model_runner-templates.ads
+4700491e	Make the render step bound a setting, and correct what the suite spends	src/library/model_runner-limits.ads src/library/model_runner-templates.adb src/library/model_runner-templates.ads tests/src/tests-template_cases.adb
+d7dc37cb	Take most of the parse slowdown back out	src/library/model_runner-gguf-containers-reader.adb
+cd29a9d1	Escape catalog text too, and not only what is put into it	src/library/model_runner-localization.adb tests/src/tests-catalog_cases.adb
+735b1055	Read metadata straight into the pool, and measure what it cost	src/library/model_runner-byte_sources-files.adb src/library/model_runner-byte_sources-memory.adb src/library/model_runner-gguf-containers-reader.adb
+19e83c7c	Hold the bounds that stand in front of the suppressed checks	src/library/model_runner-quantization.ads tests/src/tests-gguf_cases.adb
+3f5fba03	Join the tooling's disk paths through hostkit too	src/library/model_runner-platform.adb tests/src/checks.adb tests/src/docs_generation.adb tests/src/packaging.adb tests/src/tests-accounting_cases.adb
+f3e259fe	Ask hostkit for the locale the environment does not give	src/library/model_runner-platform.adb
+46fbc528	Report a sampling overflow instead of trapping on it	src/library/model_runner-sampling.adb tests/src/tests-sampling_cases.adb
+9352faa6	Report what a prompt file is wrong about	src/library/model_runner-cli-execute.adb tests/src/tests-cli_cases.adb
+3100095a	Work through the diagnostics that were never produced	src/library/model_runner-cli-driver.adb src/library/model_runner-templates.adb src/library/model_runner-tokenizer.adb tests/src/checks.adb tests/src/tests-gguf_cases.adb tests/src/tests-template_cases.adb
+79bb3c2a	Require a terminal for an interactive session	src/library/model_runner-cli-driver.adb src/library/model_runner-presentation.ads tests/src/tests-cli_cases.adb
+9dd92291	Refuse a value on an option that takes none	src/library/model_runner-cli-options.adb tests/src/tests-cli_cases.adb
+857a4d22	Refuse architecture metadata that is present and wrong	src/library/model_runner-llama.adb tests/src/tests-gguf_cases.adb
+27e602fd	Refuse tokenizer metadata that is present and wrong	src/library/model_runner-tokenizer.adb src/library/model_runner-tokenizer.ads tests/src/tests-gguf_cases.adb
+edfb593f	Test the chat template engine's bounds	src/library/model_runner-templates.ads tests/src/tests-suite.adb tests/src/tests-template_cases.adb tests/src/tests-template_cases.ads
+c2b4dc64	Say why the interactive read is not bounded like the others	src/library/model_runner-cli-interactive.adb
+2ebe6b77	Bound the prompt read from standard input	resources/messages/catalog.txt src/library/model_runner-cli-execute.adb src/library/model_runner-errors.ads src/library/model_runner-presentation.adb tests/src/tests-cli_cases.adb
+ec2c62a2	Test the memory plan and the clock	src/library/model_runner-memory.ads tests/src/tests-accounting_cases.adb tests/src/tests-accounting_cases.ads tests/src/tests-suite.adb
+3ddc02c7	Take the console event directly on Windows	src/platform/posix/model_runner-platform-signals.adb src/platform/unsupported/model_runner-platform-signals.adb src/platform/windows/model_runner-platform-signals.adb
+fe611ead	Follow the sibling crates on build configuration	src/library/model_runner-kernels.adb src/library/model_runner-numerics.adb src/library/model_runner-sampling.adb tests/src/tests-sampling_cases.adb

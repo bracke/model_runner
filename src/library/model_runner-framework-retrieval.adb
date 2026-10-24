@@ -85,10 +85,15 @@ package body Model_Runner.Framework.Retrieval is
    --  The words a query of three or more says in small letters, as it
    --  says them: words of a sentence, not names, where a name is written
    --  otherwise -- "the context" is not the package Context.
+   --  And the first word of a query of four or more, where it is written
+   --  as a sentence begins -- one capital, then small letters: "Read a
+   --  binary32 weight as a binary32" asks for no symbol named Read, and
+   --  took its name's points over every file the rest of it was about.
    function Plain_Words (Query : String) return Name_Sets.Set is
       Result : Name_Sets.Set;
       Said   : Natural := 0;
       Start  : Natural := 0;
+      Opener : Unbounded_String;
    begin
       for Index in Query'First .. Query'Last + 1 loop
          if Index <= Query'Last and then Identifier_Char (Query (Index)) then
@@ -99,12 +104,18 @@ package body Model_Runner.Framework.Retrieval is
             Said := Said + 1;
             if (for all Char of Query (Start .. Index - 1) => Char in 'a' .. 'z') then
                Result.Include (Query (Start .. Index - 1));
+            elsif Said = 1 and then Index - Start >= 2 and then Query (Start) in 'A' .. 'Z'
+              and then (for all Char of Query (Start + 1 .. Index - 1) => Char in 'a' .. 'z')
+            then
+               Opener := To_Unbounded_String (Lower (Query (Start .. Index - 1)));
             end if;
             Start := 0;
          end if;
       end loop;
       if Said < 3 then
          Result.Clear;
+      elsif Said >= 4 and then Length (Opener) > 0 then
+         Result.Include (To_String (Opener));
       end if;
       return Result;
    end Plain_Words;
