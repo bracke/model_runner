@@ -6,7 +6,9 @@ with Ada.Containers.Generic_Array_Sort;
 with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Ordered_Maps;
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Numerics.Elementary_Functions;
+with Ada.Real_Time;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 with Ada.Strings.Maps;
@@ -423,14 +425,39 @@ package body Model_Runner.Framework.Retrieval is
      (Key_Type => String, Element_Type => Boolean, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    Unsearched : Unsearched_Maps.Map;
 
-   --  The files whose reading in failed -- an install, or the counting of
-   --  their words, raised -- by key, with the print they had then: not
-   --  read in again until it changes, so a fault that comes back each
-   --  time costs one try a version, not every search. Kept when the index
-   --  is let go, which is what such a fault does.
+   --  A file whose reading in failed -- the counting of its words, or its
+   --  install, raised: the print it had, how often it failed at that
+   --  print, when it may be tried again, and what failed, as the stage
+   --  and the exception's name -- no message, which may say anything.
+   type Failure is record
+      Print : Unbounded_String;
+      Tries : Positive := 1;
+      Next  : Ada.Real_Time.Time;
+      Stage : Unbounded_String;
+      Name  : Unbounded_String;
+   end record;
+
+   --  The files whose reading in failed, by key. One is tried again once
+   --  its wait is over -- Retry_Wait, doubled each time it fails again --
+   --  and given up after Most_Tries at the same print, until the print
+   --  changes: a fault that passes, memory short for a moment, is got
+   --  over, and one that comes back costs a few tries a version, not
+   --  every search. Kept when the index is let go, which is what an
+   --  install's fault does.
    package Failed_Maps is new Ada.Containers.Indefinite_Hashed_Maps
-     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
-   Failed : Failed_Maps.Map;
+     (Key_Type => String, Element_Type => Failure, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Failed     : Failed_Maps.Map;
+   Most_Tries : constant := 4;
+   Retry_Wait : Duration := 30.0;
+
+   --  Whether a file that failed is to be read in now, at the graph's
+   --  print. Called with Lock held.
+   function Due (Was : Failure; Print : String) return Boolean is
+      use type Ada.Real_Time.Time;
+   begin
+      return To_String (Was.Print) /= Print
+        or else (Was.Tries < Most_Tries and then Ada.Real_Time.Clock >= Was.Next);
+   end Due;
 
    --  An entry's last change. Called with Lock held.
    function Change_Of (Key : String) return Natural
@@ -580,7 +607,6 @@ package body Model_Runner.Framework.Retrieval is
          for One of Index.Constant_Reference (Key).Words loop
             Unlink (One.Term, Doc);
          end loop;
-         Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Midway);
       elsif not Free_Docs.Is_Empty then
          Doc := Free_Docs.Last_Element;
          Free_Docs.Delete_Last;
@@ -589,6 +615,7 @@ package body Model_Runner.Framework.Retrieval is
          Doc_Keys.Append (Key);
          Doc := Doc_Keys.Last_Index;
       end if;
+      Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Midway);
       for Position in Counted.Iterate loop
          declare
             Term : constant Positive := Term_Of (Count_Maps.Key (Position));
@@ -782,13 +809,16 @@ package body Model_Runner.Framework.Retrieval is
    --  reads it again rather than take it to have no words; both are
    --  noted, for Not_Searched. A change to the index raising part way
    --  lets the whole index go (Clear_Index), the next search reading it
-   --  anew; a file whose reading in raised is noted (Failed) and passed
-   --  by until it changes, and the pass goes on without it.
+   --  anew, and the pass reads in no more; a file whose words could not
+   --  be counted is passed by and the pass goes on. Either file is noted
+   --  (Failed) and tried again once its wait is over.
    procedure Bring_Up (Graph : Rp.Graph; Root : String; Files : out Natural) is
       Present : Name_Sets.Set;
       Stale   : Name_Lists.Vector;
       Prints  : Name_Lists.Vector;
       Seen    : Change_Lists.Vector;
+      --  Whether this pass let the index go: it then reads in no more.
+      Let_Go  : Boolean := False;
    begin
       Lock.Seize;
       begin
@@ -801,7 +831,8 @@ package body Model_Runner.Framework.Retrieval is
                if Indexed (File) then
                   Present.Include (Key);
                   if (not Index.Contains (Key) or else Index.Constant_Reference (Key).Print /= File.Fingerprint)
-                    and then not (Failed.Contains (Key) and then Failed.Element (Key) = To_String (File.Fingerprint))
+                    and then (not Failed.Contains (Key)
+                              or else Due (Failed.Element (Key), To_String (File.Fingerprint)))
                   then
                      Stale.Append (Path);
                      Prints.Append (To_String (File.Fingerprint));
@@ -877,11 +908,13 @@ package body Model_Runner.Framework.Retrieval is
                Path    : constant String := Stale (At_Stale);
                Text    : Unbounded_String;
                Status  : E.Error_Info;
+               Stage   : Unbounded_String := To_Unbounded_String ("reading it");
             begin
                --  The size held to in the read itself: no look at the file by
                --  its path before it is opened.
                Read_In (Root, Path, Text, Status, Most => Indexed_Most);
                Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Installs);
+               Stage := To_Unbounded_String ("counting its words");
                declare
                   use type E.Error_Code;
                   Key       : constant String := Key_Of (Root, Path);
@@ -894,6 +927,7 @@ package body Model_Runner.Framework.Retrieval is
                   Print     : constant String :=
                     (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Prints (At_Stale));
                begin
+                  Stage := To_Unbounded_String ("installing it");
                   Lock.Seize;
                   begin
                      if Change_Of (Key) = Seen (At_Stale) then
@@ -914,18 +948,35 @@ package body Model_Runner.Framework.Retrieval is
                   exception
                      when others =>
                         Clear_Index;
+                        Let_Go := True;
                         Lock.Release;
                         raise;
                   end;
                end;
             exception
-               --  This file's reading in failed: noted, not tried again at
-               --  this print, and the pass goes on to the next -- one that
-               --  let the index go installs nothing more.
-               when others =>
-                  Lock.Seize;
-                  Failed.Include (Key_Of (Root, Path), Prints (At_Stale));
-                  Lock.Release;
+               --  This file's reading in failed: noted, to be tried again
+               --  once its wait is over. A fault of this file's own -- its
+               --  words could not be counted -- passes it by, and the pass
+               --  goes on to the next; one that let the index go ends the
+               --  pass, which has nothing left to install into.
+               when Error : others =>
+                  declare
+                     use type Ada.Real_Time.Time;
+                     Key   : constant String := Key_Of (Root, Path);
+                     Tries : Positive := 1;
+                  begin
+                     Lock.Seize;
+                     if Failed.Contains (Key) and then To_String (Failed.Element (Key).Print) = Prints (At_Stale) then
+                        Tries := Failed.Element (Key).Tries + 1;
+                     end if;
+                     Failed.Include
+                       (Key, (Print => To_Unbounded_String (Prints (At_Stale)), Tries => Tries,
+                              Next  => Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Retry_Wait * 2 ** (Tries - 1)),
+                              Stage => Stage,
+                              Name  => To_Unbounded_String (Ada.Exceptions.Exception_Name (Error))));
+                     Lock.Release;
+                  end;
+                  exit when Let_Go;
             end;
          end loop;
       exception
@@ -945,6 +996,24 @@ package body Model_Runner.Framework.Retrieval is
       end if;
       Lock.Release;
    end Bring_Up;
+
+   --------------------------
+   -- Retry_Indexing_After --
+   --------------------------
+
+   procedure Retry_Indexing_After (Wait : Duration) is
+      use type Ada.Real_Time.Time;
+      By : constant Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Wait);
+   begin
+      Lock.Seize;
+      Retry_Wait := Wait;
+      for Was of Failed loop
+         if Was.Next > By then
+            Was.Next := By;
+         end if;
+      end loop;
+      Lock.Release;
+   end Retry_Indexing_After;
 
    ------------------
    -- Not_Searched --
@@ -976,7 +1045,20 @@ package body Model_Runner.Framework.Retrieval is
                Key : constant String := Failed_Maps.Key (Position);
             begin
                if Key'Length > Root'Length and then Key (Key'First .. Key'First + Root'Length) = Root & ASCII.NUL then
-                  Held.Append (Key (Key'First + Root'Length + 1 .. Key'Last) & ": could not be indexed");
+                  declare
+                     use type Ada.Real_Time.Time;
+                     Was  : constant Failure := Failed_Maps.Element (Position);
+                     Left : constant Duration := Ada.Real_Time.To_Duration (Was.Next - Ada.Real_Time.Clock);
+                  begin
+                     Held.Append
+                       (Key (Key'First + Root'Length + 1 .. Key'Last) & ": could not be indexed ("
+                        & To_String (Was.Name) & " " & To_String (Was.Stage) & ", " & Image (Was.Tries)
+                        & (if Was.Tries = 1 then " time; " else " times; ")
+                        & (if Was.Tries >= Most_Tries then "not tried again until it changes"
+                           elsif Left <= 0.0 then "tried again by the next search"
+                           else "tried again in" & Natural'Image (Natural (Float'Ceiling (Float (Left)))) & " s")
+                        & ")");
+                  end;
                end if;
             end;
          end loop;

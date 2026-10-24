@@ -79,9 +79,12 @@ with Model_Runner.Framework.Stores;
 --  words; Not_Searched names both. A change to the index stopped part
 --  way lets the whole index go, to be read anew: every pass under way
 --  then installs nothing more, its changes seen before the index went.
---  A file whose reading in raised is passed by until it changes, and
---  named by Not_Searched, so a fault that comes back costs a try a
---  version of the file, not a whole index at every search. What is kept
+--  A file whose reading in raised is passed by, named by Not_Searched
+--  with what failed, and tried again after a wait that doubles each
+--  time, four tries at most until it changes: a fault that passes is got
+--  over, and one that comes back costs a few tries a version of the
+--  file, not a whole index at every search. A pass that let the index go
+--  reads in nothing more. What is kept
 --  of files gone, for passes under way, is let go once none is.
 --
 --  What a search's answer stands for, a change to the tree under way:
@@ -166,7 +169,9 @@ package Model_Runner.Framework.Retrieval is
 
    --  What a search of a tree did not search: the files its graph could
    --  not read, and those the index could not read, could not index or
-   --  holds no words of, being too large -- each as PATH: why, sorted. Said beside a search's
+   --  holds no words of, being too large -- each as PATH: why, sorted. One
+   --  that could not be indexed says what failed (the exception's name and
+   --  what was being done), how often, and when it is tried again. Said beside a search's
    --  hits, so that nothing found there is not taken for nothing there.
    --
    --  @param Graph The graph the search was given.
@@ -306,6 +311,14 @@ package Model_Runner.Framework.Retrieval is
    --
    --  @return The count.
    function Indexed_Terms return Natural;
+
+   --  How long a file whose indexing failed waits before it is tried
+   --  again, the first time: doubled each time after; a wait under way
+   --  longer than it is cut to it. For tests; 30 seconds where nobody
+   --  sets it.
+   --
+   --  @param Wait The wait.
+   procedure Retry_Indexing_After (Wait : Duration);
 
    --  How many files' last changes the index keeps, for passes under
    --  way: none once no pass is, however many files came and went.

@@ -19943,29 +19943,69 @@ package body Tests.Framework_Cases is
       end;
 
       --  An install stopped part way, its old words let go and its new
-      --  not yet in: the index is let go, the file passed by at that
-      --  version -- named as not indexed, not read again by every search
-      --  after -- and the rest read anew; written again, it is read, and
-      --  the index ranks as one made anew.
+      --  not yet in: the index is let go, the file passed by -- named as
+      --  not indexed, with what failed and when it is tried again, and not
+      --  read again by the search straight after -- and the rest read
+      --  anew. Once its wait is over it is tried again and found; failing
+      --  four times at one version, it is given up until it changes;
+      --  written again, it is read, and the index ranks as one made anew.
       declare
          procedure Run_Out is
          begin
             raise Storage_Error with "the test's own";
          end Run_Out;
          Reads : Natural;
+
+         function Said return String is
+            Missed : constant F.Name_Lists.Vector :=
+              Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), Fresh_Root (Store));
+         begin
+            return (if Missed.Is_Empty then "" else Missed.First_Element);
+         end Said;
+
+         function Begins (Text, Start : String) return Boolean
+         is (Text'Length >= Start'Length and then Text (Text'First .. Text'First + Start'Length - 1) = Start);
       begin
          Put_File (To_String (Notes), "Now it says quokka and parse." & LF);
+         --  A second file changed, after it in the pass: not read once the
+         --  first let the index go.
+         Put_File (Fresh_Root (Store) & "/src/parser.ads", Read_Whole (Fresh_Root (Store) & "/src/parser.ads")
+                   & "--  Changed." & LF);
          Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+         Reads := Rv.Files_Read;
          Hits := Find ("quokka");
          Assert (Rv.Indexed_Held = 0, "an install stopped part way did not let the index go:"
                  & Rv.Indexed_Held'Image);
+         Assert (Rv.Files_Read = Reads + 1, "a pass that let the index go read on:"
+                 & Natural'Image (Rv.Files_Read - Reads) & " files");
          Hits := Find ("quokka");
          Reads := Rv.Indexed_Reads;
          Assert (not Texts ("quokka", "docs/notes.txt") and then Rv.Indexed_Reads = Reads
-                 and then (for some One of Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)),
-                                                            Fresh_Root (Store))
-                           => One = "docs/notes.txt: could not be indexed"),
-                 "a file whose install failed was read again at each search, or was not named as not indexed");
+                 and then Begins (Said, "docs/notes.txt: could not be indexed (STORAGE_ERROR installing it, 1 time;"
+                                        & " tried again in"),
+                 "a file whose install failed was read again straight away, or was not named with what failed: "
+                 & Said);
+
+         --  Its wait over, it is tried again, and found.
+         Rv.Retry_Indexing_After (0.0);
+         Assert (Texts ("quokka", "docs/notes.txt") and then Said = "",
+                 "a file whose install failed once was not tried again once its wait was over: " & Said);
+
+         --  Failing at every try, it is given up after the fourth.
+         Put_File (To_String (Notes), "Now it says quokka and number." & LF);
+         for Try in 1 .. 4 loop
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+            Hits := Find ("quokka");
+         end loop;
+         Hits := Find ("quokka");
+         Reads := Rv.Indexed_Reads;
+         Hits := Find ("quokka");
+         Assert (Rv.Indexed_Reads = Reads and then not Texts ("quokka", "docs/notes.txt")
+                 and then Begins (Said, "docs/notes.txt: could not be indexed (STORAGE_ERROR installing it, 4 times;"
+                                        & " not tried again until it changes)"),
+                 "a file failing at every try was tried again past the fourth, or not said to be given up: "
+                 & Said);
+         Rv.Retry_Indexing_After (30.0);
          Put_File (To_String (Notes), "Now it says quokka and parse number." & LF);
          declare
             After   : constant Rv.Hit_Lists.Vector := Find ("parse number quokka");
