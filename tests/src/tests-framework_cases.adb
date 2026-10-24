@@ -4488,6 +4488,21 @@ package body Tests.Framework_Cases is
                  and then (Asked ("find_symbol", "{}") /= "" and then Failed),
                  "a name not there was not said so, or a missing argument was not a failure");
 
+         --  A name guessed from what a procedure does -- not its name --
+         --  is answered with what a search of its words finds: the
+         --  procedure whose comment says it.
+         Put_File (Project & "/src/counter.ads",
+                   "package Counter is" & LF & "   --  Moves the tally on by one." & LF
+                   & "   procedure Step (Tally : in out Natural);" & LF & "end Counter;" & LF);
+         declare
+            Guessed : constant String := Cq.Find (Store, "symbol", "moves_tally", Failed);
+         begin
+            Assert (Has (Guessed, "nothing in the project's graph for moves_tally")
+                    and then Has (Guessed, "a search for its words finds") and then Has (Guessed, "Counter.Step")
+                    and then not Failed,
+                    "a guessed name was not answered with what a search of its words finds: " & Guessed);
+         end;
+
          --  Written since the last answer: in the next.
          Put_File (Project & "/src/extra.adb",
                    "with Parser;" & LF & "procedure Extra is" & LF & "   Item : Natural;" & LF

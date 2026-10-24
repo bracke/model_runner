@@ -443,7 +443,50 @@ package body Model_Runner.Framework.Code_Queries is
          return "error: find takes kind symbol, references, depends_on, used_by, impact, search, declaration"
            & " or text -- not " & Kind;
       end if;
-      return Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed, Root);
+      declare
+         Said    : constant String :=
+           Answer (Store, Named, "{" & Sc.Quoted (Key) & ": " & Sc.Quoted (Query) & "}", Failed, Root);
+         Nothing : constant String := "nothing in the project's graph for ";
+      begin
+         --  A name the graph does not hold: a model guessing at one -- a
+         --  procedure said by what it does, named move_balance, add_entry,
+         --  update_balance in turn -- is shown what a search of its words
+         --  finds, the first five, rather than told nothing again.
+         if Kind = "symbol" and then Said'Length >= Nothing'Length
+           and then Said (Said'First .. Said'First + Nothing'Length - 1) = Nothing
+         then
+            declare
+               Searched : Boolean;
+               Found    : constant String := Retrieve (Store, "search", Query, Root, Records => False,
+                                                       Failed => Searched);
+               Lines    : Natural := 0;
+               Cut      : Natural := Found'Last;
+               Whole    : Boolean := True;
+            begin
+               if Searched or else Found'Length = 0
+                 or else Ada.Strings.Fixed.Index (Found, "nothing in the project for") = 1
+               then
+                  return Said;
+               end if;
+               for At_Char in Found'Range loop
+                  if Found (At_Char) = ASCII.LF then
+                     Lines := Lines + 1;
+                     if Lines = 5 and then At_Char < Found'Last then
+                        Cut := At_Char;
+                        Whole := False;
+                        exit;
+                     end if;
+                  end if;
+               end loop;
+               --  Cut, the search's own last line -- how to see a hit's
+               --  lines -- is said again.
+               return Said & "; no symbol is named so, and a search for its words finds:" & ASCII.LF
+                 & Found (Found'First .. Cut)
+                 & (if Whole then "" else "find kind declaration with a name or PATH:LINE shows its lines" & ASCII.LF);
+            end;
+         end if;
+         return Said;
+      end;
    end Find;
 
 end Model_Runner.Framework.Code_Queries;

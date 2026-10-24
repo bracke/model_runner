@@ -1,0 +1,11 @@
+# Retrieval held out on another tree: files's own commit subjects, area label cut, judged by the files each changed. Not tuned on.
+5f9efd6	make the FIFO through the test's C helper, so Windows links	tests/tests/src/files_suite-operations.adb tests/tests/src/files_test_metadata.c
+b4f6aee	keep a search result's rename, duplicate and link in its own folder	.github/workflows/ci.yml src/files-operations-transfer.adb tests/tests/src/files_suite-operations.adb
+b63131a	apply a settings command chosen with Enter in the palette	src/files-controller-handle_key.adb src/files-controller.adb tests/tests/src/files_suite-interaction.adb
+9da92ce	skip the non-UTF-8 name test on Windows	tests/tests/src/files_suite-rendering.adb
+66dcf47	count dangling links in a folder's item total	src/files-file_system-directory.adb tests/tests/src/files_suite-operations.adb
+96374c5	drop the settings package's unused Safe_Close	src/files-settings.adb
+126216c	name what fails in the flaky duplicate Undo; FILES_TEST_ONLY	tests/tests/src/files_suite-operations.adb tests/tests/src/test_progress.adb tests/tests/src/test_progress.ads
+81325ab	name each test as it starts when FILES_TEST_PROGRESS is set	.github/workflows/ci.yml tests/tests/src/test_progress.adb tests/tests/src/test_progress.ads tests/tests/src/tests.adb
+f2c1e2e	snapshot deep trees on a large stack too	src/files-file_system-support.adb tests/tests/src/files_suite-operations.adb
+f1a116b	copy deep trees on a task whose stack holds the depth cap	.github/workflows/ci.yml src/files-file_system-support.adb

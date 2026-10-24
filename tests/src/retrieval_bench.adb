@@ -626,6 +626,13 @@ package body Retrieval_Bench is
          function Not_The_Sets (Path : String) return Boolean
          is (Ada.Strings.Fixed.Index (Path, "fixtures/retrieval-commits") = 0);
 
+         type Tree_List is array (Positive range <>) of Unbounded_String;
+         Other_Trees : constant Tree_List :=
+           [R ("files"), R ("version"), R ("strategy"), R ("awk"), R ("shaping"), R ("terminal")];
+
+         --  The other trees' sets, summed into one.
+         Pool_Asked, Pool_Judged, Pool_Found_10, Pool_Any_10, Pool_Reciprocals : Natural := 0;
+
          procedure Judge_Commits (Named_File, Label : String; Other_Tree : String := "") is
             In_Tree  : constant String := (if Other_Tree = "" then Tree else Dirs.Full_Name (Other_Tree));
             In_Graph : constant Rp.Graph := (if Other_Tree = "" then Graph else Rp.Scan (In_Tree, Rp.Default_Roots));
@@ -708,6 +715,13 @@ package body Retrieval_Bench is
                end;
             end loop;
             Ada.Text_IO.Close (Source);
+            if Other_Tree /= "" then
+               Pool_Asked := Pool_Asked + Asked;
+               Pool_Judged := Pool_Judged + Judged;
+               Pool_Found_10 := Pool_Found_10 + Found_10;
+               Pool_Any_10 := Pool_Any_10 + Any_10;
+               Pool_Reciprocals := Pool_Reciprocals + Reciprocals;
+            end if;
             Ada.Text_IO.Put_Line
               ("search commits (" & Label & "): a relevant file in the first 10 for " & Share (Any_10, Asked)
                & ", recall@10 " & Share (Found_10, Judged) & ", MRR " & Share (Reciprocals, Asked * 1000)
@@ -722,6 +736,24 @@ package body Retrieval_Bench is
          if Dirs.Exists ("../../hostkit") then
             Judge_Commits ("fixtures/retrieval-commits-hostkit.tsv", "hostkit", Other_Tree => "../../hostkit");
          end if;
+
+         --  Ten each of six other trees' own subjects, each searched in its
+         --  tree where it is beside this one (fixtures/retrieval-other).
+         Pool_Asked := 0;
+         Pool_Judged := 0;
+         Pool_Found_10 := 0;
+         Pool_Any_10 := 0;
+         Pool_Reciprocals := 0;
+         for Repo of Other_Trees loop
+            if Dirs.Exists ("../../" & To_String (Repo)) then
+               Judge_Commits ("fixtures/retrieval-other/" & To_String (Repo) & ".tsv", To_String (Repo),
+                              Other_Tree => "../../" & To_String (Repo));
+            end if;
+         end loop;
+         Ada.Text_IO.Put_Line
+           ("search commits (other trees): a relevant file in the first 10 for " & Share (Pool_Any_10, Pool_Asked)
+            & ", recall@10 " & Share (Pool_Found_10, Pool_Judged) & ", MRR "
+            & Share (Pool_Reciprocals, Pool_Asked * 1000) & " over " & Image (Pool_Asked) & " queries");
       end;
 
       --  The index of the words over a tree of some size: this repository's

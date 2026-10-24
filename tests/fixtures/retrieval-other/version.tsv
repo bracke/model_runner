@@ -1,0 +1,11 @@
+# Retrieval held out on another tree: version's own commit subjects, area label cut, judged by the files each changed. Not tuned on.
+7bb4a3b	name-rev --no-undefined/--always, symbolic-ref -m, checkout-index -q as git; warning-free	src/version-cli.adb
+1a0ea10	log.date honoured; automatic abbreviation width	src/version-cli.adb
+147d5a6	ask the host's git about the last-line scan	tests/src/cli_integration_tests.adb
+2f281bf	pin git's scan of the last line	tests/src/cli_integration_tests.adb
+e8cad93	define the glob knobs where the startup can read them	src/main.adb src/version-cli.adb tests/src/cli_integration_tests.adb
+f1c6c88	say what check-ignore came back with	tests/src/version-cli-tests.adb
+52aa608	write the bytes a fixture means	tests/src/version-test_support.adb
+d85da64	hand fixtures a canonical, slash-separated root	tests/src/version-test_support.adb
+ea838ad	give the frozen usage tests the repository they need	tests/src/version-cli-tests.adb
+db515e9	tag takes git's option surface	src/version-cli-help.adb src/version-cli.adb tests/src/cli_integration_tests.adb

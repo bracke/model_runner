@@ -54,12 +54,16 @@ package body Agent_Trial is
       --  tokens -- and the task names a subprogram of it and no file: what
       --  a context finds of the code is all the agent starts from.
       Large : Boolean := False;
+
+      --  Whether the task is run only when named, being a measure of one
+      --  thing rather than of a coding agent's work.
+      Named_Only : Boolean := False;
    end record;
 
-   function T (Name, Kind, Notes : String; Tested, Styled, Convention, Large : Boolean := False)
+   function T (Name, Kind, Notes : String; Tested, Styled, Convention, Large, Named_Only : Boolean := False)
      return Trial_Task is
      ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled,
-       Convention, Large));
+       Convention, Large, Named_Only));
 
    --  The ledger's task: a subprogram named, no file.
    Large_Notes : constant String :=
@@ -84,7 +88,7 @@ package body Agent_Trial is
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 6) of Trial_Task :=
+   Tasks : constant array (1 .. 7) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -103,7 +107,15 @@ package body Agent_Trial is
       --  A change to one subprogram of a file too large to give whole,
       --  named by the subprogram: run only when named, the measure of what
       --  a context retrieves (--retrieval whole for the context before).
-      T ("large", "implementation", Large_Notes, Tested => True, Large => True)];
+      T ("large", "implementation", Large_Notes, Tested => True, Large => True),
+      --  The ledger's task again, its subprogram said by what it does and
+      --  not named: with --retrieval whole the agent has the file's head
+      --  and must find it -- the measure of the search by words a model
+      --  makes. Named only.
+      T ("described", "implementation",
+         "In the ledger, the procedure that moves a book's balance by an amount and counts one entry more"
+         & " must raise Constraint_Error when the amount is negative, instead of applying it. Change only"
+         & " that procedure.", Tested => True, Large => True, Named_Only => True)];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
@@ -647,7 +659,8 @@ package body Agent_Trial is
                One : Trial_Task renames Tasks (Which);
             begin
                if Chosen (Only, To_String (One.Name))
-                 and then (Only /= "" or else not (One.Styled or else One.Convention or else One.Large))
+                 and then (Only /= ""
+                           or else not (One.Styled or else One.Convention or else One.Large or else One.Named_Only))
                then
                   declare
                      Name    : constant String := To_String (One.Name);

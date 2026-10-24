@@ -1,0 +1,11 @@
+# Retrieval held out on another tree: shaping's own commit subjects, area label cut, judged by the files each changed. Not tuned on.
+c9bfd67	retain color font dependencies	src/shaping-subsetting.adb tests/src/shaping_tests.adb
+16382ff	Add color glyph subset roots	ai/api_manifest.json ai/capability_matrix.json ai/invariant_registry.json ai/proof_manifest.json src/shaping-subsetting.adb src/shaping-subsetting.ads tests/src/shaping_tests.adb
+2919359	Add bounded palette overrides	ai/api_manifest.json ai/capability_matrix.json ai/invariant_registry.json ai/proof_manifest.json src/shaping-opentype-color.adb src/shaping-opentype-color.ads tests/src/shaping_tests.adb
+11c53f2	Expose SVG document payload views	ai/api_manifest.json ai/capability_matrix.json ai/invariant_registry.json ai/proof_manifest.json src/shaping-faces.adb src/shaping-faces.ads tests/src/shaping_tests.adb
+be5e522	Expose CBDT payload views	ai/capability_matrix.json ai/proof_manifest.json src/shaping-faces.adb src/shaping-faces.ads tests/src/shaping_tests.adb
+1f127f8	Validate COLR paint variation indexes	ai/proof_manifest.json ai/source_provenance_manifest.json generated/shaping-generated-opentype_colr.adb tests/src/shaping_tests.adb
+e7b64f0	Validate COLR composite modes	ai/proof_manifest.json ai/source_provenance_manifest.json generated/shaping-generated-opentype_colr.adb tests/src/shaping_tests.adb
+247432d	Cover public COLR PaintVarSolid inspection	tests/src/shaping_tests.adb
+f3f3a94	Support post format 2.5 glyph names	ai/capability_matrix.json src/shaping-fonts.adb tests/src/shaping_tests.adb
+5fd43a1	Validate post custom glyph names	ai/capability_matrix.json src/shaping-fonts.adb tests/src/shaping_tests.adb

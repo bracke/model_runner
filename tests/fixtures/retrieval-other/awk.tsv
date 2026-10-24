@@ -1,0 +1,11 @@
+# Retrieval held out on another tree: awk's own commit subjects, area label cut, judged by the files each changed. Not tuned on.
+6ef1353	Split packaging manifest inventory	tests/source-budgets.toml tests/src/awk_workflow_packaging-manifest_files.adb tests/src/awk_workflow_packaging-manifest_files.ads tests/src/awk_workflow_packaging.adb
+b7c6197	Use project tools process arguments in workflows	tests/src/awk_workflow_install.adb tests/src/awk_workflow_source_policy-workflow_checks-process_tooling.adb tests/src/awk_workflows.adb
+635045f	Use project_tools process capture helpers	tests/src/awk_tests-process_support.adb tests/src/awk_tests-process_support.ads tests/src/awk_workflow_source_policy-workflow_checks.adb
+4c46fbf	Treat environment storage exhaustion as internal	src/library/awk_cli-platform.adb tests/src/awk_workflow_source_policy-platform_checks.adb
+2ed491d	Document hostkit stream boundary	tests/src/awk_workflow_source_policy-platform_checks.adb
+09abf3a	Move test harness to tests crate	tests/source-budgets.toml tests/src/awk_cli-testing.adb tests/src/awk_cli-testing.ads tests/src/awk_workflow_source_policy.adb
+c3543f9	Clean process language test formatting	tests/source-budgets.toml tests/src/awk_tests-process_language.adb
+ba6fc01	Retain execution exception identity	src/library/awk_cli-execution.adb tests/source-budgets.toml tests/src/awk_workflow_source_policy.adb
+59578dc	Clarify redirection write ordering	src/library/awk_cli-context_io.adb tests/source-budgets.toml tests/src/awk_workflow_source_policy.adb
+4cbad66	Resolve installed message catalogs	src/library/awk_cli-platform.adb tests/source-budgets.toml tests/src/awk_workflows.adb
