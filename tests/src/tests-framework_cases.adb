@@ -20005,6 +20005,90 @@ package body Tests.Framework_Cases is
                                         & " not tried again until it changes)"),
                  "a file failing at every try was tried again past the fourth, or not said to be given up: "
                  & Said);
+
+         --  A fault of the program's own -- not memory run out -- is not
+         --  tried again, and says where it was raised.
+         declare
+            procedure Break is
+            begin
+               raise Constraint_Error with "the test's own fault";
+            end Break;
+         begin
+            Put_File (To_String (Notes), "Now it says quokka and parse again." & LF);
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Break'Unrestricted_Access);
+            Hits := Find ("quokka");
+            Hits := Find ("quokka");
+            Reads := Rv.Indexed_Reads;
+            Hits := Find ("quokka");
+            Assert (Rv.Indexed_Reads = Reads
+                    and then Said = "docs/notes.txt: could not be indexed (CONSTRAINT_ERROR installing it, a fault"
+                                    & " of the program's own: the test's own fault; not tried again until it changes)",
+                    "a fault of the program's own was tried again, or not said as one: " & Said);
+         end;
+
+         --  A wait past the bound is held to it: the failure is noted, not
+         --  raised again in the noting.
+         Rv.Retry_Indexing_After (Duration'Last);
+         Put_File (To_String (Notes), "Now it says quokka and parse once more." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+         Hits := Find ("quokka");
+         Assert (Begins (Said, "docs/notes.txt: could not be indexed (STORAGE_ERROR installing it, 1 time;"
+                               & " tried again in 3600 s)"),
+                 "a wait past the bound was not held to it: " & Said);
+
+         --  Noting a failure raising in its turn: the exception reaches the
+         --  search, and the index's lock is not left held -- another task
+         --  takes it, and the next search answers.
+         declare
+            procedure Break_Noting is
+            begin
+               raise Program_Error with "the test's own, noting";
+            end Break_Noting;
+
+            task Taker is
+               entry Go;
+               entry Took (Held : out Natural);
+            end Taker;
+
+            task body Taker is
+               Count : Natural;
+            begin
+               accept Go;
+               Count := Rv.Indexed_Held;
+               accept Took (Held : out Natural) do
+                  Held := Count;
+               end Took;
+            end Taker;
+
+            Raised : Boolean := False;
+            Count  : Natural := 0;
+            Taken  : Boolean := False;
+         begin
+            Rv.Retry_Indexing_After (0.0);
+            Put_File (To_String (Notes), "Now it says quokka and parse at last." & LF);
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Failure_Noted,
+                                          Break_Noting'Unrestricted_Access);
+            begin
+               Hits := Find ("quokka");
+            exception
+               when Program_Error =>
+                  Raised := True;
+            end;
+            Taker.Go;
+            select
+               Taker.Took (Count);
+               Taken := True;
+            or
+               delay 30.0;
+            end select;
+            if not Taken then
+               abort Taker;
+            end if;
+            Assert (Raised, "a failure in noting a failure did not reach the search");
+            Assert (Taken, "the index's lock was left held after a failure in noting a failure");
+            Assert (Texts ("quokka", "docs/notes.txt"), "the search after a failure in noting one did not answer");
+         end;
          Rv.Retry_Indexing_After (30.0);
          Put_File (To_String (Notes), "Now it says quokka and parse number." & LF);
          declare

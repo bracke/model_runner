@@ -7,6 +7,7 @@ with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Ordered_Maps;
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.Finalization;
 with Ada.Numerics.Elementary_Functions;
 with Ada.Real_Time;
 with Ada.Strings.Fixed;
@@ -428,13 +429,19 @@ package body Model_Runner.Framework.Retrieval is
    --  A file whose reading in failed -- the counting of its words, or its
    --  install, raised: the print it had, how often it failed at that
    --  print, when it may be tried again, and what failed, as the stage
-   --  and the exception's name -- no message, which may say anything.
+   --  and the exception's name. Memory run out is a want of room, which
+   --  passes and is tried again; any other exception is a fault of this
+   --  program's own -- no file's text should raise one -- which comes
+   --  back each time: not tried again at that print, and said with the
+   --  first of its message, which names where it was raised.
    type Failure is record
-      Print : Unbounded_String;
-      Tries : Positive := 1;
-      Next  : Ada.Real_Time.Time;
-      Stage : Unbounded_String;
-      Name  : Unbounded_String;
+      Print  : Unbounded_String;
+      Tries  : Positive := 1;
+      Next   : Ada.Real_Time.Time;
+      Stage  : Unbounded_String;
+      Name   : Unbounded_String;
+      Fault  : Boolean := False;
+      Detail : Unbounded_String;
    end record;
 
    --  The files whose reading in failed, by key. One is tried again once
@@ -449,6 +456,10 @@ package body Model_Runner.Framework.Retrieval is
    Failed     : Failed_Maps.Map;
    Most_Tries : constant := 4;
    Retry_Wait : Duration := 30.0;
+
+   --  The longest first wait Retry_Indexing_After takes: doubled three
+   --  times, eight hours, well inside what a time span holds.
+   Longest_Wait : constant Duration := 3_600.0;
 
    --  Whether a file that failed is to be read in now, at the graph's
    --  print. Called with Lock held.
@@ -497,6 +508,27 @@ package body Model_Runner.Framework.Retrieval is
          Held := False;
       end Release;
    end Lock;
+
+   --  Lock held for as long as one of these lives: seized as it is made,
+   --  released however its scope is left -- an exception raised while it
+   --  is held, in a handler among others, does not leave it held, so no
+   --  later search waits on it for good.
+   type Holding is new Ada.Finalization.Limited_Controlled with null record;
+
+   overriding procedure Initialize (Self : in out Holding);
+   overriding procedure Finalize (Self : in out Holding);
+
+   overriding procedure Initialize (Self : in out Holding) is
+      pragma Unreferenced (Self);
+   begin
+      Lock.Seize;
+   end Initialize;
+
+   overriding procedure Finalize (Self : in out Holding) is
+      pragma Unreferenced (Self);
+   begin
+      Lock.Release;
+   end Finalize;
 
    --  What a declaration's description says of a query: its points, and
    --  how many of the query's words it holds.
@@ -904,7 +936,9 @@ package body Model_Runner.Framework.Retrieval is
       --  Whether this pass let the index go: it then reads in no more.
       Let_Go  : Boolean := False;
    begin
-      Lock.Seize;
+      declare
+         Locked : Holding;
+         pragma Unreferenced (Locked);
       begin
          for Index_At in 1 .. Rp.File_Count (Graph) loop
             declare
@@ -979,11 +1013,9 @@ package body Model_Runner.Framework.Retrieval is
             end loop;
          end;
          Passes := Passes + 1;
-         Lock.Release;
       exception
          when others =>
             Clear_Index;
-            Lock.Release;
             raise;
       end;
       Files := Natural (Present.Length);
@@ -1014,7 +1046,9 @@ package body Model_Runner.Framework.Retrieval is
                     (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Prints (At_Stale));
                begin
                   Stage := To_Unbounded_String ("installing it");
-                  Lock.Seize;
+                  declare
+                     Locked : Holding;
+                     pragma Unreferenced (Locked);
                   begin
                      if Change_Of (Key) = Seen (At_Stale) then
                         if E.Is_Ok (Status) or else Too_Large then
@@ -1030,12 +1064,10 @@ package body Model_Runner.Framework.Retrieval is
                         end if;
                         Failed.Exclude (Key);
                      end if;
-                     Lock.Release;
                   exception
                      when others =>
                         Clear_Index;
                         Let_Go := True;
-                        Lock.Release;
                         raise;
                   end;
                end;
@@ -1048,39 +1080,57 @@ package body Model_Runner.Framework.Retrieval is
                when Error : others =>
                   declare
                      use type Ada.Real_Time.Time;
-                     Key   : constant String := Key_Of (Root, Path);
-                     Tries : Positive := 1;
+                     use type Ada.Exceptions.Exception_Id;
+                     Key     : constant String := Key_Of (Root, Path);
+                     Fault   : constant Boolean := Ada.Exceptions.Exception_Identity (Error) /= Storage_Error'Identity;
+                     Message : constant String := Ada.Exceptions.Exception_Message (Error);
+                     Tries   : Positive := (if Fault then Most_Tries else 1);
+                     Locked  : Holding;
+                     pragma Unreferenced (Locked);
                   begin
-                     Lock.Seize;
-                     if Failed.Contains (Key) and then To_String (Failed.Element (Key).Print) = Prints (At_Stale) then
-                        Tries := Failed.Element (Key).Tries + 1;
+                     Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Failure_Noted);
+                     if not Fault and then Failed.Contains (Key)
+                       and then To_String (Failed.Element (Key).Print) = Prints (At_Stale)
+                     then
+                        Tries := Natural'Min (Failed.Element (Key).Tries + 1, Most_Tries);
                      end if;
                      Failed.Include
-                       (Key, (Print => To_Unbounded_String (Prints (At_Stale)), Tries => Tries,
-                              Next  => Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Retry_Wait * 2 ** (Tries - 1)),
-                              Stage => Stage,
-                              Name  => To_Unbounded_String (Ada.Exceptions.Exception_Name (Error))));
-                     Lock.Release;
+                       (Key, (Print  => To_Unbounded_String (Prints (At_Stale)), Tries => Tries,
+                              Next   => Ada.Real_Time.Clock
+                                          + Ada.Real_Time.To_Time_Span (Retry_Wait * 2 ** (Tries - 1)),
+                              Stage  => Stage,
+                              Name   => To_Unbounded_String (Ada.Exceptions.Exception_Name (Error)),
+                              Fault  => Fault,
+                              Detail => To_Unbounded_String
+                                          (if Fault then Message (Message'First .. Message'First
+                                                                     + Natural'Min (Message'Length, 120) - 1)
+                                           else "")));
                   end;
                   exit when Let_Go;
             end;
          end loop;
       exception
          when others =>
-            Lock.Seize;
-            Passes := Passes - 1;
-            if Passes = 0 then
-               Raise_Floor;
-            end if;
-            Lock.Release;
+            declare
+               Locked : Holding;
+               pragma Unreferenced (Locked);
+            begin
+               Passes := Passes - 1;
+               if Passes = 0 then
+                  Raise_Floor;
+               end if;
+            end;
             raise;
       end;
-      Lock.Seize;
-      Passes := Passes - 1;
-      if Passes = 0 and then not Changed.Is_Empty then
-         Raise_Floor;
-      end if;
-      Lock.Release;
+      declare
+         Locked : Holding;
+         pragma Unreferenced (Locked);
+      begin
+         Passes := Passes - 1;
+         if Passes = 0 and then not Changed.Is_Empty then
+            Raise_Floor;
+         end if;
+      end;
    end Bring_Up;
 
    --------------------------
@@ -1089,16 +1139,17 @@ package body Model_Runner.Framework.Retrieval is
 
    procedure Retry_Indexing_After (Wait : Duration) is
       use type Ada.Real_Time.Time;
-      By : constant Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Wait);
+      Held_To : constant Duration := Duration'Max (0.0, Duration'Min (Wait, Longest_Wait));
+      By      : constant Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Held_To);
+      Locked  : Holding;
+      pragma Unreferenced (Locked);
    begin
-      Lock.Seize;
-      Retry_Wait := Wait;
+      Retry_Wait := Held_To;
       for Was of Failed loop
          if Was.Next > By then
             Was.Next := By;
          end if;
       end loop;
-      Lock.Release;
    end Retry_Indexing_After;
 
    -----------------
@@ -1120,7 +1171,9 @@ package body Model_Runner.Framework.Retrieval is
          end if;
       end Look;
    begin
-      Lock.Seize;
+      declare
+         Locked : Holding;
+         pragma Unreferenced (Locked);
       begin
          for Position in Index.Iterate loop
             Look (Word_Maps.Key (Position));
@@ -1132,11 +1185,9 @@ package body Model_Runner.Framework.Retrieval is
             Look (Failed_Maps.Key (Position));
          end loop;
          Drop_Trees (Gone);
-         Lock.Release;
       exception
          when others =>
             Clear_Index;
-            Lock.Release;
             raise;
       end;
    end Forget_Tree;
@@ -1153,7 +1204,9 @@ package body Model_Runner.Framework.Retrieval is
       for Path of Rp.Unread_Paths (Graph) loop
          Result.Append (Path & ": could not be read");
       end loop;
-      Lock.Seize;
+      declare
+         Locked : Holding;
+         pragma Unreferenced (Locked);
       begin
          for Position in Unsearched.Iterate loop
             declare
@@ -1178,21 +1231,21 @@ package body Model_Runner.Framework.Retrieval is
                   begin
                      Held.Append
                        (Key (Key'First + Root'Length + 1 .. Key'Last) & ": could not be indexed ("
-                        & To_String (Was.Name) & " " & To_String (Was.Stage) & ", " & Image (Was.Tries)
-                        & (if Was.Tries = 1 then " time; " else " times; ")
-                        & (if Was.Tries >= Most_Tries then "not tried again until it changes"
-                           elsif Left <= 0.0 then "tried again by the next search"
-                           else "tried again in" & Natural'Image (Natural (Float'Ceiling (Float (Left)))) & " s")
+                        & To_String (Was.Name) & " " & To_String (Was.Stage)
+                        & (if Was.Fault
+                           then ", a fault of the program's own"
+                                & (if Length (Was.Detail) = 0 then "" else ": " & To_String (Was.Detail))
+                                & "; not tried again until it changes"
+                           else ", " & Image (Was.Tries) & (if Was.Tries = 1 then " time; " else " times; ")
+                                & (if Was.Tries >= Most_Tries then "not tried again until it changes"
+                                   elsif Left <= 0.0 then "tried again by the next search"
+                                   else "tried again in" & Natural'Image (Natural (Float'Ceiling (Float (Left))))
+                                        & " s"))
                         & ")");
                   end;
                end if;
             end;
          end loop;
-         Lock.Release;
-      exception
-         when others =>
-            Lock.Release;
-            raise;
       end;
       Result.Append (Held);
       Sorting.Sort (Result);
@@ -1204,12 +1257,12 @@ package body Model_Runner.Framework.Retrieval is
    ------------
 
    procedure Forget is
+      Locked : Holding;
+      pragma Unreferenced (Locked);
    begin
-      Lock.Seize;
       Clear_Index;
       Failed.Clear;
       Read_Count := 0;
-      Lock.Release;
    end Forget;
 
    ---------------------
@@ -1217,12 +1270,10 @@ package body Model_Runner.Framework.Retrieval is
    ---------------------
 
    function Indexed_Changes return Natural is
-      Count : Natural;
+      Locked : Holding;
+      pragma Unreferenced (Locked);
    begin
-      Lock.Seize;
-      Count := Natural (Changed.Length);
-      Lock.Release;
-      return Count;
+      return Natural (Changed.Length);
    end Indexed_Changes;
 
    -------------------
@@ -1230,12 +1281,10 @@ package body Model_Runner.Framework.Retrieval is
    -------------------
 
    function Indexed_Reads return Natural is
-      Count : Natural;
+      Locked : Holding;
+      pragma Unreferenced (Locked);
    begin
-      Lock.Seize;
-      Count := Read_Count;
-      Lock.Release;
-      return Count;
+      return Read_Count;
    end Indexed_Reads;
 
    ----------------
@@ -1243,12 +1292,10 @@ package body Model_Runner.Framework.Retrieval is
    ----------------
 
    function Indexed_Held return Natural is
-      Count : Natural;
+      Locked : Holding;
+      pragma Unreferenced (Locked);
    begin
-      Lock.Seize;
-      Count := Natural (Index.Length);
-      Lock.Release;
-      return Count;
+      return Natural (Index.Length);
    end Indexed_Held;
 
    ----------------
@@ -1262,12 +1309,10 @@ package body Model_Runner.Framework.Retrieval is
    -------------------
 
    function Indexed_Terms return Natural is
-      Count : Natural;
+      Locked : Holding;
+      pragma Unreferenced (Locked);
    begin
-      Lock.Seize;
-      Count := Natural (Dictionary.Length);
-      Lock.Release;
-      return Count;
+      return Natural (Dictionary.Length);
    end Indexed_Terms;
 
    ---------------------------------------------------------------------------
@@ -1434,7 +1479,9 @@ package body Model_Runner.Framework.Retrieval is
       --  search visits the files that hold the words, as the text's does.
       Bring_Up (Graph, Tree, Files);
       if not Terms.Is_Empty then
-         Lock.Seize;
+         declare
+            Locked : Holding;
+            pragma Unreferenced (Locked);
          begin
             declare
                Prefix   : constant String := Tree & ASCII.NUL;
@@ -1575,11 +1622,6 @@ package body Model_Runner.Framework.Retrieval is
                   end;
                end loop;
             end;
-            Lock.Release;
-         exception
-            when others =>
-               Lock.Release;
-               raise;
          end;
       end if;
 
@@ -1815,7 +1857,9 @@ package body Model_Runner.Framework.Retrieval is
          Inner_Known : Boolean := False;
          May_Hold    : Name_Sets.Set;
       begin
-         Lock.Seize;
+         declare
+            Locked : Holding;
+            pragma Unreferenced (Locked);
          begin
             for At_Term in Ids'Range loop
                if Dictionary.Contains (Terms (At_Term)) then
@@ -1937,11 +1981,6 @@ package body Model_Runner.Framework.Retrieval is
                   end;
                end loop;
             end;
-            Lock.Release;
-         exception
-            when others =>
-               Lock.Release;
-               raise;
          end;
 
          --  The best of them read again for the line to show: the first

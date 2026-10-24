@@ -80,8 +80,10 @@ with Model_Runner.Framework.Stores;
 --  way lets the whole index go, to be read anew: every pass under way
 --  then installs nothing more, its changes seen before the index went.
 --  A file whose reading in raised is passed by, named by Not_Searched
---  with what failed, and tried again after a wait that doubles each
---  time, four tries at most until it changes: a fault that passes is got
+--  with what failed. Where memory ran out it is tried again after a wait
+--  that doubles each time, four tries at most until it changes; any
+--  other exception is a fault of the program's own, said with where it
+--  was raised and not tried again until the file changes: a fault that passes is got
 --  over, and one that comes back costs a few tries a version of the
 --  file, not a whole index at every search. A pass that let the index go
 --  reads in nothing more. What is kept
@@ -171,7 +173,9 @@ package Model_Runner.Framework.Retrieval is
    --  not read, and those the index could not read, could not index or
    --  holds no words of, being too large -- each as PATH: why, sorted. One
    --  that could not be indexed says what failed (the exception's name and
-   --  what was being done), how often, and when it is tried again. Said beside a search's
+   --  what was being done) and, for memory run out, how often and when it
+   --  is tried again; for a fault of the program's own, the first of its
+   --  message. Said beside a search's
    --  hits, so that nothing found there is not taken for nothing there.
    --
    --  @param Graph The graph the search was given.
@@ -322,7 +326,8 @@ package Model_Runner.Framework.Retrieval is
 
    --  How long a file whose indexing failed waits before it is tried
    --  again, the first time: doubled each time after; a wait under way
-   --  longer than it is cut to it. For tests; 30 seconds where nobody
+   --  longer than it is cut to it. Held to 0 .. 3,600 seconds. For tests
+   --  only -- every tree's files wait alike -- and 30 seconds where nobody
    --  sets it.
    --
    --  @param Wait The wait.
