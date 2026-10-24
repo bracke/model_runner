@@ -12,8 +12,10 @@ package Model_Runner.Race_Points is
    --  copy, made and not yet renamed into its place; the files a routine
    --  stage changed, before they are committed as the task's; the index
    --  of a project's words, a file read and what it holds not yet
-   --  installed.
-   type Point is (Take_In_Writes, Read_File_Stamps, Large_Copy_Renames, Stage_Files_Kept, Index_Installs);
+   --  installed; and an install, the file's old words let go and its new
+   --  not yet in.
+   type Point is
+     (Take_In_Writes, Read_File_Stamps, Large_Copy_Renames, Stage_Files_Kept, Index_Installs, Index_Midway);
 
    --  What a test does at a point.
    type Action is access procedure;

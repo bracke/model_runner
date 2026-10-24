@@ -309,13 +309,35 @@ package body Model_Runner.Framework.Code_Queries is
       end if;
       if Kind = "search" then
          declare
-            Hits : constant Rv.Hit_Lists.Vector :=
-              Rv.Search (Store, Graph_Of (Store, Root), Tree, Asked, Most => 15,
+            Graph : constant Repository.Graph := Graph_Of (Store, Root);
+            Hits  : constant Rv.Hit_Lists.Vector :=
+              Rv.Search (Store, Graph, Tree, Asked, Most => 15,
                          May_Read => Model_Runner.Tools.Builtin.May_Read_Found'Access, Records => Records);
-            Rank : Natural := 0;
+            Rank  : Natural := 0;
+
+            --  The files the search could not look in, a few named: what
+            --  was not found may be in one of them.
+            function Left_Out return String is
+               Missed : constant Name_Lists.Vector := Rv.Not_Searched (Graph, Tree);
+               Named  : Unbounded_String;
+            begin
+               if Missed.Is_Empty then
+                  return "";
+               end if;
+               for At_Missed in 1 .. Natural'Min (5, Natural (Missed.Length)) loop
+                  Append (Named, (if At_Missed = 1 then "" else "; ") & Missed (At_Missed));
+               end loop;
+               return "note:" & Natural'Image (Natural (Missed.Length)) & " files were not searched: "
+                 & To_String (Named)
+                 & (if Natural (Missed.Length) > 5
+                    then "; and" & Natural'Image (Natural (Missed.Length) - 5) & " more" else "")
+                 & ASCII.LF;
+            end Left_Out;
+
+            Note : constant String := Left_Out;
          begin
             if Hits.Is_Empty then
-               return "nothing in the project for " & Asked;
+               return "nothing in the project for " & Asked & (if Note = "" then "" else ASCII.LF & Note);
             end if;
             for One of Hits loop
                Rank := Rank + 1;
@@ -330,6 +352,7 @@ package body Model_Runner.Framework.Code_Queries is
                        & " -- score" & Natural'Image (One.Score) & ": " & To_String (One.Why)
                        & " [" & To_String (One.Authority) & "]" & ASCII.LF);
             end loop;
+            Append (Said, Note);
             Append (Said, "find kind declaration with a name or PATH:LINE shows its lines" & ASCII.LF);
             return Bounded (To_String (Said));
          end;

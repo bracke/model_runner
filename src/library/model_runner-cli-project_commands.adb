@@ -584,6 +584,11 @@ package body Model_Runner.CLI.Project_Commands is
 
       --  Replies whose thought reached its budget and was closed for them.
       Thoughts_Closed : Natural := 0;
+
+      --  The tokens the work generated, its helpers' among them, and the
+      --  most its conversation came to hold: what it cost the model.
+      Generated     : Natural := 0;
+      Context_Most  : Natural := 0;
    end record;
 
    --  Those, in a line.
@@ -788,6 +793,8 @@ package body Model_Runner.CLI.Project_Commands is
             Recorded := Outcome.Work_Record;
          end if;
          Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
+         Runner.Generated := All_Spent;
+         Runner.Context_Most := Prompt_Tokens;
          --  What comes of the round, decided from how it ended (Wk.Next_Step).
          declare
             Last_Own : constant Boolean :=
@@ -1243,7 +1250,9 @@ package body Model_Runner.CLI.Project_Commands is
       & ", checks run:" & Natural'Image (Self.Check_Runs)
       & (if Self.Observed = 0 then "" else ", observations kept:" & Natural'Image (Self.Observed))
       & (if Self.Thoughts_Closed = 0 then ""
-         else ", thoughts closed at their budget:" & Natural'Image (Self.Thoughts_Closed)));
+         else ", thoughts closed at their budget:" & Natural'Image (Self.Thoughts_Closed))
+      & "; tokens generated:" & Natural'Image (Self.Generated)
+      & ", context at most:" & Natural'Image (Self.Context_Most));
 
    overriding procedure Run
      (Self      : in out Work_Tools;

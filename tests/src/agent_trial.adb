@@ -1181,12 +1181,28 @@ package body Agent_Trial is
                            end if;
                            declare
                               Text   : constant String := To_String (Outcome);
-                              Mark   : constant String := "thoughts closed at their budget:";
-                              At_It  : constant Natural := Ada.Strings.Fixed.Index (To_String (Figures), Mark);
-                              Closed : constant String :=
-                                (if At_It = 0 then "0"
-                                 else Ada.Strings.Fixed.Trim
-                                   (To_String (Figures) (At_It + Mark'Length .. Length (Figures)), Ada.Strings.Both));
+
+                              --  One of the work's figures, by what it is
+                              --  called: its digits, "0" where it is not said.
+                              function Figure (Mark : String) return String is
+                                 Line  : constant String := To_String (Figures);
+                                 At_It : constant Natural := Ada.Strings.Fixed.Index (Line, Mark);
+                                 Last  : Natural;
+                              begin
+                                 if At_It = 0 then
+                                    return "0";
+                                 end if;
+                                 Last := At_It + Mark'Length;
+                                 while Last <= Line'Last and then Line (Last) in ' ' | '0' .. '9' loop
+                                    Last := Last + 1;
+                                 end loop;
+                                 return Ada.Strings.Fixed.Trim
+                                   (Line (At_It + Mark'Length .. Last - 1), Ada.Strings.Both);
+                              end Figure;
+
+                              Closed : constant String := Figure ("thoughts closed at their budget:");
+                              Made   : constant String := Figure ("tokens generated:");
+                              Held   : constant String := Figure ("context at most:");
                               Ending : constant String :=
                                 (if Ada.Strings.Fixed.Index (Text, "complete") > 0 then "complete"
                                  elsif Ada.Strings.Fixed.Index (Text, "ran out of time") > 0 then "out of time"
@@ -1198,6 +1214,7 @@ package body Agent_Trial is
                                       "  run" & Integer'Image (Round) & ": " & Ending
                                       & [1 .. Natural'Max (1, 12 - Ending'Length) => ' ']
                                       & Integer'Image (Integer (Took)) & " s," & Natural'Image (Calls) & " calls, "
+                                      & Made & " tokens made, " & Held & " held at most, "
                                       & Closed & " thoughts closed" & LF);
                               Keep_In_History (Name, Ending, Natural (Took), Calls, Closed);
                            end;

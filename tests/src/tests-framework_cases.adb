@@ -19892,6 +19892,73 @@ package body Tests.Framework_Cases is
       end;
       Put_File (To_String (Notes), "Now it says quokka." & LF);
       Assert (Texts ("quokka", "docs/notes.txt"), "a file written again was not found");
+      Assert (Rv.Indexed_Changes = 0, "changes were kept with no pass under way:" & Rv.Indexed_Changes'Image);
+
+      --  Read, then changed with no search between: the older read is
+      --  held under its own print, and the next search reads the file
+      --  again.
+      declare
+         procedure Change is
+         begin
+            Put_File (To_String (Notes), "Now it says kudu." & LF);
+         end Change;
+      begin
+         Put_File (To_String (Notes), "Now it says gnu." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Change'Unrestricted_Access);
+         Hits := Find ("gnu");
+         Assert (Texts ("kudu", "docs/notes.txt") and then not Texts ("gnu", "docs/notes.txt"),
+                 "a file changed after its read was taken as read");
+      end;
+
+      --  An install stopped part way, its old words let go and its new
+      --  not yet in: the index is let go, and the next search ranks as
+      --  one made anew.
+      declare
+         procedure Run_Out is
+         begin
+            raise Storage_Error with "the test's own";
+         end Run_Out;
+         Raised : Boolean := False;
+      begin
+         Put_File (To_String (Notes), "Now it says quokka and parse." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+         begin
+            Hits := Find ("quokka");
+         exception
+            when Storage_Error =>
+               Raised := True;
+         end;
+         Assert (Raised, "the install was not stopped");
+         declare
+            After   : constant Rv.Hit_Lists.Vector := Find ("parse number quokka");
+            Held    : constant Natural := Rv.Indexed_Held;
+            Terms   : constant Natural := Rv.Indexed_Terms;
+         begin
+            Rv.Forget;
+            Assert (Rv.Hit_Lists."=" (After, Find ("parse number quokka")) and then Rv.Indexed_Held = Held
+                    and then Rv.Indexed_Terms = Terms,
+                    "an install stopped part way left an index that ranked otherwise than one made anew");
+         end;
+      end;
+      Put_File (To_String (Notes), "Now it says quokka." & LF);
+      Assert (Texts ("quokka", "docs/notes.txt"), "a file written again was not found");
+
+      --  A file too large is named as not searched, and is not once it
+      --  is gone.
+      declare
+         Large : constant String := Fresh_Root (Store) & "/docs/large.txt";
+      begin
+         Put_File (Large, Ada.Strings.Fixed."*" (Rv.Indexed_Most / 8 + 1, "numbat. "));
+         Hits := Find ("numbat");
+         Assert ((for some One of
+                    Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), Fresh_Root (Store))
+                  => One = "docs/large.txt: too large to index"),
+                 "a file too large was not named as not searched");
+         Dirs.Delete_File (Large);
+         Hits := Find ("numbat");
+         Assert (Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), Fresh_Root (Store)).Is_Empty,
+                 "a file gone was still named as not searched");
+      end;
 
       --  Two files changed; while the first is read, the second is made
       --  unreadable. It is not taken to have no words: once readable, the
@@ -19919,11 +19986,16 @@ package body Tests.Framework_Cases is
          GNAT.OS_Lib.Set_Readable (Tool);
          GNAT.OS_Lib.Set_Readable (To_String (Notes));
          if Hidden then
+            Assert ((for some One of Rv.Not_Searched (Graph, Fresh_Root (Store)) => Ada.Strings.Fixed.Index
+                       (One, ": could not be read") > 0),
+                    "a file that could not be read was not named as not searched");
             Hits := Rv.Search (Store, Graph, "", "wallaroo", 20, Records => False);
             Assert ((for some One of Hits => One.Kind = Rv.Text_Hit and then To_String (One.Path) = "src/tool.py")
                     and then (for some One of Hits => One.Kind = Rv.Text_Hit
                               and then To_String (One.Path) = "docs/notes.txt"),
                     "a file that could not be read was held as one without words");
+            Assert (Rv.Not_Searched (Graph, Fresh_Root (Store)).Is_Empty,
+                    "a file read again was still named as not searched");
          else
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "note: index-newest: a file made unreadable could still be read;"

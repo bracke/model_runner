@@ -403,18 +403,38 @@ package body Model_Runner.Framework.Retrieval is
    --  count of the index's changes, kept after a drop: a pass that read a
    --  file installs what it read only where nothing changed the entry
    --  since it chose to, so a slower pass with an older read does not put
-   --  back what a faster one replaced or dropped.
+   --  back what a faster one replaced or dropped. An entry not in Changed
+   --  last changed at Floor. Only a pass under way can hold a change it
+   --  saw, so when none is, Changed is emptied and Floor moved past every
+   --  change: what is kept for files gone is kept only while passes run.
    package Change_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Positive, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    Changed : Change_Maps.Map;
    Changes : Natural := 0;
+   Floor   : Natural := 0;
+   Passes  : Natural := 0;
 
    package Change_Lists is new Ada.Containers.Vectors (Positive, Natural);
 
-   --  An entry's last change, nought for one never changed. Called with
-   --  Lock held.
+   --  The files of the index's trees that a search does not search, by
+   --  key: true for one too large, held with no words; false for one that
+   --  could not be read, not held.
+   package Unsearched_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Boolean, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Unsearched : Unsearched_Maps.Map;
+
+   --  An entry's last change. Called with Lock held.
    function Change_Of (Key : String) return Natural
-   is (if Changed.Contains (Key) then Changed.Element (Key) else 0);
+   is (if Changed.Contains (Key) then Changed.Element (Key) else Floor);
+
+   --  Every change forgotten, none a pass under way saw matching what
+   --  comes after. Called with Lock held.
+   procedure Raise_Floor is
+   begin
+      Changed.Clear;
+      Changes := Changes + 1;
+      Floor := Changes;
+   end Raise_Floor;
 
    --  An entry changed. Called with Lock held.
    procedure Mark_Changed (Key : String) is
@@ -551,6 +571,7 @@ package body Model_Runner.Framework.Retrieval is
          for One of Index.Constant_Reference (Key).Words loop
             Unlink (One.Term, Doc);
          end loop;
+         Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Midway);
       elsif not Free_Docs.Is_Empty then
          Doc := Free_Docs.Last_Element;
          Free_Docs.Delete_Last;
@@ -716,6 +737,25 @@ package body Model_Runner.Framework.Retrieval is
          E.Add_Text (Status, "name", Path);
    end Read_In;
 
+   --  The whole index let go, to be read anew: where a change to it was
+   --  stopped part way -- memory run out in the middle of an install --
+   --  its dictionary, postings and entries need not agree, and nothing of
+   --  them is kept. A pass under way does not install over it. Called
+   --  with Lock held.
+   procedure Clear_Index is
+   begin
+      Index.Clear;
+      Dictionary.Clear;
+      Spelled.Clear;
+      Term_Names.Clear;
+      Term_Docs.Clear;
+      Free_Terms.Clear;
+      Doc_Keys.Clear;
+      Free_Docs.Clear;
+      Unsearched.Clear;
+      Raise_Floor;
+   end Clear_Index;
+
    --  The index brought up to the graph -- one brought up to the tree as
    --  it is now, by Search -- a file read again where its print changed,
    --  one gone dropped; and how many of the tree's files it holds. What is
@@ -730,7 +770,10 @@ package body Model_Runner.Framework.Retrieval is
    --  pass that installed or dropped it in between knew as much or more.
    --  A file too large is held with no words, as it is until it changes;
    --  one that could not be read is not held at all, so the next search
-   --  reads it again rather than take it to have no words.
+   --  reads it again rather than take it to have no words; both are
+   --  noted, for Not_Searched. A change to the index raising part way
+   --  lets the whole index go (Clear_Index), the next search reading it
+   --  anew.
    procedure Bring_Up (Graph : Rp.Graph; Root : String; Files : out Natural) is
       Present : Name_Sets.Set;
       Stale   : Name_Lists.Vector;
@@ -775,57 +818,133 @@ package body Model_Runner.Framework.Retrieval is
             for Key of Gone loop
                Drop (Key);
             end loop;
+            Gone.Clear;
+            for Position in Unsearched.Iterate loop
+               declare
+                  Key : constant String := Unsearched_Maps.Key (Position);
+               begin
+                  if Key'Length > Root'Length and then Key (Key'First .. Key'First + Root'Length) = Root & ASCII.NUL
+                    and then not Present.Contains (Key)
+                  then
+                     Gone.Append (Key);
+                  end if;
+               end;
+            end loop;
+            for Key of Gone loop
+               Unsearched.Delete (Key);
+            end loop;
          end;
+         Passes := Passes + 1;
+         Lock.Release;
+      exception
+         when others =>
+            Clear_Index;
+            Lock.Release;
+            raise;
+      end;
+      Files := Natural (Present.Length);
+
+      begin
+         for At_Stale in 1 .. Natural (Stale.Length) loop
+            declare
+               Path    : constant String := Stale (At_Stale);
+               Text    : Unbounded_String;
+               Status  : E.Error_Info;
+            begin
+               --  The size held to in the read itself: no look at the file by
+               --  its path before it is opened.
+               Read_In (Root, Path, Text, Status, Most => Indexed_Most);
+               Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Installs);
+               declare
+                  use type E.Error_Code;
+                  Key       : constant String := Key_Of (Root, Path);
+                  Too_Large : constant Boolean := Status.Code = E.IO_File_Too_Large;
+                  Counted   : constant Count_Maps.Map :=
+                    (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else Count_Maps.Empty_Map);
+                  Described : constant Description_Lists.Vector :=
+                    (if E.Is_Ok (Status) then Descriptions_Of (To_String (Text), Rp.Language_Of (Path))
+                     else Description_Lists.Empty_Vector);
+                  Print     : constant String :=
+                    (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Prints (At_Stale));
+               begin
+                  Lock.Seize;
+                  begin
+                     if Change_Of (Key) = Seen (At_Stale) then
+                        if E.Is_Ok (Status) or else Too_Large then
+                           Install (Key, Print, Counted, Described);
+                           Read_Count := Read_Count + 1;
+                        elsif Index.Contains (Key) then
+                           Drop (Key);
+                        end if;
+                        if E.Is_Ok (Status) then
+                           Unsearched.Exclude (Key);
+                        else
+                           Unsearched.Include (Key, Too_Large);
+                        end if;
+                     end if;
+                     Lock.Release;
+                  exception
+                     when others =>
+                        Clear_Index;
+                        Lock.Release;
+                        raise;
+                  end;
+               end;
+            end;
+         end loop;
+      exception
+         when others =>
+            Lock.Seize;
+            Passes := Passes - 1;
+            if Passes = 0 then
+               Raise_Floor;
+            end if;
+            Lock.Release;
+            raise;
+      end;
+      Lock.Seize;
+      Passes := Passes - 1;
+      if Passes = 0 and then not Changed.Is_Empty then
+         Raise_Floor;
+      end if;
+      Lock.Release;
+   end Bring_Up;
+
+   ------------------
+   -- Not_Searched --
+   ------------------
+
+   function Not_Searched (Graph : Repository.Graph; Root : String) return Name_Lists.Vector is
+      package Sorting is new Name_Lists.Generic_Sorting;
+      Result : Name_Lists.Vector;
+      Held   : Name_Lists.Vector;
+   begin
+      for Path of Rp.Unread_Paths (Graph) loop
+         Result.Append (Path & ": could not be read");
+      end loop;
+      Lock.Seize;
+      begin
+         for Position in Unsearched.Iterate loop
+            declare
+               Key : constant String := Unsearched_Maps.Key (Position);
+            begin
+               if Key'Length > Root'Length and then Key (Key'First .. Key'First + Root'Length) = Root & ASCII.NUL then
+                  Held.Append (Key (Key'First + Root'Length + 1 .. Key'Last)
+                               & (if Unsearched_Maps.Element (Position) then ": too large to index"
+                                  else ": could not be read"));
+               end if;
+            end;
+         end loop;
          Lock.Release;
       exception
          when others =>
             Lock.Release;
             raise;
       end;
-      Files := Natural (Present.Length);
-
-      for At_Stale in 1 .. Natural (Stale.Length) loop
-         declare
-            Path    : constant String := Stale (At_Stale);
-            Text    : Unbounded_String;
-            Status  : E.Error_Info;
-         begin
-            --  The size held to in the read itself: no look at the file by
-            --  its path before it is opened.
-            Read_In (Root, Path, Text, Status, Most => Indexed_Most);
-            Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Installs);
-            declare
-               use type E.Error_Code;
-               Key       : constant String := Key_Of (Root, Path);
-               Too_Large : constant Boolean := Status.Code = E.IO_File_Too_Large;
-               Counted   : constant Count_Maps.Map :=
-                 (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else Count_Maps.Empty_Map);
-               Described : constant Description_Lists.Vector :=
-                 (if E.Is_Ok (Status) then Descriptions_Of (To_String (Text), Rp.Language_Of (Path))
-                  else Description_Lists.Empty_Vector);
-               Print     : constant String :=
-                 (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Prints (At_Stale));
-            begin
-               Lock.Seize;
-               begin
-                  if Change_Of (Key) = Seen (At_Stale) then
-                     if E.Is_Ok (Status) or else Too_Large then
-                        Install (Key, Print, Counted, Described);
-                        Read_Count := Read_Count + 1;
-                     elsif Index.Contains (Key) then
-                        Drop (Key);
-                     end if;
-                  end if;
-                  Lock.Release;
-               exception
-                  when others =>
-                     Lock.Release;
-                     raise;
-               end;
-            end;
-         end;
-      end loop;
-   end Bring_Up;
+      Result.Append (Held);
+      Sorting.Sort (Result);
+      return Result;
+   end Not_Searched;
 
    ------------
    -- Forget --
@@ -834,19 +953,23 @@ package body Model_Runner.Framework.Retrieval is
    procedure Forget is
    begin
       Lock.Seize;
-      Index.Clear;
-      Dictionary.Clear;
-      Spelled.Clear;
-      Term_Names.Clear;
-      Term_Docs.Clear;
-      Free_Terms.Clear;
-      Doc_Keys.Clear;
-      Free_Docs.Clear;
-      Changed.Clear;
-      Changes := 0;
+      Clear_Index;
       Read_Count := 0;
       Lock.Release;
    end Forget;
+
+   ---------------------
+   -- Indexed_Changes --
+   ---------------------
+
+   function Indexed_Changes return Natural is
+      Count : Natural;
+   begin
+      Lock.Seize;
+      Count := Natural (Changed.Length);
+      Lock.Release;
+      return Count;
+   end Indexed_Changes;
 
    -------------------
    -- Indexed_Reads --

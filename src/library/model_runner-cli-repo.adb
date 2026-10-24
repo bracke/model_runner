@@ -723,6 +723,21 @@ package body Model_Runner.CLI.Repo is
                Opened := E.Make (E.Framework_Not_Found);
             end if;
             Hits := Rv.Search (Store, Found, Top, Typed, Most => 15, Records => E.Is_Ok (Opened));
+            --  What the search could not look in: named, so that nothing
+            --  found is not taken for nothing there.
+            declare
+               Missed : constant Model_Runner.Framework.Name_Lists.Vector := Rv.Not_Searched (Found, Top);
+               Said   : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               if not Missed.Is_Empty then
+                  for Index in 1 .. Natural (Missed.Length) loop
+                     Ada.Strings.Unbounded.Append (Said, (if Index = 1 then "" else "; ") & Missed (Index));
+                  end loop;
+                  Pres.Put_Note (Screen, "cli.repo.not_searched",
+                                 [Loc.Named ("count", Image (Natural (Missed.Length))),
+                                  Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Said))]);
+               end if;
+            end;
             if Hits.Is_Empty then
                if E.Is_Ok (Opened) then
                   S.Close (Store);

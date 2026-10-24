@@ -71,13 +71,26 @@ with Model_Runner.Framework.Stores;
 --  A file's entry is what was read of it, under the print of what was
 --  read, and is installed only where no other pass installed or dropped
 --  it since this one chose to read it: a slower pass does not put back
---  an older read, nor a file another found deleted. A file that could not
---  be read is not held, and is read again by the next search; one too
---  large is held with no words. Each scoring pass -- descriptions, then
---  words -- is made under one hold of the lock and sees one state of the
---  index; the line a text hit shows is then read from the file as it is
---  now, and one whose file cannot be read by then is left out. A file
---  changed between the two is ranked by what it held, shown as it holds.
+--  an older read, nor a file another found deleted. A file changed after
+--  it was read is held under the older text's own print, which the next
+--  search's graph -- checked against the tree first -- does not match,
+--  so it is read again then. A file that could not be read is not held,
+--  and is read again by the next search; one too large is held with no
+--  words; Not_Searched names both. A change to the index stopped part
+--  way lets the whole index go, to be read anew. What is kept of files
+--  gone, for passes under way, is let go once none is.
+--
+--  What a search's answer stands for, a change to the tree under way:
+--  its symbols are the graph's, checked against the tree as the search
+--  begins; each scoring pass -- descriptions, then words -- is made
+--  under one hold of the lock and sees one state of the index; the line
+--  a text hit shows is read from the file as it is then, and one whose
+--  file cannot be read by then is left out. A file changed in between is
+--  ranked by what it held and shown as it holds. Nothing stronger is
+--  promised: an excerpt carries its file's print and is read again only
+--  while the file still has it (Expand), and a task's context rests on
+--  every file's print (Context's dependencies), so what was built from a
+--  tree since changed is found stale there.
 package Model_Runner.Framework.Retrieval is
 
    package U renames Ada.Strings.Unbounded;
@@ -146,6 +159,16 @@ package Model_Runner.Framework.Retrieval is
       Near     : Name_Lists.Vector := Name_Lists.Empty_Vector;
       May_Read : Path_Check := null;
       Records  : Boolean := True) return Hit_Lists.Vector;
+
+   --  What a search of a tree did not search: the files its graph could
+   --  not read, and those the index could not read or holds no words of,
+   --  being too large -- each as PATH: why, sorted. Said beside a search's
+   --  hits, so that nothing found there is not taken for nothing there.
+   --
+   --  @param Graph The graph the search was given.
+   --  @param Root The tree searched, as Search's Root; not "".
+   --  @return The files, each with why.
+   function Not_Searched (Graph : Repository.Graph; Root : String) return Name_Lists.Vector;
 
    --  The words a query is taken as: each word lowered, and the parts of a
    --  dotted or underscored one; the same words a file's text is indexed
@@ -279,6 +302,12 @@ package Model_Runner.Framework.Retrieval is
    --
    --  @return The count.
    function Indexed_Terms return Natural;
+
+   --  How many files' last changes the index keeps, for passes under
+   --  way: none once no pass is, however many files came and went.
+   --
+   --  @return The count.
+   function Indexed_Changes return Natural;
 
    --  How many files searches and excerpts have read since the program
    --  began, the index's reading among them: what a measure of a search's
