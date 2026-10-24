@@ -20036,9 +20036,11 @@ package body Tests.Framework_Cases is
                                & " tried again in 3600 s)"),
                  "a wait past the bound was not held to it: " & Said);
 
-         --  Noting a failure raising in its turn: the exception reaches the
-         --  search, and the index's lock is not left held -- another task
-         --  takes it, and the next search answers.
+         --  Noting a failure raising in its turn: the noting is given up,
+         --  the search answers from what it has, the index's lock is not
+         --  left held -- another task takes it -- the pass is given back
+         --  (no change is kept once it ends), and the file, not noted, is
+         --  read again by the next search.
          declare
             procedure Break_Noting is
             begin
@@ -20085,8 +20087,10 @@ package body Tests.Framework_Cases is
             if not Taken then
                abort Taker;
             end if;
-            Assert (Raised, "a failure in noting a failure did not reach the search");
+            Assert (not Raised, "a failure in noting a failure reached the search");
             Assert (Taken, "the index's lock was left held after a failure in noting a failure");
+            Assert (Rv.Indexed_Changes = 0, "the pass was not given back after a failure in noting a failure:"
+                    & Rv.Indexed_Changes'Image);
             Assert (Texts ("quokka", "docs/notes.txt"), "the search after a failure in noting one did not answer");
          end;
          Rv.Retry_Indexing_After (30.0);
@@ -20111,8 +20115,12 @@ package body Tests.Framework_Cases is
             raise Storage_Error with "the test's own";
          end Run_Out;
 
+         --  The other search's own file to fail on: the file this pass
+         --  holds is claimed, and is waited for rather than read again.
          procedure Fail_Beside is
          begin
+            Put_File (Fresh_Root (Store) & "/src/parser.ads", Read_Whole (Fresh_Root (Store) & "/src/parser.ads")
+                      & "--  Changed beside." & LF);
             Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
             Hits := Find ("eland");
          end Fail_Beside;
@@ -20125,6 +20133,83 @@ package body Tests.Framework_Cases is
       end;
       Put_File (To_String (Notes), "Now it says quokka." & LF);
       Assert (Texts ("quokka", "docs/notes.txt"), "a file written again was not found");
+
+      --  A second search starting while a pass holds the files it chose:
+      --  it waits for their installs and reads none of them again.
+      declare
+         Alone, Both, Before : Natural;
+         Theirs_Found        : Natural;
+
+         task type Beside is
+            entry Done (Found : out Natural);
+         end Beside;
+         type Beside_Access is access Beside;
+         Other : Beside_Access;
+
+         task body Beside is
+            Theirs : Rv.Hit_Lists.Vector;
+         begin
+            Theirs := Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", "quokka", 20,
+                                 Records => False);
+            accept Done (Found : out Natural) do
+               Found := Natural (Theirs.Length);
+            end Done;
+         exception
+            when others =>
+               accept Done (Found : out Natural) do
+                  Found := 0;
+               end Done;
+         end Beside;
+
+         procedure Start_Beside is
+         begin
+            Other := new Beside;
+            delay 0.5;
+         end Start_Beside;
+      begin
+         Rv.Forget;
+         Before := Rv.Files_Read;
+         Hits := Find ("quokka");
+         Alone := Rv.Files_Read - Before;
+         Rv.Forget;
+         Before := Rv.Files_Read;
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Start_Beside'Unrestricted_Access);
+         Hits := Find ("quokka");
+         Other.Done (Theirs_Found);
+         Both := Rv.Files_Read - Before;
+         Assert (Theirs_Found > 0, "the search that waited found nothing");
+         --  The second search reads only the lines it shows: what the first
+         --  read beyond its index's files.
+         Assert (Both <= Alone + (Alone - Rv.Indexed_Reads),
+                 "a second search read again the files a pass under way held:" & Both'Image & " read, against"
+                 & Alone'Image & " alone with" & Rv.Indexed_Reads'Image & " indexed");
+      end;
+
+      --  One tree's install stopped part way lets every tree's index go:
+      --  another tree's search answers after as before.
+      declare
+         Other  : constant String := Fresh ("index-newest-beside-a-failure");
+         Graph  : Rp.Graph;
+         Before : Rv.Hit_Lists.Vector;
+
+         procedure Run_Out is
+         begin
+            raise Storage_Error with "the test's own";
+         end Run_Out;
+      begin
+         Retrieval_Files (Other);
+         Graph := Rp.Scan (Other, Rp.Roots_Of (Store));
+         Before := Rv.Search (Store, Graph, Other, "parse number total", 20, Records => False);
+         Put_File (To_String (Notes), "Now it says quokka, failing." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+         Hits := Find ("quokka");
+         Assert (Rv.Hit_Lists."=" (Before, Rv.Search (Store, Graph, Other, "parse number total", 20, Records => False)),
+                 "another tree's search answered otherwise after one tree's install failed");
+         Rv.Retry_Indexing_After (0.0);
+         Put_File (To_String (Notes), "Now it says quokka." & LF);
+         Hits := Find ("quokka");
+         Rv.Retry_Indexing_After (30.0);
+      end;
 
       --  A file too large is named as not searched, and is not once it
       --  is gone.

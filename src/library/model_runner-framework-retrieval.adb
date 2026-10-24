@@ -908,6 +908,52 @@ package body Model_Runner.Framework.Retrieval is
       Drop_Trees (Gone);
    end Drop_Gone_Trees;
 
+   --  The files a pass under way has chosen to read, by key, with the
+   --  print it chose each at: another pass that finds one of them stale
+   --  at that print waits for its install rather than read it again --
+   --  two searches of a tree not yet indexed read it once between them.
+   --  One whose graph has another print reads it itself: that is newer
+   --  work, not the same. Under Lock; kept when the index is let go, as
+   --  the passes holding the claims are still under way.
+   package Claim_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   In_Flight : Claim_Maps.Map;
+
+   --  An indexing pass under way, from its count among Passes to the claims
+   --  it holds: given back however Bring_Up is left -- an exception while a
+   --  failure is noted among others -- so neither outlives the pass.
+   type Pass_Hold is new Ada.Finalization.Limited_Controlled with record
+      Counted : Boolean := False;
+      Claimed : Name_Sets.Set;
+   end record;
+
+   overriding procedure Finalize (Self : in out Pass_Hold);
+
+   overriding procedure Finalize (Self : in out Pass_Hold) is
+   begin
+      if Self.Counted or else not Self.Claimed.Is_Empty then
+         declare
+            Locked : Holding;
+            pragma Unreferenced (Locked);
+         begin
+            for Key of Self.Claimed loop
+               In_Flight.Exclude (Key);
+            end loop;
+            Self.Claimed.Clear;
+            if Self.Counted then
+               Self.Counted := False;
+               Passes := Passes - 1;
+               if Passes = 0 and then not Changed.Is_Empty then
+                  Raise_Floor;
+               end if;
+            end if;
+         end;
+      end if;
+   exception
+      when others =>
+         null;
+   end Finalize;
+
    --  The index brought up to the graph -- one brought up to the tree as
    --  it is now, by Search -- a file read again where its print changed,
    --  one gone dropped; and how many of the tree's files it holds. What is
@@ -935,11 +981,16 @@ package body Model_Runner.Framework.Retrieval is
       Seen    : Change_Lists.Vector;
       --  Whether this pass let the index go: it then reads in no more.
       Let_Go  : Boolean := False;
+      Pass    : Pass_Hold;
+      --  The files another pass claimed at the print this one found.
+      Waiting : Name_Lists.Vector;
    begin
       declare
          Locked : Holding;
          pragma Unreferenced (Locked);
       begin
+         Passes := Passes + 1;
+         Pass.Counted := True;
          for Index_At in 1 .. Rp.File_Count (Graph) loop
             declare
                File : constant Rp.File_Entry := Rp.File_At (Graph, Index_At);
@@ -952,9 +1003,15 @@ package body Model_Runner.Framework.Retrieval is
                     and then (not Failed.Contains (Key)
                               or else Due (Failed.Element (Key), To_String (File.Fingerprint)))
                   then
-                     Stale.Append (Path);
-                     Prints.Append (To_String (File.Fingerprint));
-                     Seen.Append (Change_Of (Key));
+                     if In_Flight.Contains (Key) and then In_Flight.Element (Key) = To_String (File.Fingerprint) then
+                        Waiting.Append (Key);
+                     else
+                        Stale.Append (Path);
+                        Prints.Append (To_String (File.Fingerprint));
+                        Seen.Append (Change_Of (Key));
+                        In_Flight.Include (Key, To_String (File.Fingerprint));
+                        Pass.Claimed.Include (Key);
+                     end if;
                   end if;
                end if;
             end;
@@ -1012,7 +1069,6 @@ package body Model_Runner.Framework.Retrieval is
                Failed.Delete (Key);
             end loop;
          end;
-         Passes := Passes + 1;
       exception
          when others =>
             Clear_Index;
@@ -1064,6 +1120,8 @@ package body Model_Runner.Framework.Retrieval is
                         end if;
                         Failed.Exclude (Key);
                      end if;
+                     In_Flight.Exclude (Key);
+                     Pass.Claimed.Exclude (Key);
                   exception
                      when others =>
                         Clear_Index;
@@ -1078,6 +1136,9 @@ package body Model_Runner.Framework.Retrieval is
                --  goes on to the next; one that let the index go ends the
                --  pass, which has nothing left to install into.
                when Error : others =>
+                  --  Noted as it can be: memory short again, or anything else
+                  --  raised in the noting, leaves the file unnoted -- read
+                  --  again by the next search -- and the pass as it was.
                   declare
                      use type Ada.Real_Time.Time;
                      use type Ada.Exceptions.Exception_Id;
@@ -1088,6 +1149,8 @@ package body Model_Runner.Framework.Retrieval is
                      Locked  : Holding;
                      pragma Unreferenced (Locked);
                   begin
+                     In_Flight.Exclude (Key);
+                     Pass.Claimed.Exclude (Key);
                      Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Failure_Noted);
                      if not Fault and then Failed.Contains (Key)
                        and then To_String (Failed.Element (Key).Print) = Prints (At_Stale)
@@ -1105,32 +1168,38 @@ package body Model_Runner.Framework.Retrieval is
                                           (if Fault then Message (Message'First .. Message'First
                                                                      + Natural'Min (Message'Length, 120) - 1)
                                            else "")));
+                  exception
+                     when others =>
+                        null;
                   end;
                   exit when Let_Go;
             end;
          end loop;
-      exception
-         when others =>
-            declare
-               Locked : Holding;
-               pragma Unreferenced (Locked);
-            begin
-               Passes := Passes - 1;
-               if Passes = 0 then
-                  Raise_Floor;
+      end;
+
+      --  Files another pass claimed: waited for, not read again -- its
+      --  install is what this search is to see. Not by a pass that let the
+      --  index go, which has nothing to see them in; and a minute at most,
+      --  a pass that does not end leaving them to the next search.
+      if not Waiting.Is_Empty and then not Let_Go then
+         declare
+            use type Ada.Real_Time.Time;
+            Give_Up : constant Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.Seconds (60);
+            Busy    : Boolean := True;
+         begin
+            while Busy and then Ada.Real_Time.Clock < Give_Up loop
+               declare
+                  Locked : Holding;
+                  pragma Unreferenced (Locked);
+               begin
+                  Busy := (for some Key of Waiting => In_Flight.Contains (Key));
+               end;
+               if Busy then
+                  delay 0.002;
                end if;
-            end;
-            raise;
-      end;
-      declare
-         Locked : Holding;
-         pragma Unreferenced (Locked);
-      begin
-         Passes := Passes - 1;
-         if Passes = 0 and then not Changed.Is_Empty then
-            Raise_Floor;
-         end if;
-      end;
+            end loop;
+         end;
+      end if;
    end Bring_Up;
 
    --------------------------

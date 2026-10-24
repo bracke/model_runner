@@ -566,10 +566,48 @@ package body Retrieval_Bench is
                & Image (Natural (Alone * 1000.0)) & " ms one after another"
                & (if Failed then "; A SEARCH FAILED" else ""));
          end Together;
+
+         --  Cold, the files read: one search of this repository, then two
+         --  at once -- a file both find unread is read by each, and the
+         --  second's install refused.
+         procedure Cold_Together is
+            Tree  : constant String := Dirs.Full_Name ("..");
+            Graph : constant Rp.Graph := Rp.Scan (Tree, Rp.Default_Roots);
+            Alone, Both : Natural;
+            Before : Natural;
+         begin
+            Rv.Forget;
+            Before := Rv.Files_Read;
+            declare
+               Hits : constant Rv.Hit_Lists.Vector :=
+                 Rv.Search (Store, Graph, Tree, "uncertain relations", Most => 10, Records => False);
+            begin
+               Alone := Rv.Files_Read - Before - Natural'Min (Natural (Hits.Length), 0);
+            end;
+            Rv.Forget;
+            Before := Rv.Files_Read;
+            declare
+               task type Searcher;
+               task body Searcher is
+                  Hits : Rv.Hit_Lists.Vector;
+               begin
+                  Hits := Rv.Search (Store, Graph, Tree, "uncertain relations", Most => 10, Records => False);
+                  pragma Unreferenced (Hits);
+               end Searcher;
+               Two : array (1 .. 2) of Searcher;
+            begin
+               null;
+            end;
+            Both := Rv.Files_Read - Before;
+            Ada.Text_IO.Put_Line
+              ("index cold: one search read " & Image (Alone) & " files, two at once "
+               & Image (Both) & " (" & Image (Rv.Indexed_Reads) & " installed)");
+         end Cold_Together;
       begin
          Latency ("fixture", To_String (Root));
          Latency ("repository", Dirs.Full_Name (".."));
          Together;
+         Cold_Together;
       end;
 
       --  Held out, and not written for the bench: this repository's own
