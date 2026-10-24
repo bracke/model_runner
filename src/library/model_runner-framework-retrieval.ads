@@ -292,6 +292,14 @@ package Model_Runner.Framework.Retrieval is
    --  Forget the index of the files' words, for a test to build it again.
    procedure Forget;
 
+   --  Let go of what the index holds of a tree and every tree beneath it:
+   --  a workspace's, once the workspace is removed. A tree whose root is
+   --  gone is let go by the next search of any tree as well, however it
+   --  went.
+   --
+   --  @param Root The tree.
+   procedure Forget_Tree (Root : String);
+
    --  How many files' words the index has read since it was made or
    --  forgotten: what tells an index brought up to date from one read
    --  again.

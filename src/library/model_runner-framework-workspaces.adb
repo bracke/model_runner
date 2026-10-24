@@ -21,6 +21,7 @@ with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Race_Points;
 with Model_Runner.Tools.Editing;
@@ -1300,6 +1301,8 @@ package body Model_Runner.Framework.Workspaces is
       if Dirs.Exists (Home) then
          Files.Remove_Tree (Home, Status);
       end if;
+      --  What the search index holds of the tree goes with it.
+      Retrieval.Forget_Tree (Home);
 
       --  A worktree whose tree went some other way is still registered:
       --  git is told it is gone, so git worktree list does not keep it.

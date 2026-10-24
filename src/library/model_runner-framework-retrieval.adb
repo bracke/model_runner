@@ -792,6 +792,90 @@ package body Model_Runner.Framework.Retrieval is
       Raise_Floor;
    end Clear_Index;
 
+   --  The tree a key is of: what comes before its NUL.
+   function Root_Of (Key : String) return String is
+      At_Nul : constant Natural := Ada.Strings.Fixed.Index (Key, [1 => ASCII.NUL]);
+   begin
+      return (if At_Nul = 0 then Key else Key (Key'First .. At_Nul - 1));
+   end Root_Of;
+
+   --  Whether a tree is Root or one beneath it, both as full names.
+   function Within (Tree, Root : String) return Boolean is
+      Full : constant String := Ada.Directories.Full_Name (if Tree = "" then "." else Tree);
+      Base : constant String := Ada.Directories.Full_Name (if Root = "" then "." else Root);
+   begin
+      return Full = Base
+        or else (Full'Length > Base'Length and then Full (Full'First .. Full'First + Base'Length - 1) = Base
+                 and then Full (Full'First + Base'Length) in '/' | '\');
+   end Within;
+
+   --  Every file of the trees Gone holds let go: its entry, and what is
+   --  noted of it as not searched or failed. Called with Lock held.
+   procedure Drop_Trees (Gone : Name_Sets.Set) is
+      Keys : Name_Lists.Vector;
+   begin
+      if Gone.Is_Empty then
+         return;
+      end if;
+      for Position in Index.Iterate loop
+         if Gone.Contains (Root_Of (Word_Maps.Key (Position))) then
+            Keys.Append (Word_Maps.Key (Position));
+         end if;
+      end loop;
+      for Key of Keys loop
+         Drop (Key);
+      end loop;
+      Keys.Clear;
+      for Position in Unsearched.Iterate loop
+         if Gone.Contains (Root_Of (Unsearched_Maps.Key (Position))) then
+            Keys.Append (Unsearched_Maps.Key (Position));
+         end if;
+      end loop;
+      for Key of Keys loop
+         Unsearched.Delete (Key);
+      end loop;
+      Keys.Clear;
+      for Position in Failed.Iterate loop
+         if Gone.Contains (Root_Of (Failed_Maps.Key (Position))) then
+            Keys.Append (Failed_Maps.Key (Position));
+         end if;
+      end loop;
+      for Key of Keys loop
+         Failed.Delete (Key);
+      end loop;
+   end Drop_Trees;
+
+   --  The trees the index holds files of, other than Root, whose root is
+   --  gone -- a workspace removed when its task ended, never searched
+   --  again: let go, or every one would be held until the program ends.
+   --  Called with Lock held.
+   procedure Drop_Gone_Trees (Root : String) is
+      Seen : Name_Sets.Set;
+      Gone : Name_Sets.Set;
+
+      procedure Look (Key : String) is
+         Tree : constant String := Root_Of (Key);
+      begin
+         if Tree /= Root and then not Seen.Contains (Tree) then
+            Seen.Include (Tree);
+            if not Ada.Directories.Exists (if Tree = "" then "." else Tree) then
+               Gone.Include (Tree);
+            end if;
+         end if;
+      end Look;
+   begin
+      for Position in Index.Iterate loop
+         Look (Word_Maps.Key (Position));
+      end loop;
+      for Position in Unsearched.Iterate loop
+         Look (Unsearched_Maps.Key (Position));
+      end loop;
+      for Position in Failed.Iterate loop
+         Look (Failed_Maps.Key (Position));
+      end loop;
+      Drop_Trees (Gone);
+   end Drop_Gone_Trees;
+
    --  The index brought up to the graph -- one brought up to the tree as
    --  it is now, by Search -- a file read again where its print changed,
    --  one gone dropped; and how many of the tree's files it holds. What is
@@ -841,6 +925,8 @@ package body Model_Runner.Framework.Retrieval is
                end if;
             end;
          end loop;
+
+         Drop_Gone_Trees (Root);
 
          --  What the tree no longer holds -- deleted, or renamed to a path
          --  read below -- is no longer indexed.
@@ -1014,6 +1100,46 @@ package body Model_Runner.Framework.Retrieval is
       end loop;
       Lock.Release;
    end Retry_Indexing_After;
+
+   -----------------
+   -- Forget_Tree --
+   -----------------
+
+   procedure Forget_Tree (Root : String) is
+      Seen : Name_Sets.Set;
+      Gone : Name_Sets.Set;
+
+      procedure Look (Key : String) is
+         Tree : constant String := Root_Of (Key);
+      begin
+         if not Seen.Contains (Tree) then
+            Seen.Include (Tree);
+            if Within (Tree, Root) then
+               Gone.Include (Tree);
+            end if;
+         end if;
+      end Look;
+   begin
+      Lock.Seize;
+      begin
+         for Position in Index.Iterate loop
+            Look (Word_Maps.Key (Position));
+         end loop;
+         for Position in Unsearched.Iterate loop
+            Look (Unsearched_Maps.Key (Position));
+         end loop;
+         for Position in Failed.Iterate loop
+            Look (Failed_Maps.Key (Position));
+         end loop;
+         Drop_Trees (Gone);
+         Lock.Release;
+      exception
+         when others =>
+            Clear_Index;
+            Lock.Release;
+            raise;
+      end;
+   end Forget_Tree;
 
    ------------------
    -- Not_Searched --

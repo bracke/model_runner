@@ -20120,6 +20120,37 @@ package body Tests.Framework_Cases is
                  "a search of the shorter tree found another tree's words");
       end;
 
+      --  A tree removed -- a workspace whose task ended -- is let go by
+      --  the next search of any tree; one forgotten by name at once.
+      declare
+         Gone_Tree : constant String := Fresh ("index-newest-removed-tree");
+         Kept_Tree : constant String := Fresh ("index-newest-forgotten-tree");
+         Theirs    : Rv.Hit_Lists.Vector;
+         Held      : Natural;
+      begin
+         Dirs.Create_Path (Gone_Tree & "/docs");
+         Put_File (Gone_Tree & "/docs/aardwolf.txt", "The aardwolf eats termites." & LF);
+         Dirs.Create_Path (Kept_Tree & "/docs");
+         Put_File (Kept_Tree & "/docs/pangolin.txt", "The pangolin eats ants." & LF);
+         Hits := Find ("quokka");
+         Held := Rv.Indexed_Held;
+         Theirs := Rv.Search (Store, Rp.Scan (Gone_Tree, Rp.Roots_Of (Store)), Gone_Tree, "aardwolf", 20,
+                              Records => False);
+         Assert (not Theirs.Is_Empty, "a word of the tree to be removed was not found");
+         Theirs := Rv.Search (Store, Rp.Scan (Kept_Tree, Rp.Roots_Of (Store)), Kept_Tree, "pangolin", 20,
+                              Records => False);
+         Assert (not Theirs.Is_Empty, "a word of the tree to be forgotten was not found");
+         Assert (Rv.Indexed_Held = Held + 2, "the other trees' files were not indexed:" & Rv.Indexed_Held'Image);
+         Dirs.Delete_Tree (Gone_Tree);
+         Hits := Find ("quokka");
+         Assert (Rv.Indexed_Held = Held + 1, "a tree removed was still held after another tree's search:"
+                 & Rv.Indexed_Held'Image & " against" & Natural'Image (Held + 1));
+         Rv.Forget_Tree (Kept_Tree);
+         Assert (Rv.Indexed_Held = Held, "a tree forgotten by name was still held:" & Rv.Indexed_Held'Image);
+         Hits := Find ("quokka");
+         Assert (Rv.Indexed_Held = Held, "a search of another tree took a forgotten tree back in");
+      end;
+
       --  Searches from three tasks while the files are written and the
       --  index forgotten: none fails.
       declare
