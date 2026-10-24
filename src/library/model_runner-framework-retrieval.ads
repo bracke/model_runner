@@ -333,6 +333,13 @@ package Model_Runner.Framework.Retrieval is
    --  @param Wait The wait.
    procedure Retry_Indexing_After (Wait : Duration);
 
+   --  How long a search waits at most for files another search's pass is
+   --  reading: what is still being read then is named by Not_Searched.
+   --  For tests only; a minute where nobody sets it.
+   --
+   --  @param Most The wait, held to 0 .. 3,600 seconds.
+   procedure Wait_For_Claims_At_Most (Most : Duration);
+
    --  How many files' last changes the index keeps, for passes under
    --  way: none once no pass is, however many files came and went.
    --

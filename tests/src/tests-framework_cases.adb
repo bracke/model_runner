@@ -20185,6 +20185,191 @@ package body Tests.Framework_Cases is
                  & Alone'Image & " alone with" & Rv.Indexed_Reads'Image & " indexed");
       end;
 
+      --  Claims are their holder's to release. A pass holds the file at one
+      --  print; the file changes and a second pass claims it at the new
+      --  one and is held reading it; the first ends. A third search, at the
+      --  new print, still waits for the second rather than read the file
+      --  again: the first's ending did not take the second's claim.
+      declare
+         protected Gate is
+            procedure Arrive;
+            procedure Open;
+            entry Arrived;
+            entry Pass_Through;
+         private
+            Here, Opened : Boolean := False;
+         end Gate;
+
+         protected body Gate is
+            procedure Arrive is
+            begin
+               Here := True;
+            end Arrive;
+
+            procedure Open is
+            begin
+               Opened := True;
+            end Open;
+
+            entry Arrived when Here is
+            begin
+               null;
+            end Arrived;
+
+            entry Pass_Through when Opened is
+            begin
+               null;
+            end Pass_Through;
+         end Gate;
+
+         --  The second pass, at its read: held until the gate opens.
+         procedure Hold_Second is
+         begin
+            Gate.Arrive;
+            Gate.Pass_Through;
+         end Hold_Second;
+
+         task type Searcher is
+            entry Done (Found : out Natural);
+         end Searcher;
+         type Searcher_Access is access Searcher;
+
+         task body Searcher is
+            Theirs : Rv.Hit_Lists.Vector;
+         begin
+            Theirs := Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", "hartebeest", 20,
+                                 Records => False);
+            accept Done (Found : out Natural) do
+               Found := Natural (Theirs.Length);
+            end Done;
+         exception
+            when others =>
+               accept Done (Found : out Natural) do
+                  Found := 0;
+               end Done;
+         end Searcher;
+
+         Second, Third : Searcher_Access;
+
+         --  The first pass, at its read: the file changed, the second
+         --  started and held at its own read.
+         procedure Change_And_Start_Second is
+         begin
+            Put_File (To_String (Notes), "Now it says hartebeest." & LF);
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Hold_Second'Unrestricted_Access);
+            Second := new Searcher;
+            Gate.Arrived;
+         end Change_And_Start_Second;
+
+         Reads_Before : Natural;
+         Found_By     : array (1 .. 2) of Natural;
+         Third_Waited : Boolean;
+      begin
+         Put_File (To_String (Notes), "Now it says topi." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs,
+                                       Change_And_Start_Second'Unrestricted_Access);
+         Hits := Find ("topi");
+         --  The first has ended; the second holds its claim at the gate.
+         Reads_Before := Rv.Indexed_Reads;
+         Third := new Searcher;
+         delay 0.5;
+         --  Said after the gate is open: a task held at it would keep the
+         --  test from ending.
+         Third_Waited := Rv.Indexed_Reads = Reads_Before;
+         Gate.Open;
+         Second.Done (Found_By (1));
+         Third.Done (Found_By (2));
+         Assert (Third_Waited,
+                 "a third search read a file the second still held, its claim taken by the first's ending");
+         Assert (Found_By (1) > 0 and then Found_By (2) > 0, "the second or third search found nothing");
+         Assert (Texts ("hartebeest", "docs/notes.txt"), "the file held by the second pass was not found after");
+      end;
+
+      --  A search that stops waiting on another's claim says the file is
+      --  still being read, not that it holds nothing; once the other's
+      --  install is in, it is no longer said.
+      declare
+         protected Gate is
+            procedure Arrive;
+            procedure Open;
+            entry Arrived;
+            entry Pass_Through;
+         private
+            Here, Opened : Boolean := False;
+         end Gate;
+
+         protected body Gate is
+            procedure Arrive is
+            begin
+               Here := True;
+            end Arrive;
+
+            procedure Open is
+            begin
+               Opened := True;
+            end Open;
+
+            entry Arrived when Here is
+            begin
+               null;
+            end Arrived;
+
+            entry Pass_Through when Opened is
+            begin
+               null;
+            end Pass_Through;
+         end Gate;
+
+         procedure Hold_Reader is
+         begin
+            Gate.Arrive;
+            Gate.Pass_Through;
+         end Hold_Reader;
+
+         task Reader is
+            entry Go;
+            entry Done (Found : out Natural);
+         end Reader;
+
+         task body Reader is
+            Theirs : Rv.Hit_Lists.Vector;
+         begin
+            accept Go;
+            Theirs := Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", "springbok", 20,
+                                 Records => False);
+            accept Done (Found : out Natural) do
+               Found := Natural (Theirs.Length);
+            end Done;
+         exception
+            when others =>
+               accept Done (Found : out Natural) do
+                  Found := 0;
+               end Done;
+         end Reader;
+
+         Read_By   : Natural;
+         Said_Read : Boolean;
+
+         Graph : Rp.Graph;
+      begin
+         Put_File (To_String (Notes), "Now it says springbok." & LF);
+         Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Hold_Reader'Unrestricted_Access);
+         Reader.Go;
+         Gate.Arrived;
+         Rv.Wait_For_Claims_At_Most (0.2);
+         Hits := Rv.Search (Store, Graph, "", "springbok", 20, Records => False);
+         Rv.Wait_For_Claims_At_Most (60.0);
+         Said_Read := (for some One of Rv.Not_Searched (Graph, Fresh_Root (Store))
+                       => One = "docs/notes.txt: still being read by another search");
+         Gate.Open;
+         Reader.Done (Read_By);
+         Assert (Said_Read, "a search that stopped waiting did not say the file was still being read");
+         Assert (Read_By > 0, "the search holding the file found nothing");
+         Assert (Rv.Not_Searched (Graph, Fresh_Root (Store)).Is_Empty,
+                 "a file still said to be being read once it was read in");
+      end;
+
       --  One tree's install stopped part way lets every tree's index go:
       --  another tree's search answers after as before.
       declare

@@ -16,6 +16,7 @@ with Ada.Strings.Maps;
 
 with Hostkit.Fs;
 
+with Model_Runner.Framework.Execution;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Observations;
@@ -420,10 +421,13 @@ package body Model_Runner.Framework.Retrieval is
    package Change_Lists is new Ada.Containers.Vectors (Positive, Natural);
 
    --  The files of the index's trees that a search does not search, by
-   --  key: true for one too large, held with no words; false for one that
-   --  could not be read, not held.
+   --  key, and why: too large, held with no words; could not be read, not
+   --  held; another search's pass was reading it and had not installed it
+   --  when this one stopped waiting; or this one's work was stopped before
+   --  it was read. Each goes once the file is read in.
+   type Unsearched_Why is (Too_Large, Unreadable, Being_Read, Stopped);
    package Unsearched_Maps is new Ada.Containers.Indefinite_Hashed_Maps
-     (Key_Type => String, Element_Type => Boolean, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+     (Key_Type => String, Element_Type => Unsearched_Why, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    Unsearched : Unsearched_Maps.Map;
 
    --  A file whose reading in failed -- the counting of its words, or its
@@ -915,20 +919,86 @@ package body Model_Runner.Framework.Retrieval is
    --  One whose graph has another print reads it itself: that is newer
    --  work, not the same. Under Lock; kept when the index is let go, as
    --  the passes holding the claims are still under way.
+   --  A claim names the pass that holds it, and only that pass releases
+   --  it: a file claimed again at a newer print by another pass is that
+   --  pass's to release, not the older one's, which would otherwise end
+   --  the claim others are waiting on.
+   type Claim is record
+      Print : Unbounded_String;
+      Owner : Positive;
+   end record;
    package Claim_Maps is new Ada.Containers.Indefinite_Hashed_Maps
-     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+     (Key_Type => String, Element_Type => Claim, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    In_Flight : Claim_Maps.Map;
+   Last_Pass : Natural := 0;
+
+   --  How long a search waits on others' claims at most.
+   Claim_Wait : Duration := 60.0;
+
+   --  Told each time a claim is released: a search waiting on claims is
+   --  woken to look again, rather than look every few milliseconds.
+   protected Releases is
+      procedure Signal;
+      function Count return Natural;
+      --  Return once a claim has been released since Count said After.
+      entry Await (After : Natural);
+   private
+      entry Hold (After : Natural);
+      Released  : Natural := 0;
+      Releasing : Boolean := False;
+   end Releases;
+
+   protected body Releases is
+      procedure Signal is
+      begin
+         Released := (if Released = Natural'Last then 0 else Released + 1);
+         Releasing := Hold'Count > 0;
+      end Signal;
+
+      function Count return Natural is (Released);
+
+      entry Await (After : Natural) when True is
+      begin
+         if Released = After then
+            requeue Hold with abort;
+         end if;
+      end Await;
+
+      entry Hold (After : Natural) when Releasing is
+         pragma Unreferenced (After);
+      begin
+         if Hold'Count = 0 then
+            Releasing := False;
+         end if;
+      end Hold;
+   end Releases;
+
+   --  A claim given up by the pass that holds it, and only by it. Called
+   --  with Lock held.
+   procedure Release_Claim (Key : String; Owner : Positive) is
+      Position : constant Claim_Maps.Cursor := In_Flight.Find (Key);
+   begin
+      if Claim_Maps.Has_Element (Position) and then Claim_Maps.Element (Position).Owner = Owner then
+         In_Flight.Delete (Key);
+         Releases.Signal;
+      end if;
+   end Release_Claim;
 
    --  An indexing pass under way, from its count among Passes to the claims
    --  it holds: given back however Bring_Up is left -- an exception while a
    --  failure is noted among others -- so neither outlives the pass.
    type Pass_Hold is new Ada.Finalization.Limited_Controlled with record
+      Id      : Positive := 1;
       Counted : Boolean := False;
       Claimed : Name_Sets.Set;
    end record;
 
    overriding procedure Finalize (Self : in out Pass_Hold);
 
+   --  Nothing here allocates or reads: the lock is a protected entry, the
+   --  claims and the count are let go in place. The handler is the last
+   --  guard finalization must have -- an exception out of it is a program
+   --  error where the pass's scope ends -- not a path in use.
    overriding procedure Finalize (Self : in out Pass_Hold) is
    begin
       if Self.Counted or else not Self.Claimed.Is_Empty then
@@ -937,7 +1007,7 @@ package body Model_Runner.Framework.Retrieval is
             pragma Unreferenced (Locked);
          begin
             for Key of Self.Claimed loop
-               In_Flight.Exclude (Key);
+               Release_Claim (Key, Self.Id);
             end loop;
             Self.Claimed.Clear;
             if Self.Counted then
@@ -982,8 +1052,14 @@ package body Model_Runner.Framework.Retrieval is
       --  Whether this pass let the index go: it then reads in no more.
       Let_Go  : Boolean := False;
       Pass    : Pass_Hold;
-      --  The files another pass claimed at the print this one found.
+      --  The files another pass claimed at the print this one found, and
+      --  that print.
       Waiting : Name_Lists.Vector;
+      Waited  : Name_Lists.Vector;
+      --  Whether whoever this search is for has been stopped: no more is
+      --  read for it, nor waited for.
+      function Stop_Asked return Boolean
+      is (Model_Runner.Framework.Execution.Cancel_Requested or else Model_Runner.Framework.Execution.Work_Withdrawn);
    begin
       declare
          Locked : Holding;
@@ -991,6 +1067,8 @@ package body Model_Runner.Framework.Retrieval is
       begin
          Passes := Passes + 1;
          Pass.Counted := True;
+         Last_Pass := (if Last_Pass = Natural'Last then 1 else Last_Pass + 1);
+         Pass.Id := Last_Pass;
          for Index_At in 1 .. Rp.File_Count (Graph) loop
             declare
                File : constant Rp.File_Entry := Rp.File_At (Graph, Index_At);
@@ -1003,13 +1081,14 @@ package body Model_Runner.Framework.Retrieval is
                     and then (not Failed.Contains (Key)
                               or else Due (Failed.Element (Key), To_String (File.Fingerprint)))
                   then
-                     if In_Flight.Contains (Key) and then In_Flight.Element (Key) = To_String (File.Fingerprint) then
+                     if In_Flight.Contains (Key) and then In_Flight.Element (Key).Print = File.Fingerprint then
                         Waiting.Append (Key);
+                        Waited.Append (To_String (File.Fingerprint));
                      else
                         Stale.Append (Path);
                         Prints.Append (To_String (File.Fingerprint));
                         Seen.Append (Change_Of (Key));
-                        In_Flight.Include (Key, To_String (File.Fingerprint));
+                        In_Flight.Include (Key, (Print => File.Fingerprint, Owner => Pass.Id));
                         Pass.Claimed.Include (Key);
                      end if;
                   end if;
@@ -1078,6 +1157,19 @@ package body Model_Runner.Framework.Retrieval is
 
       begin
          for At_Stale in 1 .. Natural (Stale.Length) loop
+            --  Stopped: what is left unread is said so, and its claims go
+            --  with the pass.
+            if Stop_Asked then
+               declare
+                  Locked : Holding;
+                  pragma Unreferenced (Locked);
+               begin
+                  for Rest in At_Stale .. Natural (Stale.Length) loop
+                     Unsearched.Include (Key_Of (Root, Stale (Rest)), Stopped);
+                  end loop;
+               end;
+               exit;
+            end if;
             declare
                Path    : constant String := Stale (At_Stale);
                Text    : Unbounded_String;
@@ -1092,7 +1184,7 @@ package body Model_Runner.Framework.Retrieval is
                declare
                   use type E.Error_Code;
                   Key       : constant String := Key_Of (Root, Path);
-                  Too_Large : constant Boolean := Status.Code = E.IO_File_Too_Large;
+                  Oversized : constant Boolean := Status.Code = E.IO_File_Too_Large;
                   Counted   : constant Count_Maps.Map :=
                     (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else Count_Maps.Empty_Map);
                   Described : constant Description_Lists.Vector :=
@@ -1106,8 +1198,13 @@ package body Model_Runner.Framework.Retrieval is
                      Locked : Holding;
                      pragma Unreferenced (Locked);
                   begin
-                     if Change_Of (Key) = Seen (At_Stale) then
-                        if E.Is_Ok (Status) or else Too_Large then
+                     --  Installed only by the pass still holding the file's
+                     --  claim: one whose claim another took at a newer print
+                     --  read a file since changed, and leaves it to that one.
+                     if Change_Of (Key) = Seen (At_Stale)
+                       and then In_Flight.Contains (Key) and then In_Flight.Element (Key).Owner = Pass.Id
+                     then
+                        if E.Is_Ok (Status) or else Oversized then
                            Install (Key, Print, Counted, Described);
                            Read_Count := Read_Count + 1;
                         elsif Index.Contains (Key) then
@@ -1116,11 +1213,11 @@ package body Model_Runner.Framework.Retrieval is
                         if E.Is_Ok (Status) then
                            Unsearched.Exclude (Key);
                         else
-                           Unsearched.Include (Key, Too_Large);
+                           Unsearched.Include (Key, (if Oversized then Too_Large else Unreadable));
                         end if;
                         Failed.Exclude (Key);
                      end if;
-                     In_Flight.Exclude (Key);
+                     Release_Claim (Key, Pass.Id);
                      Pass.Claimed.Exclude (Key);
                   exception
                      when others =>
@@ -1149,7 +1246,7 @@ package body Model_Runner.Framework.Retrieval is
                      Locked  : Holding;
                      pragma Unreferenced (Locked);
                   begin
-                     In_Flight.Exclude (Key);
+                     Release_Claim (Key, Pass.Id);
                      Pass.Claimed.Exclude (Key);
                      Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Failure_Noted);
                      if not Fault and then Failed.Contains (Key)
@@ -1178,26 +1275,57 @@ package body Model_Runner.Framework.Retrieval is
       end;
 
       --  Files another pass claimed: waited for, not read again -- its
-      --  install is what this search is to see. Not by a pass that let the
-      --  index go, which has nothing to see them in; and a minute at most,
-      --  a pass that does not end leaving them to the next search.
+      --  install is what this search is to see. Woken each time a claim is
+      --  released, and every quarter second to see whether this search's
+      --  work was stopped. Not by a pass that let the index go, which has
+      --  nothing to see them in; a minute at most. What is still claimed
+      --  when the waiting ends is said by Not_Searched as being read, not
+      --  taken to hold nothing.
       if not Waiting.Is_Empty and then not Let_Go then
          declare
             use type Ada.Real_Time.Time;
-            Give_Up : constant Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.Seconds (60);
+            Give_Up : constant Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Claim_Wait);
             Busy    : Boolean := True;
+            Heard   : Natural;
+
+            function Still_Claimed (At_Wait : Positive) return Boolean
+            is (In_Flight.Contains (Waiting (At_Wait))
+                and then To_String (In_Flight.Element (Waiting (At_Wait)).Print) = Waited (At_Wait));
          begin
-            while Busy and then Ada.Real_Time.Clock < Give_Up loop
+            loop
+               Heard := Releases.Count;
                declare
                   Locked : Holding;
                   pragma Unreferenced (Locked);
                begin
-                  Busy := (for some Key of Waiting => In_Flight.Contains (Key));
+                  Busy := (for some At_Wait in 1 .. Natural (Waiting.Length) => Still_Claimed (At_Wait));
                end;
-               if Busy then
-                  delay 0.002;
-               end if;
+               exit when not Busy or else Stop_Asked or else Ada.Real_Time.Clock >= Give_Up;
+               declare
+                  Look_Again : Ada.Real_Time.Time := Ada.Real_Time.Clock + Ada.Real_Time.Milliseconds (250);
+               begin
+                  if Give_Up < Look_Again then
+                     Look_Again := Give_Up;
+                  end if;
+                  select
+                     Releases.Await (Heard);
+                  or
+                     delay until Look_Again;
+                  end select;
+               end;
             end loop;
+            if Busy then
+               declare
+                  Locked : Holding;
+                  pragma Unreferenced (Locked);
+               begin
+                  for At_Wait in 1 .. Natural (Waiting.Length) loop
+                     if Still_Claimed (At_Wait) then
+                        Unsearched.Include (Waiting (At_Wait), (if Stop_Asked then Stopped else Being_Read));
+                     end if;
+                  end loop;
+               end;
+            end if;
          end;
       end if;
    end Bring_Up;
@@ -1220,6 +1348,17 @@ package body Model_Runner.Framework.Retrieval is
          end if;
       end loop;
    end Retry_Indexing_After;
+
+   -----------------------------
+   -- Wait_For_Claims_At_Most --
+   -----------------------------
+
+   procedure Wait_For_Claims_At_Most (Most : Duration) is
+      Locked : Holding;
+      pragma Unreferenced (Locked);
+   begin
+      Claim_Wait := Duration'Max (0.0, Duration'Min (Most, 3_600.0));
+   end Wait_For_Claims_At_Most;
 
    -----------------
    -- Forget_Tree --
@@ -1283,8 +1422,11 @@ package body Model_Runner.Framework.Retrieval is
             begin
                if Key'Length > Root'Length and then Key (Key'First .. Key'First + Root'Length) = Root & ASCII.NUL then
                   Held.Append (Key (Key'First + Root'Length + 1 .. Key'Last)
-                               & (if Unsearched_Maps.Element (Position) then ": too large to index"
-                                  else ": could not be read"));
+                               & (case Unsearched_Maps.Element (Position) is
+                                     when Too_Large  => ": too large to index",
+                                     when Unreadable => ": could not be read",
+                                     when Being_Read => ": still being read by another search",
+                                     when Stopped    => ": not read, the work was stopped"));
                end if;
             end;
          end loop;
