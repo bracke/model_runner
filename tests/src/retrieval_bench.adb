@@ -578,78 +578,104 @@ package body Retrieval_Bench is
       --  once from git log). A hit is relevant where its file is one of
       --  them; the rank of the first, and how many of the files the first
       --  ten name, are counted.
+      --  The older sixty (retrieval-commits-dev.tsv) are what ranking is
+      --  tuned on; the newer are looked at only once a change is made.
       declare
          Tree   : constant String := Dirs.Full_Name ("..");
          Graph  : constant Rp.Graph := Rp.Scan (Tree, Rp.Default_Roots);
-         Source : Ada.Text_IO.File_Type;
-         Asked, Judged, Found_10, Any_10 : Natural := 0;
-         Reciprocals : Natural := 0;
-      begin
-         Ada.Text_IO.Open (Source, Ada.Text_IO.In_File, "fixtures/retrieval-commits.tsv");
-         while not Ada.Text_IO.End_Of_File (Source) loop
-            declare
-               Line   : constant String := Ada.Text_IO.Get_Line (Source);
-               First  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
-               Second : constant Natural :=
-                 (if First = 0 then 0 else Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), [1 => ASCII.HT]));
-            begin
-               if Line'Length > 0 and then Line (Line'First) /= '#' and then Second > 0 then
-                  declare
-                     Query  : constant String := Line (First + 1 .. Second - 1);
-                     Files  : constant String := " " & Line (Second + 1 .. Line'Last) & " ";
-                     Hits   : constant Rv.Hit_Lists.Vector :=
-                       Rv.Search (Store, Graph, Tree, Query, Most => 10, Records => False);
-                     Wanted : Natural := 0;
-                     Named  : Unbounded_String := To_Unbounded_String (" ");
-                     Rank   : Natural := 0;
-                  begin
-                     for C of Files loop
-                        if C = ' ' then
-                           Wanted := Wanted + 1;
-                        end if;
-                     end loop;
-                     Wanted := Wanted - 1;
-                     for At_Hit in 1 .. Natural (Hits.Length) loop
-                        declare
-                           Path : constant String := To_String (Hits (At_Hit).Path);
-                        begin
-                           if Path /= "" and then Ada.Strings.Fixed.Index (Files, " " & Path & " ") > 0 then
-                              if Rank = 0 then
-                                 Rank := At_Hit;
-                              end if;
-                              if Ada.Strings.Fixed.Index (To_String (Named), " " & Path & " ") = 0 then
-                                 Append (Named, Path & " ");
-                              end if;
+
+         --  The sets themselves hold every query word for word: not searched.
+         function Not_The_Sets (Path : String) return Boolean
+         is (Ada.Strings.Fixed.Index (Path, "fixtures/retrieval-commits") = 0);
+
+         procedure Judge_Commits (Named_File, Label : String) is
+            Source : Ada.Text_IO.File_Type;
+            Asked, Judged, Found_10, Any_10 : Natural := 0;
+            Reciprocals : Natural := 0;
+         begin
+            Ada.Text_IO.Open (Source, Ada.Text_IO.In_File, Named_File);
+            while not Ada.Text_IO.End_Of_File (Source) loop
+               declare
+                  Line   : constant String := Ada.Text_IO.Get_Line (Source);
+                  First  : constant Natural := Ada.Strings.Fixed.Index (Line, [1 => ASCII.HT]);
+                  Second : constant Natural :=
+                    (if First = 0 then 0 else Ada.Strings.Fixed.Index (Line (First + 1 .. Line'Last), [1 => ASCII.HT]));
+               begin
+                  if Line'Length > 0 and then Line (Line'First) /= '#' and then Second > 0 then
+                     declare
+                        Query  : constant String := Line (First + 1 .. Second - 1);
+                        Files  : constant String := " " & Line (Second + 1 .. Line'Last) & " ";
+                        Hits   : constant Rv.Hit_Lists.Vector :=
+                          Rv.Search (Store, Graph, Tree, Query, Most => 10,
+                                     May_Read => Not_The_Sets'Unrestricted_Access, Records => False);
+                        Wanted : Natural := 0;
+                        Named  : Unbounded_String := To_Unbounded_String (" ");
+                        Rank   : Natural := 0;
+                     begin
+                        for C of Files loop
+                           if C = ' ' then
+                              Wanted := Wanted + 1;
                            end if;
-                        end;
-                     end loop;
-                     Asked := Asked + 1;
-                     Judged := Judged + Wanted;
-                     for C of To_String (Named) loop
-                        if C = ' ' then
-                           Found_10 := Found_10 + 1;
+                        end loop;
+                        Wanted := Wanted - 1;
+                        for At_Hit in 1 .. Natural (Hits.Length) loop
+                           declare
+                              Path : constant String := To_String (Hits (At_Hit).Path);
+                           begin
+                              if Path /= "" and then Ada.Strings.Fixed.Index (Files, " " & Path & " ") > 0 then
+                                 if Rank = 0 then
+                                    Rank := At_Hit;
+                                 end if;
+                                 if Ada.Strings.Fixed.Index (To_String (Named), " " & Path & " ") = 0 then
+                                    Append (Named, Path & " ");
+                                 end if;
+                              end if;
+                           end;
+                        end loop;
+                        Asked := Asked + 1;
+                        Judged := Judged + Wanted;
+                        for C of To_String (Named) loop
+                           if C = ' ' then
+                              Found_10 := Found_10 + 1;
+                           end if;
+                        end loop;
+                        Found_10 := Found_10 - 1;
+                        if Rank > 0 then
+                           Any_10 := Any_10 + 1;
+                           Reciprocals := Reciprocals + 1000 / Rank;
                         end if;
-                     end loop;
-                     Found_10 := Found_10 - 1;
-                     if Rank > 0 then
-                        Any_10 := Any_10 + 1;
-                        Reciprocals := Reciprocals + 1000 / Rank;
-                     end if;
-                     if Ada.Environment_Variables.Exists ("BENCH_TOP") then
-                        Ada.Text_IO.Put_Line
-                          ("commit " & Line (Line'First .. First - 1) & ": first relevant"
-                           & (if Rank = 0 then " -" else Natural'Image (Rank)) & "; " & Query
-                           & (if Hits.Is_Empty then "" else " | best " & To_String (Hits.First_Element.Path)));
-                     end if;
-                  end;
-               end if;
-            end;
-         end loop;
-         Ada.Text_IO.Close (Source);
-         Ada.Text_IO.Put_Line
-           ("search commits (held out): a relevant file in the first 10 for " & Share (Any_10, Asked)
-            & ", recall@10 " & Share (Found_10, Judged) & ", MRR " & Share (Reciprocals, Asked * 1000)
-            & " over " & Image (Asked) & " queries, " & Image (Judged) & " files judged");
+                        if Ada.Environment_Variables.Exists ("BENCH_TOP") then
+                           Ada.Text_IO.Put_Line
+                             ("commit " & Line (Line'First .. First - 1) & ": first relevant"
+                              & (if Rank = 0 then " -" else Natural'Image (Rank)) & "; " & Query
+                              & (if Hits.Is_Empty then "" else " | best " & To_String (Hits.First_Element.Path)));
+                        end if;
+                        --  BENCH_TOP=all: the ten, each with its kind, a * on
+                        --  one judged relevant.
+                        if Ada.Environment_Variables.Exists ("BENCH_TOP")
+                          and then Ada.Environment_Variables.Value ("BENCH_TOP") = "all"
+                        then
+                           for One of Hits loop
+                              Ada.Text_IO.Put_Line
+                                ("   " & (if Ada.Strings.Fixed.Index (Files, " " & To_String (One.Path) & " ") > 0
+                                          then "* " else "  ")
+                                 & Rv.Hit_Kind'Image (One.Kind) & Natural'Image (One.Score) & " "
+                                 & To_String (One.Name));
+                           end loop;
+                        end if;
+                     end;
+                  end if;
+               end;
+            end loop;
+            Ada.Text_IO.Close (Source);
+            Ada.Text_IO.Put_Line
+              ("search commits (" & Label & "): a relevant file in the first 10 for " & Share (Any_10, Asked)
+               & ", recall@10 " & Share (Found_10, Judged) & ", MRR " & Share (Reciprocals, Asked * 1000)
+               & " over " & Image (Asked) & " queries, " & Image (Judged) & " files judged");
+         end Judge_Commits;
+      begin
+         Judge_Commits ("fixtures/retrieval-commits-dev.tsv", "dev");
+         Judge_Commits ("fixtures/retrieval-commits.tsv", "held out");
       end;
 
       --  The index of the words over a tree of some size: this repository's

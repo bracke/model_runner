@@ -1888,7 +1888,50 @@ package body Model_Runner.Framework.Retrieval is
                end record;
                package Tally_Maps is new Ada.Containers.Ordered_Maps (Positive, Tally);
                Tallies : Tally_Maps.Map;
+
+               --  A word's count in a file, saturating and taken against the
+               --  file's length (BM25's k1 and b): a long file -- a log of
+               --  measurements, a test suite -- holds most words of a long
+               --  query somewhere, and outranked the source it is about.
+               --  Scale keeps a file's sum where the counts' once was, so a
+               --  text hit stands beside a symbol's points as before. A
+               --  document's words count half: the change asked for is in
+               --  the source. Chosen on the dev set of this repository's own
+               --  commit subjects (tests/fixtures/retrieval-commits-dev.tsv).
+               K1          : constant Float := 2.0;
+               B           : constant Float := 0.75;
+               Scale       : constant Float := 3.6;
+               Document_Of : constant Float := 0.5;
+               Mean        : Float := 1.0;
+               Documents   : Name_Sets.Set;
             begin
+               for At_File in 1 .. Rp.File_Count (Graph) loop
+                  declare
+                     File : constant Rp.File_Entry := Rp.File_At (Graph, At_File);
+                  begin
+                     if File.Role = Rp.Documentation then
+                        Documents.Include (To_String (File.Path));
+                     end if;
+                  end;
+               end loop;
+               declare
+                  Total, Count : Natural := 0;
+               begin
+                  for Position in Index.Iterate loop
+                     declare
+                        Key : constant String := Word_Maps.Key (Position);
+                     begin
+                        if Key'Length > Prefix'Length and then Key (Key'First .. Key'First + Prefix'Length - 1) = Prefix
+                        then
+                           Total := Total + Index.Constant_Reference (Position).Count;
+                           Count := Count + 1;
+                        end if;
+                     end;
+                  end loop;
+                  if Count > 0 then
+                     Mean := Float'Max (1.0, Float (Total) / Float (Count));
+                  end if;
+               end;
                for At_Term in Ids'Range loop
                   if Ids (At_Term) > 0 then
                      for Doc of Term_Docs (Ids (At_Term)) loop
@@ -1910,9 +1953,17 @@ package body Model_Runner.Framework.Retrieval is
                                  Was : Tally := (if Tallies.Contains (Doc) then Tallies (Doc) else (others => <>));
                               begin
                                  Was.Held := Was.Held + 1;
-                                 Was.Score := Was.Score + Float (Natural'Min (8, One.Count))
-                                   * 10.0 * Ada.Numerics.Elementary_Functions.Log
-                                              (1.0 + Float (Files) / Float (Spread (At_Term)), 2.0);
+                                 declare
+                                    Len : constant Float := Float (Index.Constant_Reference (Key).Count);
+                                    Tf  : constant Float := Float (One.Count);
+                                 begin
+                                    Was.Score := Was.Score
+                                      + (if Documents.Contains (Key (Key'First + Prefix'Length .. Key'Last))
+                                         then Document_Of else 1.0)
+                                      * Scale * Tf * (K1 + 1.0) / (Tf + K1 * (1.0 - B + B * Len / Mean))
+                                      * 10.0 * Ada.Numerics.Elementary_Functions.Log
+                                                 (1.0 + Float (Files) / Float (Spread (At_Term)), 2.0);
+                                 end;
                                  --  The line shown, until the text is read: where the
                                  --  rarest of its words first is.
                                  if Spread (At_Term) < Was.Rarest then
