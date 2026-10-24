@@ -18,6 +18,7 @@ with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Observations;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Race_Points;
 
 package body Model_Runner.Framework.Retrieval is
 
@@ -398,6 +399,30 @@ package body Model_Runner.Framework.Retrieval is
    Free_Docs  : Number_Lists.Vector;
    Read_Count : Natural := 0;
 
+   --  When each file's entry last changed -- installed or dropped -- as a
+   --  count of the index's changes, kept after a drop: a pass that read a
+   --  file installs what it read only where nothing changed the entry
+   --  since it chose to, so a slower pass with an older read does not put
+   --  back what a faster one replaced or dropped.
+   package Change_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Positive, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Changed : Change_Maps.Map;
+   Changes : Natural := 0;
+
+   package Change_Lists is new Ada.Containers.Vectors (Positive, Natural);
+
+   --  An entry's last change, nought for one never changed. Called with
+   --  Lock held.
+   function Change_Of (Key : String) return Natural
+   is (if Changed.Contains (Key) then Changed.Element (Key) else 0);
+
+   --  An entry changed. Called with Lock held.
+   procedure Mark_Changed (Key : String) is
+   begin
+      Changes := Changes + 1;
+      Changed.Include (Key, Changes);
+   end Mark_Changed;
+
    protected Lock is
       entry Seize;
       procedure Release;
@@ -487,6 +512,7 @@ package body Model_Runner.Framework.Retrieval is
       Index.Delete (Key);
       Doc_Keys.Replace_Element (Doc, "");
       Free_Docs.Append (Doc);
+      Mark_Changed (Key);
    end Drop;
 
    --  A file's counted words into the index, in place of what it held of
@@ -570,6 +596,7 @@ package body Model_Runner.Framework.Retrieval is
                      Doc => Doc, Lengths => Lengths, Words => Words, Said => Said));
          end;
       end;
+      Mark_Changed (Key);
    end Install;
 
    --  What a file holds of a term: its posting, or a count of nought.
@@ -695,10 +722,20 @@ package body Model_Runner.Framework.Retrieval is
    --  to be read is found under Lock, and what is gone dropped; each file
    --  is read and its words counted without it, and installed under it:
    --  a search of one tree does not wait on another's reading.
+   --
+   --  What is installed is what was read, under the print of what was
+   --  read: a file changed since the graph was taken is held as it is
+   --  now, not under the graph's older print. It is installed only where
+   --  its entry has not changed since this pass chose to read it; another
+   --  pass that installed or dropped it in between knew as much or more.
+   --  A file too large is held with no words, as it is until it changes;
+   --  one that could not be read is not held at all, so the next search
+   --  reads it again rather than take it to have no words.
    procedure Bring_Up (Graph : Rp.Graph; Root : String; Files : out Natural) is
       Present : Name_Sets.Set;
       Stale   : Name_Lists.Vector;
       Prints  : Name_Lists.Vector;
+      Seen    : Change_Lists.Vector;
    begin
       Lock.Seize;
       begin
@@ -713,6 +750,7 @@ package body Model_Runner.Framework.Retrieval is
                   if not Index.Contains (Key) or else Index.Constant_Reference (Key).Print /= File.Fingerprint then
                      Stale.Append (Path);
                      Prints.Append (To_String (File.Fingerprint));
+                     Seen.Append (Change_Of (Key));
                   end if;
                end if;
             end;
@@ -755,17 +793,29 @@ package body Model_Runner.Framework.Retrieval is
             --  The size held to in the read itself: no look at the file by
             --  its path before it is opened.
             Read_In (Root, Path, Text, Status, Most => Indexed_Most);
+            Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Installs);
             declare
+               use type E.Error_Code;
+               Key       : constant String := Key_Of (Root, Path);
+               Too_Large : constant Boolean := Status.Code = E.IO_File_Too_Large;
                Counted   : constant Count_Maps.Map :=
                  (if E.Is_Ok (Status) then Words_Of (To_String (Text)) else Count_Maps.Empty_Map);
                Described : constant Description_Lists.Vector :=
                  (if E.Is_Ok (Status) then Descriptions_Of (To_String (Text), Rp.Language_Of (Path))
                   else Description_Lists.Empty_Vector);
+               Print     : constant String :=
+                 (if E.Is_Ok (Status) then Fingerprint (To_String (Text)) else Prints (At_Stale));
             begin
                Lock.Seize;
                begin
-                  Install (Key_Of (Root, Path), Prints (At_Stale), Counted, Described);
-                  Read_Count := Read_Count + 1;
+                  if Change_Of (Key) = Seen (At_Stale) then
+                     if E.Is_Ok (Status) or else Too_Large then
+                        Install (Key, Print, Counted, Described);
+                        Read_Count := Read_Count + 1;
+                     elsif Index.Contains (Key) then
+                        Drop (Key);
+                     end if;
+                  end if;
                   Lock.Release;
                exception
                   when others =>
@@ -792,6 +842,8 @@ package body Model_Runner.Framework.Retrieval is
       Free_Terms.Clear;
       Doc_Keys.Clear;
       Free_Docs.Clear;
+      Changed.Clear;
+      Changes := 0;
       Read_Count := 0;
       Lock.Release;
    end Forget;
@@ -1075,10 +1127,9 @@ package body Model_Runner.Framework.Retrieval is
                      for Id of Ids loop
                         for Doc of Term_Docs (Id) loop
                            declare
-                              Key  : constant String := Doc_Keys (Doc);
-                              Path : constant String := Key (Key'First + Prefix'Length .. Key'Last);
+                              Key : constant String := Doc_Keys (Doc);
                            begin
-                              if In_Tree (Key) and then Shown (Path) then
+                              if In_Tree (Key) and then Shown (Key (Key'First + Prefix'Length .. Key'Last)) then
                                  declare
                                     Held : File_Words renames Index.Constant_Reference (Key).Element.all;
                                     Low  : Positive := Held.Said'First;
@@ -1430,10 +1481,9 @@ package body Model_Runner.Framework.Retrieval is
                   if Ids (At_Term) > 0 then
                      for Doc of Term_Docs (Ids (At_Term)) loop
                         declare
-                           Key  : constant String := Doc_Keys (Doc);
-                           Path : constant String := Key (Key'First + Prefix'Length .. Key'Last);
+                           Key : constant String := Doc_Keys (Doc);
                         begin
-                           if In_Tree (Doc) and then Shown (Path) then
+                           if In_Tree (Doc) and then Shown (Key (Key'First + Prefix'Length .. Key'Last)) then
                               declare
                                  One : constant Posting := Find (Index.Constant_Reference (Key).Words, Ids (At_Term));
                                  Was : Tally := (if Tallies.Contains (Doc) then Tallies (Doc) else (others => <>));

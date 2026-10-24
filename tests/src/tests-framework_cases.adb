@@ -19826,6 +19826,174 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Searches_At_Once_Agree;
 
+   --  The index installs only what is newest: a pass that read a file
+   --  another replaced, or one another found deleted, does not put its
+   --  read back; a file that could not be read is read again by the next
+   --  search, not held as one without words; two trees, their roots of
+   --  other lengths, are each searched alone; and searches while the
+   --  files change and the index is forgotten do not fail.
+   procedure Index_Installs_Only_The_Newest
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+      Notes : Unbounded_String;
+
+      function Find (Query : String) return Rv.Hit_Lists.Vector
+      is (Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", Query, 20, Records => False));
+
+      function Texts (Query : String; Path : String) return Boolean
+      is (for some One of Find (Query) => One.Kind = Rv.Text_Hit and then To_String (One.Path) = Path);
+
+      Hits : Rv.Hit_Lists.Vector;
+   begin
+      Task_Project (Store, "index-newest");
+      Retrieval_Files (Fresh_Root (Store));
+      Notes := To_Unbounded_String (Fresh_Root (Store) & "/docs/notes.txt");
+      Rv.Forget;
+      Assert (Texts ("quokka", "docs/notes.txt"), "a word was not found in its file");
+
+      --  Read, then replaced and indexed by another search before this
+      --  pass installs: what the other installed stays.
+      declare
+         procedure Replace_And_Search is
+         begin
+            Put_File (To_String (Notes), "Now it says yak." & LF);
+            Hits := Find ("yak");
+         end Replace_And_Search;
+         Reads : Natural;
+      begin
+         Put_File (To_String (Notes), "Now it says zebra." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Replace_And_Search'Unrestricted_Access);
+         Hits := Find ("zebra");
+         Reads := Rv.Indexed_Reads;
+         Assert (Texts ("yak", "docs/notes.txt") and then not Texts ("zebra", "docs/notes.txt")
+                 and then Rv.Indexed_Reads = Reads,
+                 "a slower pass put back an older read over a newer one");
+      end;
+
+      --  Read, then deleted and found gone by another search: the file
+      --  is not held again.
+      declare
+         procedure Delete_And_Search is
+         begin
+            Dirs.Delete_File (To_String (Notes));
+            Hits := Find ("emu");
+         end Delete_And_Search;
+         Held : Natural;
+      begin
+         Put_File (To_String (Notes), "Now it says emu." & LF);
+         Held := Rv.Indexed_Held;
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Delete_And_Search'Unrestricted_Access);
+         Hits := Find ("emu");
+         Assert (Rv.Indexed_Held = Held - 1, "a file another search found deleted was held again:"
+                 & Rv.Indexed_Held'Image & " against" & Held'Image);
+         Assert (not Texts ("emu", "docs/notes.txt"), "a deleted file's words were found");
+      end;
+      Put_File (To_String (Notes), "Now it says quokka." & LF);
+      Assert (Texts ("quokka", "docs/notes.txt"), "a file written again was not found");
+
+      --  Two files changed; while the first is read, the second is made
+      --  unreadable. It is not taken to have no words: once readable, the
+      --  next search reads it.
+      declare
+         Tool : constant String := Fresh_Root (Store) & "/src/tool.py";
+         Was    : constant String := Read_Whole (Tool);
+         Hidden : Boolean := False;
+
+         --  The file this pass reads second, made unreadable after the
+         --  first is read.
+         procedure Hide_Both is
+         begin
+            GNAT.OS_Lib.Set_Non_Readable (Tool);
+            GNAT.OS_Lib.Set_Non_Readable (To_String (Notes));
+            Hidden := not GNAT.OS_Lib.Is_Readable_File (Tool);
+         end Hide_Both;
+         Graph : Rp.Graph;
+      begin
+         Put_File (To_String (Notes), "Now it says wallaroo." & LF);
+         Put_File (Tool, Was & "# wallaroo" & LF);
+         Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Hide_Both'Unrestricted_Access);
+         Hits := Rv.Search (Store, Graph, "", "wallaroo", 20, Records => False);
+         GNAT.OS_Lib.Set_Readable (Tool);
+         GNAT.OS_Lib.Set_Readable (To_String (Notes));
+         if Hidden then
+            Hits := Rv.Search (Store, Graph, "", "wallaroo", 20, Records => False);
+            Assert ((for some One of Hits => One.Kind = Rv.Text_Hit and then To_String (One.Path) = "src/tool.py")
+                    and then (for some One of Hits => One.Kind = Rv.Text_Hit
+                              and then To_String (One.Path) = "docs/notes.txt"),
+                    "a file that could not be read was held as one without words");
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "note: index-newest: a file made unreadable could still be read;"
+               & " that part was not run");
+         end if;
+         Put_File (Tool, Was);
+      end;
+
+      --  Another tree, its root longer: each tree's search finds its own
+      --  files' words and not the other's.
+      declare
+         Other  : constant String := Fresh ("index-newest-other-tree-with-a-longer-root");
+         Theirs : Rv.Hit_Lists.Vector;
+      begin
+         Dirs.Create_Path (Other & "/docs");
+         Put_File (Other & "/docs/platypus.txt", "The platypus lays eggs." & LF);
+         Theirs := Rv.Search (Store, Rp.Scan (Other, Rp.Roots_Of (Store)), Other, "platypus quokka", 20,
+                              Records => False);
+         Assert ((for some One of Theirs => To_String (One.Path) = "docs/platypus.txt")
+                 and then not (for some One of Theirs => To_String (One.Path) = "docs/notes.txt"),
+                 "a search of the longer tree found another tree's words");
+         Assert (not (for some One of Find ("platypus quokka") => To_String (One.Path) = "docs/platypus.txt"),
+                 "a search of the shorter tree found another tree's words");
+      end;
+
+      --  Searches from three tasks while the files are written and the
+      --  index forgotten: none fails.
+      declare
+         Graph  : constant Rp.Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         Failed : Unbounded_String;
+      begin
+         declare
+            task type Searcher;
+            task body Searcher is
+            begin
+               for Round in 1 .. 30 loop
+                  Assert (not Rv.Search (Store, Graph, "", "parse number", 20, Records => False).Is_Empty,
+                          "a search while the files changed found nothing");
+               end loop;
+            exception
+               when Error : others =>
+                  Append (Failed, Ada.Exceptions.Exception_Information (Error));
+            end Searcher;
+            Searchers : array (1 .. 3) of Searcher;
+
+            --  Written as another program writes it: Ada's own files
+            --  refuse one opened twice in a process, and a search may
+            --  have it open.
+            procedure Write (Text : String) is
+               File    : constant GNAT.OS_Lib.File_Descriptor :=
+                 GNAT.OS_Lib.Create_File (To_String (Notes), GNAT.OS_Lib.Binary);
+               Written : Integer;
+            begin
+               Written := GNAT.OS_Lib.Write (File, Text'Address, Text'Length);
+               GNAT.OS_Lib.Close (File);
+               Assert (Written = Text'Length, "the file was not written");
+            end Write;
+         begin
+            for Round in 1 .. 30 loop
+               Write ("Round" & Round'Image & " says quokka" & Ada.Strings.Fixed."*" (Round, '.') & LF);
+               if Round mod 5 = 0 then
+                  Rv.Forget;
+               end if;
+            end loop;
+         end;
+         Assert (Length (Failed) = 0, "a search while the files changed failed: " & To_String (Failed));
+      end;
+      S.Close (Store);
+   end Index_Installs_Only_The_Newest;
+
    --  A graph is checked against its tree, not taken on its maker's word:
    --  current while nothing is added, changed or removed, and not once a
    --  file is.
@@ -20778,6 +20946,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Searches_At_Once_Agree'Access,
          "searches of two trees at once give what each gives alone");
+      Register_Routine
+        (T, Index_Installs_Only_The_Newest'Access,
+         "the index installs only what is newest, and holds no failed read");
       Register_Routine
         (T, Graphs_Are_Checked_Current'Access,
          "a graph is checked against its tree, current only while nothing changed since");

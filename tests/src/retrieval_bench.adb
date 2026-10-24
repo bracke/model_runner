@@ -494,9 +494,82 @@ package body Retrieval_Bench is
                & Share (Rv.Files_Read - Read_Before, Took'Length) & " files read a search, the last giving "
                & Image (Natural (Hits.Length)) & " hits");
          end Latency;
+
+         --  The same searches from three tasks at once -- two on this
+         --  repository, one on the fixture -- each search timed, and the
+         --  whole against the three run one after another: what waiting
+         --  on the index's lock costs agents searching side by side.
+         procedure Together is
+            Trees  : constant array (1 .. 3) of Unbounded_String :=
+              [R (Dirs.Full_Name ("..")), R (Dirs.Full_Name ("..")), Root];
+            Graphs : array (Trees'Range) of Rp.Graph;
+            Each   : constant Positive := Queries'Length * 5;
+            Took   : Times (1 .. Each * Trees'Length);
+            Failed : Boolean := False with Atomic;
+
+            procedure Run_Searches (Which : Positive) is
+               Hits : Rv.Hit_Lists.Vector;
+               At_Took : Natural := (Which - 1) * Each;
+            begin
+               for Round in 1 .. 5 loop
+                  for Query of Queries loop
+                     declare
+                        Began : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                     begin
+                        Hits := Rv.Search (Store, Graphs (Which), To_String (Trees (Which)), To_String (Query),
+                                           Most => 10, Records => False);
+                        At_Took := At_Took + 1;
+                        Took (At_Took) := Ada.Calendar.Clock - Began;
+                     end;
+                  end loop;
+               end loop;
+               if Hits.Is_Empty then
+                  Failed := True;
+               end if;
+            end Run_Searches;
+
+            Began  : Ada.Calendar.Time;
+            Alone  : Duration;
+            At_Once : Duration;
+         begin
+            for Which in Trees'Range loop
+               Graphs (Which) := Rp.Scan (To_String (Trees (Which)), Rp.Default_Roots);
+            end loop;
+            Began := Ada.Calendar.Clock;
+            for Which in Trees'Range loop
+               Run_Searches (Which);
+            end loop;
+            Alone := Ada.Calendar.Clock - Began;
+            Began := Ada.Calendar.Clock;
+            declare
+               task type Searcher (Which : Positive);
+               task body Searcher is
+               begin
+                  Run_Searches (Which);
+               exception
+                  when others =>
+                     Failed := True;
+               end Searcher;
+               First  : Searcher (1);
+               Second : Searcher (2);
+               Third  : Searcher (3);
+            begin
+               null;
+            end;
+            At_Once := Ada.Calendar.Clock - Began;
+            Sort_Times (Took);
+            Ada.Text_IO.Put_Line
+              ("latency together: p50 " & Image (Natural (Took ((Took'Length + 1) / 2) * 1000.0)) & " ms, p95 "
+               & Image (Natural (Took ((Took'Length * 95 + 99) / 100) * 1000.0)) & " ms over "
+               & Image (Took'Length) & " searches from 3 tasks; all "
+               & Image (Natural (At_Once * 1000.0)) & " ms at once against "
+               & Image (Natural (Alone * 1000.0)) & " ms one after another"
+               & (if Failed then "; A SEARCH FAILED" else ""));
+         end Together;
       begin
          Latency ("fixture", To_String (Root));
          Latency ("repository", Dirs.Full_Name (".."));
+         Together;
       end;
 
       --  The index of the words over a tree of some size: this repository's

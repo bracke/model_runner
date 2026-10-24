@@ -67,6 +67,17 @@ with Model_Runner.Framework.Stores;
 --  without it, so one tree's reading does not hold up another's search.
 --  The index visits, for each word of a query, the files that hold it; a
 --  word no indexed file holds any more leaves it.
+--
+--  A file's entry is what was read of it, under the print of what was
+--  read, and is installed only where no other pass installed or dropped
+--  it since this one chose to read it: a slower pass does not put back
+--  an older read, nor a file another found deleted. A file that could not
+--  be read is not held, and is read again by the next search; one too
+--  large is held with no words. Each scoring pass -- descriptions, then
+--  words -- is made under one hold of the lock and sees one state of the
+--  index; the line a text hit shows is then read from the file as it is
+--  now, and one whose file cannot be read by then is left out. A file
+--  changed between the two is ranked by what it held, shown as it holds.
 package Model_Runner.Framework.Retrieval is
 
    package U renames Ada.Strings.Unbounded;
