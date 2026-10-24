@@ -1352,6 +1352,46 @@ package body Model_Runner.Framework.Context is
                   end if;
                end loop;
 
+               --  And those it says by what they do and does not name: the
+               --  best of a search of its words that their comment says, three
+               --  at most, as the named are, a little below them. Asked of a
+               --  procedure "that moves a book's balance and counts one entry
+               --  more", the context held no line of the ledger -- its files
+               --  are no component's by their paths, and nothing was named.
+               if not Whole_Only then
+                  declare
+                     use type Rv.Hit_Kind;
+                     Asked : constant String :=
+                       Records.Get (View, "definition.title") & " " & Records.Get (View, "definition.notes")
+                       & " " & Records.Get (View, "definition.question");
+                     Hits  : constant Rv.Hit_Lists.Vector :=
+                       Rv.Search (Item, Graph, Project, Asked, Most => 10, Records => False);
+                     Taken : Natural := 0;
+                  begin
+                     for One of Hits loop
+                        exit when Taken = 3;
+                        if One.Kind = Rv.Symbol_Hit
+                          and then Ada.Strings.Fixed.Index (To_String (One.Why), "its comment says") > 0
+                          and then not Named_Symbols.Contains (To_String (One.Name))
+                        then
+                           declare
+                              Found : Rv.Excerpt_Lists.Vector;
+                              Got   : E.Error_Info;
+                           begin
+                              Rv.Declaration (Graph, Project, To_String (One.Name), Declaration_Lines, Found, Got);
+                              for Piece of Found loop
+                                 Offer_Excerpt (Piece, "a declaration whose comment says what the task asks", Normal);
+                              end loop;
+                              if not Found.Is_Empty then
+                                 Named_Symbols.Append (To_String (One.Name));
+                                 Taken := Taken + 1;
+                              end if;
+                           end;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+
                for Name of Named_Symbols loop
                   for Index in 1 .. Repository.Relation_Count (Graph) loop
                      declare

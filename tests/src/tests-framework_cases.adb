@@ -5634,6 +5634,44 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Contexts_Are_Built_Again_Where_The_Tree_Moved;
 
+   --  A context holds the declaration a task says by what it does and
+   --  does not name: the one whose comment says it, from a search of the
+   --  task's words -- in a project whose files are no component's by
+   --  their paths, it held no line of the code.
+   procedure Contexts_Show_What_A_Task_Describes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Made   : Cx.Built;
+      Given  : Tk.Field_Map;
+   begin
+      Task_Project (Store, "context-described");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/burrows.ads",
+                "package Burrows is" & LF
+                & "   --  Counts the wombats sleeping in a burrow." & LF
+                & "   function Tally (Depth : Natural) return Natural;" & LF & LF
+                & "   --  The tunnel's length in metres." & LF
+                & "   function Length (Depth : Natural) return Natural;" & LF
+                & "end Burrows;" & LF);
+      Given := Fields ("Change it", "implementation", "component", "nowhere-by-path");
+      Given.Include ("notes", "the function that counts the wombats sleeping in a burrow must count only the"
+                     & " awake ones");
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a task to build context for was not made: " & Code_Of (Status));
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Made, Status);
+      Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "function Tally (Depth : Natural)") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Made), "a declaration whose comment says") > 0,
+              "a context did not show the declaration its task said by what it does");
+      S.Close (Store);
+   end Contexts_Show_What_A_Task_Describes;
+
    --  A call is recorded when it starts and ends once; an answer is held to
    --  its contract.
    procedure Invocations_Are_Recorded
@@ -21431,6 +21469,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Contexts_Are_Built_Again_Where_The_Tree_Moved'Access,
          "a context built while a file it shows changes is built again");
+      Register_Routine
+        (T, Contexts_Show_What_A_Task_Describes'Access,
+         "a context shows the declaration its task says by what it does");
       Register_Routine
         (T, Invocations_Are_Recorded'Access,
          "a model call is recorded once ended and its answer held to a"
