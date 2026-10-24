@@ -1,0 +1,62 @@
+# Retrieval held out, the next older: as retrieval-commits.tsv, from the 60 qualifying commits older than the fresh set's.
+# Not looked at while tuning; scored once a change is made.
+1b7d1daf	an agent run can write a JSON trace of its calls, results and tally	resources/messages/catalog.txt src/library/model_runner-cli-execute.adb src/library/model_runner-cli-options.adb src/library/model_runner-cli-options.ads
+2b99200d	delegated subtasks fan out over a pool of sessions, one per subtask at once	src/library/model_runner-cli-execute.adb src/library/model_runner-tools-builtin.adb src/library/model_runner-tools-builtin.ads
+11979d22	retrieve reads legacy Word .doc files	src/library/model_runner-tools-builtin.adb src/library/model_runner-tools-doc.adb src/library/model_runner-tools-doc.ads tests/src/tests-tools_cases.adb
+69e10279	retrieve reads Office, OpenDocument and EPUB files	src/library/model_runner-tools-builtin.adb src/library/model_runner-tools-ooxml.adb src/library/model_runner-tools-ooxml.ads tests/src/tests-tools_cases.adb
+f98c598d	the rule bound widened so the whole tool set stays tight	src/library/model_runner-grammar.ads tests/src/tests-tools_cases.adb
+25ae891f	what the loop generated and came to hold, counted	src/library/model_runner-agent.adb src/library/model_runner-agent.ads tests/src/agent_eval.adb tests/src/agent_eval.ads
+b9c70b2f	a wall-clock budget on the agent loop	src/library/model_runner-agent.adb src/library/model_runner-agent.ads tests/src/agent_eval.adb
+243d70d9	tool-call arguments constrained to each tool's schema, and a trajectory	src/library/model_runner-schema.adb src/library/model_runner-tools-constraint.adb src/library/model_runner-tools-constraint.ads tests/src/agent_eval.adb tests/src/agent_eval.ads tests/src/tests-tools_cases.adb tests/src/tests_main.adb tests/src/tool_commands.adb
+f22fd5da	the hybrid crossed against the independent implementation, and the sweep made whole	src/library/model_runner-llama.adb tests/src/conformance.adb tests/src/fixture_mutation.adb tests/src/reference_transformer.adb tests/src/reference_transformer.ads tests/src/tiny_model.adb tests/src/tiny_model.ads
+89cc3199	the shared expert dealt with the experts, and three kernels without their checks	src/library/model_runner-kernels.adb src/library/model_runner-llama.adb
+b099074e	the six-bit strip without its tables, and the whole team for a k-quant	src/library/model_runner-backend-cpu.adb src/library/model_runner-quantization-integers-kernels.adb
+1ea6496c	kept states are slots, and the head is read once	src/library/model_runner-llama.adb src/library/model_runner-llama.ads tests/src/speed_run.adb tests/src/speed_run.ads tests/src/tests_main.adb tests/src/tool_commands.adb
+dde53877	what a token spends off the device, measured at the seams	src/library/model_runner-sampling.adb src/library/model_runner-sampling.ads tests/src/tests-sampling_cases.adb
+be16de7f	the three-bit row product dealt as the two-bit one is	src/library/model_runner-shaders.ads src/shaders/row_product.comp
+c36ab435	the matrix attention kernel at a head of a hundred and twenty-eight	src/library/model_runner-platform-device-products.adb src/library/model_runner-platform-device-products.ads src/library/model_runner-shaders.ads src/shaders/attention_matrix.comp tests/src/checks.adb tests/src/tests-backend_cases.adb
+2860343c	the listed products' tile, and what the decode was not	src/library/model_runner-platform-device-products.adb src/library/model_runner-platform-device-products.ads src/library/model_runner-shaders.ads src/shaders/matrix_product.comp tests/src/checks.adb tests/src/tests-backend_cases.adb
+599fb408	the host's share priced: the device is busy for 93 per cent of a token	src/library/model_runner-backend-device.adb src/library/model_runner-backend-device.ads src/library/model_runner-llama.adb
+fa7e83cd	the three-bit row product shared across the lanes	src/library/model_runner-shaders.ads src/shaders/row_product.comp
+d324d0c7	the element-wise work of a layer, on the pool	src/library/model_runner-backend-cpu.adb src/library/model_runner-kernels.adb src/library/model_runner-llama.adb
+41627588	two arrays at one address, and MXFP4's prompt	src/library/model_runner-quantization-integers-kernels.adb
+6e98f947	MXFP4's panel keeps the exponent byte	src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-interleave.adb src/library/model_runner-quantization-interleave.ads
+0d7ee7ed	attention's two loops move into the kernel that scores, and the reach is proved once	src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-llama.adb tests/src/tests-inference_cases.adb
+f75d90cc	the repetition penalty asked its question two million times a token	src/library/model_runner-sampling.adb src/library/model_runner-sampling.ads
+abe381db	a prompt reads the weights three times where it read them twelve	src/library/model_runner-cli-options.ads src/library/model_runner-generation.ads src/library/model_runner-llama.ads tests/src/tests_main.adb
+a25f9932	sixteen query rows to an attending workgroup, where thirty-two were	src/library/model_runner-platform-device-products.ads src/library/model_runner-shaders.ads src/shaders/attention_matrix.comp
+5ad7543f	a tile of thirty-two rows, which is where the batch's own numbers stop being rebuilt	src/library/model_runner-quantization-integers.ads
+da5ec7f1	the words did not match the source, and eight queries a block	src/library/model_runner-platform-device-products.ads src/library/model_runner-shaders.ads src/shaders/attention.comp src/shaders/matrix_product.comp
+33b052d3	the scalar loops nobody had looked at, and three refusals	src/library/model_runner-quantization-integers.adb src/library/model_runner-tensors.adb
+98acbce0	twenty-one million lookups where seventeen thousand will do	src/library/model_runner-tokenizer.adb
+e73009bf	the answers nobody read, and a device prompt a tenth faster for deleting them	src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-platform-device-products.ads
+0c7bbf77	a tile of answers is written the way the target keeps them	src/library/model_runner-tensors.adb
+6d1eba12	what a layer costs on a device, and how many rows a tile should take	src/library/model_runner-quantization-integers.ads src/library/model_runner-tensors.adb
+39a2233b	a format for a model whose own template opens with a macro	src/library/model_runner-templates.adb src/library/model_runner-templates.ads tests/src/tests-template_cases.adb
+c4f919af	the documents fell behind the device, and one of them was a comment	SECURITY.md src/library/model_runner-backend-device.ads
+b4fa77b0	read a file that ends in padding	src/library/model_runner-gguf-containers-reader.adb
+d64fc717	the oldest shape here, and the only one that does not rotate	src/library/model_runner-backend-device.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads tests/src/conformance.adb tests/src/fixture_mutation.adb tests/src/reference_transformer.adb tests/src/reference_transformer.ads tests/src/tiny_model.adb tests/src/tiny_model.ads
+a1d3b7eb	gemma and phi3 chat formats, and the pseudo-locale I had been breaking	resources/messages/catalog.txt src/library/model_runner-templates.adb src/library/model_runner-templates.ads
+6bea10f4	Shift on the drafting path, refuse an undescribed requirement, record the load	src/library/model_runner-generation.adb src/library/model_runner-schema.adb tests/src/speed_run.adb tests/src/speed_run.ads tests/src/tests-inference_cases.adb
+065328db	Honour required, and test the rolling context through the command	src/library/model_runner-schema.adb src/library/model_runner-schema.ads tests/src/tests-cli_cases.adb tests/src/tests-grammar_cases.adb
+60eb0dd5	Hold the speed tool to the command, and re-take every figure quietly	src/library/model_runner-presentation.adb tests/src/speed_run.adb tests/src/speed_run.ads tests/src/tests-cli_cases.adb
+a051e417	Add five samplers, and make the penalties act at temperature zero	resources/messages/catalog.txt src/library/model_runner-cli-options.adb src/library/model_runner-sampling.adb src/library/model_runner-sampling.ads tests/src/tests-sampling_cases.adb
+07946194	Measure the grammar filter, and make it 725 times faster	src/library/model_runner-grammar.adb src/library/model_runner-grammar.ads tests/src/benchmarks.adb
+d3b92554	Implement mixture of experts	src/library/model_runner-limits.ads src/library/model_runner-llama.adb src/library/model_runner-llama.ads tests/src/conformance.adb tests/src/reference_transformer.adb tests/src/reference_transformer.ads tests/src/tests-gguf_cases.adb tests/src/tests-inference_cases.adb tests/src/tiny_model.adb tests/src/tiny_model.ads
+7a927890	Report a failed truncation, ask for mapping, and name the shared hosts	src/platform/posix/model_runner-platform-mapping.adb src/platform/posix/model_runner-platform-signals.adb tests/src/checks.adb tests/src/platform/posix/captured_output.adb tests/src/platform/posix/raise_interrupt.adb tests/src/platform/windows/captured_output.adb tests/src/tests-cli_cases.adb
+11113a64	Restore the work the last commit described but did not contain	src/library/model_runner-cli-options.adb tests/src/checks.adb tests/src/tests-cli_cases.adb tools/src/check_all.adb tools/src/check_all_selftest.adb
+1e12174b	One marker rule for both roads, and a byte-pair model to drive	src/library/model_runner-tokenizer.adb tests/src/bpe_vocabulary.adb tests/src/reference_tokenizer.adb tests/src/tests-gguf_cases.adb tests/src/tests-inference_cases.adb tests/src/tiny_model.adb tests/src/tiny_model.ads
+51b1dff6	Give the interactive commands one list instead of three	src/library/model_runner-cli-interactive.adb src/library/model_runner-cli-interactive.ads tests/src/checks.adb
+e1c3270c	Measure the reference backend, and find the published ratio wrong	src/library/model_runner-presentation.ads tests/src/benchmarks.adb
+f4198061	Make --color always mean always	src/library/model_runner-presentation.adb tests/src/tests-cli_cases.adb
+14e44669	Say two architectures where the code has two, and check that it stays said	src/library/model_runner-llama.ads tests/src/checks.adb tests/src/tests_main.adb
+f9444dca	Delete a stated limit that was wrong, and check the rest	src/library/model_runner-bytes.ads src/library/model_runner-cli-options.ads tests/src/checks.adb
+85fe4692	Fail when a public operation has no caller, and clear a reset session	src/library/model_runner-bytes.ads src/library/model_runner-llama.adb tests/src/checks.adb tests/src/tests-cli_cases.adb
+b805ce5c	Let a session say whether it is reading a prompt or writing a reply	src/library/model_runner-generation.adb src/library/model_runner-llama.adb src/library/model_runner-llama.ads tests/src/checks.adb tests/src/tests-cli_cases.adb
+8d2d2794	Remove two diagnostics that a working feature had superseded	resources/messages/catalog.txt src/library/model_runner-errors.adb src/library/model_runner-errors.ads tests/src/reserved_codes.adb tests/src/reserved_codes.ads
+1084218f	Drive the interactive loop from a test	src/library/model_runner-cli-interactive.adb src/library/model_runner-cli-interactive.ads tests/src/tests-cli_cases.adb tests/src/tiny_model.adb tests/src/tiny_model.ads
+539fd764	Give a template's variables their own room and their own error	resources/messages/catalog.txt src/library/model_runner-errors.adb src/library/model_runner-errors.ads src/library/model_runner-templates.adb tests/src/tests-template_cases.adb
+d3828348	Read containers that have no tensors, and say why one is truncated	src/library/model_runner-gguf-containers-reader.adb tests/src/tests-catalog_cases.adb
+7b48d1c1	Stop fusing the multiply into the Q4_0 decode	src/library/model_runner-quantization.adb src/library/model_runner-quantization.ads tests/src/tests-gguf_cases.adb
+025d393f	Measure what the kernels are waiting for	src/library/model_runner-quantization.adb tests/src/benchmarks.adb
+7ca1af4b	Correct three published claims that had gone stale	src/library/model_runner-cli.ads

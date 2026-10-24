@@ -626,7 +626,9 @@ package body Retrieval_Bench is
          function Not_The_Sets (Path : String) return Boolean
          is (Ada.Strings.Fixed.Index (Path, "fixtures/retrieval-commits") = 0);
 
-         procedure Judge_Commits (Named_File, Label : String) is
+         procedure Judge_Commits (Named_File, Label : String; Other_Tree : String := "") is
+            In_Tree  : constant String := (if Other_Tree = "" then Tree else Dirs.Full_Name (Other_Tree));
+            In_Graph : constant Rp.Graph := (if Other_Tree = "" then Graph else Rp.Scan (In_Tree, Rp.Default_Roots));
             Source : Ada.Text_IO.File_Type;
             Asked, Judged, Found_10, Any_10 : Natural := 0;
             Reciprocals : Natural := 0;
@@ -644,7 +646,7 @@ package body Retrieval_Bench is
                         Query  : constant String := Line (First + 1 .. Second - 1);
                         Files  : constant String := " " & Line (Second + 1 .. Line'Last) & " ";
                         Hits   : constant Rv.Hit_Lists.Vector :=
-                          Rv.Search (Store, Graph, Tree, Query, Most => 10,
+                          Rv.Search (Store, In_Graph, In_Tree, Query, Most => 10,
                                      May_Read => Not_The_Sets'Unrestricted_Access, Records => False);
                         Wanted : Natural := 0;
                         Named  : Unbounded_String := To_Unbounded_String (" ");
@@ -715,6 +717,10 @@ package body Retrieval_Bench is
          Judge_Commits ("fixtures/retrieval-commits-dev.tsv", "dev");
          Judge_Commits ("fixtures/retrieval-commits.tsv", "held out");
          Judge_Commits ("fixtures/retrieval-commits-fresh.tsv", "fresh");
+         Judge_Commits ("fixtures/retrieval-commits-older.tsv", "older");
+         if Dirs.Exists ("../../hostkit") then
+            Judge_Commits ("fixtures/retrieval-commits-hostkit.tsv", "hostkit", Other_Tree => "../../hostkit");
+         end if;
       end;
 
       --  The index of the words over a tree of some size: this repository's

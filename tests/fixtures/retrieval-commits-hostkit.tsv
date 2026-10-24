@@ -1,0 +1,51 @@
+# Retrieval held out on another tree: hostkit's own commit subjects, area label cut, judged by the files each changed, searched in hostkit's tree.
+# Not looked at while tuning; scored once a change is made.
+2ec9fa3	watch a folder through the wide API; guardrails name the W calls	check_hostkit/src/check_hostkit.adb src/platform/windows/hostkit-watch.adb
+81b2f20	Windows paths and names through the wide API	src/platform/windows/hostkit-fs.adb src/platform/windows/hostkit-host.adb src/platform/windows/hostkit-metadata.adb
+8be9fd9	Metadata.Change_Stamp on macOS and Windows	src/platform/macos/hostkit-metadata.adb src/platform/windows/hostkit-metadata.adb tests/tests/src/hostkit_suite.adb
+ed3ff78	trash on macOS through NSFileManager instead of deprecated Carbon	check_hostkit/src/check_hostkit.adb src/platform/macos/hostkit-trash.adb tests/tests/src/hostkit_suite.adb
+a65d5b9	wait out a brief hold on a file before failing a move or sync on Windows	src/platform/windows/hostkit-durability.adb src/platform/windows/hostkit-fs.adb
+95c23c4	keep a directory's execute bits on Windows	src/platform/windows/hostkit-metadata.adb
+1de65ef	tell hard links to one file apart from two files on Windows	src/platform/windows/hostkit-metadata.adb
+2f3b7d9	read file times against the epoch in UTC, not local midnight	src/platform/linux/hostkit-metadata.adb src/platform/macos/hostkit-metadata.adb src/platform/windows/hostkit-metadata.adb
+8de03a9	give Process32FirstW the snapshot entry's padded size	src/platform/windows/hostkit-parent_watch.adb
+616bed7	end a child with its parent on Windows too	src/platform/windows/hostkit-parent_watch.adb tests/tests/src/hostkit_suite.adb
+62148bf	find a program's data files beside its executable	src/hostkit-resources.adb src/hostkit-resources.ads tests/tests/src/hostkit_suite.adb
+70ad378	fail a local-channel send to a closed peer instead of dying	src/platform/linux/hostkit-local_channel.adb src/platform/macos/hostkit-local_channel.adb
+bd3f492	keep the Windows lease lock clear of the file's data	src/platform/windows/hostkit-lease_files.adb tests/tests/src/hostkit_suite.adb
+41063d4	refuse a multiply-linked lease file on Windows	src/hostkit-lease_files.ads src/platform/windows/hostkit-lease_files.adb
+e997ff3	compile the Windows lease I/O size check	src/platform/windows/hostkit-lease_files.adb
+253d0ea	choose the shell family by host, not by COMSPEC	src/hostkit-shell.adb
+e52d5fc	use the right O_DIRECTORY on arm, arm64, powerpc and m68k	src/platform/linux/hostkit-durability.adb
+e450982	a started program gets SIGPIPE's default back	src/platform/linux/hostkit-native.adb src/platform/macos/hostkit-native.adb
+cc26a5e	Reserve_Space opens read-write, retries EINTR, says Not_Supported where the file system cannot	src/hostkit-durability.ads src/platform/linux/hostkit-durability.adb
+878d597	drop a doubled blank line in the Linux Run_Captured	src/platform/linux/hostkit-native.adb
+8a27544	what tells a process from a later one given its id (boot id and start time on Linux)	src/hostkit-process.adb src/hostkit-process.ads
+27d28ac	launch Windows argument vectors	src/hostkit-process.adb tests/tests/src/hostkit_suite.adb
+03b32e5	a program replaced on disk is named without the kernel's (deleted) suffix	src/platform/linux/hostkit-fs.adb
+2e9d94d	a group run dies with its caller on Linux (PR_SET_PDEATHSIG through a shell that kills the group); the child's signal mask is cleared before exec	src/hostkit-process.ads src/platform/linux/hostkit-native.adb
+dcfde90	Locks are opened close-on-exec	src/platform/linux/hostkit-locks.adb src/platform/macos/hostkit-locks.adb tests/tests/src/hostkit_shell_cases.adb
+0a90b42	Run_Captured stops a whole job on Windows	src/hostkit-process.ads src/platform/windows/hostkit-native.adb
+0cb0aac	The last two, in the bodies this host cannot compile	src/platform/macos/hostkit-native.adb src/platform/windows/hostkit-fs.adb
+959ad7a	A clean build says nothing, and CI now checks	.github/workflows/ci.yml src/platform/linux/hostkit-fs.adb src/platform/linux/hostkit-native.adb
+9aae224	Assign moves this program own writing on Windows too	src/hostkit-descriptors.ads src/platform/windows/hostkit-descriptors.adb tests/tests/src/hostkit_shell_cases.adb
+85db12d	what Assign does not do on Windows	src/hostkit-descriptors.ads src/platform/windows/hostkit-descriptors.adb
+f83c7ae	macOS keeps three fields Linux does not in struct passwd	src/platform/macos/hostkit-fs.adb
+f7470ec	Record what the third host actually answered	src/hostkit-pty.ads src/platform/windows/hostkit-pty.adb
+684d57a	Answer with an exit code instead of raising over it	src/hostkit-spawn.ads src/platform/windows/hostkit-spawn.adb
+6494c5d	An interruptible console is one that is not handing keys over as bytes	src/hostkit-terminal_control.ads src/platform/windows/hostkit-terminal_control.adb
+f6e702a	Raw mode asks the console for UTF-8, because it hands over its code page	src/platform/windows/hostkit-terminal_control.adb
+01f2574	Say the child's handles, rather than hiding this process's	src/hostkit-spawn.ads src/platform/windows/hostkit-spawn.adb
+9b4f694	Clear this process's standard handles across the spawn	src/platform/windows/hostkit-spawn.adb
+7e84a47	Detached as well as attached, or the inherited console wins	src/platform/windows/hostkit-spawn.adb
+9c768ae	A COORD is four bytes in a register, not a record by reference	src/platform/windows/hostkit-pty.adb tests/tests/src/hostkit_shell_cases.adb
+d40cce5	A child gets an empty signal mask, not the caller's	src/platform/linux/hostkit-spawn.adb src/platform/macos/hostkit-spawn.adb
+85127ee	Fix macOS group lookup identifier	src/platform/macos/hostkit-native.adb
+07ce84f	Complete terminal descriptor names	src/platform/macos/hostkit-descriptors.adb src/platform/unsupported/hostkit-descriptors.adb src/platform/windows/hostkit-descriptors.adb
+f8cd678	make the Windows body's C operators visible, and ask what a save holds	src/platform/windows/hostkit-host.adb tests/tests/src/hostkit_shell_cases.adb
+bb7c894	Write one backslash where one was meant	check_hostkit/src/check_hostkit.adb src/platform/windows/hostkit-fs.adb
+93dfadd	compile the locale bodies, and stop asserting POSIX of Windows	src/platform/macos/hostkit-host.adb src/platform/windows/hostkit-host.adb tests/tests/src/hostkit_suite.adb
+64f05f4	quote Windows command-line arguments with the real CRT rules	src/hostkit-windows_command_line.adb src/hostkit-windows_command_line.ads src/platform/windows/hostkit-native.adb tests/tests/src/hostkit_suite.adb
+be1e1de	make the elevation flag's type visible on Windows	src/platform/windows/hostkit-host.adb
+3f1519a	record the two other ways a host answers wrong	src/hostkit.ads
+812337c	drop redundant use clauses and an anonymous-allocator warning guard	src/platform/linux/hostkit-local_channel.adb src/platform/linux/hostkit-native.adb tests/tests/src/hostkit_suite.adb
