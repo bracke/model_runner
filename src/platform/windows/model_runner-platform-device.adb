@@ -15,6 +15,13 @@ package body Model_Runner.Platform.Device is
       return System.Null_Address;
    end Entry_Point;
 
+   --  No instance is made here, so none is live.
+   function Is_Live (Instance : System.Address) return Boolean is
+      pragma Unreferenced (Instance);
+   begin
+      return False;
+   end Is_Live;
+
    procedure Open (Item : in out Inventory; Found : out Boolean) is
    begin
       Close (Item);

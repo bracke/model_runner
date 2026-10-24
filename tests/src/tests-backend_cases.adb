@@ -2743,6 +2743,49 @@ package body Tests.Backend_Cases is
    -- Recorded_Attention_Says_What_A_Call_Says --
    -----------------------------------------------
 
+   --  A device closed out of order -- its inventory first, then the
+   --  context and the engine made from it -- does not stop the program:
+   --  the loader, asked through an instance that is gone, aborts rather
+   --  than answer null, so what is asked through one is answered here as
+   --  for none. A device opened after works.
+   procedure Device_Closed_Out_Of_Order_Does_Not_Abort
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found  : Boolean;
+      Ready  : Boolean;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         Device_Notes.Skip ("for a device closed out of order");
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Devices.Close (Held);
+         Device_Notes.Skip ("for a device closed out of order");
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+
+      Devices.Close (Held);
+      Products.Close (Engine);
+      Devices.Close (Opened);
+
+      Devices.Open (Held, Found);
+      Devices.Open (Opened, Held, 1, Ready);
+      Assert (Found and then Ready, "a device would not open after one was closed out of order");
+      Products.Open (Engine, Opened, Ready);
+      Assert (Ready, "an engine would not open after a device was closed out of order");
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end Device_Closed_Out_Of_Order_Does_Not_Abort;
+
    --  Attention recorded into a sequence against attention submitted on its
    --  own, on the same cache with the same queries.
    --
@@ -7609,6 +7652,10 @@ package body Tests.Backend_Cases is
 
       Model_Runner.Backend.Device.Open (Ready);
       if Ready then
+         --  The first hold opens the keeper, which counts its rounds from
+         --  nought: counted from before it, what an earlier keeper left in
+         --  the count had to be outdone, and on a busy machine was not.
+         Model_Runner.Backend.Device.Hold_Clock;
          declare
             Before : constant Natural := Products.Keeper_Rounds;
          begin
@@ -12394,6 +12441,9 @@ package body Tests.Backend_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Device_Closed_Out_Of_Order_Does_Not_Abort'Access,
+         "a device closed out of order does not stop the program, and one opened after works");
       Register_Routine
         (T, Partition_Covers_Rows'Access,
          "the partition covers every row exactly once for every worker count");

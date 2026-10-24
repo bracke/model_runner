@@ -6265,9 +6265,12 @@ package body Model_Runner.Platform.Device.Products is
       Item.Download := 0;
       Item.Instance := Null_Handle;
 
-      --  Whoever was asking before this, if anyone was. Close is called from
-      --  Open, and Open has an instance of its own to go back to.
-      Instance_Of := Restore;
+      --  Whoever was asking before this, if anyone was and its instance is
+      --  still there. Close is called from Open, and Open has an instance
+      --  of its own to go back to; an engine closed after the inventory it
+      --  was made from would otherwise leave every later asker -- the
+      --  keeper among them -- naming an instance that is gone.
+      Instance_Of := (if Is_Live (Restore) then Restore else Null_Handle);
    end Close;
 
    function Is_Ready (Item : Engine) return Boolean
@@ -18879,9 +18882,12 @@ package body Model_Runner.Platform.Device.Products is
       Close_Keeper;
       Ready := False;
 
-      if not Is_Open (On) or else Instance_Of = Null_Handle then
+      --  Asked through the instance its own context came from, not through
+      --  whichever engine asked last, which may have been another's.
+      if not Is_Open (On) or else not Is_Live (On.Instance) then
          return;
       end if;
+      Instance_Of := On.Instance;
 
       Keep.Logical := On.Logical;
       Keep.Queue := On.Queue;

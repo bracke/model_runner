@@ -310,6 +310,10 @@ private
    function Entry_Point
      (Instance : System.Address; Name : String) return System.Address;
 
+   --  Whether an instance is one made here and not yet destroyed: the
+   --  only kind an entry point may be asked through.
+   function Is_Live (Instance : System.Address) return Boolean;
+
    type Context is limited record
       Instance : System.Address := System.Null_Address;
       Physical : System.Address := System.Null_Address;

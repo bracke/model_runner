@@ -571,6 +571,64 @@ package body Model_Runner.Platform.Device is
       return Find /= null;
    end Is_Supported;
 
+   --  The instances made here and not yet destroyed. Asked through a handle
+   --  that is no instance -- one destroyed -- the loader does not answer
+   --  null: it says "Invalid instance" and aborts the process. Whatever
+   --  asks through one gone -- a context closed after the inventory it was
+   --  made from, an engine giving back what it held once the device under
+   --  it went -- is answered here as for no instance, null, instead. The
+   --  look and the asking are one protected action, as is an instance's
+   --  leaving: a task cannot find it held and then ask once another task
+   --  has destroyed it.
+   type Address_Array is array (Positive range <>) of System.Address;
+
+   protected Instances is
+      procedure Add (Handle : System.Address);
+      procedure Remove (Handle : System.Address);
+      procedure Ask
+        (Handle : System.Address; Name : C.Strings.chars_ptr; Result : out System.Address);
+      function Holds (Handle : System.Address) return Boolean;
+   private
+      Live : Address_Array (1 .. 64) := [others => System.Null_Address];
+   end Instances;
+
+   protected body Instances is
+      procedure Add (Handle : System.Address) is
+      begin
+         for Slot of Live loop
+            if Slot = System.Null_Address then
+               Slot := Handle;
+               return;
+            end if;
+         end loop;
+      end Add;
+
+      procedure Remove (Handle : System.Address) is
+      begin
+         for Slot of Live loop
+            if Slot = Handle then
+               Slot := System.Null_Address;
+               return;
+            end if;
+         end loop;
+      end Remove;
+
+      function Holds (Handle : System.Address) return Boolean
+      is (for some Slot of Live => Slot = Handle);
+
+      procedure Ask
+        (Handle : System.Address; Name : C.Strings.chars_ptr; Result : out System.Address) is
+      begin
+         Result := System.Null_Address;
+         if Find /= null and then (Handle = System.Null_Address or else Holds (Handle)) then
+            Result := Find (Handle, Name);
+         end if;
+      end Ask;
+   end Instances;
+
+   function Is_Live (Instance : System.Address) return Boolean
+   is (Instance /= System.Null_Address and then Instances.Holds (Instance));
+
    ------------------
    -- Entry_Point --
    ------------------
@@ -582,10 +640,7 @@ package body Model_Runner.Platform.Device is
       Result : System.Address := System.Null_Address;
    begin
       Load;
-
-      if Find /= null then
-         Result := Find (Instance, Room);
-      end if;
+      Instances.Ask (Instance, Room, Result);
 
       C.Strings.Free (Room);
       return Result;
@@ -666,6 +721,7 @@ package body Model_Runner.Platform.Device is
       end;
 
       Item.Handle := Instance;
+      Instances.Add (Instance);
       Found := True;
 
       declare
@@ -740,13 +796,11 @@ package body Model_Runner.Platform.Device is
    begin
       if Item.Handle /= System.Null_Address and then Find /= null then
          declare
-            Room : C.Strings.chars_ptr :=
-              C.Strings.New_String ("vkDestroyInstance");
-
             Destroy : constant Destroy_Instance_Call :=
-              To_Destroy (Find (Item.Handle, Room));
+              To_Destroy (Entry_Point (Item.Handle, "vkDestroyInstance"));
          begin
-            C.Strings.Free (Room);
+            --  No longer an instance to ask through, from before it goes.
+            Instances.Remove (Item.Handle);
 
             if Destroy /= null then
                Destroy (Item.Handle, System.Null_Address);
@@ -1569,14 +1623,11 @@ package body Model_Runner.Platform.Device is
         and then Find /= null
       then
          declare
-            Room : C.Strings.chars_ptr :=
-              C.Strings.New_String ("vkDestroyDevice");
-
+            --  Null where the instance went first: the device went with
+            --  it, and nothing is left to destroy.
             Destroy : constant Destroy_Device_Call :=
-              To_Destroy (Find (Item.Instance, Room));
+              To_Destroy (Entry_Point (Item.Instance, "vkDestroyDevice"));
          begin
-            C.Strings.Free (Room);
-
             if Destroy /= null then
                Destroy (Item.Logical, System.Null_Address);
             end if;
