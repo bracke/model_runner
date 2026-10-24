@@ -77,8 +77,12 @@ with Model_Runner.Framework.Stores;
 --  so it is read again then. A file that could not be read is not held,
 --  and is read again by the next search; one too large is held with no
 --  words; Not_Searched names both. A change to the index stopped part
---  way lets the whole index go, to be read anew. What is kept of files
---  gone, for passes under way, is let go once none is.
+--  way lets the whole index go, to be read anew: every pass under way
+--  then installs nothing more, its changes seen before the index went.
+--  A file whose reading in raised is passed by until it changes, and
+--  named by Not_Searched, so a fault that comes back costs a try a
+--  version of the file, not a whole index at every search. What is kept
+--  of files gone, for passes under way, is let go once none is.
 --
 --  What a search's answer stands for, a change to the tree under way:
 --  its symbols are the graph's, checked against the tree as the search
@@ -161,8 +165,8 @@ package Model_Runner.Framework.Retrieval is
       Records  : Boolean := True) return Hit_Lists.Vector;
 
    --  What a search of a tree did not search: the files its graph could
-   --  not read, and those the index could not read or holds no words of,
-   --  being too large -- each as PATH: why, sorted. Said beside a search's
+   --  not read, and those the index could not read, could not index or
+   --  holds no words of, being too large -- each as PATH: why, sorted. Said beside a search's
    --  hits, so that nothing found there is not taken for nothing there.
    --
    --  @param Graph The graph the search was given.

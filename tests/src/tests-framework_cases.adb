@@ -5587,6 +5587,38 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Contexts_Are_Budgeted;
 
+   --  A context built while a file it shows changes is built again: what
+   --  it shows is the tree at one moment, not two.
+   procedure Contexts_Are_Built_Again_Where_The_Tree_Moved
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Made   : Cx.Built;
+
+      procedure Write_Beside is
+      begin
+         Put_File (Fresh_Root (Store) & "/src/parser.adb", "--  The second version: zebu." & LF);
+      end Write_Beside;
+   begin
+      Task_Project (Store, "context-moved");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/parser.adb", "--  The first version: gnu." & LF);
+      Tk.Create (Store, Change, Fields ("Parse", "implementation", "component", "parser"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a task to build context for was not made");
+      Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Context_Built, Write_Beside'Unrestricted_Access);
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Made, Status);
+      Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "zebu") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Made), "gnu.") = 0,
+              "a context built while its file changed showed the file as it had been");
+      S.Close (Store);
+   end Contexts_Are_Built_Again_Where_The_Tree_Moved;
+
    --  A call is recorded when it starts and ends once; an answer is held to
    --  its contract.
    procedure Invocations_Are_Recorded
@@ -19911,24 +19943,30 @@ package body Tests.Framework_Cases is
       end;
 
       --  An install stopped part way, its old words let go and its new
-      --  not yet in: the index is let go, and the next search ranks as
-      --  one made anew.
+      --  not yet in: the index is let go, the file passed by at that
+      --  version -- named as not indexed, not read again by every search
+      --  after -- and the rest read anew; written again, it is read, and
+      --  the index ranks as one made anew.
       declare
          procedure Run_Out is
          begin
             raise Storage_Error with "the test's own";
          end Run_Out;
-         Raised : Boolean := False;
+         Reads : Natural;
       begin
          Put_File (To_String (Notes), "Now it says quokka and parse." & LF);
          Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
-         begin
-            Hits := Find ("quokka");
-         exception
-            when Storage_Error =>
-               Raised := True;
-         end;
-         Assert (Raised, "the install was not stopped");
+         Hits := Find ("quokka");
+         Assert (Rv.Indexed_Held = 0, "an install stopped part way did not let the index go:"
+                 & Rv.Indexed_Held'Image);
+         Hits := Find ("quokka");
+         Reads := Rv.Indexed_Reads;
+         Assert (not Texts ("quokka", "docs/notes.txt") and then Rv.Indexed_Reads = Reads
+                 and then (for some One of Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)),
+                                                            Fresh_Root (Store))
+                           => One = "docs/notes.txt: could not be indexed"),
+                 "a file whose install failed was read again at each search, or was not named as not indexed");
+         Put_File (To_String (Notes), "Now it says quokka and parse number." & LF);
          declare
             After   : constant Rv.Hit_Lists.Vector := Find ("parse number quokka");
             Held    : constant Natural := Rv.Indexed_Held;
@@ -19939,6 +19977,27 @@ package body Tests.Framework_Cases is
                     and then Rv.Indexed_Terms = Terms,
                     "an install stopped part way left an index that ranked otherwise than one made anew");
          end;
+      end;
+
+      --  The index let go by one search while another's pass holds a read:
+      --  that pass installs nothing into the index made anew.
+      declare
+         procedure Run_Out is
+         begin
+            raise Storage_Error with "the test's own";
+         end Run_Out;
+
+         procedure Fail_Beside is
+         begin
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Midway, Run_Out'Unrestricted_Access);
+            Hits := Find ("eland");
+         end Fail_Beside;
+      begin
+         Put_File (To_String (Notes), "Now it says eland." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Fail_Beside'Unrestricted_Access);
+         Hits := Find ("eland");
+         Assert (Rv.Indexed_Held = 0, "a pass installed into an index let go while it held its read:"
+                 & Rv.Indexed_Held'Image);
       end;
       Put_File (To_String (Notes), "Now it says quokka." & LF);
       Assert (Texts ("quokka", "docs/notes.txt"), "a file written again was not found");
@@ -20929,6 +20988,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Contexts_Are_Budgeted'Access,
          "a context is budgeted by priority, deduplicated and reproducible");
+      Register_Routine
+        (T, Contexts_Are_Built_Again_Where_The_Tree_Moved'Access,
+         "a context built while a file it shows changes is built again");
       Register_Routine
         (T, Invocations_Are_Recorded'Access,
          "a model call is recorded once ended and its answer held to a"

@@ -34,12 +34,15 @@ private package Model_Runner.Framework.Files is
    --
    --  @param Path The file.
    --  @param Text Its bytes.
-   --  @param Status IO_File_Too_Large past the record limit, IO_Read_Failed
-   --    when it cannot be read.
+   --  @param Status IO_File_Too_Large past Most or the record limit,
+   --    IO_Read_Failed when it cannot be read.
+   --  @param Most The largest file read, in bytes; never past the record
+   --    limit.
    procedure Read_Text
      (Path   : String;
       Text   : out Ada.Strings.Unbounded.Unbounded_String;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status : out Model_Runner.Errors.Error_Info;
+      Most   : Natural := Natural'Last);
 
    --  A file's print, its bytes read a piece at a time: the same as
    --  Fingerprint of its whole text, for a file too large to hold.

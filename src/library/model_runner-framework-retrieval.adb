@@ -423,6 +423,15 @@ package body Model_Runner.Framework.Retrieval is
      (Key_Type => String, Element_Type => Boolean, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
    Unsearched : Unsearched_Maps.Map;
 
+   --  The files whose reading in failed -- an install, or the counting of
+   --  their words, raised -- by key, with the print they had then: not
+   --  read in again until it changes, so a fault that comes back each
+   --  time costs one try a version, not every search. Kept when the index
+   --  is let go, which is what such a fault does.
+   package Failed_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => String, Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+   Failed : Failed_Maps.Map;
+
    --  An entry's last change. Called with Lock held.
    function Change_Of (Key : String) return Natural
    is (if Changed.Contains (Key) then Changed.Element (Key) else Floor);
@@ -722,7 +731,7 @@ package body Model_Runner.Framework.Retrieval is
                   Status := E.Make (E.Framework_Not_Found);
                   E.Add_Text (Status, "name", Path);
                else
-                  Files.Read_Text (Full, Text, Status);
+                  Files.Read_Text (Full, Text, Status, Most);
                end if;
             end;
          when Hostkit.Fs.Read_Outside | Hostkit.Fs.Read_Missing | Hostkit.Fs.Read_Not_File
@@ -773,7 +782,8 @@ package body Model_Runner.Framework.Retrieval is
    --  reads it again rather than take it to have no words; both are
    --  noted, for Not_Searched. A change to the index raising part way
    --  lets the whole index go (Clear_Index), the next search reading it
-   --  anew.
+   --  anew; a file whose reading in raised is noted (Failed) and passed
+   --  by until it changes, and the pass goes on without it.
    procedure Bring_Up (Graph : Rp.Graph; Root : String; Files : out Natural) is
       Present : Name_Sets.Set;
       Stale   : Name_Lists.Vector;
@@ -790,7 +800,9 @@ package body Model_Runner.Framework.Retrieval is
             begin
                if Indexed (File) then
                   Present.Include (Key);
-                  if not Index.Contains (Key) or else Index.Constant_Reference (Key).Print /= File.Fingerprint then
+                  if (not Index.Contains (Key) or else Index.Constant_Reference (Key).Print /= File.Fingerprint)
+                    and then not (Failed.Contains (Key) and then Failed.Element (Key) = To_String (File.Fingerprint))
+                  then
                      Stale.Append (Path);
                      Prints.Append (To_String (File.Fingerprint));
                      Seen.Append (Change_Of (Key));
@@ -832,6 +844,21 @@ package body Model_Runner.Framework.Retrieval is
             end loop;
             for Key of Gone loop
                Unsearched.Delete (Key);
+            end loop;
+            Gone.Clear;
+            for Position in Failed.Iterate loop
+               declare
+                  Key : constant String := Failed_Maps.Key (Position);
+               begin
+                  if Key'Length > Root'Length and then Key (Key'First .. Key'First + Root'Length) = Root & ASCII.NUL
+                    and then not Present.Contains (Key)
+                  then
+                     Gone.Append (Key);
+                  end if;
+               end;
+            end loop;
+            for Key of Gone loop
+               Failed.Delete (Key);
             end loop;
          end;
          Passes := Passes + 1;
@@ -881,6 +908,7 @@ package body Model_Runner.Framework.Retrieval is
                         else
                            Unsearched.Include (Key, Too_Large);
                         end if;
+                        Failed.Exclude (Key);
                      end if;
                      Lock.Release;
                   exception
@@ -890,6 +918,14 @@ package body Model_Runner.Framework.Retrieval is
                         raise;
                   end;
                end;
+            exception
+               --  This file's reading in failed: noted, not tried again at
+               --  this print, and the pass goes on to the next -- one that
+               --  let the index go installs nothing more.
+               when others =>
+                  Lock.Seize;
+                  Failed.Include (Key_Of (Root, Path), Prints (At_Stale));
+                  Lock.Release;
             end;
          end loop;
       exception
@@ -935,6 +971,15 @@ package body Model_Runner.Framework.Retrieval is
                end if;
             end;
          end loop;
+         for Position in Failed.Iterate loop
+            declare
+               Key : constant String := Failed_Maps.Key (Position);
+            begin
+               if Key'Length > Root'Length and then Key (Key'First .. Key'First + Root'Length) = Root & ASCII.NUL then
+                  Held.Append (Key (Key'First + Root'Length + 1 .. Key'Last) & ": could not be indexed");
+               end if;
+            end;
+         end loop;
          Lock.Release;
       exception
          when others =>
@@ -954,6 +999,7 @@ package body Model_Runner.Framework.Retrieval is
    begin
       Lock.Seize;
       Clear_Index;
+      Failed.Clear;
       Read_Count := 0;
       Lock.Release;
    end Forget;

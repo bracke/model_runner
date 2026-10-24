@@ -21,7 +21,6 @@ package body Model_Runner.Framework.Files is
 
    use Ada.Strings.Unbounded;
    use type Dirs.File_Kind;
-   use type Dirs.File_Size;
 
    package Sorting is new Name_Lists.Generic_Sorting;
 
@@ -89,8 +88,10 @@ package body Model_Runner.Framework.Files is
    procedure Read_Text
      (Path   : String;
       Text   : out Unbounded_String;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Most   : Natural := Natural'Last)
    is
+      Limit  : constant Long_Long_Integer := Long_Long_Integer'Min (Long_Long_Integer (Most), Records.Max_Bytes);
       File   : Stream_IO.File_Type;
       Buffer : String_Access;
    begin
@@ -100,14 +101,12 @@ package body Model_Runner.Framework.Files is
       declare
          Size : constant Dirs.File_Size := Dirs.Size (Path);
       begin
-         if Size > Records.Max_Bytes then
+         if Long_Long_Integer (Size) > Limit then
             Status := E.Make (E.IO_File_Too_Large);
             E.Add_Text (Status, "path", Path, E.Param_Path);
             E.Add_Integer
               (Status, "size", Long_Long_Integer (Size), E.Param_Bytes);
-            E.Add_Integer
-              (Status, "limit", Long_Long_Integer (Records.Max_Bytes),
-               E.Param_Bytes);
+            E.Add_Integer (Status, "limit", Limit, E.Param_Bytes);
             return;
          end if;
 

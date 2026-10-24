@@ -23,6 +23,7 @@ with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Tools.Editing;
+with Model_Runner.Race_Points;
 
 package body Model_Runner.Framework.Context is
 
@@ -846,18 +847,16 @@ package body Model_Runner.Framework.Context is
 
    end Settle;
 
-   -----------
-   -- Build --
-   -----------
-
-   procedure Build
+   --  A context built once, from the tree as Graph says it is.
+   procedure Build_Once
      (Item    : Stores.Store;
       Task_Id : String;
       Model   : Model_Profile;
       Result  : out Built;
       Status  : out Model_Runner.Errors.Error_Info;
-      Instructions : String := "";
-      Tree    : String := "")
+      Instructions : String;
+      Tree    : String;
+      Graph   : out Repository.Graph)
    is
       View       : Records.Item;
       Config     : Records.Item;
@@ -865,9 +864,6 @@ package body Model_Runner.Framework.Context is
       --  Each file offered, as its item and its revision, read whole.
       File_Revisions : Name_Lists.Vector;
       Component  : Unbounded_String;
-      --  The tree's files as they are now: what is offered from, and what
-      --  a retrieval kept is held to.
-      Graph      : Repository.Graph;
 
       procedure Offer (Id, Kind : String; Rank : Priority; Text : String) is
       begin
@@ -1959,6 +1955,35 @@ package body Model_Runner.Framework.Context is
          end loop;
       end;
 
+   end Build_Once;
+
+   -----------
+   -- Build --
+   -----------
+
+   --  Built, then the tree checked against the graph it was built from: a
+   --  file changed meanwhile -- an agent beside this one writing -- would
+   --  leave a context of two moments, so it is built again, three times
+   --  at most; a tree that will not hold still is built from as it was
+   --  last, each file it shows at the revision it was read at.
+   procedure Build
+     (Item    : Stores.Store;
+      Task_Id : String;
+      Model   : Model_Profile;
+      Result  : out Built;
+      Status  : out Model_Runner.Errors.Error_Info;
+      Instructions : String := "";
+      Tree    : String := "")
+   is
+      --  The tree's files as they were: what was offered from, and what a
+      --  retrieval kept is held to.
+      Graph : Repository.Graph;
+   begin
+      for Attempt in 1 .. 3 loop
+         Build_Once (Item, Task_Id, Model, Result, Status, Instructions, Tree, Graph);
+         Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Context_Built);
+         exit when E.Is_Error (Status) or else Repository.Is_Current (Tree_Of (Item, Tree), Graph);
+      end loop;
    end Build;
 
    -----------------
