@@ -94,7 +94,7 @@ package body Model_Runner.CLI.Checkpoint is
       --  save that stops part way -- a full disk, a kill -- leaves the
       --  conversation saved before, not half of this one. Written a slice
       --  at a time from where it was built, not copied whole onto a stack.
-      Create (File, Out_File, Partial);
+      Create (File, Out_File, Partial, Form => "shared=no");
       declare
          Slice_Bytes : constant := 64 * 1024;
          Length      : constant Natural := US.Length (Buf);

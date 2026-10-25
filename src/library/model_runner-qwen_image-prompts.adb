@@ -401,7 +401,7 @@ package body Model_Runner.Qwen_Image.Prompts is
          return;
       end if;
       Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
-      Create (Handle, Out_File, Part);
+      Create (Handle, Out_File, Part, Form => "shared=no");
       declare
          Data : constant Stream_Access := Stream (Handle);
       begin

@@ -471,7 +471,7 @@ package body Model_Runner.Tools.Editing is
          Block : constant Stream_Element_Array (1 .. Stream_Element_Offset (Content'Length))
          with Import, Address => Content'Address;
       begin
-         Stream_IO.Create (File, Stream_IO.Out_File, Partial);
+         Stream_IO.Create (File, Stream_IO.Out_File, Partial, Form => "shared=no");
          Stream_IO.Write (File, Block);
          Stream_IO.Close (File);
       exception
@@ -537,7 +537,7 @@ package body Model_Runner.Tools.Editing is
             --  what it held past the new text, and a shorter one kept the
             --  old tail. Created over, it is the same file emptied, its
             --  other names still its own.
-            Stream_IO.Create (Copy, Stream_IO.Out_File, Disk);
+            Stream_IO.Create (Copy, Stream_IO.Out_File, Disk, Form => "shared=no");
             Stream_IO.Write (Copy, Block);
             Stream_IO.Close (Copy);
             --  Durable as the file itself is made so, not as its partial was.

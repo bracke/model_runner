@@ -3065,6 +3065,24 @@ package body Tests.Tools_Cases is
                     "a write through a link made the link a file and left what it named: "
                     & Room (Room'First .. Last));
          end if;
+         --  A file of two names, written in place, while another task reads
+         --  it: written all the same, both names holding the new text -- the
+         --  run time refuses a second open of a file under its default form.
+         Placed.Run ("write_file", "{""path"": ""twice.txt"", ""content"": ""one""}", Room, Last, Ended, Status);
+         if Hostkit.Fs.Create_Hard_Link (Tree & "/twice.txt", Tree & "/again.txt") then
+            declare
+               Held : Ada.Streams.Stream_IO.File_Type;
+            begin
+               Placed.Run ("read_file", "{""path"": ""twice.txt""}", Room, Last, Ended, Status);
+               Ada.Streams.Stream_IO.Open (Held, Ada.Streams.Stream_IO.In_File, Tree & "/twice.txt");
+               Placed.Run ("write_file", "{""path"": ""twice.txt"", ""content"": ""two""}", Room, Last, Ended,
+                           Status);
+               Ada.Streams.Stream_IO.Close (Held);
+               Assert (Whole_File (Tree & "/twice.txt") = "two" and then Whole_File (Tree & "/again.txt") = "two",
+                       "a file of two names was not written while another task read it: "
+                       & Room (Room'First .. Last));
+            end;
+         end if;
          --  A long name is written: the partial beside it was past a name's
          --  limit.
          declare

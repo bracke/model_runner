@@ -88,7 +88,7 @@ package body Model_Runner.Hub.Store is
       Part : constant String := Manifest (Directory) & ".part";
       File : IO.File_Type;
    begin
-      IO.Create (File, IO.Out_File, Part);
+      IO.Create (File, IO.Out_File, Part, Form => "shared=no");
       for Line of Items loop
          String'Write (IO.Stream (File), Line & ASCII.LF);
       end loop;

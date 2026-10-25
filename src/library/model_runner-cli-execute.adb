@@ -66,7 +66,7 @@ package body Model_Runner.CLI.Execute is
 
       begin
          Ada.Streams.Stream_IO.Create
-           (Handle, Ada.Streams.Stream_IO.Out_File, Partial);
+           (Handle, Ada.Streams.Stream_IO.Out_File, Partial, Form => "shared=no");
          Opened := True;
          while Done < Data'Length loop
             declare

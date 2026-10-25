@@ -212,7 +212,7 @@ package body Model_Runner.Panel_Cache is
          Head (Ada.Streams.Stream_Element_Offset (Index - Header'First + 1)) :=
            Character'Pos (Header (Index));
       end loop;
-      Create (Out_F, Out_File, Part);
+      Create (Out_F, Out_File, Part, Form => "shared=no");
       Write (Out_F, Head);
       Close (Out_F);
 
@@ -359,7 +359,7 @@ package body Model_Runner.Panel_Cache is
       begin
          Ada.Directories.Create_Path (Ada.Directories.Containing_Directory (Path));
          Sweep_Parts (Path);
-         Create (Out_F, Out_File, Part);
+         Create (Out_F, Out_File, Part, Form => "shared=no");
 
          declare
             Head : Ada.Streams.Stream_Element_Array (1 .. Header_Bytes) :=

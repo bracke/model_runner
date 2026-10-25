@@ -617,7 +617,7 @@ begin
                      Back.Append (Found.First_Element);
                   end;
                end loop;
-               Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept);
+               Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept, Form => "shared=no");
                for One_Id of Dismissed loop
                   if not Back.Contains (One_Id) then
                      Ada.Text_IO.Put_Line (File, One_Id);
@@ -680,7 +680,7 @@ begin
             Pres.Report (Screen, Outcome);
             return;
          end if;
-         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept);
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept, Form => "shared=no");
          for One_Id of Dismissed loop
             if Named /= "all" and then One_Id /= Named then
                Ada.Text_IO.Put_Line (File, One_Id);
@@ -729,9 +729,9 @@ begin
                Dismissed : constant Names.Vector := Dismissed_List (Store);
             begin
                if Ada.Directories.Exists (Kept) then
-                  Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept);
+                  Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept, Form => "shared=no");
                else
-                  Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept);
+                  Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept, Form => "shared=no");
                end if;
                for Name of S.Names (Store, Model_Runner.Framework.Results_Area) loop
                   declare
@@ -836,9 +836,9 @@ begin
             File : Ada.Text_IO.File_Type;
          begin
             if Ada.Directories.Exists (Kept) then
-               Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept);
+               Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept, Form => "shared=no");
             else
-               Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept);
+               Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Kept, Form => "shared=no");
             end if;
             Ada.Text_IO.Put_Line (File, Named);
             Ada.Text_IO.Close (File);
@@ -866,7 +866,7 @@ begin
                elsif Dismissed_List (Store).Contains (Other) then
                   Pres.Put_Note (Screen, "cli.result.dismissed_already", [Loc.Named ("name", Other)]);
                else
-                  Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept);
+                  Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, Kept, Form => "shared=no");
                   Ada.Text_IO.Put_Line (File, Other);
                   Ada.Text_IO.Close (File);
                   Pres.Put_Message (Screen, "cli.result.dismissed", [Loc.Named ("name", Other)]);

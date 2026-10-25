@@ -768,7 +768,7 @@ begin
                begin
                   Ada.Text_IO.Create
                     (File, Ada.Text_IO.Out_File,
-                     T.To_String (Item.Trace_File_Path));
+                     T.To_String (Item.Trace_File_Path), Form => "shared=no");
                   Ada.Text_IO.Put (File,
                      "{""model"":""" & JSON_Escape
                        (T.To_String (Item.Model_Path))

@@ -452,7 +452,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
                           (1 .. Ada.Streams.Stream_Element_Offset (File'Length))
                           with Import, Address => File.all'Address;
                      begin
-                        Create (Handle, Out_File, Name_Of (Index));
+                        Create (Handle, Out_File, Name_Of (Index), Form => "shared=no");
                         Write (Handle, Block);
                         Close (Handle);
                      exception

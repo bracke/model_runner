@@ -164,7 +164,7 @@ package body Model_Runner.Framework.Files is
       File : Stream_IO.File_Type;
    begin
       Status := E.Success;
-      Stream_IO.Create (File, Stream_IO.Out_File, Path);
+      Stream_IO.Create (File, Stream_IO.Out_File, Path, Form => "shared=no");
       String'Write (Stream_IO.Stream (File), Text);
       Stream_IO.Close (File);
    exception

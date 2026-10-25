@@ -1682,7 +1682,7 @@ package body Model_Runner.Presentation is
       Path : String;
       Ok   : out Boolean) is
    begin
-      Ada.Text_IO.Create (Item.File, Ada.Text_IO.Out_File, Path);
+      Ada.Text_IO.Create (Item.File, Ada.Text_IO.Out_File, Path, Form => "shared=no");
       Ok := True;
    exception
       when others =>

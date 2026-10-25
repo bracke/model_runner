@@ -1061,7 +1061,7 @@ package body Model_Runner.CLI.Choosers is
       if History_File = "" then
          return;
       end if;
-      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
       for One of History loop
          Ada.Text_IO.Put_Line (File, One);
       end loop;
@@ -1089,15 +1089,15 @@ package body Model_Runner.CLI.Choosers is
          return;
       end if;
       if Over then
-         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
          for One of History loop
             Ada.Text_IO.Put_Line (File, One);
          end loop;
       else
          if Ada.Directories.Exists (History_File) then
-            Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, History_File);
+            Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, History_File, Form => "shared=no");
          else
-            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File);
+            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
          end if;
          Ada.Text_IO.Put_Line (File, Line);
       end if;

@@ -396,7 +396,7 @@ package body Model_Runner.CLI.Work is
                File : Ada.Streams.Stream_IO.File_Type;
             begin
                Ada.Streams.Stream_IO.Create
-                 (File, Ada.Streams.Stream_IO.Out_File, W.Usage_Beside (Prompt_Path));
+                 (File, Ada.Streams.Stream_IO.Out_File, W.Usage_Beside (Prompt_Path), Form => "shared=no");
                String'Write (Ada.Streams.Stream_IO.Stream (File), To_String (Usage));
                Ada.Streams.Stream_IO.Close (File);
             end;
