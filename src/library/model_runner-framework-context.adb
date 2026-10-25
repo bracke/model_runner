@@ -865,7 +865,45 @@ package body Model_Runner.Framework.Context is
       File_Revisions : Name_Lists.Vector;
       Component  : Unbounded_String;
 
+      --  A file's or an excerpt's lines, each led by its number, as a read of
+      --  part of a file shows them: told to give the line a function is
+      --  declared on, qwen3-8b had the file whole and no number in it, took
+      --  another excerpt's and asked for lines past the file's end until it
+      --  was stopped -- twice in three runs.
+      function Numbered (Text : String; First : Positive) return String is
+         Result : Unbounded_String;
+         Line   : Positive := First;
+         Start  : Positive := Text'First;
+      begin
+         for Index in Text'Range loop
+            if Text (Index) = ASCII.LF or else Index = Text'Last then
+               Append (Result, Image (Line) & ": "
+                       & Text (Start .. (if Text (Index) = ASCII.LF then Index - 1 else Index)) & ASCII.LF);
+               Line := Line + 1;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return To_String (Result);
+      end Numbered;
+
+      --  Where a piece's lines begin: an excerpt's, as its identifier
+      --  says (code:PATH#FIRST-LAST); a file's at its first.
+      function First_Line (Id : String) return Positive is
+         Mark : constant Natural := Ada.Strings.Fixed.Index (Id, "#", Ada.Strings.Backward);
+         Dash : constant Natural := (if Mark = 0 then 0 else Ada.Strings.Fixed.Index (Id (Mark .. Id'Last), "-"));
+      begin
+         if Mark > 0 and then Dash > Mark + 1
+           and then (for all C of Id (Mark + 1 .. Dash - 1) => C in '0' .. '9')
+           and then Dash - Mark - 1 <= 9
+         then
+            return Positive'Max (1, Natural'Value (Id (Mark + 1 .. Dash - 1)));
+         end if;
+         return 1;
+      end First_Line;
+
       procedure Offer (Id, Kind : String; Rank : Priority; Text : String) is
+         Shown : constant Boolean :=
+           Id'Length > 5 and then Id (Id'First .. Id'First + 4) in "file:" | "code:";
       begin
          --  Each once, however many ways it is reached.
          for Held of Candidates loop
@@ -878,7 +916,7 @@ package body Model_Runner.Framework.Context is
               (Context.Item'(Id   => To_Unbounded_String (Id),
                 Kind => To_Unbounded_String (Kind),
                 Rank => Rank,
-                Text => To_Unbounded_String (Text)));
+                Text => To_Unbounded_String (if Shown then Numbered (Text, First_Line (Id)) else Text)));
             --  A file's revision as it was read whole, before fitting may
             --  trim what is shown of it.
             if Id'Length > 5 and then Id (Id'First .. Id'First + 4) = "file:" then
@@ -2183,7 +2221,12 @@ package body Model_Runner.Framework.Context is
                   declare
                      Fence : constant String (1 .. Natural'Max (3, Most + 1)) := [others => '`'];
                   begin
-                     Append (Text, "## " & Heading (Next) & " (quoted)" & ASCII.LF & Fence & ASCII.LF & Inner
+                     Append (Text, "## " & Heading (Next)
+                             & (if Ada.Strings.Fixed.Index (To_String (Next.Id), "file:") = 1
+                                  or else Ada.Strings.Fixed.Index (To_String (Next.Id), "code:") = 1
+                                then " (quoted; each line led by its number and a colon, which are not in the file)"
+                                else " (quoted)")
+                             & ASCII.LF & Fence & ASCII.LF & Inner
                              & ASCII.LF & Fence & ASCII.LF & ASCII.LF);
                   end;
                end;

@@ -5796,6 +5796,9 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
       Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "zebra") > 0,
               "a context did not hold a file its component is placed at");
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "1: --  Where the zebra's account is kept.") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Made), "which are not in the file") > 0,
+              "a file in a context did not show its lines' numbers, said as not the file's");
       Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "okapi") = 0,
               "a context held a file outside its component whose path holds the component's name");
       S.Close (Store);
