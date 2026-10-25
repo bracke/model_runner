@@ -20661,6 +20661,35 @@ package body Tests.Framework_Cases is
                  "a file gone was still named as not searched");
       end;
 
+      --  Read by the path, as on a host without a read held beneath the
+      --  tree: a file too large is still not read, one within the size is.
+      declare
+         Large : constant String := Fresh_Root (Store) & "/docs/large.txt";
+         Small : constant String := Fresh_Root (Store) & "/docs/small.txt";
+      begin
+         Rv.Read_By_Path (True);
+         Put_File (Large, Ada.Strings.Fixed."*" (Rv.Indexed_Most / 8 + 1, "wombat. "));
+         Put_File (Small, "A dingo, and only one." & LF);
+         Hits := Find ("wombat");
+         Assert ((for some One of
+                    Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), Fresh_Root (Store))
+                  => One = "docs/large.txt: too large to index"),
+                 "a file too large, read by its path, was not named as not searched");
+         Assert ((for all Hit of Hits => To_String (Hit.Path) /= "docs/large.txt"),
+                 "a file too large, read by its path, was searched");
+         Hits := Find ("dingo");
+         Assert ((for some Hit of Hits => To_String (Hit.Path) = "docs/small.txt"),
+                 "a file within the size, read by its path, was not searched");
+         Rv.Read_By_Path (False);
+         Dirs.Delete_File (Large);
+         Dirs.Delete_File (Small);
+         Hits := Find ("wombat");
+      exception
+         when others =>
+            Rv.Read_By_Path (False);
+            raise;
+      end;
+
       --  Two files changed; while the first is read, the second is made
       --  unreadable. It is not taken to have no words: once readable, the
       --  next search reads it.

@@ -340,6 +340,13 @@ package Model_Runner.Framework.Retrieval is
    --  @param Most The wait, held to 0 .. 3,600 seconds.
    procedure Wait_For_Claims_At_Most (Most : Duration);
 
+   --  Files read as on a host where no read can be held beneath the
+   --  tree: by their path, the size held to all the same. For tests only;
+   --  off where nobody sets it.
+   --
+   --  @param On Whether files are read so.
+   procedure Read_By_Path (On : Boolean);
+
    --  How many files' last changes the index keeps, for passes under
    --  way: none once no pass is, however many files came and went.
    --

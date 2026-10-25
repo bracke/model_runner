@@ -765,6 +765,9 @@ package body Model_Runner.Framework.Retrieval is
       function Total return Natural is (Done);
    end Reads;
 
+   --  Read_In reads by the path, as where Read_Beneath is not had.
+   By_Path : Boolean := False with Atomic;
+
    procedure Read_In
      (Root   : String;
       Path   : String;
@@ -786,7 +789,11 @@ package body Model_Runner.Framework.Retrieval is
          E.Add_Text (Status, "detail", "a path within the project, as src/x.adb, is wanted");
          return;
       end if;
-      Hostkit.Fs.Read_Beneath (Root, Path, Most, Text, Outcome);
+      if By_Path then
+         Outcome := Hostkit.Fs.Read_Unsupported;
+      else
+         Hostkit.Fs.Read_Beneath (Root, Path, Most, Text, Outcome);
+      end if;
       case Outcome is
          when Hostkit.Fs.Read_Done =>
             Status := E.Success;
@@ -1381,6 +1388,15 @@ package body Model_Runner.Framework.Retrieval is
    begin
       Claim_Wait := Duration'Max (0.0, Duration'Min (Most, 3_600.0));
    end Wait_For_Claims_At_Most;
+
+   ------------------
+   -- Read_By_Path --
+   ------------------
+
+   procedure Read_By_Path (On : Boolean) is
+   begin
+      By_Path := On;
+   end Read_By_Path;
 
    -----------------
    -- Forget_Tree --
