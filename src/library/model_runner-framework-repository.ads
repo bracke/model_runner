@@ -305,6 +305,14 @@ package Model_Runner.Framework.Repository is
       Found  : Graph;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  How many bytes a record of a kept graph is held to, past which its
+   --  relations are kept in parts of their own. For tests only -- a graph
+   --  in parts is otherwise one of tens of megabytes -- and 48 MB where
+   --  nobody sets it.
+   --
+   --  @param Bytes The most a record of the graph holds.
+   procedure Keep_Parts_At_Most (Bytes : Positive);
+
    --  Bring a graph up to date with the project as it is now, reading only
    --  what changed: a file whose size and time are those it was read with
    --  is taken as it was, a changed or new one is read again, a removed one

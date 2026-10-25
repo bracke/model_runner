@@ -3483,6 +3483,42 @@ package body Tests.Framework_Cases is
                        = Rp.References_To (Found, "Parser.Next"),
               "the kept graph did not read back whole");
 
+      --  Past a record's size, its relations kept in parts: read back whole
+      --  and in order; a part of another graph refused; kept in one record
+      --  again, its parts let go.
+      Rp.Keep_Parts_At_Most (400);
+      Rp.Keep (Store, Change, Found, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then S.Exists (Store, F.Indexes_Area, "repository-part-000002"),
+              "a graph past a record's size was not kept in parts: " & Code_Of (Status));
+      Rp.Load (Store, Kept, Status);
+      Assert (E.Is_Ok (Status)
+              and then Rp.Graph_Fingerprint (Kept) = Rp.Graph_Fingerprint (Found)
+              and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found)
+              and then (for all Index in 1 .. Rp.Relation_Count (Found) =>
+                          Rp."=" (Rp.Relation_At (Kept, Index), Rp.Relation_At (Found, Index))),
+              "a graph kept in parts did not read back whole and in order: " & Code_Of (Status));
+      declare
+         Part : R.Item;
+      begin
+         S.Read (Store, F.Indexes_Area, "repository-part-000001", Part, Status);
+         R.Set (Part, "fingerprint", "0000000000000000");
+         R.Set_Revision (Part, R.Revision (Part) + 1);
+         S.Put (Change, F.Indexes_Area, "repository-part-000001", Part);
+         S.Commit (Store, Change, Status);
+         Rp.Load (Store, Kept, Status);
+         Assert (E.Is_Error (Status) and then Rp.Relation_Count (Kept) = 0,
+                 "a part of another graph was taken for this one's");
+      end;
+      Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
+      Rp.Keep (Store, Change, Found, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then not S.Exists (Store, F.Indexes_Area, "repository-part-000001"),
+              "a graph kept whole again left its parts");
+      Rp.Load (Store, Kept, Status);
+      Assert (E.Is_Ok (Status) and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found),
+              "a graph kept whole again did not read back");
+
       Put_File (Project & "/src/extra.ads", "package Extra is" & LF
                 & "end Extra;" & LF);
       Assert (Rp.Graph_Fingerprint (Rp.Scan (Project))

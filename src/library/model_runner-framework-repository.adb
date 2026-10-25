@@ -2424,6 +2424,35 @@ package body Model_Runner.Framework.Repository is
    -- Keep --
    ----------
 
+   --  How many bytes a record of the graph is held to: under what a read
+   --  takes whole (Records.Max_Bytes), with room for the record's own
+   --  lines. A graph within it is kept in one record, as it always was;
+   --  one past it keeps its relations in parts of their own -- humanize's
+   --  2.5 million references, 580 MB, were refused as one record, and
+   --  every session read the tree again for want of it.
+   Part_Bytes : Long_Long_Integer := 48 * 1024 * 1024 with Atomic;
+
+   procedure Keep_Parts_At_Most (Bytes : Positive) is
+   begin
+      Part_Bytes := Long_Long_Integer (Bytes);
+   end Keep_Parts_At_Most;
+
+   --  The name a part of the graph's relations is kept under.
+   function Part_Name (Part : Positive) return String
+   is (Index_Name & "-part-" & Records.Numbered (Part, Part));
+
+   --  A relation as its field says it.
+   function Relation_Text (Link : Relation) return String
+   is (Lower (Relation_Kind'Image (Link.Kind)) & Tab
+       & To_String (Link.From) & Tab & To_String (Link.To) & Tab
+       & Lower (Derivation'Image (Link.Source)) & Tab
+       & Lower (Confidence'Image (Link.Sure)) & Tab
+       & To_String (Link.Where) & Tab & To_String (Link.Origin));
+
+   --  What a field takes in a record past its value: its name, its
+   --  value's length, and the line breaks, about.
+   Field_Bytes : constant := 32;
+
    procedure Keep
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
@@ -2434,10 +2463,42 @@ package body Model_Runner.Framework.Repository is
         Records.Create
           (Schemas.Repository_Schema, 1, "REPOSITORY",
            Stores.Current_Revision (Item, Indexes_Area, Index_Name) + 1);
+      Print     : constant String := Graph_Fingerprint (Found);
+      Relations : constant Natural := Natural (Found.Relations.Length);
+
+      --  The relations' bytes: whether they go in parts.
+      Spread : Long_Long_Integer := 0;
+      Parts  : Natural := 0;
+
+      --  The fields of the relations from First to Last, in Into.
+      procedure Set_Relations (Into : in out Records.Item; First, Last : Natural) is
+      begin
+         for Index in First .. Last loop
+            Records.Set (Into, "relation." & Records.Numbered (Index, Relations),
+                         Relation_Text (Found.Relations (Index)));
+         end loop;
+      end Set_Relations;
+
+      --  The part of the relations from First to Last, kept.
+      procedure Put_Part (First, Last : Natural) is
+         Part : Records.Item :=
+           Records.Create
+             (Schemas.Repository_Schema, 1, "REPOSITORY-PART-" & Records.Numbered (Parts + 1, Parts + 1),
+              Stores.Current_Revision (Item, Indexes_Area, Part_Name (Parts + 1)) + 1);
+      begin
+         Parts := Parts + 1;
+         Records.Set (Part, "fingerprint", Print);
+         Records.Set (Part, "reader", Reader_Version);
+         Set_Relations (Part, First, Last);
+         Stores.Put (Change, Indexes_Area, Part_Name (Parts), Part);
+      end Put_Part;
    begin
       Status := E.Success;
+      for Link of Found.Relations loop
+         Spread := Spread + Long_Long_Integer (Relation_Text (Link)'Length + Field_Bytes);
+      end loop;
       --  In the order the record keeps its fields -- file, fingerprint,
-      --  relation, symbol -- so each is set at the end.
+      --  parts, reader, relation, symbol -- so each is set at the end.
       for Index in 1 .. Natural (Found.Files.Length) loop
          declare
             File : File_Entry renames Found.Files (Index);
@@ -2449,21 +2510,33 @@ package body Model_Runner.Framework.Repository is
                & To_String (File.Fingerprint) & Tab & To_String (File.Stamp));
          end;
       end loop;
-      Records.Set (Value, "fingerprint", Graph_Fingerprint (Found));
-      Records.Set (Value, "reader", Reader_Version);
-      for Index in 1 .. Natural (Found.Relations.Length) loop
+      Records.Set (Value, "fingerprint", Print);
+      if Spread <= Part_Bytes then
+         Records.Set (Value, "reader", Reader_Version);
+         Set_Relations (Value, 1, Relations);
+      else
          declare
-            Link : Relation renames Found.Relations (Index);
+            First : Positive := 1;
+            Bytes : Long_Long_Integer := 0;
          begin
-            Records.Set
-              (Value, "relation." & Records.Numbered (Index, Natural (Found.Relations.Length)),
-               Lower (Relation_Kind'Image (Link.Kind)) & Tab
-               & To_String (Link.From) & Tab & To_String (Link.To) & Tab
-               & Lower (Derivation'Image (Link.Source)) & Tab
-               & Lower (Confidence'Image (Link.Sure)) & Tab
-               & To_String (Link.Where) & Tab & To_String (Link.Origin));
+            for Index in 1 .. Relations loop
+               declare
+                  Size : constant Long_Long_Integer :=
+                    Long_Long_Integer (Relation_Text (Found.Relations (Index))'Length + Field_Bytes);
+               begin
+                  if Bytes + Size > Part_Bytes and then Index > First then
+                     Put_Part (First, Index - 1);
+                     First := Index;
+                     Bytes := 0;
+                  end if;
+                  Bytes := Bytes + Size;
+               end;
+            end loop;
+            Put_Part (First, Relations);
          end;
-      end loop;
+         Records.Set (Value, "parts", Image (Parts));
+         Records.Set (Value, "reader", Reader_Version);
+      end if;
       for Index in 1 .. Natural (Found.Symbols.Length) loop
          declare
             Named : Symbol renames Found.Symbols (Index);
@@ -2476,8 +2549,18 @@ package body Model_Runner.Framework.Repository is
       end loop;
       Stores.Put (Change, Indexes_Area, Index_Name, Value);
 
+      --  The parts an earlier, larger graph kept past these: let go.
+      declare
+         Next : Positive := Parts + 1;
+      begin
+         while Stores.Exists (Item, Indexes_Area, Part_Name (Next)) loop
+            Stores.Remove (Change, Indexes_Area, Part_Name (Next));
+            Next := Next + 1;
+         end loop;
+      end;
+
       --  What the state will keep, known here from now on.
-      Remember (Key_Of (Item), Found, Graph_Fingerprint (Found));
+      Remember (Key_Of (Item), Found, Print);
    end Keep;
 
    ----------
@@ -2490,6 +2573,53 @@ package body Model_Runner.Framework.Repository is
       Status : out Model_Runner.Errors.Error_Info)
    is
       Value : Records.Item;
+
+      --  The graph's files, symbols and relations, from a record of it.
+      procedure Take (From : Records.Item) is
+      begin
+         for Index in 1 .. Records.Field_Count (From) loop
+            declare
+               Field : constant String := Records.Field_Name (From, Index);
+               Parts : constant Name_Lists.Vector :=
+                 Split_Tabs (Records.Get (From, Field));
+            begin
+               if Ada.Strings.Fixed.Index (Field, "file.") = Field'First
+                 and then Natural (Parts.Length) in 4 .. 5
+               then
+                  Found.Files.Append
+                    (File_Entry'
+                     (Path        => To_Unbounded_String (Parts (1)),
+                      Language    => To_Unbounded_String (Parts (2)),
+                      Role        => File_Role'Value (Parts (3)),
+                      Fingerprint => To_Unbounded_String (Parts (4)),
+                      Stamp       => To_Unbounded_String
+                                       (if Natural (Parts.Length) = 5 then Parts (5) else "")));
+               elsif Ada.Strings.Fixed.Index (Field, "symbol.") = Field'First
+                 and then Natural (Parts.Length) = 4
+               then
+                  Found.Symbols.Append
+                    (Symbol'
+                     (Name => To_Unbounded_String (Parts (1)),
+                      Kind => To_Unbounded_String (Parts (2)),
+                      Path => To_Unbounded_String (Parts (3)),
+                      Line => Natural'Value (Parts (4))));
+               elsif Ada.Strings.Fixed.Index (Field, "relation.") = Field'First
+                 and then Natural (Parts.Length) in 6 .. 7
+               then
+                  Found.Relations.Append
+                    (Relation'
+                     (Kind   => Relation_Kind'Value (Parts (1)),
+                      From   => To_Unbounded_String (Parts (2)),
+                      To     => To_Unbounded_String (Parts (3)),
+                      Source => Derivation'Value (Parts (4)),
+                      Sure   => Confidence'Value (Parts (5)),
+                      Where  => To_Unbounded_String (Parts (6)),
+                      Origin => To_Unbounded_String
+                                  (if Natural (Parts.Length) = 7 then Parts (7) else "")));
+               end if;
+            end;
+         end loop;
+      end Take;
    begin
       Found := (others => <>);
       Stores.Read (Item, Indexes_Area, Index_Name, Value, Status);
@@ -2504,48 +2634,29 @@ package body Model_Runner.Framework.Repository is
          return;
       end if;
 
-      for Index in 1 .. Records.Field_Count (Value) loop
-         declare
-            Field : constant String := Records.Field_Name (Value, Index);
-            Parts : constant Name_Lists.Vector :=
-              Split_Tabs (Records.Get (Value, Field));
-         begin
-            if Ada.Strings.Fixed.Index (Field, "file.") = Field'First
-              and then Natural (Parts.Length) in 4 .. 5
-            then
-               Found.Files.Append
-                 (File_Entry'
-                  (Path        => To_Unbounded_String (Parts (1)),
-                   Language    => To_Unbounded_String (Parts (2)),
-                   Role        => File_Role'Value (Parts (3)),
-                   Fingerprint => To_Unbounded_String (Parts (4)),
-                   Stamp       => To_Unbounded_String
-                                    (if Natural (Parts.Length) = 5 then Parts (5) else "")));
-            elsif Ada.Strings.Fixed.Index (Field, "symbol.") = Field'First
-              and then Natural (Parts.Length) = 4
-            then
-               Found.Symbols.Append
-                 (Symbol'
-                  (Name => To_Unbounded_String (Parts (1)),
-                   Kind => To_Unbounded_String (Parts (2)),
-                   Path => To_Unbounded_String (Parts (3)),
-                   Line => Natural'Value (Parts (4))));
-            elsif Ada.Strings.Fixed.Index (Field, "relation.") = Field'First
-              and then Natural (Parts.Length) in 6 .. 7
-            then
-               Found.Relations.Append
-                 (Relation'
-                  (Kind   => Relation_Kind'Value (Parts (1)),
-                   From   => To_Unbounded_String (Parts (2)),
-                   To     => To_Unbounded_String (Parts (3)),
-                   Source => Derivation'Value (Parts (4)),
-                   Sure   => Confidence'Value (Parts (5)),
-                   Where  => To_Unbounded_String (Parts (6)),
-                   Origin => To_Unbounded_String
-                               (if Natural (Parts.Length) = 7 then Parts (7) else "")));
-            end if;
-         end;
-      end loop;
+      Take (Value);
+      --  Its relations in parts of their own: each the same graph's, by its
+      --  print, or the graph is not taken.
+      if Records.Get (Value, "parts") /= "" then
+         for Part in 1 .. Natural'Value (Records.Get (Value, "parts")) loop
+            declare
+               Held : Records.Item;
+            begin
+               Stores.Read (Item, Indexes_Area, Part_Name (Part), Held, Status);
+               if E.Is_Ok (Status) and then Records.Get (Held, "fingerprint") /= Records.Get (Value, "fingerprint")
+               then
+                  Status := E.Make (E.Framework_Record_Malformed);
+                  E.Add_Text (Status, "path", "indexes/" & Part_Name (Part), E.Param_Path);
+                  E.Add_Text (Status, "detail", "a part of another graph than the one it is kept with");
+               end if;
+               if E.Is_Error (Status) then
+                  Found := (others => <>);
+                  return;
+               end if;
+               Take (Held);
+            end;
+         end loop;
+      end if;
    exception
       when Constraint_Error =>
          Found := (others => <>);
