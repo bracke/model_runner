@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+
 package body Model_Runner.Framework.Records is
 
    package E renames Model_Runner.Errors;
@@ -136,6 +138,18 @@ package body Model_Runner.Framework.Records is
    -- Set --
    ---------
 
+   --------------
+   -- Numbered --
+   --------------
+
+   function Numbered (Index, Count : Natural) return String is
+      Plain : constant String := Ada.Strings.Fixed.Trim (Natural'Image (Index), Ada.Strings.Left);
+      Wide  : constant Natural :=
+        Natural'Max (6, Ada.Strings.Fixed.Trim (Natural'Image (Count), Ada.Strings.Left)'Length);
+   begin
+      return [1 .. Integer'Max (0, Wide - Plain'Length) => '0'] & Plain;
+   end Numbered;
+
    procedure Set (Value : in out Item; Name : String; Text : String) is
       Place : Positive;
       Found : Boolean;
@@ -147,6 +161,13 @@ package body Model_Runner.Framework.Records is
       Locate (Value, Name, Place, Found);
       if Found then
          Value.Fields (Place).Value := To_Unbounded_String (Text);
+      --  Past the last: appended, which grows the vector by doubling -- an
+      --  Insert there copied every field before it, each time, and a graph
+      --  of 1,400 files took minutes to keep.
+      elsif Place > Natural (Value.Fields.Length) then
+         Value.Fields.Append
+           (Field'(Name  => To_Unbounded_String (Name),
+                   Value => To_Unbounded_String (Text)));
       else
          Value.Fields.Insert
            (Before   => Place,

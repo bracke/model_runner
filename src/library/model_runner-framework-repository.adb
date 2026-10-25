@@ -160,12 +160,6 @@ package body Model_Runner.Framework.Repository is
    is (Ada.Strings.Fixed.Trim
          (Path, Ada.Strings.Maps.To_Set ("/"), Ada.Strings.Maps.To_Set ("/")));
 
-   function Six (Value : Natural) return String is
-      Plain : constant String := Image (Value);
-   begin
-      return [1 .. Integer'Max (0, 6 - Plain'Length) => '0'] & Plain;
-   end Six;
-
    function Sorted (Items : Name_Lists.Vector) return Name_Lists.Vector is
       Result : Name_Lists.Vector := Items;
    begin
@@ -2449,7 +2443,7 @@ package body Model_Runner.Framework.Repository is
             File : File_Entry renames Found.Files (Index);
          begin
             Records.Set
-              (Value, "file." & Six (Index),
+              (Value, "file." & Records.Numbered (Index, Natural (Found.Files.Length)),
                To_String (File.Path) & Tab & To_String (File.Language) & Tab
                & Lower (File_Role'Image (File.Role)) & Tab
                & To_String (File.Fingerprint) & Tab & To_String (File.Stamp));
@@ -2462,7 +2456,7 @@ package body Model_Runner.Framework.Repository is
             Link : Relation renames Found.Relations (Index);
          begin
             Records.Set
-              (Value, "relation." & Six (Index),
+              (Value, "relation." & Records.Numbered (Index, Natural (Found.Relations.Length)),
                Lower (Relation_Kind'Image (Link.Kind)) & Tab
                & To_String (Link.From) & Tab & To_String (Link.To) & Tab
                & Lower (Derivation'Image (Link.Source)) & Tab
@@ -2475,7 +2469,7 @@ package body Model_Runner.Framework.Repository is
             Named : Symbol renames Found.Symbols (Index);
          begin
             Records.Set
-              (Value, "symbol." & Six (Index),
+              (Value, "symbol." & Records.Numbered (Index, Natural (Found.Symbols.Length)),
                To_String (Named.Name) & Tab & To_String (Named.Kind) & Tab
                & To_String (Named.Path) & Tab & Image (Named.Line));
          end;

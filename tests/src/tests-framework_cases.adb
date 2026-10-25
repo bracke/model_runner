@@ -1,4 +1,5 @@
 with Ada.Real_Time;
+with Ada.Unchecked_Deallocation;
 with AUnit.Test_Cases;
 with Ada.Calendar;
 with Model_Runner.Platform.Signals;
@@ -309,6 +310,24 @@ package body Tests.Framework_Cases is
               "the fingerprint is not FNV-1a");
    end Records_Round_Trip;
 
+   --  A list's fields are numbered to sort in its order however long it
+   --  is: six digits as before for a short one, wider past a million --
+   --  where the millionth had sorted between the 100,000th and the next.
+   procedure Records_Number_A_Long_List_In_Order
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Long : constant := 1_200_000;
+   begin
+      Assert (R.Numbered (7, 10) = "000007" and then R.Numbered (999_999, 999_999) = "999999",
+              "a short list's numbers are not six digits as they were");
+      Assert (R.Numbered (7, Long) = "0000007" and then R.Numbered (Long, Long) = "1200000",
+              "a long list's numbers are not as wide as its largest");
+      Assert (R.Numbered (100_001, Long) < R.Numbered (999_999, Long)
+              and then R.Numbered (999_999, Long) < R.Numbered (1_000_000, Long),
+              "a long list's numbers do not sort in its order");
+   end Records_Number_A_Long_List_In_Order;
+
    --  Text that is not a record is refused, and says why.
    procedure Records_Refuse_What_Is_Not_One
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -568,6 +587,44 @@ package body Tests.Framework_Cases is
       Assert (E.Is_Ok (Status), "state let go of could not be opened");
       S.Close (Second);
    end Second_Session_Is_Refused;
+
+   --  A record larger than a read takes whole is refused before the change
+   --  is marked: nothing of it is left to be finished at the next opening,
+   --  and the next change commits as before. Written, a graph of 580 MB
+   --  could be neither read back nor finished, and /init undid itself.
+   procedure Records_Too_Large_Are_Refused_Before_The_Mark
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      type Text_Access is access String;
+      procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+      Project : constant String := Fresh ("too-large");
+      Store   : S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Value   : R.Item := R.Create ("project.fact", 1, "FACT-LANGUAGE", 1);
+      Big     : Text_Access := new String'(1 .. R.Max_Bytes + 1 => 'x');
+   begin
+      S.Create (Store, Project, "Large", Status);
+      R.Set (Value, "key", "language");
+      R.Set (Value, "value", Big.all);
+      R.Set (Value, "source", "explicit");
+      R.Set (Value, "confidence", "authoritative");
+      Free (Big);
+      S.Put (Change, F.Project_Area, "fact.language", Value);
+      S.Commit (Store, Change, Status);
+      Assert (E."=" (Status.Code, E.IO_File_Too_Large),
+              "a record too large to read back was not refused: " & Code_Of (Status));
+      Assert (not S.Journal_Pending (Store), "a refused record left a change to finish");
+      Assert (not S.Exists (Store, F.Project_Area, "fact.language"), "a refused record was kept");
+
+      R.Set (Value, "value", "Ada_2022");
+      S.Put (Change, F.Project_Area, "fact.language", Value);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status) and then S.Exists (Store, F.Project_Area, "fact.language"),
+              "a change after a refused one did not commit: " & Code_Of (Status));
+      S.Close (Store);
+   end Records_Too_Large_Are_Refused_Before_The_Mark;
 
    --  A change committed and interrupted before it was applied is applied
    --  when the state is next opened.
@@ -21453,6 +21510,9 @@ package body Tests.Framework_Cases is
         (T, Records_Round_Trip'Access,
          "a record reads back as written and its text is canonical");
       Register_Routine
+        (T, Records_Number_A_Long_List_In_Order'Access,
+         "a list's fields are numbered to sort in its order however long it is");
+      Register_Routine
         (T, Records_Refuse_What_Is_Not_One'Access,
          "text that is not a record is refused");
       Register_Routine
@@ -21468,6 +21528,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Second_Session_Is_Refused'Access,
          "a second session is refused state another holds");
+      Register_Routine
+        (T, Records_Too_Large_Are_Refused_Before_The_Mark'Access,
+         "a record too large to read back is refused before its change is marked");
       Register_Routine
         (T, Committed_Change_Rolls_Forward'Access,
          "a committed change interrupted before it was applied is finished");

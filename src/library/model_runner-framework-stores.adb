@@ -1011,9 +1011,23 @@ package body Model_Runner.Framework.Stores is
                      end if;
                   end;
 
-                  Write_Text
-                    (Join (Journal, "op-" & Six (Index) & Record_Suffix),
-                     Records.Serialize (Next.Value), Status);
+                  --  A record no read takes whole is refused here, before
+                  --  the mark: written, its change could be neither read
+                  --  back nor finished at the next opening -- a graph of
+                  --  2.5 million references (580 MB) left every later
+                  --  opening a journal to finish that never could be.
+                  declare
+                     Text : constant String := Records.Serialize (Next.Value);
+                  begin
+                     if Text'Length > Records.Max_Bytes then
+                        Status := E.Make (E.IO_File_Too_Large);
+                        E.Add_Text (Status, "path", Place_Of (Next.Where, Name), E.Param_Path);
+                        E.Add_Integer (Status, "size", Long_Long_Integer (Text'Length), E.Param_Bytes);
+                        E.Add_Integer (Status, "limit", Records.Max_Bytes, E.Param_Bytes);
+                        return;
+                     end if;
+                     Write_Text (Join (Journal, "op-" & Six (Index) & Record_Suffix), Text, Status);
+                  end;
                   Made_Durable
                     (Join (Journal, "op-" & Six (Index) & Record_Suffix), False, Status);
                   if E.Is_Error (Status) then

@@ -40,12 +40,6 @@ package body Model_Runner.Framework.Indexes is
      (Key_Type => String, Element_Type => Unbounded_String,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
 
-   function Six (Value : Natural) return String is
-      Plain : constant String := Image (Value);
-   begin
-      return (if Plain'Length >= 6 then Plain else [1 .. 6 - Plain'Length => '0'] & Plain);
-   end Six;
-
    --  How the indexes are made from the graph: built by a builder that
    --  makes them otherwise, they are built again. 1: the first counted.
    Builder_Version : constant String := "1";
@@ -86,9 +80,12 @@ package body Model_Runner.Framework.Indexes is
          if Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
             Stores.Read (Item, Indexes_Area, Name_Of (Which), Held, Read);
             if E.Is_Ok (Read)
-              and then not Records.Has (Held, "entry." & Six (Natural (Lines.Length) + 1))
+              and then not Records.Has
+                             (Held,
+                              "entry." & Records.Numbered (Natural (Lines.Length) + 1, Natural (Lines.Length) + 1))
               and then (for all Index in 1 .. Natural (Lines.Length) =>
-                          Records.Get (Held, "entry." & Six (Index)) = Lines (Index))
+                          Records.Get (Held, "entry." & Records.Numbered (Index, Natural (Lines.Length)))
+                          = Lines (Index))
             then
                return;
             end if;
@@ -102,7 +99,7 @@ package body Model_Runner.Framework.Indexes is
          begin
             Records.Set (Value, "source", Source);
             for Index in 1 .. Natural (Lines.Length) loop
-               Records.Set (Value, "entry." & Six (Index), Lines (Index));
+               Records.Set (Value, "entry." & Records.Numbered (Index, Natural (Lines.Length)), Lines (Index));
             end loop;
             Stores.Put (Change, Indexes_Area, Name_Of (Which), Value);
          end;

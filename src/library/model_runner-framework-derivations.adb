@@ -26,12 +26,6 @@ package body Model_Runner.Framework.Derivations is
    function Image (Value : Natural) return String
    is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
 
-   function Six (Value : Natural) return String is
-      Plain : constant String := Image (Value);
-   begin
-      return (if Plain'Length >= 6 then Plain else [1 .. 6 - Plain'Length => '0'] & Plain);
-   end Six;
-
    function Lower (Text : String) return String
    renames Ada.Characters.Handling.To_Lower;
 
@@ -822,13 +816,17 @@ package body Model_Runner.Framework.Derivations is
          Records.Set (Value, "created_at", Timestamp);
          Records.Set (Value, "result", To_String (Answer.Id));
          for Index in 1 .. Natural (Lines.Length) loop
-            Records.Set (Value, "need." & Six (Index), Lines (Index));
+            Records.Set (Value, "need." & Records.Numbered (Index, Natural (Lines.Length)), Lines (Index));
          end loop;
          for Index in 1 .. Natural (Confirms.Length) loop
-            Records.Set (Value, "confirm." & Six (Index), Confirms (Index));
-            Same := Same and then Records.Get (Held, "confirm." & Six (Index)) = Confirms (Index);
+            Records.Set (Value, "confirm." & Records.Numbered (Index, Natural (Confirms.Length)), Confirms (Index));
+            Same := Same
+              and then Records.Get (Held, "confirm." & Records.Numbered (Index, Natural (Confirms.Length)))
+                       = Confirms (Index);
          end loop;
-         Same := Same and then not Records.Has (Held, "confirm." & Six (Natural (Confirms.Length) + 1));
+         Same := Same and then not Records.Has
+                                   (Held, "confirm." & Records.Numbered (Natural (Confirms.Length) + 1,
+                                                                         Natural (Confirms.Length) + 1));
          if not Same then
             Records.Set_Revision (Value, Next_Revision (Item, Change, Key));
             Stores.Put (Change, Derivations_Area, Key, Value);

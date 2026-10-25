@@ -97,6 +97,18 @@ package Model_Runner.Framework.Records is
    --  @param Text The field's bytes.
    procedure Set (Value : in out Item; Name : String; Text : String);
 
+   --  A list's item number for its field's name: as wide as the largest
+   --  of Count, six digits at least, so a list's fields sort in its order
+   --  however long it is and each is set at the record's end. At six
+   --  digits the millionth went between the 100,000th and the next, and
+   --  every one after was set in the middle of the record: a tree of
+   --  1,400 files took more than twenty minutes to initialize.
+   --
+   --  @param Index The item's number, from 1.
+   --  @param Count How many items the list has.
+   --  @return Index, led by zeros.
+   function Numbered (Index, Count : Natural) return String;
+
    --  Remove a field when it is there.
    --
    --  @param Value The record.
