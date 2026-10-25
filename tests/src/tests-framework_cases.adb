@@ -20423,6 +20423,176 @@ package body Tests.Framework_Cases is
                  "a file still said to be being read once it was read in");
       end;
 
+      --  A pass raising with a file's claim noted as its own and not yet
+      --  taken leaves nothing claimed: the next search reads the file
+      --  rather than wait on it, and finds it.
+      declare
+         procedure Break_Claim is
+         begin
+            raise Storage_Error with "the test's own, claiming";
+         end Break_Claim;
+         Graph : Rp.Graph;
+         Found : Boolean;
+      begin
+         Put_File (To_String (Notes), "Now it says impala." & LF);
+         Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Claims, Break_Claim'Unrestricted_Access);
+         begin
+            Hits := Rv.Search (Store, Graph, "", "impala", 20, Records => False);
+         exception
+            when Storage_Error =>
+               null;
+         end;
+         Rv.Wait_For_Claims_At_Most (0.2);
+         Found := Texts ("impala", "docs/notes.txt");
+         Rv.Wait_For_Claims_At_Most (60.0);
+         Assert (Found and then Rv.Not_Searched (Graph, Fresh_Root (Store)).Is_Empty,
+                 "a claim noted by a pass that raised was left held: "
+                 & (if Rv.Not_Searched (Graph, Fresh_Root (Store)).Is_Empty then "not found"
+                    else Rv.Not_Searched (Graph, Fresh_Root (Store)).First_Element));
+      end;
+
+      --  Stopped while a file is read: its words are not counted nor
+      --  installed, it is said not read for it, and once the work goes on
+      --  it is read and found.
+      declare
+         Stop : aliased Model_Runner.Cancellation.Token;
+
+         procedure Stop_Now is
+         begin
+            Stop.Request;
+         end Stop_Now;
+
+         Graph : Rp.Graph;
+         Reads : Natural;
+         Said  : Boolean;
+      begin
+         Put_File (To_String (Notes), "Now it says eland." & LF);
+         Graph := Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store));
+         Model_Runner.Framework.Execution.Watch (Stop'Unchecked_Access);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Stop_Now'Unrestricted_Access);
+         Reads := Rv.Indexed_Reads;
+         Hits := Rv.Search (Store, Graph, "", "eland", 20, Records => False);
+         Model_Runner.Framework.Execution.Watch (null);
+         Said := (for some One of Rv.Not_Searched (Graph, Fresh_Root (Store))
+                  => One = "docs/notes.txt: not read, the work was stopped");
+         Assert (Rv.Indexed_Reads = Reads and then Said,
+                 "a file read when its work was stopped was installed, or not said unread:"
+                 & Natural'Image (Rv.Indexed_Reads - Reads));
+         Assert (Texts ("eland", "docs/notes.txt") and then Rv.Not_Searched (Graph, Fresh_Root (Store)).Is_Empty,
+                 "a file passed by when its work was stopped was not read once it went on");
+      end;
+
+      --  Several searches waiting on one claim: each is woken when it is
+      --  given back, and each finds what was installed.
+      declare
+         protected Gate is
+            procedure Arrive;
+            procedure Open;
+            entry Arrived;
+            entry Pass_Through;
+         private
+            Here, Opened : Boolean := False;
+         end Gate;
+
+         protected body Gate is
+            procedure Arrive is
+            begin
+               Here := True;
+            end Arrive;
+
+            procedure Open is
+            begin
+               Opened := True;
+            end Open;
+
+            entry Arrived when Here is
+            begin
+               null;
+            end Arrived;
+
+            entry Pass_Through when Opened is
+            begin
+               null;
+            end Pass_Through;
+         end Gate;
+
+         procedure Hold_Reader is
+         begin
+            Gate.Arrive;
+            Gate.Pass_Through;
+         end Hold_Reader;
+
+         task type Searcher is
+            entry Go;
+            entry Done (Found : out Boolean; Took : out Duration; Said : out Unbounded_String);
+         end Searcher;
+
+         task body Searcher is
+            use type Ada.Real_Time.Time;
+            Theirs : Rv.Hit_Lists.Vector;
+            Began  : Ada.Real_Time.Time;
+         begin
+            accept Go;
+            Began := Ada.Real_Time.Clock;
+            Theirs := Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", "oryx", 20,
+                                 Records => False);
+            accept Done (Found : out Boolean; Took : out Duration; Said : out Unbounded_String) do
+               Found := (for some One of Theirs
+                         => One.Kind = Rv.Text_Hit and then To_String (One.Path) = "docs/notes.txt");
+               Took := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Began);
+               Said := To_Unbounded_String (Theirs.Length'Image & " hits");
+            end Done;
+         exception
+            when Error : others =>
+               accept Done (Found : out Boolean; Took : out Duration; Said : out Unbounded_String) do
+                  Found := False;
+                  Took := 0.0;
+                  Said := To_Unbounded_String (Ada.Exceptions.Exception_Information (Error));
+               end Done;
+         end Searcher;
+
+         Holder  : Searcher;
+         Waiters : array (1 .. 3) of Searcher;
+         Found   : array (0 .. 3) of Boolean := [others => False];
+         Took    : array (0 .. 3) of Duration := [others => 0.0];
+         Said    : array (0 .. 3) of Unbounded_String;
+         Read_At : Natural;
+
+         function Told return String is
+            Text : Unbounded_String;
+         begin
+            for At_One in Found'Range loop
+               Append (Text, " [" & At_One'Image & ":" & Found (At_One)'Image & Took (At_One)'Image & " "
+                       & To_String (Said (At_One)) & "]");
+            end loop;
+            for One of Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), Fresh_Root (Store)) loop
+               Append (Text, " {" & One & "}");
+            end loop;
+            return To_String (Text);
+         end Told;
+      begin
+         Put_File (To_String (Notes), "Now it says oryx." & LF);
+         Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Hold_Reader'Unrestricted_Access);
+         Holder.Go;
+         Gate.Arrived;
+         Read_At := Rv.Indexed_Reads;
+         for One of Waiters loop
+            One.Go;
+         end loop;
+         delay 0.5;
+         Gate.Open;
+         Holder.Done (Found (0), Took (0), Said (0));
+         for At_Waiter in Waiters'Range loop
+            Waiters (At_Waiter).Done (Found (At_Waiter), Took (At_Waiter), Said (At_Waiter));
+         end loop;
+         Assert ((for all Each of Found => Each), "a search waiting beside others on one claim found nothing:" & Told);
+         Assert ((for all At_Waiter in Waiters'Range => Took (At_Waiter) < 10.0),
+                 "a search waiting beside others was not woken when the claim was given back:" & Told);
+         Assert (Rv.Indexed_Reads = Read_At + 1, "searches waiting on one claim read the file again:"
+                 & Natural'Image (Rv.Indexed_Reads - Read_At));
+      end;
+
       --  One tree's install stopped part way lets every tree's index go:
       --  another tree's search answers after as before.
       declare

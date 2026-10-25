@@ -1099,8 +1099,12 @@ package body Model_Runner.Framework.Retrieval is
                         Stale.Append (Path);
                         Prints.Append (To_String (File.Fingerprint));
                         Seen.Append (Change_Of (Key));
-                        In_Flight.Include (Key, (Print => File.Fingerprint, Owner => Pass.Id));
+                        --  Kept among the pass's claims before it is
+                        --  taken: one raising between leaves nothing
+                        --  claimed that the pass would not give back.
                         Pass.Claimed.Include (Key);
+                        Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Claims);
+                        In_Flight.Include (Key, (Print => File.Fingerprint, Owner => Pass.Id));
                      end if;
                   end if;
                end if;
@@ -1166,19 +1170,21 @@ package body Model_Runner.Framework.Retrieval is
       end;
       Files := Natural (Present.Length);
 
+      declare
+         --  Stopped: what is left unread is said so, and its claims go
+         --  with the pass.
+         procedure Say_Stopped (From : Positive) is
+            Locked : Holding;
+            pragma Unreferenced (Locked);
+         begin
+            for Rest in From .. Natural (Stale.Length) loop
+               Unsearched.Include (Key_Of (Root, Stale (Rest)), Stopped);
+            end loop;
+         end Say_Stopped;
       begin
          for At_Stale in 1 .. Natural (Stale.Length) loop
-            --  Stopped: what is left unread is said so, and its claims go
-            --  with the pass.
             if Stop_Asked then
-               declare
-                  Locked : Holding;
-                  pragma Unreferenced (Locked);
-               begin
-                  for Rest in At_Stale .. Natural (Stale.Length) loop
-                     Unsearched.Include (Key_Of (Root, Stale (Rest)), Stopped);
-                  end loop;
-               end;
+               Say_Stopped (At_Stale);
                exit;
             end if;
             declare
@@ -1191,6 +1197,11 @@ package body Model_Runner.Framework.Retrieval is
                --  its path before it is opened.
                Read_In (Root, Path, Text, Status, Most => Indexed_Most);
                Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Installs);
+               --  Stopped while it was read: its words are not counted.
+               if Stop_Asked then
+                  Say_Stopped (At_Stale);
+                  exit;
+               end if;
                Stage := To_Unbounded_String ("counting its words");
                declare
                   use type E.Error_Code;
