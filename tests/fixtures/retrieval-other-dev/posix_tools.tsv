@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: posix_tools's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+f3b8aa7	compare link targets in either separator, and prove the inventory harder	tests/src/command_tests-surface_smoke.adb tests/src/proof_targets.adb
+91e97cc	keep explore's quit hint on a narrow status line	generated/package-manifest.txt tests/src/operation_tests.adb tools/explore/e2e/src/e2e_rig.adb tools/explore/e2e/src/e2e_rig.ads tools/explore/e2e/src/performance_tests.adb tools/explore/e2e/src/session_tests.adb tools/explore/src/library/explore-render.adb
+3f0bb31	make explore's CI checks hold on every host	generated/package-manifest.txt tests/src/build_checks.adb tools/explore/e2e/src/e2e_rig.adb tools/explore/e2e/src/e2e_rig.ads tools/explore/e2e/src/performance_tests.adb
+26d7d3f	write and check release checksums only during a release	docs/release-process.md generated/package-manifest.txt tests/src/posix_tools_tests.adb
+be2d17f	list . and .. under ls -a, and links whose targets are missing	common/src/posix_tools-commands-ls.adb docs/commands/ls.md generated/regressions.csv generated/requirements.csv tests/src/command_tests-surface_smoke.adb
+dd1cf2a	add a terminal adapter for full-screen programs	common/src/posix_tools-host_adapters-signals.adb common/src/posix_tools-host_adapters-signals.ads common/src/posix_tools-host_adapters-terminal_io.adb common/src/posix_tools-host_adapters-terminal_io.ads tests/src/package_entries.adb
+32a6ff5	name each command's main source in the inventory	common/src/posix_tools-command_inventory.adb common/src/posix_tools-command_inventory.ads tests/src/basic_tests.adb tests/src/package_entries.adb tests/src/posix_tools_tests.adb
+dc0448b	canonicalize zone names through I18N.Time_Zone_Data	common/src/posix_tools-commands-date_parsing.adb
+02efee5	take number symbols and zone names from i18n's public API	common/src/posix_tools-commands-date_parsing.adb common/src/posix_tools-commands-seq.adb common/src/posix_tools-text-printf_formats-number_images.adb common/src/posix_tools-text-sort_numeric.adb
+073e74d	check cp -p's access time against the one the source was given	tests/src/command_tests-surface_smoke.adb

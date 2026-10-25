@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: adash's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+0f55f0c	Drop with clauses evaluation no longer uses	src/library/adash-language-evaluation.adb
+998f9a9	explain installed shell usage	README.md docs/user-guide.md
+d6a0c20	use descriptor terminal detection	adash_tests/tests/adash_tests-interactive_cases.adb src/library/adash-terminal.adb src/library/adash-terminal.ads
+f4cfa73	Seeding a frame makes the run BROKEN, and Set_Slot is not the reason	benchmarks/README.md
+2d786f7	An address map, so a carried name keeps its place	benchmarks/README.md src/library/adash-language-evaluation.adb src/library/adash-language-evaluation.ads
+47c26a6	The address map shares storage with a block that shadows	benchmarks/README.md
+f4b6a52	The address map stamps offsets; Place_Of stays as it is	benchmarks/README.md
+fda358e	Set_Slot, the write beside Slot_Value	adash_tests/tests/adash_tests-machine_cases.adb src/library/adash-machine.adb src/library/adash-machine.ads
+106382b	Pin the toolchain in the two crates that did not, not around them	alire.toml
+ee754a2	Refuse the system compiler in the solution	alire.toml

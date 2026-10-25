@@ -19625,6 +19625,34 @@ package body Tests.Framework_Cases is
       end;
    end Declarations_Have_Extents;
 
+   --  A word of a sentence is not a file's name: a file named for one of
+   --  them is not taken over the file the sentence is about.
+   procedure Searches_Take_No_Sentence_Word_For_A_Name
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store : S.Store;
+
+      function Find (Query : String) return Rv.Hit_Lists.Vector
+      is (Rv.Search (Store, Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), "", Query, 20, Records => False));
+   begin
+      Task_Project (Store, "search-paths");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Dirs.Create_Path (Fresh_Root (Store) & "/docs");
+      Put_File (Fresh_Root (Store) & "/docs/streaming.md", "How the pump's water moves." & LF);
+      Put_File (Fresh_Root (Store) & "/src/pump.adb", "--  Hold the streaming buffers on the heap." & LF);
+      for Letter in Character range 'a' .. 'l' loop
+         Put_File (Fresh_Root (Store) & "/src/other_" & Letter & ".adb", "--  Nothing of it." & LF);
+      end loop;
+      declare
+         Hits : constant Rv.Hit_Lists.Vector := Find ("hold the streaming buffers on the heap");
+      begin
+         Assert (not Hits.Is_Empty and then To_String (Hits.First_Element.Path) = "src/pump.adb",
+                 "a file named for one word of a sentence ranked over the file the sentence is about");
+      end;
+      S.Close (Store);
+   end Searches_Take_No_Sentence_Word_For_A_Name;
+
    --  A search ranks by fixed rules -- a full name over its end, over its
    --  last part, over a beginning, over the words of a name or a text --
    --  says why each ranks and how far a record is to be taken as said,
@@ -21834,6 +21862,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Searches_Are_Ranked'Access,
          "a search ranks by fixed rules, says why, and shows only what may be read");
+      Register_Routine
+        (T, Searches_Take_No_Sentence_Word_For_A_Name'Access,
+         "a file named for a word of a sentence is not taken for what the sentence is about");
       Register_Routine
         (T, Word_Index_Follows_The_Tree'Access,
          "the index of the files' words follows the tree and ranks as one made anew");

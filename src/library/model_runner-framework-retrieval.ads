@@ -34,8 +34,9 @@ with Model_Runner.Framework.Stores;
 --  them, 60 for a unit one of them depends on or is used by surely, 30 for
 --  one only probably.
 --
---  A file: 900 for its path, 600 for its name, 50 for each query word in
---  its path.
+--  A file: 900 for its path, 600 for its name -- not where the word is
+--  one of a sentence's, as for a symbol's name -- 50 for each query word
+--  in its path.
 --
 --  A record -- a requirement, specification, decision, task or
 --  observation: 1000 for its identifier; 80 for each query word in its

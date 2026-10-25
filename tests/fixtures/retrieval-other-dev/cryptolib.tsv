@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: cryptolib's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+2e5c415	Write Keccak's rounds out and absorb whole lanes; SHA-512 copies a block at a time	CHANGELOG.md cryptolib.gpr src/cryptolib-hashes.adb src/cryptolib-sha3.adb
+019cd11	Run SHA-1 on the SHA extensions, and hash whole blocks where they lie	CHANGELOG.md src-arch-generic/cryptolib-hashes-hardware.adb src-arch-x86_64/cryptolib-hashes-hardware.adb src/cryptolib-hashes-hardware.ads src/cryptolib-hashes.adb
+3c0a4e1	Compute ChaCha20 eight blocks at a time in vector lanes	CHANGELOG.md cryptolib.gpr src/cryptolib-chacha20_poly1305.adb
+e8e3672	Run SHA-256 on the SHA extensions, and hash whole blocks where they lie	CHANGELOG.md cryptolib.gpr src-arch-generic/cryptolib-hashes-hardware.adb src-arch-x86_64/cryptolib-hashes-hardware.adb src/cryptolib-hashes-hardware.ads src/cryptolib-hashes.adb
+cd6d0ff	Run AES and GHASH on AES-NI and PCLMULQDQ where the processor has them	CHANGELOG.md cryptolib.gpr src-arch-generic/cryptolib-ciphers-hardware.adb src-arch-x86_64/cryptolib-ciphers-hardware.adb src/cryptolib-ciphers-hardware.ads src/cryptolib-ciphers.adb src/cryptolib-ciphers.ads
+05c5117	Say what changed, for the crates that pin this by commit	CHANGELOG.md
+2a59bd6	Test the ML-KEM and Argon2 entry points that nothing executed	SECURITY.md tests/src/tests_kdfs.adb tests/src/tests_key_exchange.adb
+c99f8d0	Expose the ECDSA DER signature encoder	CHANGELOG.md README.md SECURITY.md src/cryptolib-certificates.adb src/cryptolib-ecdsa.adb src/cryptolib-ecdsa.ads tests/src/tests_curves.adb
+463c1ab	Add Argon2.Verify, so the recommended password hash can be checked safely	CHANGELOG.md README.md SECURITY.md src/cryptolib-argon2.adb src/cryptolib-argon2.ads tests/src/tests_kdfs.adb
+5bf2c11	Say what this crate is, at the length a reader has time for	alire.toml

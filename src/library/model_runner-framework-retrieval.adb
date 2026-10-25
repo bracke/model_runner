@@ -1978,7 +1978,11 @@ package body Model_Runner.Framework.Retrieval is
                if Path = Word then
                   Score := Score + 900;
                   Append (Why, "its path");
-               elsif Name = Word or else Ada.Directories.Base_Name (Name) = Word then
+               --  A word of a sentence is not a file's name: "Hold file
+               --  streaming buffers on the heap" asks for no STREAMING.md.
+               elsif (Name = Word or else Ada.Directories.Base_Name (Name) = Word)
+                 and then not Plain.Contains (Word)
+               then
                   Score := Score + 600;
                   Append (Why, "its name");
                end if;

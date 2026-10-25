@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: webframework's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+f51a6dd	Static files cached in place, without the cache library	.github/workflows/ci.yml alire.toml src/web-static.adb tests/alire.toml webframework_logging/alire.toml webframework_logging/src/webframework_logging.adb webframework_logging/src/webframework_logging.ads
+b006d4d	Let the metrics scrape be authenticated	example_app/src/app-guards.adb example_app/src/app-guards.ads example_app/src/example_app.adb webframework_metrics/src/webframework_metrics.adb webframework_metrics/src/webframework_metrics.ads
+149e7ef	Serve OpenMetrics dialect + trace exemplar in the demo	example_app/src/app-trace_demo.adb example_app/src/example_app.adb webframework_metrics/src/webframework_metrics.adb webframework_metrics/src/webframework_metrics.ads
+884abef	Say what this crate is, at the length a reader has time for	alire.toml
+8fb3202	Demo REST routing in example_app: DELETE /api/projects/:id	example_app/src/app-pages.adb example_app/src/app-pages.ads example_app/src/example_app.adb example_app/templates/projects.html
+0868f57	Render the SSE demo page through the app's template layout	example_app/src/app-pages.adb example_app/src/app-pages.ads example_app/src/app-server_events.adb example_app/src/app-server_events.ads example_app/src/example_app.adb example_app/templates/live-events.html
+af076a0	Demo Server-Sent Events in example_app	example_app/src/app-nav.adb example_app/src/app-server_events.adb example_app/src/app-server_events.ads example_app/src/example_app.adb example_app/static/sse-demo.js src/web-application.adb src/web-application.ads
+c12ce59	fix scaffolder so generated apps build	webframework_cli/src/webframework_cli.adb
+e1b6adf	scaffold config-ready apps	webframework_cli/src/webframework_cli.adb
+40cae43	Integrate config into example_app	example_app/alire.toml example_app/example_app.toml example_app/src/example_app.adb

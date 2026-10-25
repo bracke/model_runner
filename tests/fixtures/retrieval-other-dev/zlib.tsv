@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: zlib's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+249a2b9	Hold file streaming buffers on the heap	src/zlib.adb
+56d3b4f	qualify the toolchain-guard argument list	check_zlib/src/check_zlib.adb
+95d5f1d	LZMA encoder tables on the heap (frame 1.7 MB -> 8.5 KB)	src/zlib-lzma_encoder.adb
+35792b6	qualify argument lists now that project_tools also takes vectors	tools/check_all.adb tools/seven_zip_interop_check.adb
+cfff01d	a decode that fits the task is not an insufficient-memory failure	tests/src/zlib_insufficient_memory_tests.adb
+b8410cb	packed Huffman decode entries and pending-bit buffer; zstd bitstream built on the heap	src/zlib-huffman.ads src/zlib-zstd_bits.adb src/zlib.ads
+174a604	inflate a whole zlib stream with a table-driven decoder	src/zlib-fast_inflate.adb src/zlib-fast_inflate.ads src/zlib.adb
+9e67642	reject reserved gzip FLG bits in Read_GZip_Header	src/zlib.adb tests/src/zlib_gzip_broader_compat_tests.adb
+3f11bd5	Say what this crate is, at the length a reader has time for	alire.toml
+ac3dce0	validate the gzip FHCRC and expose header length	src/zlib.adb src/zlib.ads tests/src/zlib_gzip_broader_compat_tests.adb

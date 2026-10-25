@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: versionlib's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+84316b7	Compile a grep pattern into its caller's expression	CHANGELOG.md src/version-grep.adb
+e3aa038	status --ignored does not enter an ignored directory with nothing tracked under it	CHANGELOG.md src/version-status.adb src/version-working_tree.adb src/version-working_tree.ads
+28d14a5	status --ignored: configuration held, sparse asked once, directory exclusion kept per directory; tree entries by memchr in diffs	CHANGELOG.md src/version-diff.adb src/version-ignore.adb src/version-ignore.ads src/version-objects.adb src/version-objects.ads src/version-status.adb
+9fff6dd	Object ids compared in place; tree entries found by mode width and memchr	CHANGELOG.md src/version-objects.adb
+b5fc73b	raw tree walks, in-place pack lookup, fast ignore shapes	CHANGELOG.md src/version-diff.adb src/version-ignore.adb src/version-object_cache.adb src/version-objects.adb src/version-pack.adb src/version-path_safety.adb tests/src/version-maintenance-tests.adb
+43e9073	walk two trees' levels in their order, without maps	CHANGELOG.md src/version-diff.adb
+dbfe3c4	a call runs from a task's own directory, and pack files can be let go	CHANGELOG.md src/version-files.adb src/version-files.ads src/version-hooks.adb src/version-pack.adb src/version-pack.ads tests/src/version-worktrees-tests.adb
+4c56330	scan the last line the way git scans it	CHANGELOG.md src/version-grep.adb
+b5613f5	align sibling branches here too	.github/workflows/ci.yml
+d890574	a merge result is written the way a checkout writes it	CHANGELOG.md src/version-merge.adb src/version-platform.adb src/version-platform.ads

@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: i18n's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+33d2dc7	CLDR coordinate units for latitude and longitude hemispheres	CHANGELOG.md cldr/src/generate_cldr_export.adb cldr/upstream/source_manifest.txt tests/src/i18n-platform_tests-test_week_data.adb
+e7c3986	drop an unneeded use clause in Plural_Ranges	src/i18n-plural_ranges.adb
+9a49810	import every CLDR interval skeleton	CHANGELOG.md cldr/src/generate_cldr_export.adb cldr/upstream/source_manifest.txt src/i18n-date_time_format-format_time_interval_into.adb tests/src/i18n-platform_tests-test_date_intervals.adb
+45090df	join every date-time skeleton's date and time by CLDR's glue	CHANGELOG.md src/i18n-date_time_format.adb
+730e898	fall back where a date interval pattern drops the field that differs	src/i18n-date_time_format-format_date_interval_into.adb tests/src/i18n-platform_tests-test_date_intervals.adb
+a39ae61	number ranges and approximate numbers by CLDR's miscPatterns	CHANGELOG.md cldr/src/generate_cldr_data.adb cldr/src/generate_cldr_export.adb cldr/upstream/source_manifest.txt src/i18n-number_format-format_pattern_into.adb src/i18n-number_format.adb tests/src/i18n-platform_tests-test_date_intervals.adb
+fc2b7bb	percent sign before the digits where CLDR puts it; short fraction stems in number skeletons	CHANGELOG.md cldr/src/generate_cldr_data.adb cldr/src/generate_cldr_export.adb src/i18n-number_format.adb
+a2e0167	export the year-month and year-quarter date skeletons	CHANGELOG.md cldr/raw/coverage.txt cldr/src/generate_cldr_export.adb cldr/upstream/source_manifest.txt
+973d0d9	data store shares one section table per file instead of copying it per lookup	CHANGELOG.md src/i18n-data_store.adb
+7717183	per-numbering-system number symbols; data store section cap raised and loud	CHANGELOG.md cldr/src/generate_cldr_data.adb cldr/src/generate_cldr_export.adb cldr/src/import_cldr_raw.adb cldr/upstream/source_manifest.txt src/i18n-data_store.adb src/i18n-number_format.adb

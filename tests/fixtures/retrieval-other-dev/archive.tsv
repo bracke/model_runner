@@ -1,0 +1,11 @@
+# Retrieval tuned on another tree: archive's own commit subjects, area label cut, judged by the files each changed. The tuning set for other trees; retrieval-other/ stays held out.
+f00d53f	work the settings panel from the keyboard	src/archive-gui_frame.adb src/archive-gui_runtime.adb src/archive-model.adb src/archive-model.ads src/archive-ui.adb src/archive-ui.ads tests/src/archive_suite-core.adb
+53cef8f	read the message catalogue from beside the program	src/archive-localization.adb
+90f2f24	install macOS libraries from the runner's Homebrew snapshot	.github/workflows/ci.yml
+764c5a9	draw text at the size and advance the layouts measure with	src/archive-application-windows.adb src/archive-gui_frame.adb src/archive-gui_runtime.adb src/archive-ui.ads
+c2ca029	build against guikit's settings field Display text	src/archive-gui_frame.adb
+e3cd35f	make the zlib-backed gzip/RAR readers pass check_all	src/archive-archives-readers-rar.adb tests/src/check_all.adb
+d477fcb	parse the gzip header through zlib, not an app copy	alire.toml src/archive-archives-readers-gzip.adb
+6c8d5f9	read .cab through zlib, not an app copy	src/archive-archives-readers-cab.adb
+6691073	read ar/cpio/ISO/RAR through zlib, not app copies	src/archive-archives-readers-ar.adb src/archive-archives-readers-cpio.adb src/archive-archives-readers-iso.adb src/archive-archives-readers-rar.adb src/archive-archives-readers-zlib_bridge.adb src/archive-archives-readers-zlib_bridge.ads
+dc08183	back Archive.Verification.CRC32 with CryptoLib, not a hand-rolled copy	src/archive-verification-crc32.adb src/archive-verification-crc32.ads
