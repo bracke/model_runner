@@ -58,12 +58,24 @@ package body Agent_Trial is
       --  Whether the task is run only when named, being a measure of one
       --  thing rather than of a coding agent's work.
       Named_Only : Boolean := False;
+
+      --  A tree of another project beside this one to run it in, cloned
+      --  as it is, where the task is one there: the search's ranking
+      --  measured where a person's work is, not in a project the trial
+      --  writes. "" for the trial's own.
+      Tree : Unbounded_String;
+
+      --  The path a right answer names, where the task asks to find
+      --  something: said with the outcome, as the report has it or not.
+      Expect : Unbounded_String;
    end record;
 
-   function T (Name, Kind, Notes : String; Tested, Styled, Convention, Large, Named_Only : Boolean := False)
+   function T
+     (Name, Kind, Notes : String; Tested, Styled, Convention, Large, Named_Only : Boolean := False;
+      Tree, Expect : String := "")
      return Trial_Task is
      ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled,
-       Convention, Large, Named_Only));
+       Convention, Large, Named_Only, To_Unbounded_String (Tree), To_Unbounded_String (Expect)));
 
    --  The ledger's task: a subprogram named, no file.
    Large_Notes : constant String :=
@@ -88,7 +100,7 @@ package body Agent_Trial is
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 7) of Trial_Task :=
+   Tasks : constant array (1 .. 9) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -115,12 +127,26 @@ package body Agent_Trial is
       T ("described", "implementation",
          "In the ledger, the procedure that moves a book's balance by an amount and counts one entry more"
          & " must raise Constraint_Error when the amount is negative, instead of applying it. Change only"
-         & " that procedure.", Tested => True, Large => True, Named_Only => True)];
+         & " that procedure.", Tested => True, Large => True, Named_Only => True),
+      --  A thing to find in another project's tree, said by what it does:
+      --  humanize's 893 sources, notifications' 106. Named only, and only
+      --  where the tree is beside this one.
+      T ("humanize", "analysis",
+         "Find the function that works out what share of a disk's capacity is taken, as a whole percentage"
+         & " rounded to the nearest, for the label that says how full a disk is. Report its file, its name and"
+         & " the line it is declared on. Change no file.",
+         Named_Only => True, Tree => "humanize", Expect => "src/humanize-bytes.adb"),
+      T ("notifications", "analysis",
+         "Find the function that decides whether a request to send to a number of recipients is let through,"
+         & " turned away for now, turned away for good, or held for a person to approve. Report its file, its"
+         & " name and the line it is declared on. Change no file.",
+         Named_Only => True, Tree => "notifications", Expect => "notifications-abuse_control")];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
    procedure Make_Project
-     (Root : String; Tested : Boolean; Convention : Boolean := False; Large : Boolean := False)
+     (Root : String; Tested : Boolean; Convention : Boolean := False; Large : Boolean := False;
+      Tree : String := "")
    is
       procedure Put (Name, Text : String) is
          File : Ada.Text_IO.File_Type;
@@ -153,6 +179,23 @@ package body Agent_Trial is
    begin
       if Ada.Directories.Exists (Root) then
          Ada.Directories.Delete_Tree (Root);
+      end if;
+      --  Another project's tree, as its last commit holds it.
+      if Tree /= "" then
+         declare
+            Line    : Hostkit.String_Vectors.Vector;
+            Ignored : Hostkit.Process.Process_Outcome;
+         begin
+            for Word of Hostkit.String_Vectors.Vector'
+              ([To_Unbounded_String ("clone"), To_Unbounded_String ("--quiet"), To_Unbounded_String ("--local"),
+                To_Unbounded_String (Tree), To_Unbounded_String (Root)])
+            loop
+               Line.Append (Word);
+            end loop;
+            Ignored := Hostkit.Process.Run_Captured
+              ("git", Line, Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Hostkit.Fs.Null_Device);
+         end;
+         return;
       end if;
       Ada.Directories.Create_Path (Root & "/src");
       Put ("src/calc.ads",
@@ -333,9 +376,14 @@ package body Agent_Trial is
 
    function Check_Line
      (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True; Styled : Boolean := False;
-      Convention : Boolean := False)
+      Convention : Boolean := False; Tree : Boolean := False)
       return String is
-     (if Tested
+     --  Another project's tree is not built: the task there only finds.
+     (if Tree
+      then "/reconfigure add set.execution.allowed test profile.analysis=""look: test -d src"""
+           & " profile.build=""look: test -d src"" profile.tests=""look: test -d src"""
+           & Time_Bound & Knowledge_Words (Knowledge) & " confirm=yes"
+      elsif Tested
       then "/reconfigure add set.execution.allowed gnatmake obj/test_add" & (if Convention then " sh" else "") & " "
            & "profile.checks=""build: gnatmake -q" & Style_Words (Styled) & " -D obj -aIsrc src/main.adb -o obj/main;"
            & " test: gnatmake -q" & Style_Words (Styled)
@@ -532,7 +580,14 @@ package body Agent_Trial is
          File   : Ada.Text_IO.File_Type;
          Commit : Unbounded_String := To_Unbounded_String ("unknown");
          Mark   : Unbounded_String;
+         --  The tree the program run was built in, not this one: a trial
+         --  of another build (--program) was kept under this tree's commit.
+         Built  : constant String :=
+           Ada.Directories.Containing_Directory
+             (Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Program)));
       begin
+         Words.Append (To_Unbounded_String ("-C"));
+         Words.Append (To_Unbounded_String (Built));
          Words.Append (To_Unbounded_String ("rev-parse"));
          Words.Append (To_Unbounded_String ("--short"));
          Words.Append (To_Unbounded_String ("HEAD"));
@@ -546,6 +601,8 @@ package body Agent_Trial is
             Ada.Directories.Delete_File (Said);
          end if;
          Words.Clear;
+         Words.Append (To_Unbounded_String ("-C"));
+         Words.Append (To_Unbounded_String (Built));
          Words.Append (To_Unbounded_String ("status"));
          Words.Append (To_Unbounded_String ("--porcelain"));
          Words.Append (To_Unbounded_String ("--untracked-files=no"));
@@ -666,6 +723,11 @@ package body Agent_Trial is
                      Name    : constant String := To_String (One.Name);
                      Root    : constant String := Ada.Directories.Full_Name ("obj/agent-trial-" & Name);
                      Project : constant String := Ada.Directories.Simple_Name (Root);
+                     --  The other project's tree the task is run in, beside
+                     --  this one; "" for the trial's own.
+                     Tree_At : constant String :=
+                       (if Length (One.Tree) = 0 then ""
+                        else Ada.Directories.Full_Name ("../../" & To_String (One.Tree)));
                      Pair    : Hostkit.Pty.Pair;
                      Spawned : Hostkit.Spawn.Options;
                      Child   : Hostkit.Spawn.Process_Handle;
@@ -673,6 +735,9 @@ package body Agent_Trial is
                      Seen    : Unbounded_String;
                      --  What the screen showed wrongly, said with the outcome.
                      Display_Faults : Unbounded_String;
+                     --  Whether the report named what a right answer names:
+                     --  ", right", ", wrong", or "" where nothing is expected.
+                     Answered : Unbounded_String;
                      Began   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
                      --  When the screen last grew, and how often a stall was
                      --  written down: a session that shows nothing for five
@@ -890,10 +955,14 @@ package body Agent_Trial is
                         return Text (At_It + 8 .. Last);
                      end Made_Task;
                   begin
-                     if Carried then
+                     if Tree_At /= "" and then not Ada.Directories.Exists (Tree_At) then
+                        Ada.Text_IO.Put_Line ("agent-trial " & Name & ": no tree at " & Tree_At);
+                        Clean := False;
+                        return;
+                     elsif Carried then
                         Reset_Sources (Root);
                      else
-                        Make_Project (Root, One.Tested, One.Convention, One.Large);
+                        Make_Project (Root, One.Tested, One.Convention, One.Large, Tree_At);
                      end if;
                      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                         Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");
@@ -956,11 +1025,12 @@ package body Agent_Trial is
                                  Send ("");
                               end if;
                               if Carried
-                                or else (Wait_For ("initialized", 30.0)
+                                or else (Wait_For ("initialized", (if Tree_At = "" then 30.0 else 300.0))
                                          and then (Hostkit.Process.Locate ("gnatmake") = ""
                                                    or else (Send_Then
                                                               (Check_Line (One.Tested, Apart, Knowledge,
-                                                                           One.Styled, One.Convention))
+                                                                           One.Styled, One.Convention,
+                                                                           Tree_At /= ""))
                                                             and then Wait_For ("is now revision", 30.0))))
                               then
                                  --  What the harness proposed from what earlier
@@ -978,7 +1048,11 @@ package body Agent_Trial is
                                     end loop;
                                  end if;
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
-                                       & (if To_String (One.Kind) = "implementation"
+                                       --  In another project's tree, the project
+                                       --  itself by its crate's name, as /init
+                                       --  took it: its files ranked for the task.
+                                       & (if Tree_At /= "" then " component=" & To_String (One.Tree)
+                                          elsif To_String (One.Kind) = "implementation"
                                           then " component=" & Project else "")
                                        & " notes=" & To_String (One.Notes));
                                  if Wait_For ("created TASK-", 30.0) then
@@ -1216,13 +1290,30 @@ package body Agent_Trial is
                               Closed : constant String := Figure ("thoughts closed at their budget:");
                               Made   : constant String := Figure ("tokens generated:");
                               Held   : constant String := Figure ("context at most:");
+                              --  Whether the report names the path a right
+                              --  answer names: the last report, from its
+                              --  status to the harness's record of the work.
+                              Screen    : constant String := Plain (To_String (Seen));
+                              Report_At : constant Natural :=
+                                Ada.Strings.Fixed.Index (Screen, "status:", Going => Ada.Strings.Backward);
+                              Record_At : constant Natural :=
+                                (if Report_At = 0 then 0
+                                 else Ada.Strings.Fixed.Index
+                                        (Screen (Report_At .. Screen'Last), "the work as the harness recorded it"));
+                              Answer    : constant String :=
+                                (if Length (One.Expect) = 0 then ""
+                                 elsif Report_At > 0 and then Record_At > Report_At
+                                   and then Ada.Strings.Fixed.Index
+                                              (Screen (Report_At .. Record_At), To_String (One.Expect)) > 0
+                                 then ", right" else ", wrong");
                               Ending : constant String :=
-                                (if Ada.Strings.Fixed.Index (Text, "complete") > 0 then "complete"
+                                (if Ada.Strings.Fixed.Index (Text, "complete") > 0 then "complete" & Answer
                                  elsif Ada.Strings.Fixed.Index (Text, "ran out of time") > 0 then "out of time"
                                  elsif Ada.Strings.Fixed.Index (Text, "blocked") > 0 then "blocked"
                                  elsif Ada.Strings.Fixed.Index (Text, "failed") > 0 then "failed"
                                  else "other");
                            begin
+                              Answered := To_Unbounded_String (Answer);
                               Append (Rows (Which),
                                       "  run" & Integer'Image (Round) & ": " & Ending
                                       & [1 .. Natural'Max (1, 12 - Ending'Length) => ' ']
@@ -1236,6 +1327,10 @@ package body Agent_Trial is
                               & (if Repeats = 1 then ""
                                  else " (run" & Integer'Image (Round) & " of" & Integer'Image (Repeats) & ")")
                               & ": " & To_String (Outcome)
+                              & (if Length (One.Expect) = 0 then ""
+                                 else LF & "  answer: " & (if To_String (Answered) = ", right"
+                                                            then "names " else "does not name ")
+                                      & To_String (One.Expect))
                               & LF & "  time:" & Integer'Image (Integer (Took)) & " s; calls:" & Natural'Image (Calls)
                               & (if Length (Used) = 0 then "" else " (" & To_String (Used) & ")")
                               & LF & "  " & (if Length (Figures) = 0 then "(no work figures)" else To_String (Figures))
