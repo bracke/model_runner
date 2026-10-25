@@ -1,5 +1,6 @@
 with Device_Clock;
 with Ada.Calendar;
+with Ada.Environment_Variables;
 with Ada.Text_IO;
 
 with Model_Runner.Bytes;
@@ -752,8 +753,14 @@ package body Device_Bench is
 
          type Values is access N.Real_Array;
 
-         Rows    : constant := 16384;
-         Columns : constant := 2048;
+         --  A layer's own shape where BENCH_ROWS and BENCH_COLUMNS name
+         --  one: a format's rate at one shape is not its rate at another.
+         function Sized (Name : String; Unsaid : Positive) return Positive
+         is (if Ada.Environment_Variables.Exists (Name)
+             then Positive'Value (Ada.Environment_Variables.Value (Name)) else Unsaid);
+
+         Rows    : constant Positive := Sized ("BENCH_ROWS", 16384);
+         Columns : constant Positive := Sized ("BENCH_COLUMNS", 2048);
          Vectors : constant Positive := Tile_Vectors;
          Seconds : constant Duration := 0.40;
 
@@ -1159,8 +1166,13 @@ package body Device_Bench is
 
          type Values is access N.Real_Array;
 
-         Rows    : constant := 8192;
-         Columns : constant := 4096;
+         --  A layer's own shape where BENCH_ROWS and BENCH_COLUMNS name one.
+         function Sized (Name : String; Unsaid : Positive) return Positive
+         is (if Ada.Environment_Variables.Exists (Name)
+             then Positive'Value (Ada.Environment_Variables.Value (Name)) else Unsaid);
+
+         Rows    : constant Positive := Sized ("BENCH_ROWS", 8192);
+         Columns : constant Positive := Sized ("BENCH_COLUMNS", 4096);
          Seconds : constant Duration := 0.30;
 
          --  The vectors a product carries: a generated token's one, and a

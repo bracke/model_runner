@@ -252,6 +252,10 @@ package body Perplexity_Run is
            (Item.Engine, Item.Container, Item.Source,
             Backend => Backend, Threads => Threads, Status => Status,
             Repack => Repack,
+            --  The positions a pass holds, a chunk's: unsaid, a model's own
+            --  context was planned -- 262,144 positions, 18 GiB for a 27B --
+            --  and the device refused it while a chunk takes 512.
+            Context => Chunk,
             Stretch =>
               (Kind =>
                  (if Stretch = "none" then L.As_Trained
