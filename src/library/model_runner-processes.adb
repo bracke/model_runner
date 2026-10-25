@@ -69,7 +69,7 @@ package body Model_Runner.Processes is
       if not Ada.Directories.Exists (Path) then
          return;
       end if;
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=no");
       declare
          Size : constant Natural := Natural (Stream_IO.Size (File));
          Head : constant Natural := Stream_Most * 3 / 5;

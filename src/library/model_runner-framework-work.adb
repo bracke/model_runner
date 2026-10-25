@@ -333,7 +333,7 @@ package body Model_Runner.Framework.Work is
       if not Ada.Directories.Exists (Path) then
          return Absent_Print;
       end if;
-      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
       loop
          Ada.Streams.Stream_IO.Read (File, Piece, Last);
          exit when Last < Piece'First;

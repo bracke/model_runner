@@ -94,7 +94,7 @@ package body Model_Runner.CLI.Init is
             File : Ada.Text_IO.File_Type;
             Text : Unbounded_String;
          begin
-            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
             while not Ada.Text_IO.End_Of_File (File) loop
                Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
             end loop;
@@ -620,7 +620,7 @@ package body Model_Runner.CLI.Init is
                File  : Ada.Text_IO.File_Type;
                Found : Unbounded_String;
             begin
-               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+               Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
                while not Ada.Text_IO.End_Of_File (File) and then Found = Null_Unbounded_String loop
                   declare
                      Bare  : constant String :=
@@ -985,7 +985,7 @@ package body Model_Runner.CLI.Init is
                                     Has_Test : Boolean := False;
                                  begin
                                     if Ada.Directories.Exists (Manifest) then
-                                       Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Manifest);
+                                       Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Manifest, Form => "shared=no");
                                        while not Ada.Text_IO.End_Of_File (File) loop
                                           if Ada.Strings.Fixed.Index (Ada.Text_IO.Get_Line (File), """test""") > 0 then
                                              Has_Test := True;

@@ -1888,7 +1888,7 @@ package body Model_Runner.CLI.Project_Commands is
       File   : Ada.Text_IO.File_Type;
    begin
       if Ada.Directories.Exists (Kept) then
-         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Kept);
+         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Kept, Form => "shared=no");
          while not Ada.Text_IO.End_Of_File (File) loop
             Result.Append (Ada.Text_IO.Get_Line (File));
          end loop;
@@ -2009,7 +2009,7 @@ package body Model_Runner.CLI.Project_Commands is
             elsif not Ada.Directories.Exists (Whole) then
                return True;
             end if;
-            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Whole);
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Whole, Form => "shared=no");
             while not Found and then not Ada.Text_IO.End_Of_File (File) loop
                declare
                   Line : constant String := Ada.Text_IO.Get_Line (File);
@@ -2813,7 +2813,8 @@ package body Model_Runner.CLI.Project_Commands is
                      File : Ada.Text_IO.File_Type;
                      Name : constant String := Ada.Directories.Simple_Name (Found);
                   begin
-                     Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Ada.Directories.Full_Name (Found));
+                     Ada.Text_IO.Open
+                       (File, Ada.Text_IO.In_File, Ada.Directories.Full_Name (Found), Form => "shared=no");
                      while not Ada.Text_IO.End_Of_File (File) loop
                         declare
                            Line : constant String := Ada.Text_IO.Get_Line (File);

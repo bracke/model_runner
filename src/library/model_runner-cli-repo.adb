@@ -920,7 +920,7 @@ package body Model_Runner.CLI.Repo is
                            File : File_Type;
                            Line_Number : Natural := 0;
                         begin
-                           Open (File, In_File, Hostkit.Fs.Join (Directory, Path));
+                           Open (File, In_File, Hostkit.Fs.Join (Directory, Path), Form => "shared=no");
                            while not End_Of_File (File) loop
                               declare
                                  Line : constant String := Get_Line (File);
@@ -1190,7 +1190,7 @@ package body Model_Runner.CLI.Repo is
                                     use Ada.Streams.Stream_IO;
                                     File : File_Type;
                                  begin
-                                    Open (File, In_File, Hostkit.Fs.Join (Directory, Path));
+                                    Open (File, In_File, Hostkit.Fs.Join (Directory, Path), Form => "shared=no");
                                     if Size (File) < 2_000_000 then
                                        declare
                                           Whole : String (1 .. Natural (Size (File)));
@@ -1370,7 +1370,7 @@ package body Model_Runner.CLI.Repo is
                                        use Ada.Streams.Stream_IO;
                                        File : File_Type;
                                     begin
-                                       Open (File, In_File, Hostkit.Fs.Join (Directory, Path));
+                                       Open (File, In_File, Hostkit.Fs.Join (Directory, Path), Form => "shared=no");
                                        declare
                                           Whole : String (1 .. Natural (Size (File)));
                                        begin
@@ -1620,7 +1620,7 @@ package body Model_Runner.CLI.Repo is
                                     end;
                                  elsif Read_Files < 200 and then Size (Path) < 1_000_000 then
                                     Read_Files := Read_Files + 1;
-                                    Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                                    Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
                                     while not Ada.Text_IO.End_Of_File (File) loop
                                        Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
                                     end loop;
@@ -1695,7 +1695,7 @@ package body Model_Runner.CLI.Repo is
                                  declare
                                     File : Ada.Text_IO.File_Type;
                                  begin
-                                    Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Argument);
+                                    Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Argument, Form => "shared=no");
                                     while not Ada.Text_IO.End_Of_File (File) loop
                                        Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
                                     end loop;

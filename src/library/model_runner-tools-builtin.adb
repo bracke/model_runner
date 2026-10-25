@@ -553,7 +553,7 @@ package body Model_Runner.Tools.Builtin is
       then
          raise Ada.IO_Exceptions.Data_Error;
       end if;
-      Open (File, In_File, Path);
+      Open (File, In_File, Path, Form => "shared=no");
       while not End_Of_File (File) loop
          Read (File, Block, Last);
          exit when Last < Block'First;
@@ -802,7 +802,7 @@ package body Model_Runner.Tools.Builtin is
       Buf  : Stream_Element_Array (1 .. 2048);
       Last : Stream_Element_Offset;
    begin
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=no");
       Stream_IO.Read (File, Buf, Last);
       Stream_IO.Close (File);
       for I in 1 .. Last loop
@@ -839,7 +839,7 @@ package body Model_Runner.Tools.Builtin is
       Buf  : Buffer := new Stream_Element_Array (1 .. Stream_Element_Offset (Limit));
       Last : Stream_Element_Offset := 0;
    begin
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=no");
       Stream_IO.Read (File, Buf.all, Last);
       Stream_IO.Close (File);
       return Result : String (1 .. Natural (Last)) do
@@ -881,7 +881,7 @@ package body Model_Runner.Tools.Builtin is
       then
          return Failure ("" & Path & " is a directory: list_directory " & Path & " lists it");
       end if;
-      Open (File, In_File, Disk);
+      Open (File, In_File, Disk, Form => "shared=no");
       declare
          Total : constant Natural := Natural (Size (File));
       begin

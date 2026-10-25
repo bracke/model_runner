@@ -53,7 +53,7 @@ package body Model_Runner.Hub.Store is
       if not Ada.Directories.Exists (Manifest (Directory)) then
          return Result;
       end if;
-      IO.Open (File, IO.In_File, Manifest (Directory));
+      IO.Open (File, IO.In_File, Manifest (Directory), Form => "shared=no");
       declare
          Text  : String (1 .. Natural (IO.Size (File)));
          Start : Positive := 1;

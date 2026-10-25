@@ -78,7 +78,7 @@ package body Model_Runner.Tools.Editing is
       end if;
       --  A slice at a time onto the text: a file of megabytes copied whole
       --  onto a stack, twice, overflowed a worker's.
-      Stream_IO.Open (File, Stream_IO.In_File, Disk);
+      Stream_IO.Open (File, Stream_IO.In_File, Disk, Form => "shared=no");
       declare
          Block : Stream_Element_Array (1 .. 64 * 1024);
          Last  : Stream_Element_Offset;
@@ -180,7 +180,7 @@ package body Model_Runner.Tools.Editing is
       Stop    : Boolean := False;
    begin
       Cut := False;
-      Stream_IO.Open (File, Stream_IO.In_File, Disk);
+      Stream_IO.Open (File, Stream_IO.In_File, Disk, Form => "shared=no");
       while not Stop and then not Stream_IO.End_Of_File (File) loop
          Stream_IO.Read (File, Block, Last);
          for Index in Block'First .. Last loop

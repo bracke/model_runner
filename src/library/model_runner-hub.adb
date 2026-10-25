@@ -1004,7 +1004,7 @@ package body Model_Runner.Hub is
       Seen    : String (1 .. 64);
    begin
       CryptoLib.Hashes.Initialize_SHA256 (Context);
-      Stream_IO.Open (In_File, Stream_IO.In_File, Path);
+      Stream_IO.Open (In_File, Stream_IO.In_File, Path, Form => "shared=no");
       while not Stream_IO.End_Of_File (In_File) loop
          Stream_IO.Read (In_File, Buffer, Last);
          CryptoLib.Hashes.Update (Context, Buffer (1 .. Last));
@@ -1084,7 +1084,7 @@ package body Model_Runner.Hub is
          then
             return "";
          end if;
-         Stream_IO.Open (Note, Stream_IO.In_File, Path & ".sha256");
+         Stream_IO.Open (Note, Stream_IO.In_File, Path & ".sha256", Form => "shared=no");
          String'Read (Stream_IO.Stream (Note), Held);
          Stream_IO.Close (Note);
          return Held;
@@ -1156,7 +1156,7 @@ package body Model_Runner.Hub is
       declare
          Text : String (1 .. Natural (Ada.Directories.Size (Path & ".joining")));
       begin
-         Stream_IO.Open (Note, Stream_IO.In_File, Path & ".joining");
+         Stream_IO.Open (Note, Stream_IO.In_File, Path & ".joining", Form => "shared=no");
          String'Read (Stream_IO.Stream (Note), Text);
          Stream_IO.Close (Note);
          Keep := Interfaces.Unsigned_64'Value (Text);
@@ -1171,7 +1171,7 @@ package body Model_Runner.Hub is
             Last   : Stream_Element_Offset;
             Left   : Interfaces.Unsigned_64 := Keep;
          begin
-            Stream_IO.Open (In_File, Stream_IO.In_File, Path);
+            Stream_IO.Open (In_File, Stream_IO.In_File, Path, Form => "shared=no");
             Stream_IO.Create (Out_File, Stream_IO.Out_File, Path & ".cut");
             while Left > 0 loop
                declare
@@ -1438,7 +1438,7 @@ package body Model_Runner.Hub is
             declare
                In_File : Stream_IO.File_Type;
             begin
-               Stream_IO.Open (In_File, Stream_IO.In_File, Chunk_Path (K));
+               Stream_IO.Open (In_File, Stream_IO.In_File, Chunk_Path (K), Form => "shared=no");
                while not Stream_IO.End_Of_File (In_File) loop
                   Stream_IO.Read (In_File, Buffer, Last);
                   Stream_IO.Write (Out_File, Buffer (1 .. Last));
@@ -1507,7 +1507,7 @@ package body Model_Runner.Hub is
       declare
          Text : String (1 .. Natural (Ada.Directories.Size (Part & ".revision")));
       begin
-         Stream_IO.Open (Note, Stream_IO.In_File, Part & ".revision");
+         Stream_IO.Open (Note, Stream_IO.In_File, Part & ".revision", Form => "shared=no");
          String'Read (Stream_IO.Stream (Note), Text);
          Stream_IO.Close (Note);
          return Text;

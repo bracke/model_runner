@@ -153,7 +153,7 @@ package body Model_Runner.Drafts is
          return "";
       end if;
 
-      Stream_IO.Open (Handle, Stream_IO.In_File, Sidecar);
+      Stream_IO.Open (Handle, Stream_IO.In_File, Sidecar, Form => "shared=no");
       Stream_IO.Read (Handle, Bytes, Last);
       Stream_IO.Close (Handle);
 

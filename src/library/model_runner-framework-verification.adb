@@ -538,7 +538,7 @@ package body Model_Runner.Framework.Verification is
       if Where = "" or else not Ada.Directories.Exists (Where) then
          return "not found: " & Program;
       end if;
-      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Where);
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Where, Form => "shared=no");
       while not Ada.Streams.Stream_IO.End_Of_File (File) loop
          Ada.Streams.Stream_IO.Read (File, Block, Last);
          for Index in Block'First .. Last loop

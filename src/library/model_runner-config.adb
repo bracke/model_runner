@@ -84,7 +84,7 @@ package body Model_Runner.Config is
       --  than Text_IO: a settings file is small and read whole, and nothing
       --  in this layer reaches for Text_IO. An implausibly large file is
       --  left unread rather than pulled onto the stack.
-      Open (File, In_File, Path);
+      Open (File, In_File, Path, Form => "shared=no");
       declare
          Length : constant Ada.Streams.Stream_IO.Count := Size (File);
       begin

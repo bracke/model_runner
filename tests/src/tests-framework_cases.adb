@@ -20593,6 +20593,31 @@ package body Tests.Framework_Cases is
                  & Natural'Image (Rv.Indexed_Reads - Read_At));
       end;
 
+      --  A record another task has open -- the configuration, which
+      --  every search reads -- is read all the same: the run time's own
+      --  open refused one already open, unless both said how to share it.
+      declare
+         Held : Ada.Streams.Stream_IO.File_Type;
+         Read : Boolean := True;
+      begin
+         Ada.Streams.Stream_IO.Open (Held, Ada.Streams.Stream_IO.In_File, S.Root (Store) & "/config/resolved.rec");
+         begin
+            Hits := Find ("parse");
+            declare
+               Config : constant Model_Runner.Framework.Records.Item :=
+                 Model_Runner.Framework.Configurations.Required (Store);
+               pragma Unreferenced (Config);
+            begin
+               null;
+            end;
+         exception
+            when others =>
+               Read := False;
+         end;
+         Ada.Streams.Stream_IO.Close (Held);
+         Assert (Read, "the configuration was not read while another task had it open");
+      end;
+
       --  One tree's install stopped part way lets every tree's index go:
       --  another tree's search answers after as before.
       declare

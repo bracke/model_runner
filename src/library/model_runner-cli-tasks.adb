@@ -1608,7 +1608,7 @@ package body Model_Runner.CLI.Tasks is
             Ada.Environment_Variables.Clear ("LC_ALL");
          end if;
          pragma Unreferenced (Ran);
-         Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Output);
+         Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Output, Form => "shared=no");
          while not Ada.Text_IO.End_Of_File (File_In) loop
             Pres.Put_Diff_Line (Screen, Ada.Text_IO.Get_Line (File_In));
          end loop;
@@ -5039,7 +5039,7 @@ package body Model_Runner.CLI.Tasks is
                                        File_In : Ada.Text_IO.File_Type;
                                     begin
                                        if Rp."=" (Rp.File_At (Graph, Index).Role, Rp.Source) then
-                                          Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Path);
+                                          Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Path, Form => "shared=no");
                                           while not Ada.Text_IO.End_Of_File (File_In) loop
                                              if Ada.Strings.Fixed.Index
                                                   (Ada.Text_IO.Get_Line (File_In), Requirement) > 0
@@ -5206,7 +5206,7 @@ package body Model_Runner.CLI.Tasks is
                            File_In : Ada.Text_IO.File_Type;
                         begin
                            if Ada.Directories.Exists (Merged) then
-                              Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Merged);
+                              Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Merged, Form => "shared=no");
                               while not Ada.Text_IO.End_Of_File (File_In) loop
                                  Append (Text, Ada.Text_IO.Get_Line (File_In) & ASCII.LF);
                               end loop;
@@ -5400,7 +5400,7 @@ package body Model_Runner.CLI.Tasks is
                         Has  : Boolean := False;
                      begin
                         if Ada.Directories.Exists (Path) then
-                           Ada.Text_IO.Open (In_File, Ada.Text_IO.In_File, Path);
+                           Ada.Text_IO.Open (In_File, Ada.Text_IO.In_File, Path, Form => "shared=no");
                            while not Has and then not Ada.Text_IO.End_Of_File (In_File) loop
                               declare
                                  Line : constant String := Ada.Text_IO.Get_Line (In_File);
@@ -6989,7 +6989,7 @@ package body Model_Runner.CLI.Tasks is
                               use Ada.Streams.Stream_IO;
                               File : File_Type;
                            begin
-                              Open (File, In_File, Path);
+                              Open (File, In_File, Path, Form => "shared=no");
                               declare
                                  Text : String (1 .. Natural (Size (File)));
                               begin
@@ -7102,7 +7102,7 @@ package body Model_Runner.CLI.Tasks is
                            declare
                               File_In : Ada.Text_IO.File_Type;
                            begin
-                              Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Output);
+                              Ada.Text_IO.Open (File_In, Ada.Text_IO.In_File, Output, Form => "shared=no");
                               while not Ada.Text_IO.End_Of_File (File_In) loop
                                  Pres.Put_Diff_Line (Screen, Ada.Text_IO.Get_Line (File_In));
                               end loop;

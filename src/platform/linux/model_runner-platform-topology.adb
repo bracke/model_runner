@@ -46,7 +46,7 @@ package body Model_Runner.Platform.Topology is
                --  skipped, not taken for an answer of nought -- a machine
                --  with one core offline counted its threads instead.
                if Ada.Directories.Exists (Path) then
-                  Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                  Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
 
                   declare
                      --  Bounded. A line longer than this is not a sibling
@@ -112,7 +112,7 @@ package body Model_Runner.Platform.Topology is
          return 0;
       end if;
 
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
 
       declare
          Line : String (1 .. 512);

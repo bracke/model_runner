@@ -162,7 +162,7 @@ package body Model_Runner.CLI.Checkpoint is
    begin
       Loaded := False;
       Status := E.Success;
-      Open (File, In_File, Path);
+      Open (File, In_File, Path, Form => "shared=no");
 
       --  No larger than the conversation it could hold, written out: its
       --  rendering's bound twice over, for the fields' lengths and the

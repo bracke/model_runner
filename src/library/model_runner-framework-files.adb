@@ -60,7 +60,7 @@ package body Model_Runner.Framework.Files is
    begin
       Print := Null_Unbounded_String;
       Status := E.Success;
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=no");
       loop
          Stream_IO.Read (File, Piece, Last);
          exit when Last < Piece'First;
@@ -113,7 +113,7 @@ package body Model_Runner.Framework.Files is
          Buffer := new String (1 .. Natural (Size));
       end;
 
-      Stream_IO.Open (File, Stream_IO.In_File, Path);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=no");
 
       --  Read whole, as bytes: String'Read goes a small block at a time,
       --  and the state's indexes are megabytes.
@@ -140,13 +140,16 @@ package body Model_Runner.Framework.Files is
       Text := To_Unbounded_String (Buffer.all);
       Free (Buffer);
    exception
-      when others =>
+      when Failure : others =>
          if Stream_IO.Is_Open (File) then
             Stream_IO.Close (File);
          end if;
          Free (Buffer);
          Status := E.Make (E.IO_Read_Failed);
          E.Add_Text (Status, "path", Path, E.Param_Path);
+         E.Add_Text
+           (Status, "detail",
+            Ada.Exceptions.Exception_Name (Failure) & ": " & Ada.Exceptions.Exception_Message (Failure));
    end Read_Text;
 
    ----------------

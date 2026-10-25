@@ -1390,7 +1390,7 @@ package body Model_Runner.CLI.Intents is
                                              & " retires it, and text=... revises it by hand"));
                         end;
                      else
-                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
                         while not Ada.Text_IO.End_Of_File (File) loop
                            Ada.Strings.Unbounded.Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
                         end loop;
@@ -2739,7 +2739,7 @@ package body Model_Runner.CLI.Intents is
                      if Length (Held.Provenance) > 0 and then To_String (Held.Source) not in "" | "user"
                        and then Ada.Directories.Exists (Path)
                      then
-                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path);
+                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
                         while not Ada.Text_IO.End_Of_File (File) loop
                            Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
                         end loop;

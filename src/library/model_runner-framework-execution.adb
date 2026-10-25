@@ -998,7 +998,7 @@ package body Model_Runner.Framework.Execution is
                   Last  : Stream_Element_Offset;
                   Tail  : String (1 .. Natural (Want));
                begin
-                  Stream_IO.Open (File, Stream_IO.In_File, Output);
+                  Stream_IO.Open (File, Stream_IO.In_File, Output, Form => "shared=no");
                   Stream_IO.Set_Index (File, Size - Want + 1);
                   Stream_IO.Read (File, Piece, Last);
                   Stream_IO.Close (File);
@@ -1176,9 +1176,9 @@ package body Model_Runner.Framework.Execution is
               & Indented (To_String (Result.Output));
          begin
             if Ada.Directories.Exists (Harness_Log (Project)) then
-               Open (File, Append_File, Harness_Log (Project));
+               Open (File, Append_File, Harness_Log (Project), Form => "shared=no");
             else
-               Create (File, Out_File, Harness_Log (Project));
+               Create (File, Out_File, Harness_Log (Project), Form => "shared=no");
             end if;
             String'Write (Stream (File), Line);
             Close (File);

@@ -96,7 +96,7 @@ package body Model_Runner.CLI.Execute.Support is
          Result := new String (1 .. Natural (Size) + 1);
       end;
 
-      Open (Handle, In_File, Path);
+      Open (Handle, In_File, Path, Form => "shared=no");
 
       --  Read line by line and restore the separators, so that the prompt
       --  keeps its whitespace and newlines exactly.

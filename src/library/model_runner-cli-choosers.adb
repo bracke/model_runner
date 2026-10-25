@@ -1024,7 +1024,7 @@ package body Model_Runner.CLI.Choosers is
       if History_File = "" or else not Ada.Directories.Exists (History_File) then
          return;
       end if;
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, History_File);
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, History_File, Form => "shared=no");
       while not Ada.Text_IO.End_Of_File (File) loop
          History.Append (Ada.Text_IO.Get_Line (File));
       end loop;

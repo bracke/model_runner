@@ -341,7 +341,7 @@ package body Model_Runner.Qwen_Image.Prompts is
       if Path = "" or else not Ada.Directories.Exists (Path) then
          return;
       end if;
-      Open (Handle, In_File, Path);
+      Open (Handle, In_File, Path, Form => "shared=no");
       declare
          Data  : constant Stream_Access := Stream (Handle);
          Said  : String (Magic'Range);

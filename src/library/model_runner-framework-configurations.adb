@@ -213,7 +213,7 @@ package body Model_Runner.Framework.Configurations is
          if not Ada.Directories.Exists (Path) then
             return "";
          end if;
-         Open (File, In_File, Path);
+         Open (File, In_File, Path, Form => "shared=no");
          declare
             Text : String (1 .. Natural'Min (Natural (Size (File)), 65_536));
          begin
@@ -4016,7 +4016,8 @@ package body Model_Runner.Framework.Configurations is
       if Unreadable (Status) then
          raise Configuration_Unavailable
            with "the project's configuration cannot be read: "
-                & E.Error_Code'Image (Status.Code);
+                & E.Error_Code'Image (Status.Code)
+                & (if E.Text_Of (Status, "detail") = "" then "" else " (" & E.Text_Of (Status, "detail") & ")");
       end if;
       return (if E.Is_Error (Status) then None else Value);
    end Required;

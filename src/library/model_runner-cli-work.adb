@@ -85,7 +85,7 @@ package body Model_Runner.CLI.Work is
       declare
          Text : String (1 .. Natural (Ada.Directories.Size (Path)));
       begin
-         Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+         Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
          String'Read (Ada.Streams.Stream_IO.Stream (File), Text);
          Ada.Streams.Stream_IO.Close (File);
          return Text;
@@ -228,7 +228,7 @@ package body Model_Runner.CLI.Work is
             File  : File_Type;
             Magic : String (1 .. 4) := [others => ' '];
          begin
-            Open (File, In_File, Model_Runner.Platform.Resolve_Model_Path (Named));
+            Open (File, In_File, Model_Runner.Platform.Resolve_Model_Path (Named), Form => "shared=no");
             if Size (File) >= 4 then
                String'Read (Stream (File), Magic);
             end if;
