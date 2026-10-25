@@ -20268,6 +20268,31 @@ package body Tests.Framework_Cases is
                                & " tried again in 3600 s)"),
                  "a wait past the bound was not held to it: " & Said);
 
+         --  A search that gave up waiting while another read the file: once
+         --  that read fails, the failure is what is said of the file -- not
+         --  the waiting search's "still being read", of a read nobody makes.
+         declare
+            procedure Wait_Then_Fail is
+               Inner : constant Rv.Hit_Lists.Vector := Find ("quokka");
+               pragma Unreferenced (Inner);
+            begin
+               raise Storage_Error with "the test's own, after a search gave up waiting";
+            end Wait_Then_Fail;
+            Missed : F.Name_Lists.Vector;
+         begin
+            Rv.Retry_Indexing_After (0.0);
+            Rv.Wait_For_Claims_At_Most (0.0);
+            Put_File (To_String (Notes), "Now it says quokka and parse while waited on." & LF);
+            Model_Runner.Race_Points.Arm (Model_Runner.Race_Points.Index_Installs, Wait_Then_Fail'Unrestricted_Access);
+            Hits := Find ("quokka");
+            Rv.Wait_For_Claims_At_Most (60.0);
+            Missed := Rv.Not_Searched (Rp.Scan (Fresh_Root (Store), Rp.Roots_Of (Store)), Fresh_Root (Store));
+            Assert ((for some One of Missed => Begins (One, "docs/notes.txt: could not be indexed")),
+                    "a read that failed was not said as one");
+            Assert (not (for some One of Missed => Ada.Strings.Fixed.Index (One, "still being read") > 0),
+                    "a file whose read failed was still said to be being read");
+         end;
+
          --  Noting a failure raising in its turn: the noting is given up,
          --  the search answers from what it has, the index's lock is not
          --  left held -- another task takes it -- the pass is given back
@@ -21491,6 +21516,51 @@ package body Tests.Framework_Cases is
          Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", "src/main.adb:6", "", True, Failed));
          Assert (not Failed and then Ada.Strings.Fixed.Index (To_String (Said), "6:    P.Parse_Number") > 0,
                  "the declaration holding a line was not shown");
+         --  Line 0, and a line past the file's end: said, not raised.
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", "src/main.adb:0", "", True, Failed));
+         Assert (Failed and then Ada.Strings.Fixed.Index (To_String (Said), "line 0") > 0,
+                 "line 0 was not refused: " & To_String (Said));
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", "src/main.adb:9999999", "", True, Failed));
+         Assert (Failed, "a line past the file's end was not refused: " & To_String (Said));
+
+         --  A declaration longer than an answer holds: shown to its last
+         --  whole line that fits, and the rest named by a reference that
+         --  shows it.
+         declare
+            Long_Text : Unbounded_String :=
+              To_Unbounded_String ("package Long_One is" & LF & "   procedure Many" & LF);
+            Cut_At    : Natural;
+            Line_End  : Natural;
+         begin
+            for Index in 1 .. 150 loop
+               Append (Long_Text, (if Index = 1 then "     (" else "      ")
+                       & "P_" & Ada.Strings.Fixed.Trim (Index'Image, Ada.Strings.Left) & " : Integer := 0"
+                       & (if Index = 150 then ");" else ";") & "  --  " & (1 .. 60 => 'x') & LF);
+            end loop;
+            Append (Long_Text, "end Long_One;" & LF);
+            Put_File (Fresh_Root (Store) & "/src/long_one.ads", To_String (Long_Text));
+            Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", "Long_One.Many", "", True, Failed));
+            Cut_At := Ada.Strings.Fixed.Index (To_String (Said), "not shown for room");
+            Assert (not Failed and then Length (Said) <= Cq.Answer_Most and then Cut_At > 0
+                    and then Ada.Strings.Fixed.Index (To_String (Said), "(cut at") = 0,
+                    "a long declaration was cut at the answer's end, not before it: " & Length (Said)'Image);
+            --  The reference named, given back, shows the lines not shown.
+            declare
+               Rest_At : constant Natural :=
+                 Ada.Strings.Fixed.Index (To_String (Said), "src/long_one.ads:", From => Cut_At);
+               Space   : constant Natural := Ada.Strings.Fixed.Index (To_String (Said), " ", From => Rest_At);
+               Ref     : constant String := Slice (Said, Rest_At, Space - 1);
+               Dash    : constant Natural := Ada.Strings.Fixed.Index (Ref, "-");
+               First   : constant String := Ref (Ref'First + 17 .. Dash - 1);
+            begin
+               Line_End := Ada.Strings.Fixed.Index (To_String (Said), First & ": ");
+               Assert (Rest_At > 0 and then Line_End = 0,
+                       "the lines not shown were shown, or not named: " & Ref);
+               Said := To_Unbounded_String (Cq.Retrieve (Store, "declaration", Ref, "", True, Failed));
+               Assert (not Failed and then Ada.Strings.Fixed.Index (To_String (Said), LF & First & ":") > 0,
+                       "the reference to the lines not shown did not show them: " & Ref);
+            end;
+         end;
          Said := To_Unbounded_String
            (Cq.Retrieve (Store, "declaration", "src/parser.ads:1-2@0123456789abcdef", "", True, Failed));
          Assert (Failed and then Ada.Strings.Fixed.Index (To_String (Said), "has changed") > 0,

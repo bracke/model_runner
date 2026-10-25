@@ -1277,6 +1277,10 @@ package body Model_Runner.Framework.Retrieval is
                   begin
                      Release_Claim (Key, Pass.Id);
                      Pass.Claimed.Exclude (Key);
+                     --  The failure is what is said of it now: a waiting
+                     --  search's "still being read" went on beside it, of a
+                     --  file nobody was reading any more.
+                     Unsearched.Exclude (Key);
                      Model_Runner.Race_Points.Here (Model_Runner.Race_Points.Index_Failure_Noted);
                      if not Fault and then Failed.Contains (Key)
                        and then To_String (Failed.Element (Key).Print) = Prints (At_Stale)

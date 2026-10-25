@@ -277,6 +277,16 @@ package body Model_Runner.Framework.Code_Queries is
           else Text (Text'First .. Text'First + Answer_Most - 1) & ASCII.LF
                & "(cut at" & Natural'Image (Answer_Most) & " characters: ask for less)");
 
+      --  What the excerpts may fill of an answer, the rest kept for what
+      --  is said after them: past it an excerpt is shown to its last whole
+      --  line that fits, and what is not shown is named by a reference that
+      --  shows it. Cut at the end instead, an answer lost the declarations
+      --  after the first long one, and ended in the middle of a line.
+      Room : constant Natural := Answer_Most - 1_500;
+
+      --  The excerpts and lines not shown for room, each by its reference.
+      Not_Shown : Unbounded_String;
+
       --  An excerpt as the agent is shown it: where from, then its lines
       --  numbered.
       procedure Show (Piece : Rv.Excerpt) is
@@ -284,15 +294,37 @@ package body Model_Runner.Framework.Code_Queries is
          Row   : Natural := Piece.First;
          Start : Positive := Text'First;
       begin
+         if Length (Said) + 200 > Room then
+            Append (Not_Shown, "  " & Rv.Reference (Piece) & " (" & Rv.Provenance (Piece) & ")" & ASCII.LF);
+            return;
+         end if;
          Append (Said, "-- " & Rv.Provenance (Piece) & ASCII.LF);
          for At_Char in Text'Range loop
             if Text (At_Char) = ASCII.LF then
-               Append (Said, Image (Row) & ": " & Text (Start .. At_Char - 1) & ASCII.LF);
+               declare
+                  Line : constant String := Image (Row) & ": " & Text (Start .. At_Char - 1) & ASCII.LF;
+               begin
+                  if Length (Said) + Line'Length > Room then
+                     Append (Not_Shown, "  " & To_String (Piece.Path) & ":" & Image (Row) & "-" & Image (Piece.Last)
+                             & "@" & To_String (Piece.Fingerprint) & " (the rest of the lines above)" & ASCII.LF);
+                     return;
+                  end if;
+                  Append (Said, Line);
+               end;
                Row := Row + 1;
                Start := At_Char + 1;
             end if;
          end loop;
       end Show;
+
+      --  What was not shown for room, said before the answer ends.
+      procedure Say_Not_Shown is
+      begin
+         if Length (Not_Shown) > 0 then
+            Append (Said, "not shown for room -- find kind declaration with one of these shows it:" & ASCII.LF
+                    & To_String (Not_Shown));
+         end if;
+      end Say_Not_Shown;
 
       function Shown (Path : String) return Boolean
       is (Model_Runner.Tools.Builtin.May_Read_Found (Path));
@@ -385,7 +417,13 @@ package body Model_Runner.Framework.Code_Queries is
                   Failed := True;
                   return "error: " & Asked (Asked'First .. Colon - 1) & " is not yours to read";
                end if;
-               Rv.Around (Tree, Asked (Asked'First .. Colon - 1), Positive'Value (Asked (Colon + 1 .. Asked'Last)),
+               --  Line 0 is no line: said, where it was taken to be one and
+               --  raised into the tool's caller.
+               if Natural'Value (Asked (Colon + 1 .. Asked'Last)) = 0 then
+                  Failed := True;
+                  return "error: " & Asked & " names line 0; a file's lines are numbered from 1";
+               end if;
+               Rv.Around (Tree, Asked (Asked'First .. Colon - 1), Natural'Value (Asked (Colon + 1 .. Asked'Last)),
                           120, Piece, Status);
                if Model_Runner.Errors.Is_Error (Status) then
                   Failed := True;
@@ -408,6 +446,7 @@ package body Model_Runner.Framework.Code_Queries is
                   end loop;
                end;
             end if;
+            Say_Not_Shown;
             Append (Said, "an excerpt's ref, given to find kind declaration, shows those lines again"
                     & " while the file is unchanged; read_file reads more" & ASCII.LF);
             return Bounded (To_String (Said));
