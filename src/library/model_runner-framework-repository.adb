@@ -14,7 +14,6 @@ with Hostkit.Metadata;
 
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Files;
-with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository.Languages;
 with Model_Runner.Framework.Schemas;
 
@@ -411,8 +410,10 @@ package body Model_Runner.Framework.Repository is
    -- Component_Roots --
    ---------------------
 
-   function Component_Roots (Item : Stores.Store; Component : String) return Name_Lists.Vector is
-      Config : Records.Item;
+   function Component_Roots (Item : Stores.Store; Component : String) return Name_Lists.Vector
+   is (Component_Roots (Configurations.Required (Item), Component));
+
+   function Component_Roots (Config : Records.Item; Component : String) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
 
       --  Whether the word from From on says NAME=VALUE: the roots end
@@ -428,7 +429,6 @@ package body Model_Runner.Framework.Repository is
          return False;
       end Setting_At;
    begin
-      Config := Configurations.Required (Item);
       declare
          Text  : constant String := Records.Get (Config, "map.component." & Component);
          Mark  : constant Natural := Ada.Strings.Fixed.Index (Text, "roots=");
@@ -459,7 +459,10 @@ package body Model_Runner.Framework.Repository is
    -- In_Component --
    ------------------
 
-   function In_Component (Item : Stores.Store; Component, Path : String) return Boolean is
+   function In_Component (Item : Stores.Store; Component, Path : String) return Boolean
+   is (In_Component (Configurations.Required (Item), Component, Path));
+
+   function In_Component (Config : Records.Item; Component, Path : String) return Boolean is
       function Clean (Text : String) return String is
          Result : String := Text;
          Last   : Natural := Result'Last;
@@ -483,7 +486,7 @@ package body Model_Runner.Framework.Repository is
       function Closeness (Named : String) return Integer is
          Best : Integer := -1;
       begin
-         for Root of Component_Roots (Item, Named) loop
+         for Root of Component_Roots (Config, Named) loop
             declare
                R : constant String := Clean (Root);
             begin
@@ -501,15 +504,13 @@ package body Model_Runner.Framework.Repository is
          return Best;
       end Closeness;
 
-      Mine   : constant Integer := Closeness (Component);
-      Config : Records.Item;
+      Mine : constant Integer := Closeness (Component);
    begin
       if Mine < 0 then
          return False;
       end if;
       --  Where roots overlap, the file is the component's whose root holds
       --  it most closely: src/proc is proc's, not src's.
-      Config := Configurations.Required (Item);
       for Index in 1 .. Records.Field_Count (Config) loop
          declare
             Field : constant String := Records.Field_Name (Config, Index);

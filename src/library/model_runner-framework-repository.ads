@@ -3,6 +3,7 @@ private with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 
 --  What the repository holds, found without a model.
@@ -253,6 +254,20 @@ package Model_Runner.Framework.Repository is
    --  @param Path The file, relative to the project.
    --  @return True when it lies in one of the component's roots.
    function In_Component (Item : Stores.Store; Component, Path : String) return Boolean;
+
+   --  Component_Roots and In_Component by a configuration already read:
+   --  for a caller asking of many files at once.
+   --
+   --  @param Config The project's configuration.
+   --  @param Component The component.
+   --  @return Its roots; none where it declares none.
+   function Component_Roots (Config : Records.Item; Component : String) return Name_Lists.Vector;
+
+   --  @param Config The project's configuration.
+   --  @param Component The component.
+   --  @param Path The file, relative to the project.
+   --  @return True when it lies in one of the component's roots.
+   function In_Component (Config : Records.Item; Component, Path : String) return Boolean;
 
    --  What a file's place says it is for.
    --

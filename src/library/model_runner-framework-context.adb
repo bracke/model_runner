@@ -1184,6 +1184,27 @@ package body Model_Runner.Framework.Context is
             Project : constant String := Tree_Of (Item, Tree);
             Wanted  : constant String := Lower (To_String (Component));
 
+            --  Which files are the component's: those under the roots the
+            --  configuration places it at; any where it is the project
+            --  itself, one that lists and places no component -- then the
+            --  ones a search of the task's words finds; else those whose
+            --  paths hold its name.
+            Placed : constant Boolean :=
+              Wanted /= "" and then not Repository.Component_Roots (Config, To_String (Component)).Is_Empty;
+            Whole_Project : constant Boolean :=
+              Wanted /= "" and then not Placed and then Records.Get (Config, "set.components") = ""
+              and then Natural (Tasks.Components_Of (Config).Length) = 1
+              and then Tasks.Components_Of (Config).First_Element = To_String (Component);
+
+            function Of_Component (Path : String) return Boolean
+            is (if Placed then Repository.In_Component (Config, To_String (Component), Path)
+                elsif Whole_Project then True
+                else Ada.Strings.Fixed.Index (Lower (Path), Wanted) > 0);
+
+            --  How many of its files the project itself offers as its
+            --  component's.
+            Project_Files_Most : constant := 12;
+
             --  The files the task names, for what uses them to follow.
             Named_Files : Name_Lists.Vector;
 
@@ -1540,7 +1561,10 @@ package body Model_Runner.Framework.Context is
                         File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
                         Path : constant String := To_String (File.Path);
                      begin
-                        if Ada.Strings.Fixed.Index (Lower (Path), Wanted) > 0
+                        --  The project itself: of its files, those the
+                        --  search found, not all of them.
+                        if Of_Component (Path)
+                          and then (not Whole_Project or else Score_Of (Path) > 0)
                           and then File.Role in Repository.Source | Repository.Test
                         then
                            Order.Append (Path);
@@ -1566,6 +1590,11 @@ package body Model_Runner.Framework.Context is
                         end if;
                      end;
                   end loop;
+                  --  The project itself: its best files only, not every file
+                  --  a word of the task is in.
+                  if Whole_Project and then Natural (Order.Length) > Project_Files_Most then
+                     Order.Set_Length (Ada.Containers.Count_Type (Project_Files_Most));
+                  end if;
                   for Path of Order loop
                      declare
                         Text : Unbounded_String;
@@ -1619,7 +1648,8 @@ package body Model_Runner.Framework.Context is
                         File : constant Repository.File_Entry := Repository.File_At (Graph, Index);
                      begin
                         if File.Role = Repository.Test
-                          and then Ada.Strings.Fixed.Index (Lower (To_String (File.Path)), Wanted) > 0
+                          and then not Whole_Project
+                          and then Of_Component (To_String (File.Path))
                         then
                            Append (Listed, To_String (File.Path) & ASCII.LF);
                         end if;

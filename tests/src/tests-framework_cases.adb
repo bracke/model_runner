@@ -2719,7 +2719,8 @@ package body Tests.Framework_Cases is
    procedure Task_Project
      (Store  : in out S.Store;
       Leaf   : String;
-      Policy : String := "")
+      Policy : String := "";
+      Name   : String := "")
    is
       Project  : constant String := Fresh (Leaf);
       Registry : Tp.Registry;
@@ -2735,7 +2736,11 @@ package body Tests.Framework_Cases is
          & "task_kind analysis = estimate?" & LF
          & "map task_field.estimate = text" & LF
          & "scalar task.profile.implementation = tests" & LF
-         & "profile tests = run the tests" & LF & Policy));
+         & "profile tests = run the tests" & LF & Policy
+         & (if Name = "" then "" else "input project_name" & LF)));
+      if Name /= "" then
+         Given.Include ("project_name", Name);
+      end if;
       Tp.Compose (Registry, "work", Composed, Status);
       Cf.Prepare (Composed, Project, Given, Planned, Status);
       Cf.Initialize (Store, Project, Planned, Done, Status);
@@ -5671,6 +5676,56 @@ package body Tests.Framework_Cases is
               "a context did not show the declaration its task said by what it does");
       S.Close (Store);
    end Contexts_Show_What_A_Task_Describes;
+
+   --  A component's files are those its placement holds, not those whose
+   --  paths happen to hold its name; and where the component is the
+   --  project itself, by its name, they are the ones its task is about --
+   --  no path holds that name, and the context held none of them.
+   procedure Contexts_Take_A_Component_By_Its_Place
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Id     : Unbounded_String;
+      Made   : Cx.Built;
+      Given  : Tk.Field_Map;
+   begin
+      Task_Project (Store, "context-placed", "map component.ledger = roots=src/books/" & LF);
+      Dirs.Create_Path (Fresh_Root (Store) & "/src/books");
+      Put_File (Fresh_Root (Store) & "/src/books/accounts.adb", "--  Where the zebra's account is kept." & LF);
+      Put_File (Fresh_Root (Store) & "/src/ledger_notes.adb", "--  The okapi's notes." & LF);
+      Tk.Create (Store, Change, Fields ("Mend it", "implementation", "component", "ledger"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a task in a placed component was not made: " & Code_Of (Status));
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Made, Status);
+      Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "zebra") > 0,
+              "a context did not hold a file its component is placed at");
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "okapi") = 0,
+              "a context held a file outside its component whose path holds the component's name");
+      S.Close (Store);
+
+      Task_Project (Store, "context-whole", Name => "marsupials");
+      Dirs.Create_Path (Fresh_Root (Store) & "/src");
+      Put_File (Fresh_Root (Store) & "/src/hops.adb", "--  How far a kangaroo hops in one bound." & LF);
+      Put_File (Fresh_Root (Store) & "/src/burrows.adb", "--  How deep the quokka digs." & LF);
+      Assert (Tk.Components (Store) = Model_Runner.Framework.Name_Lists.To_Vector ("marsupials", 1),
+              "a project that lists no component was not one by its name");
+      Given := Fields ("Mend it", "implementation", "component", "marsupials");
+      Given.Include ("notes", "a kangaroo hops farther in one bound than it is told");
+      Tk.Create (Store, Change, Given, "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a task in the project itself was not made: " & Code_Of (Status));
+      Cx.Build (Store, To_String (Id), Cx.Profile (Store, ""), Made, Status);
+      Assert (E.Is_Ok (Status), "a context was not built: " & Code_Of (Status));
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "How far a kangaroo hops") > 0,
+              "a context in the project itself did not hold the file its task is about");
+      Assert (Ada.Strings.Fixed.Index (Cx.Rendered (Made), "quokka") = 0,
+              "a context in the project itself held a file its task is not about");
+      S.Close (Store);
+   end Contexts_Take_A_Component_By_Its_Place;
 
    --  A call is recorded when it starts and ends once; an answer is held to
    --  its contract.
@@ -21696,6 +21751,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Contexts_Show_What_A_Task_Describes'Access,
          "a context shows the declaration its task says by what it does");
+      Register_Routine
+        (T, Contexts_Take_A_Component_By_Its_Place'Access,
+         "a component's files are those its place holds, or the project's the task is about");
       Register_Routine
         (T, Invocations_Are_Recorded'Access,
          "a model call is recorded once ended and its answer held to a"
