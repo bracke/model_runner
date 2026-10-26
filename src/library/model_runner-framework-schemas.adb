@@ -613,7 +613,9 @@ package body Model_Runner.Framework.Schemas is
                for Item of Known.Rules.all loop
                   if Names (Item, Field) then
                      Named := True;
-                     if not Holds (Item, Records.Get (Value, Field)) then
+                     --  Text holds anything: its value not fetched, a
+                     --  graph's 2.5 million fields took seconds to check.
+                     if Item.Kind /= Text_Field and then not Holds (Item, Records.Field_Value (Value, Index)) then
                         Refuse ("its " & Field & " is not what the field"
                                 & " holds: it takes "
                                 & (case Item.Kind is

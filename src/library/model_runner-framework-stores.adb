@@ -1250,11 +1250,15 @@ package body Model_Runner.Framework.Stores is
                      declare
                         Text   : Unbounded_String;
                         Read   : E.Error_Info;
-                        Parsed : Records.Item;
+
+                        procedure Pass (Field, Value : String) is null;
                      begin
+                        --  Framed whole, field by field to its end: parsed
+                        --  into a record as well, a graph's 600 MB took
+                        --  seconds to be found whole.
                         Files.Read_Text (Staged, Text, Read);
                         if E.Is_Ok (Read) then
-                           Records.Parse (To_String (Text), Staged, Parsed, Read);
+                           Records.Walk (To_String (Text), Staged, Pass'Access, Read);
                         end if;
                         if E.Is_Error (Read) then
                            Unrecoverable

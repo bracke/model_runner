@@ -2,13 +2,11 @@ with Interfaces;
 with Ada.Unchecked_Deallocation;
 with Ada.Calendar;
 with Ada.Characters.Handling;
-with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Directories;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
-with Ada.Strings.Hash;
 with Ada.Strings.Maps;
 
 with Hostkit.Fs;
@@ -230,18 +228,33 @@ package body Model_Runner.Framework.Repository is
    procedure Share_Names (Found : in out Graph) is
       Held : Shared_Names.Map;
 
+      --  The last relation's file and finder: the next is mostly from the
+      --  same, taken without asking Held -- asked for all three, a graph
+      --  of 2.5 million relations took two seconds.
+      Last_From, Last_Origin : Unbounded_String;
+
       procedure Share (Name : in out Unbounded_String) is
       begin
          Name := Shared (Held, To_String (Name));
       end Share;
+
+      procedure Share_As_Last (Name : in out Unbounded_String; Last : in out Unbounded_String) is
+      begin
+         if Name /= Last then
+            Share (Name);
+            Last := Name;
+         else
+            Name := Last;
+         end if;
+      end Share_As_Last;
    begin
       for Index in 1 .. Natural (Found.Relations.Length) loop
          declare
             Link : Relation renames Found.Relations.Reference (Index);
          begin
-            Share (Link.From);
+            Share_As_Last (Link.From, Last_From);
             Share (Link.To);
-            Share (Link.Origin);
+            Share_As_Last (Link.Origin, Last_Origin);
          end;
       end loop;
    end Share_Names;
@@ -1309,6 +1322,40 @@ package body Model_Runner.Framework.Repository is
       return (if Dot = 0 then Name else Name (Dot + 1 .. Name'Last));
    end Last_Part;
 
+   --------------
+   -- Catch_Up --
+   --------------
+
+   procedure Catch_Up (Into : in out Graph) is
+      procedure Note (Map : in out Places_By_Name.Map; Key : String; Place : Positive) is
+      begin
+         if not Map.Contains (Key) then
+            Map.Insert (Key, Place_Lists.Empty_Vector);
+         end if;
+         Map.Reference (Key).Append (Place);
+      end Note;
+   begin
+      --  Fewer than it looked at: another graph's, begun again.
+      if Into.Depends_Seen > Natural (Into.Relations.Length) then
+         Into.Depends_By_Unit.Clear;
+         Into.Depends_Seen := 0;
+      end if;
+      for Place in Into.Depends_Seen + 1 .. Natural (Into.Relations.Length) loop
+         if Into.Relations (Place).Kind = Depends_On then
+            Note (Into.Depends_By_Unit, To_String (Into.Relations (Place).From), Place);
+         end if;
+      end loop;
+      Into.Depends_Seen := Natural (Into.Relations.Length);
+      if Into.Symbols_Seen > Natural (Into.Symbols.Length) then
+         Into.Symbols_By_Last.Clear;
+         Into.Symbols_Seen := 0;
+      end if;
+      for Place in Into.Symbols_Seen + 1 .. Natural (Into.Symbols.Length) loop
+         Note (Into.Symbols_By_Last, Lower (Last_Part (To_String (Into.Symbols (Place).Name))), Place);
+      end loop;
+      Into.Symbols_Seen := Natural (Into.Symbols.Length);
+   end Catch_Up;
+
    --  The references a file makes to the symbols of the units it withs
    --  and its own: every word that is such a symbol's last name.
    procedure Find_References
@@ -1321,6 +1368,7 @@ package body Model_Runner.Framework.Repository is
       Seen   : Name_Lists.Vector;
       Visible : Name_Sets.Set;
       Places : Word_Places.Map;
+      Chosen : Place_Lists.Vector;
 
       --  The file's package renamings, each new name lowered to the
       --  lowered name it stands for: Rp.Find_Symbols, where package Rp
@@ -1387,20 +1435,25 @@ package body Model_Runner.Framework.Repository is
       --  The units whose names this file can use: its own, what it
       --  withs, and the parents of each, which a child sees and a with of
       --  a child names too.
+      Catch_Up (Into);
       Seen.Append (Unit);
       declare
          Withs : Name_Lists.Vector;
          Lines : Name_Lists.Vector;
       begin
-         for Link of Into.Relations loop
-            if Link.Kind = Depends_On and then To_String (Link.From) = Unit then
-               Seen.Append (To_String (Link.To));
-               if Ada.Strings.Fixed.Index (To_String (Link.Where), Path & ":") = 1 then
-                  Withs.Append (To_String (Link.To));
-                  Lines.Append (To_String (Link.Where));
-               end if;
-            end if;
-         end loop;
+         if Into.Depends_By_Unit.Contains (Unit) then
+            for Place of Into.Depends_By_Unit.Constant_Reference (Unit) loop
+               declare
+                  Link : Relation renames Into.Relations (Place);
+               begin
+                  Seen.Append (To_String (Link.To));
+                  if Ada.Strings.Fixed.Index (To_String (Link.Where), Path & ":") = 1 then
+                     Withs.Append (To_String (Link.To));
+                     Lines.Append (To_String (Link.Where));
+                  end if;
+               end;
+            end loop;
+         end if;
 
          --  Its with clause is a use of the unit it names.
          for Index in 1 .. Natural (Withs.Length) loop
@@ -1451,8 +1504,21 @@ package body Model_Runner.Framework.Repository is
          end if;
       end loop;
 
-      for Item of Into.Symbols loop
+      --  The symbols whose last name the file has as a word, in the
+      --  graph's order.
+      declare
+         package Place_Sorting is new Place_Lists.Generic_Sorting;
+      begin
+         for Position in Places.Iterate loop
+            if Into.Symbols_By_Last.Contains (Word_Places.Key (Position)) then
+               Chosen.Append (Into.Symbols_By_Last.Element (Word_Places.Key (Position)));
+            end if;
+         end loop;
+         Place_Sorting.Sort (Chosen);
+      end;
+      for Place of Chosen loop
          declare
+            Item  : constant Symbol := Into.Symbols (Place);
             Full  : constant String := To_String (Item.Name);
             Dot   : constant Natural :=
               Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
@@ -3007,8 +3073,15 @@ package body Model_Runner.Framework.Repository is
       end if;
 
       Load (Item, Kept, Read);
-      Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
-                        Read_Again, Roots_Of (Item));
+      if E.Is_Error (Read) then
+         --  None kept: the tree scanned, not refreshed from nothing -- the
+         --  same graph, its references read without asking what changed.
+         Found := Scan_All (Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item));
+         Read_Again := 0;
+      else
+         Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                           Read_Again, Roots_Of (Item));
+      end if;
       if Read_Again > 0 or else E.Is_Error (Read)
         or else Natural (Found.Files.Length) /= Natural (Kept.Files.Length)
       then
@@ -3188,6 +3261,12 @@ package body Model_Runner.Framework.Repository is
        & Lower (Confidence'Image (Link.Sure)) & Tab
        & To_String (Link.Where) & Tab & To_String (Link.Origin));
 
+   --  How long Relation_Text's text is, not made.
+   function Relation_Text_Length (Link : Relation) return Natural
+   is (Relation_Kind'Image (Link.Kind)'Length + Length (Link.From) + Length (Link.To)
+       + Derivation'Image (Link.Source)'Length + Confidence'Image (Link.Sure)'Length
+       + Length (Link.Where) + Length (Link.Origin) + 6);
+
    --  What a field takes in a record past its value: its name, its
    --  value's length, and the line breaks, about.
    Field_Bytes : constant := 32;
@@ -3237,7 +3316,7 @@ package body Model_Runner.Framework.Repository is
    begin
       Status := E.Success;
       for Link of Found.Relations loop
-         Spread := Spread + Long_Long_Integer (Relation_Text (Link)'Length + Field_Bytes);
+         Spread := Spread + Long_Long_Integer (Relation_Text_Length (Link) + Field_Bytes);
       end loop;
       --  In the order the record keeps its fields -- file, fingerprint,
       --  parts, reader, relation, symbol -- so each is set at the end.
@@ -3300,43 +3379,50 @@ package body Model_Runner.Framework.Repository is
                   end if;
                end loop;
                declare
-                  Hashes : array (1 .. Count) of Interfaces.Unsigned_64 := [others => Hash ("")];
+                  --  Each bucket's relations, so each is made into text once.
+                  type Place_List_Array is array (1 .. Count) of Place_Lists.Vector;
+                  Held : Place_List_Array;
                begin
                   for Index in 1 .. Relations loop
                      if Into (Index) > 0 then
-                        Hashes (Into (Index)) :=
-                          Hash_On (Relation_Text (Found.Relations (Index)) & ASCII.LF, Hashes (Into (Index)));
+                        Held (Into (Index)).Append (Index);
                      end if;
                   end loop;
                   for Bucket in 1 .. Count loop
                      declare
-                        Its   : constant String := Fingerprint_Of (Hashes (Bucket));
                         Field : constant String := "bucket." & Records.Numbered (Bucket, Count);
+                        Print : Interfaces.Unsigned_64 := Hash ("");
+                        Kept  : Records.Item :=
+                          Records.Create
+                            (Schemas.Repository_Schema, 1,
+                             "REPOSITORY-BUCKET-" & Records.Numbered (Bucket, Count),
+                             Stores.Current_Revision (Item, Indexes_Area, Bucket_Name (Bucket, Count)) + 1);
                         Shown : Natural := 0;
                      begin
-                        Records.Set (Value, Field, Its);
-                        if not (Had = Count and then Records.Get (Old, Field) = Its
-                                and then Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Count)))
-                        then
+                        --  Its fields set in their order: fingerprint, reader
+                        --  and then the relations are placed as they come.
+                        Records.Set (Kept, "fingerprint", "");
+                        Records.Set (Kept, "reader", Reader_Version);
+                        for Index of Held (Bucket) loop
                            declare
-                              Kept : Records.Item :=
-                                Records.Create
-                                  (Schemas.Repository_Schema, 1,
-                                   "REPOSITORY-BUCKET-" & Records.Numbered (Bucket, Count),
-                                   Stores.Current_Revision (Item, Indexes_Area, Bucket_Name (Bucket, Count)) + 1);
+                              Text : constant String := Relation_Text (Found.Relations (Index));
                            begin
-                              Records.Set (Kept, "fingerprint", Its);
-                              Records.Set (Kept, "reader", Reader_Version);
-                              for Index in 1 .. Relations loop
-                                 if Into (Index) = Bucket then
-                                    Shown := Shown + 1;
-                                    Records.Set (Kept, "relation." & Records.Numbered (Shown, Sizes (Bucket)),
-                                                 Relation_Text (Found.Relations (Index)));
-                                 end if;
-                              end loop;
-                              Stores.Put (Change, Indexes_Area, Bucket_Name (Bucket, Count), Kept);
+                              Print := Hash_On (Text & ASCII.LF, Print);
+                              Shown := Shown + 1;
+                              Records.Set (Kept, "relation." & Records.Numbered (Shown, Sizes (Bucket)), Text);
                            end;
-                        end if;
+                        end loop;
+                        declare
+                           Its : constant String := Fingerprint_Of (Print);
+                        begin
+                           Records.Set (Value, Field, Its);
+                           Records.Set (Kept, "fingerprint", Its);
+                           if not (Had = Count and then Records.Get (Old, Field) = Its
+                                   and then Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Count)))
+                           then
+                              Stores.Put (Change, Indexes_Area, Bucket_Name (Bucket, Count), Kept);
+                           end if;
+                        end;
                      end;
                   end loop;
                end;

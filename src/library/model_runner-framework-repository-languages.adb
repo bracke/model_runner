@@ -400,11 +400,12 @@ package body Model_Runner.Framework.Repository.Languages is
          end if;
       end loop;
       Seen.Append (Unit);
-      for Link of Into.Relations loop
-         if Link.Kind = Depends_On and then To_String (Link.From) = Unit then
-            Seen.Append (To_String (Link.To));
-         end if;
-      end loop;
+      Catch_Up (Into);
+      if Into.Depends_By_Unit.Contains (Unit) then
+         for Place of Into.Depends_By_Unit.Constant_Reference (Unit) loop
+            Seen.Append (To_String (Into.Relations (Place).To));
+         end loop;
+      end if;
 
       --  Where each word of the file stands, found once: looked for token
       --  by token for every symbol of the graph, a C project's scan was

@@ -1,4 +1,6 @@
 with Ada.Containers.Vectors;
+private with Ada.Containers.Indefinite_Hashed_Maps;
+private with Ada.Strings.Hash;
 
 with Ada.Strings.Unbounded;
 
@@ -728,6 +730,13 @@ private
 
    package Relation_Vectors renames Relation_Lists;
 
+   package Place_Lists is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Positive);
+
+   package Places_By_Name is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Place_Lists.Vector, Hash => Ada.Strings.Hash,
+      Equivalent_Keys => "=", "=" => Place_Lists."=");
+
    type Graph is record
       Files     : File_Vectors.Vector;
       Symbols   : Symbol_Vectors.Vector;
@@ -761,6 +770,20 @@ private
       --  references it holds itself all the same, read again since.
       Light        : Boolean := False;
       Held_Origins : Name_Lists.Vector;
+
+      --  For reading references, found once and kept up as the graph
+      --  grows: each unit's Depends_On relations by the unit, each symbol
+      --  by its last name lowered, and how many relations and symbols
+      --  they have looked at. Asked of every relation and symbol for
+      --  every file, a tree of 2.5 million references took half a minute.
+      Depends_By_Unit : Places_By_Name.Map;
+      Depends_Seen    : Natural := 0;
+      Symbols_By_Last : Places_By_Name.Map;
+      Symbols_Seen    : Natural := 0;
    end record;
+
+   --  Bring a graph's Depends_By_Unit and Symbols_By_Last up to what it
+   --  holds.
+   procedure Catch_Up (Into : in out Graph);
 
 end Model_Runner.Framework.Repository;
