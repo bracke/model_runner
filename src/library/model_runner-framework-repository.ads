@@ -416,6 +416,28 @@ package Model_Runner.Framework.Repository is
    --  @return Its Graph_Fingerprint; empty when none is kept.
    function Kept_Fingerprint (Item : Stores.Store) return String;
 
+   --  Bring a graph kept in buckets up to date without reading them all:
+   --  from its record alone -- files, symbols, what the files declare --
+   --  a refresh reads the changed files and what can see them, and only
+   --  the buckets those files' references fall in are written again. A
+   --  session in a tree of 2.5 million references read every bucket to
+   --  put one file's right.
+   --
+   --  @param Item The store.
+   --  @param Found The graph without the references of the files not
+   --    touched: for its files, symbols, declared relations and
+   --    fingerprint -- what the derived indexes are made from -- not for
+   --    a question about references.
+   --  @param Patched False where the graph is not kept in buckets, or a
+   --    bucket was not what the record said, or would grow past what a
+   --    record holds: then Current is the way, and nothing was written.
+   --  @param Status A failure keeping it.
+   procedure Patch_Current
+     (Item    : in out Stores.Store;
+      Found   : out Graph;
+      Patched : out Boolean;
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  The graph kept in the project state.
    --
    --  @param Item The store.
@@ -670,6 +692,11 @@ private
       --  Default_Roots where Known is false. Not kept with the graph.
       Within       : Roots;
       Within_Known : Boolean := False;
+
+      --  The files whose references a refresh read again, and those it
+      --  found gone: what a graph kept in buckets has to have put right in
+      --  theirs. Not kept with the graph.
+      Touched      : Name_Lists.Vector;
    end record;
 
 end Model_Runner.Framework.Repository;

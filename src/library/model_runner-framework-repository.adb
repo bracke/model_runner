@@ -1,3 +1,4 @@
+with Interfaces;
 with Ada.Unchecked_Deallocation;
 with Ada.Calendar;
 with Ada.Characters.Handling;
@@ -244,6 +245,12 @@ package body Model_Runner.Framework.Repository is
          end;
       end loop;
    end Share_Names;
+
+   --  The relations found by reading a file's uses of names -- read again
+   --  when what they name may have changed, and kept in buckets where a
+   --  graph is past one record. The rest are what the file declares.
+   function Is_Reference (Kind : Relation_Kind) return Boolean
+   is (Kind in References | Calls);
 
    procedure Add_Relation (Into : in out Graph; Item : Relation) is
       Made : Relation := Item;
@@ -1846,9 +1853,6 @@ package body Model_Runner.Framework.Repository is
             return "";
       end Print_Of;
 
-      function Is_Reference (Kind : Relation_Kind) return Boolean
-      is (Kind in References | Calls);
-
       --  The units a set of files hold, from a graph.
       function Units_Of (From : Graph; Paths : Name_Sets.Set) return Name_Lists.Vector is
          Units : Name_Lists.Vector;
@@ -2157,6 +2161,7 @@ package body Model_Runner.Framework.Repository is
                     or else (not Moved.Is_Empty and then Language_Of (Path) /= "Ada");
                   Result.Reading := To_Unbounded_String (Path);
                   if Sees then
+                     Result.Touched.Append (Path);
                      if not Changed_Set.Contains (Path) then
                         Read_Again := Read_Again + 1;
                      end if;
@@ -2176,6 +2181,9 @@ package body Model_Runner.Framework.Repository is
       Result.Reading := Null_Unbounded_String;
       Result.Within := Within;
       Result.Within_Known := True;
+      for Path of Gone loop
+         Result.Touched.Append (Path);
+      end loop;
       Share_Names (Result);
       return Result;
    end Refresh_Or_Check;
@@ -2778,17 +2786,28 @@ package body Model_Runner.Framework.Repository is
                --  Each relation's bucket, and how many each bucket holds.
                Into  : Index_List_Access := new Index_List (1 .. Natural'Max (1, Relations));
                Sizes : array (1 .. Count) of Natural := [others => 0];
+               Declared : Natural := 0;
             begin
+               --  A reference goes in its bucket; what a file declares stays
+               --  in the record (0), so that a graph without its references
+               --  -- the record alone -- is one a refresh can work from.
                for Index in 1 .. Relations loop
-                  Into (Index) := Bucket_Of (Found.Relations (Index), Count);
-                  Sizes (Into (Index)) := Sizes (Into (Index)) + 1;
+                  if Is_Reference (Found.Relations (Index).Kind) then
+                     Into (Index) := Bucket_Of (Found.Relations (Index), Count);
+                     Sizes (Into (Index)) := Sizes (Into (Index)) + 1;
+                  else
+                     Into (Index) := 0;
+                     Declared := Declared + 1;
+                  end if;
                end loop;
                declare
                   Hashes : array (1 .. Count) of Interfaces.Unsigned_64 := [others => Hash ("")];
                begin
                   for Index in 1 .. Relations loop
-                     Hashes (Into (Index)) :=
-                       Hash_On (Relation_Text (Found.Relations (Index)) & ASCII.LF, Hashes (Into (Index)));
+                     if Into (Index) > 0 then
+                        Hashes (Into (Index)) :=
+                          Hash_On (Relation_Text (Found.Relations (Index)) & ASCII.LF, Hashes (Into (Index)));
+                     end if;
                   end loop;
                   for Bucket in 1 .. Count loop
                      declare
@@ -2820,6 +2839,18 @@ package body Model_Runner.Framework.Repository is
                            end;
                         end if;
                      end;
+                  end loop;
+               end;
+               --  The declared relations, in the record itself.
+               declare
+                  Shown : Natural := 0;
+               begin
+                  for Index in 1 .. Relations loop
+                     if Into (Index) = 0 then
+                        Shown := Shown + 1;
+                        Records.Set (Value, "relation." & Records.Numbered (Shown, Declared),
+                                     Relation_Text (Found.Relations (Index)));
+                     end if;
                   end loop;
                end;
                Free (Into);
@@ -2887,10 +2918,14 @@ package body Model_Runner.Framework.Repository is
    -- Load --
    ----------
 
-   procedure Load
-     (Item   : Stores.Store;
-      Found  : out Graph;
-      Status : out Model_Runner.Errors.Error_Info)
+   --  Load, or with Record_Only the graph's record alone: its files, its
+   --  symbols and what its files declare, and no reference kept in a
+   --  bucket -- what a refresh of a large graph works from.
+   procedure Load_Kept
+     (Item        : Stores.Store;
+      Found       : out Graph;
+      Status      : out Model_Runner.Errors.Error_Info;
+      Record_Only : Boolean)
    is
       Value : Records.Item;
 
@@ -3005,6 +3040,9 @@ package body Model_Runner.Framework.Repository is
       end if;
 
       Take (Value);
+      if Record_Only then
+         return;
+      end if;
       --  Its relations in buckets: each the one the record lists, by its
       --  print, or the graph is not taken.
       if Records.Get (Value, "buckets") /= "" then
@@ -3064,7 +3102,192 @@ package body Model_Runner.Framework.Repository is
          Status := E.Make (E.Framework_Record_Malformed);
          E.Add_Text (Status, "path", "indexes/" & Index_Name, E.Param_Path);
          E.Add_Text (Status, "detail", "a line of the graph is not one");
+   end Load_Kept;
+
+   procedure Load
+     (Item   : Stores.Store;
+      Found  : out Graph;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+   begin
+      Load_Kept (Item, Found, Status, Record_Only => False);
    end Load;
+
+   -------------------
+   -- Patch_Current --
+   -------------------
+
+   procedure Patch_Current
+     (Item    : in out Stores.Store;
+      Found   : out Graph;
+      Patched : out Boolean;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Directory  : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+      Value      : Records.Item;
+      Light      : Graph;
+      Read_Again : Natural;
+      Unchanged  : Boolean;
+      Change     : Stores.Transaction;
+   begin
+      Patched := False;
+      Status := E.Success;
+      Found := (others => <>);
+      Stores.Read (Item, Indexes_Area, Index_Name, Value, Status);
+      if E.Is_Error (Status) or else Records.Get (Value, "buckets") = ""
+        or else Records.Get (Value, "reader") /= Reader_Version
+      then
+         Status := E.Success;
+         return;
+      end if;
+      Load_Kept (Item, Light, Status, Record_Only => True);
+      if E.Is_Error (Status) then
+         Status := E.Success;
+         return;
+      end if;
+      Found := Refresh_Or_Check (Directory, Light, Read_Again, Roots_Of (Item), False, Unchanged);
+      if Unchanged then
+         Patched := True;
+         return;
+      end if;
+      declare
+         Count   : constant Positive := Positive'Value (Records.Get (Value, "buckets"));
+         Touched : Name_Sets.Set;
+         Struck  : array (1 .. Count) of Boolean := [others => False];
+         Main    : Records.Item :=
+           Records.Create (Schemas.Repository_Schema, 1, "REPOSITORY",
+                           Stores.Current_Revision (Item, Indexes_Area, Index_Name) + 1);
+         Declared : Natural := 0;
+      begin
+         for Path of Found.Touched loop
+            Touched.Include (Path);
+            declare
+               Probe : Relation;
+            begin
+               Probe.Origin := To_Unbounded_String (Path);
+               Struck (Bucket_Of (Probe, Count)) := True;
+            end;
+         end loop;
+
+         --  Each bucket a touched file falls in: its references kept but
+         --  for the touched files', and theirs as read now.
+         for Bucket in 1 .. Count loop
+            declare
+               Field : constant String := "bucket." & Records.Numbered (Bucket, Count);
+            begin
+               if Struck (Bucket) then
+                  declare
+                     Held  : Records.Item;
+                     Lines : Name_Lists.Vector;
+                     Print : Interfaces.Unsigned_64 := Hash ("");
+                     Bytes : Long_Long_Integer := 0;
+                  begin
+                     Stores.Read (Item, Indexes_Area, Bucket_Name (Bucket, Count), Held, Status);
+                     if E.Is_Error (Status) or else Records.Get (Held, "fingerprint") /= Records.Get (Value, Field) then
+                        Status := E.Success;
+                        return;
+                     end if;
+                     for Index in 1 .. Records.Field_Count (Held) loop
+                        declare
+                           Name : constant String := Records.Field_Name (Held, Index);
+                           Text : constant String := Records.Field_Value (Held, Index);
+                           Tab_At : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab], Ada.Strings.Backward);
+                        begin
+                           if Name'Length > 9 and then Name (Name'First .. Name'First + 8) = "relation."
+                             and then not Touched.Contains (Text (Tab_At + 1 .. Text'Last))
+                           then
+                              Lines.Append (Text);
+                           end if;
+                        end;
+                     end loop;
+                     for Link of Found.Relations loop
+                        if Is_Reference (Link.Kind) and then Touched.Contains (To_String (Link.Origin))
+                          and then Bucket_Of (Link, Count) = Bucket
+                        then
+                           Lines.Append (Relation_Text (Link));
+                        end if;
+                     end loop;
+                     for Line of Lines loop
+                        Print := Hash_On (Line & ASCII.LF, Print);
+                        Bytes := Bytes + Long_Long_Integer (Line'Length + Field_Bytes);
+                     end loop;
+                     --  Past what a bucket holds: the whole graph is kept
+                     --  again, in more of them.
+                     if Bytes > Part_Bytes then
+                        return;
+                     end if;
+                     declare
+                        Kept : Records.Item :=
+                          Records.Create
+                            (Schemas.Repository_Schema, 1, "REPOSITORY-BUCKET-" & Records.Numbered (Bucket, Count),
+                             Stores.Current_Revision (Item, Indexes_Area, Bucket_Name (Bucket, Count)) + 1);
+                     begin
+                        Records.Set (Kept, "fingerprint", Fingerprint_Of (Print));
+                        Records.Set (Kept, "reader", Reader_Version);
+                        for Index in 1 .. Natural (Lines.Length) loop
+                           Records.Set (Kept, "relation." & Records.Numbered (Index, Natural (Lines.Length)),
+                                        Lines (Index));
+                        end loop;
+                        Stores.Put (Change, Indexes_Area, Bucket_Name (Bucket, Count), Kept);
+                     end;
+                     Records.Set (Main, Field, Fingerprint_Of (Print));
+                  end;
+               else
+                  Records.Set (Main, Field, Records.Get (Value, Field));
+               end if;
+            end;
+         end loop;
+
+         --  The record: buckets, files, fingerprint, reader, what the files
+         --  declare, symbols -- in the order it keeps its fields.
+         Records.Set (Main, "buckets", Image (Count));
+         for Index in 1 .. Natural (Found.Files.Length) loop
+            declare
+               File : File_Entry renames Found.Files (Index);
+            begin
+               Records.Set
+                 (Main, "file." & Records.Numbered (Index, Natural (Found.Files.Length)),
+                  To_String (File.Path) & Tab & To_String (File.Language) & Tab
+                  & Lower (File_Role'Image (File.Role)) & Tab
+                  & To_String (File.Fingerprint) & Tab & To_String (File.Stamp));
+            end;
+         end loop;
+         Records.Set (Main, "fingerprint", Graph_Fingerprint (Found));
+         Records.Set (Main, "reader", Reader_Version);
+         for Link of Found.Relations loop
+            if not Is_Reference (Link.Kind) then
+               Declared := Declared + 1;
+            end if;
+         end loop;
+         declare
+            Shown : Natural := 0;
+         begin
+            for Link of Found.Relations loop
+               if not Is_Reference (Link.Kind) then
+                  Shown := Shown + 1;
+                  Records.Set (Main, "relation." & Records.Numbered (Shown, Declared), Relation_Text (Link));
+               end if;
+            end loop;
+         end;
+         for Index in 1 .. Natural (Found.Symbols.Length) loop
+            declare
+               Named : Symbol renames Found.Symbols (Index);
+            begin
+               Records.Set
+                 (Main, "symbol." & Records.Numbered (Index, Natural (Found.Symbols.Length)),
+                  To_String (Named.Name) & Tab & To_String (Named.Kind) & Tab
+                  & To_String (Named.Path) & Tab & Image (Named.Line));
+            end;
+         end loop;
+         Stores.Put (Change, Indexes_Area, Index_Name, Main);
+         Stores.Commit (Item, Change, Status);
+         Patched := E.Is_Ok (Status);
+      end;
+   exception
+      when Constraint_Error =>
+         Patched := False;
+         Status := E.Success;
+   end Patch_Current;
 
    ---------------------------------------------------------------------------
    --  Extents.

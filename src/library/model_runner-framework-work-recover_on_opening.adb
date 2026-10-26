@@ -374,7 +374,16 @@ begin
    begin
       Repository.Kept_Is_Current (Item, Fresh, Graph);
       if not (Fresh and then Indexes.Current (Item, Graph)) then
-         Repository.Current (Item, Graph, Kept);
+         --  A graph kept in buckets is put right where it changed; any
+         --  other, or one that could not be, is brought up to date whole.
+         declare
+            Patched : Boolean;
+         begin
+            Repository.Patch_Current (Item, Graph, Patched, Kept);
+            if not Patched then
+               Repository.Current (Item, Graph, Kept);
+            end if;
+         end;
          if not Indexes.Current (Item, Graph) then
             Indexes.Build (Item, Change, Graph, Kept);
             if E.Is_Ok (Kept) then

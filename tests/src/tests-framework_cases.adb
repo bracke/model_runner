@@ -3517,7 +3517,9 @@ package body Tests.Framework_Cases is
          Before : Revisions;
          Added  : Rp.Graph;
       begin
-         Rp.Keep_Parts_At_Most (400);
+         --  Small enough that this tree's relations go in buckets, large
+         --  enough that a bucket put right is not past it.
+         Rp.Keep_Parts_At_Most (1_500);
          Rp.Keep (Store, Change, Found, Status);
          S.Commit (Store, Change, Status);
          Assert (E.Is_Ok (Status) and then S.Exists (Store, F.Indexes_Area, Bucket (1)),
@@ -3536,8 +3538,9 @@ package body Tests.Framework_Cases is
          S.Commit (Store, Change, Status);
          Assert (Written (Before, Now) = 0, "a graph kept again unchanged wrote its buckets again");
 
-         Put_File (Project & "/src/bucket_probe.ads", "package Bucket_Probe is" & LF
-                   & "   procedure Probe;" & LF & "end Bucket_Probe;" & LF);
+         --  It uses a name, so it has references of its own to keep.
+         Put_File (Project & "/src/bucket_probe.ads", "with Parser;" & LF & "package Bucket_Probe is" & LF
+                   & "   procedure Probe (Item : out Parser.Token);" & LF & "end Bucket_Probe;" & LF);
          Added := Rp.Scan (Project);
          Before := Now;
          Rp.Keep (Store, Change, Added, Status);
@@ -3545,6 +3548,40 @@ package body Tests.Framework_Cases is
          Assert (Written (Before, Now) in 1 .. 2,
                  "a file added wrote other buckets than its own:" & Written (Before, Now)'Image);
          Dirs.Delete_File (Project & "/src/bucket_probe.ads");
+
+         --  Put right where it changed, from its record alone: a file
+         --  changed with its names as they were, and then one declaring a
+         --  new name, which what sees it is read again for -- each time the
+         --  graph read back whole is the one a scan makes.
+         declare
+            Spec    : constant String := Read_Whole (Project & "/src/parser.ads");
+            Light   : Rp.Graph;
+            Patched : Boolean;
+
+            function Same (A, B : Rp.Graph) return Boolean is
+              (Rp.Relation_Count (A) = Rp.Relation_Count (B)
+               and then (for all Index in 1 .. Rp.Relation_Count (A) =>
+                           (for some Other in 1 .. Rp.Relation_Count (B) =>
+                              Rp."=" (Rp.Relation_At (B, Other), Rp.Relation_At (A, Index)))));
+         begin
+            Rp.Keep (Store, Change, Rp.Scan (Project), Status);
+            S.Commit (Store, Change, Status);
+            delay 2.1;
+            Put_File (Project & "/src/parser.ads", "--  Only a comment more." & LF & Spec);
+            Rp.Patch_Current (Store, Light, Patched, Status);
+            Rp.Load (Store, Kept, Status);
+            Assert (Patched and then E.Is_Ok (Status) and then Same (Kept, Rp.Scan (Project)),
+                    "a graph in buckets put right where it changed is not the one a scan makes");
+            delay 2.1;
+            Put_File (Project & "/src/parser.ads",
+                      Spec (Spec'First .. Ada.Strings.Fixed.Index (Spec, "end Parser;") - 1)
+                      & "   procedure Patched_In;" & LF & "end Parser;" & LF);
+            Rp.Patch_Current (Store, Light, Patched, Status);
+            Rp.Load (Store, Kept, Status);
+            Assert (Patched and then E.Is_Ok (Status) and then Same (Kept, Rp.Scan (Project)),
+                    "a graph in buckets put right after a new name is not the one a scan makes");
+            Put_File (Project & "/src/parser.ads", Spec);
+         end;
 
          declare
             Part : R.Item;
@@ -3572,9 +3609,12 @@ package body Tests.Framework_Cases is
          declare
             Fresh : Boolean;
             Files : Rp.Graph;
+            Tree  : constant Rp.Graph := Rp.Scan (Project);
          begin
+            Rp.Keep (Store, Change, Tree, Status);
+            S.Commit (Store, Change, Status);
             Rp.Kept_Is_Current (Store, Fresh, Files);
-            Assert (Fresh and then Rp.Graph_Fingerprint (Files) = Rp.Graph_Fingerprint (Found)
+            Assert (Fresh and then Rp.Graph_Fingerprint (Files) = Rp.Graph_Fingerprint (Tree)
                     and then Rp.Relation_Count (Files) = 0,
                     "a graph just kept was not taken as current, or its relations were read to learn so");
             Put_File (Project & "/src/freshness_probe.ads", "package Freshness_Probe is" & LF
