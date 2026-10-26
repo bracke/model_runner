@@ -2507,6 +2507,8 @@ package body Model_Runner.CLI.Project_Commands is
          end;
       end if;
       S.Close (Store);
+      --  Its graph read meanwhile, for the first question that needs it.
+      Model_Runner.Framework.Repository.Warm_Up (Here);
    end Recover_Here;
 
    ------------------------

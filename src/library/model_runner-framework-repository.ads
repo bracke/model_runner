@@ -394,6 +394,21 @@ package Model_Runner.Framework.Repository is
       Fresh : out Boolean;
       Files : out Graph);
 
+   --  Start reading a project's kept graph in the background, brought up
+   --  to date, so that what asks for it next -- a search, a context --
+   --  finds it in memory: a session opens without its graph's relations,
+   --  and the first search of a large tree waited for them. A caller of
+   --  Now or Current for the same project meanwhile waits for this read
+   --  rather than making its own. Nothing is started where one is still
+   --  under way.
+   --
+   --  @param Project_Directory The project.
+   procedure Warm_Up (Project_Directory : String);
+
+   --  Stop a read Warm_Up started, for a program ending: it is let go
+   --  between one part of the graph and the next.
+   procedure Stop_Warm_Up;
+
    --  The fingerprint of the graph kept in the project state: known in
    --  this process once it has read or kept one, loaded otherwise.
    --

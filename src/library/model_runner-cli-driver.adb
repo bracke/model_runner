@@ -6,6 +6,7 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 
 with Hostkit.Parent_Watch;
+with Model_Runner.Framework.Repository;
 with Model_Runner.Platform.Signals;
 with Hostkit.Signals;
 with Model_Runner.CLI.Execute;
@@ -393,11 +394,15 @@ package body Model_Runner.CLI.Driver is
       begin
          Model_Runner.Platform.Signals.Install (null, Attached);
          Run (Source, Status);
+         --  A graph still being read in the background is let go: the
+         --  program does not wait seconds for it to end.
+         Model_Runner.Framework.Repository.Stop_Warm_Up;
          if Attached then
             Model_Runner.Platform.Signals.Remove;
          end if;
       exception
          when others =>
+            Model_Runner.Framework.Repository.Stop_Warm_Up;
             if Attached then
                Model_Runner.Platform.Signals.Remove;
             end if;

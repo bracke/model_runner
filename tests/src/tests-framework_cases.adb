@@ -3583,6 +3583,12 @@ package body Tests.Framework_Cases is
             Dirs.Delete_File (Project & "/src/freshness_probe.ads");
             Assert (not Fresh, "a graph was taken as current with a file added beside it");
          end;
+
+         --  Read in the background, then asked for: the asker waits for that
+         --  read rather than making its own, and has the graph a scan makes.
+         Rp.Warm_Up (Project);
+         Assert (Rp.Graph_Fingerprint (Rp.Now (Store)) = Rp.Graph_Fingerprint (Rp.Scan (Project)),
+                 "a graph read in the background was not the tree's");
       exception
          when others =>
             Rp.Keep_Parts_At_Most (48 * 1024 * 1024);

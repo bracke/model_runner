@@ -2374,6 +2374,80 @@ package body Model_Runner.Framework.Repository is
       Memory_Lock.Release;
    end Refresh_Remembered;
 
+   ----------------
+   -- Warming up --
+   ----------------
+
+   --  A graph read in the background, by the project it is of.
+   protected Warming is
+      --  Taken for Key, where none is under way.
+      procedure Claim (Key : String; Got : out Boolean);
+      procedure Release;
+      --  Whether the read under way is of Key.
+      function Holds (Key : String) return Boolean;
+      --  Until no read is under way.
+      entry Await;
+      procedure Ask_Stop;
+      function Stopping return Boolean;
+   private
+      Held     : Boolean := False;
+      Held_Key : Unbounded_String;
+      Stop     : Boolean := False;
+   end Warming;
+
+   protected body Warming is
+      procedure Claim (Key : String; Got : out Boolean) is
+      begin
+         Got := not Held and then not Stop;
+         if Got then
+            Held := True;
+            Held_Key := To_Unbounded_String (Key);
+         end if;
+      end Claim;
+
+      procedure Release is
+      begin
+         Held := False;
+         Held_Key := Null_Unbounded_String;
+      end Release;
+
+      function Holds (Key : String) return Boolean is (Held and then To_String (Held_Key) = Key);
+
+      entry Await when not Held is
+      begin
+         null;
+      end Await;
+
+      procedure Ask_Stop is
+      begin
+         Stop := True;
+      end Ask_Stop;
+
+      function Stopping return Boolean is (Stop);
+   end Warming;
+
+   --  Raised in a background read told to stop.
+   Warm_Up_Stopped : exception;
+
+   --  Wait for a background read of Key, where one is under way: what it
+   --  reads is in memory once it ends.
+   procedure Wait_For_Warm_Up (Key : String) is
+   begin
+      if Warming.Holds (Key) then
+         Warming.Await;
+      end if;
+   end Wait_For_Warm_Up;
+
+   --  The reader: one read at a time, a project's graph by its directory.
+   task Warmer is
+      entry Take (Project_Directory : String);
+   end Warmer;
+
+   procedure Stop_Warm_Up is
+   begin
+      Warming.Ask_Stop;
+   end Stop_Warm_Up;
+
    ---------
    -- Now --
    ---------
@@ -2386,6 +2460,11 @@ package body Model_Runner.Framework.Repository is
       Read       : E.Error_Info;
       Read_Again : Natural;
    begin
+      --  Not the background read itself, which reads by a store opened
+      --  only to be read, and would wait for its own end.
+      if not Stores.Is_Read_Only (Item) then
+         Wait_For_Warm_Up (Key);
+      end if;
       return Result : Graph do
          Refresh_Remembered
            (Key, Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item),
@@ -2417,6 +2496,7 @@ package body Model_Runner.Framework.Repository is
       Change     : Stores.Transaction;
    begin
       Status := E.Success;
+      Wait_For_Warm_Up (Key);
 
       --  Known here: brought up to date from what this process holds, and
       --  kept where that is not what the state keeps.
@@ -2932,6 +3012,9 @@ package body Model_Runner.Framework.Repository is
             Count : constant Positive := Positive'Value (Records.Get (Value, "buckets"));
          begin
             for Bucket in 1 .. Count loop
+               if Warming.Stopping then
+                  raise Warm_Up_Stopped;
+               end if;
                declare
                   Held : Records.Item;
                begin
@@ -3676,5 +3759,81 @@ package body Model_Runner.Framework.Repository is
       end loop;
       return Sorted (Result);
    end Dependents_Of;
+
+   ------------
+   -- Warmer --
+   ------------
+
+   task body Warmer is
+      Directory : Unbounded_String;
+   begin
+      loop
+         select
+            accept Take (Project_Directory : String) do
+               Directory := To_Unbounded_String (Project_Directory);
+            end Take;
+         or
+            terminate;
+         end select;
+         declare
+            Store  : Stores.Store;
+            Status : E.Error_Info;
+         begin
+            Stores.Open_To_Read (Store, To_String (Directory), Status);
+            if E.Is_Ok (Status) then
+               declare
+                  Found : constant Graph := Now (Store);
+                  pragma Unreferenced (Found);
+               begin
+                  null;
+               end;
+            end if;
+            Stores.Close (Store);
+            Warming.Release;
+         exception
+            --  Told to stop, or the read failed: nothing is kept, and what
+            --  asks next reads the graph itself.
+            when others =>
+               begin
+                  Stores.Close (Store);
+               exception
+                  when others =>
+                     null;
+               end;
+               Warming.Release;
+         end;
+      end loop;
+   end Warmer;
+
+   -------------
+   -- Warm_Up --
+   -------------
+
+   procedure Warm_Up (Project_Directory : String) is
+      Store  : Stores.Store;
+      Status : E.Error_Info;
+      Key    : Unbounded_String;
+      Got    : Boolean;
+   begin
+      Stores.Open_To_Read (Store, Project_Directory, Status);
+      if E.Is_Error (Status) then
+         Stores.Close (Store);
+         return;
+      end if;
+      Key := To_Unbounded_String (Key_Of (Store));
+      Stores.Close (Store);
+      Warming.Claim (To_String (Key), Got);
+      if Got then
+         select
+            Warmer.Take (Project_Directory);
+         or
+            delay 1.0;
+            Warming.Release;
+         end select;
+      end if;
+   exception
+      when others =>
+         null;
+   end Warm_Up;
 
 end Model_Runner.Framework.Repository;
