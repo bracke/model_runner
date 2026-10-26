@@ -2059,11 +2059,15 @@ package body Model_Runner.Framework.Repository is
          --  with every name it declares as it was -- a comment, a body --
          --  is not one another file's references can read otherwise, and
          --  reading again every file that can see it took seconds when
-         --  the unit is one that hundreds of files use.
-         function Declaring_Otherwise return Name_Sets.Set is
-            package Text_Sorting is new Name_Lists.Generic_Sorting;
+         --  the unit is one that hundreds of files use. One that only
+         --  declares more (Grown) changes another file's references only
+         --  where that file says one of the new names (Added_Words, their
+         --  last parts in small letters): a use that found nothing before.
+         Renamed, Grown : Name_Sets.Set;
+         Added_Words    : Name_Sets.Set;
+
+         function Declaring_Otherwise return Boolean is
             Was, Is_Now : Name_Maps.Map;
-            Result_Set  : Name_Sets.Set;
          begin
             for Named of Kept.Symbols loop
                if Changed_Set.Contains (To_String (Named.Path)) then
@@ -2077,22 +2081,72 @@ package body Model_Runner.Framework.Repository is
             end loop;
             for Path of Changed_Set loop
                declare
-                  Before : Name_Lists.Vector :=
-                    (if Was.Contains (Path) then Was.Element (Path) else Name_Lists.Empty_Vector);
-                  After  : Name_Lists.Vector :=
-                    (if Is_Now.Contains (Path) then Is_Now.Element (Path) else Name_Lists.Empty_Vector);
+                  Before, After : Name_Sets.Set;
+                  Gained        : Name_Sets.Set;
                begin
-                  Text_Sorting.Sort (Before);
-                  Text_Sorting.Sort (After);
-                  if not Name_Lists."=" (Before, After) then
-                     Result_Set.Include (Path);
+                  if Was.Contains (Path) then
+                     for Name of Was.Element (Path) loop
+                        Before.Include (Name);
+                     end loop;
+                  end if;
+                  if Is_Now.Contains (Path) then
+                     for Name of Is_Now.Element (Path) loop
+                        After.Include (Name);
+                     end loop;
+                  end if;
+                  if not Name_Sets.Is_Subset (Before, After) then
+                     Renamed.Include (Path);
+                  elsif not Name_Sets."=" (Before, After) then
+                     Grown.Include (Path);
+                     Gained := Name_Sets.Difference (After, Before);
+                     for Entry_Of of Gained loop
+                        declare
+                           Name : constant String :=
+                             Entry_Of (Entry_Of'First .. Ada.Strings.Fixed.Index (Entry_Of, [Tab]) - 1);
+                           Cut  : Natural := Name'First - 1;
+                        begin
+                           for At_Char in Name'Range loop
+                              if Name (At_Char) in '.' | ':' then
+                                 Cut := At_Char;
+                              end if;
+                           end loop;
+                           Added_Words.Include (Lower (Name (Cut + 1 .. Name'Last)));
+                        end;
+                     end loop;
                   end if;
                end;
             end loop;
-            return Result_Set;
+            return True;
          end Declaring_Otherwise;
 
-         Moved   : Name_Lists.Vector := Units_Of (Result, Declaring_Otherwise);
+         --  Whether a text says one of Added_Words, as a whole word.
+         function Mentions (Text : String) return Boolean is
+            Low   : constant String := Lower (Text);
+            Start : Natural := 0;
+         begin
+            for At_Char in Low'First .. Low'Last + 1 loop
+               if At_Char <= Low'Last
+                 and then (Ada.Characters.Handling.Is_Alphanumeric (Low (At_Char)) or else Low (At_Char) = '_')
+               then
+                  if Start = 0 then
+                     Start := At_Char;
+                  end if;
+               elsif Start > 0 then
+                  if Added_Words.Contains (Low (Start .. At_Char - 1)) then
+                     return True;
+                  end if;
+                  Start := 0;
+               end if;
+            end loop;
+            return False;
+         end Mentions;
+
+         --  Renamed, Grown and Added_Words filled, before Moved is.
+         Sorted_Out : constant Boolean := Declaring_Otherwise;
+         pragma Unreferenced (Sorted_Out);
+         Moved   : Name_Lists.Vector := Units_Of (Result, Renamed);
+         Grown_Units : constant Name_Lists.Vector := Units_Of (Result, Grown);
+         Grown_Set   : Name_Sets.Set;
          Gone_Set : Name_Sets.Set;
          function Gone_Units return Name_Lists.Vector is
          begin
@@ -2106,6 +2160,9 @@ package body Model_Runner.Framework.Repository is
       begin
          for Unit of Moved loop
             Moved_Set.Include (Unit);
+         end loop;
+         for Unit of Grown_Units loop
+            Grown_Set.Include (Unit);
          end loop;
          for Unit of Removed loop
             if not Moved_Set.Contains (Unit) then
@@ -2134,31 +2191,40 @@ package body Model_Runner.Framework.Repository is
                   Own    : constant Name_Lists.Vector :=
                     (if Units_In.Contains (Path) then Units_In.Element (Path)
                      else Name_Lists.Empty_Vector);
-                  Sees   : Boolean := Changed_Set.Contains (Path);
+                  --  Whether the file can see one of Units: one of its own,
+                  --  one it depends on, or one of that unit's parents, which
+                  --  a with of a child sees as well. A reader that finds what
+                  --  is called by its name, not by what the file depends on
+                  --  -- x.method (), a prefix of a module -- may see any unit
+                  --  that changed, as a whole scan reads it.
+                  function Can_See (Units : Name_Lists.Vector; Units_Set : Name_Sets.Set) return Boolean is
+                  begin
+                     for Unit of Own loop
+                        if Units_Set.Contains (Unit) then
+                           return True;
+                        end if;
+                        if Depends.Contains (Unit) then
+                           for Target of Depends.Constant_Reference (Unit) loop
+                              if Units_Set.Contains (Target)
+                                or else (for some One of Units =>
+                                           Target'Length > One'Length
+                                           and then Target (Target'First .. Target'First + One'Length) = One & ".")
+                              then
+                                 return True;
+                              end if;
+                           end loop;
+                        end if;
+                     end loop;
+                     return not Units.Is_Empty and then Language_Of (Path) /= "Ada";
+                  end Can_See;
+
+                  --  Read again: changed, or able to see a unit that lost or
+                  --  changed a name, or one that only gained names where the
+                  --  file says one of them.
+                  Sees : constant Boolean :=
+                    Changed_Set.Contains (Path) or else Can_See (Moved, Moved_Set)
+                    or else (Can_See (Grown_Units, Grown_Set) and then Mentions (Text_Of (Path)));
                begin
-                  for Unit of Own loop
-                     exit when Sees;
-                     if Depends.Contains (Unit) then
-                        --  A unit it depends on, or one of that unit's
-                        --  parents, which a with of a child sees as well.
-                        for Target of Depends.Constant_Reference (Unit) loop
-                           if Moved_Set.Contains (Target)
-                             or else (for some One of Moved =>
-                                        Target'Length > One'Length
-                                        and then Target (Target'First .. Target'First + One'Length) = One & ".")
-                           then
-                              Sees := True;
-                              exit;
-                           end if;
-                        end loop;
-                     end if;
-                  end loop;
-                  Sees := Sees or else (for some Unit of Own => Moved_Set.Contains (Unit))
-                    --  A reader that finds what is called by its name, not by
-                    --  what the file depends on -- x.method (), a prefix of
-                    --  a module -- may see any unit that changed: read again
-                    --  whenever one did, as a whole scan reads it.
-                    or else (not Moved.Is_Empty and then Language_Of (Path) /= "Ada");
                   Result.Reading := To_Unbounded_String (Path);
                   if Sees then
                      Result.Touched.Append (Path);

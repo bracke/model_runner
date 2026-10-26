@@ -3719,14 +3719,51 @@ package body Tests.Framework_Cases is
                     and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Again)
                     and then Rp.References_To (Refreshed, "Parser.Next") = Rp.References_To (Again, "Parser.Next"),
                     "a spec changed with its names as they were had what sees it read again:" & Read'Image);
-            delay 2.1;
-            Put_File (Project & "/src/parser.ads",
-                      Spec (Spec'First .. Ada.Strings.Fixed.Index (Spec, "end Parser;") - 1)
-                      & "   procedure Rewind;" & LF & "end Parser;" & LF);
-            Refreshed := Rp.Refresh (Project, Again, Read);
-            Assert (Read >= 2
-                    and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Rp.Scan (Project)),
-                    "a spec that declares a new name did not have what sees it read again");
+            --  One that only declares a name more: read again alone where
+            --  no file says it; with the file that says it -- a use that
+            --  found nothing before -- where one does. One that declares a
+            --  name no more: with every file that can see it.
+            declare
+               Main   : constant String := Read_Whole (Project & "/src/main.adb");
+               Before : Rp.Graph;
+               function Spec_With (Line : String) return String is
+                 (Spec (Spec'First .. Ada.Strings.Fixed.Index (Spec, "end Parser;") - 1) & Line
+                  & "end Parser;" & LF);
+            begin
+               delay 2.1;
+               Put_File (Project & "/src/parser.ads", Spec_With ("   procedure Rewind;" & LF));
+               Refreshed := Rp.Refresh (Project, Again, Read);
+               Assert (Read = 1 and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Rp.Scan (Project)),
+                       "a spec declaring a name no file says had what sees it read again:" & Read'Image);
+
+               Put_File (Project & "/src/parser.ads", Spec);
+               Put_File (Project & "/src/main.adb",
+                         Main (Main'First .. Ada.Strings.Fixed.Index (Main, "end Main;") - 1)
+                         & "   Parser.Rewind;" & LF & "end Main;" & LF);
+               delay 2.1;
+               Before := Rp.Scan (Project);
+               delay 2.1;
+               Put_File (Project & "/src/parser.ads", Spec_With ("   procedure Rewind;" & LF));
+               Refreshed := Rp.Refresh (Project, Before, Read);
+               Again := Rp.Scan (Project);
+               Assert (Read = 2 and then not Rp.References_To (Again, "Parser.Rewind").Is_Empty
+                       and then Rp.References_To (Refreshed, "Parser.Rewind")
+                                = Rp.References_To (Again, "Parser.Rewind")
+                       and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Again),
+                       "a spec declaring a name a file says did not have that file read again:" & Read'Image);
+
+               delay 2.1;
+               declare
+                  Next_At : constant Positive := Ada.Strings.Fixed.Index (Spec, "   procedure Next");
+                  After   : constant Positive := Ada.Strings.Fixed.Index (Spec, "Token);", Next_At) + 8;
+               begin
+                  Put_File (Project & "/src/parser.ads", Spec (Spec'First .. Next_At - 1) & Spec (After .. Spec'Last));
+               end;
+               Refreshed := Rp.Refresh (Project, Again, Read);
+               Assert (Read >= 3 and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Rp.Scan (Project)),
+                       "a spec declaring a name no more did not have what sees it read again:" & Read'Image);
+               Put_File (Project & "/src/main.adb", Main);
+            end;
             Put_File (Project & "/src/parser.ads", Spec);
          end;
          --  Bytes among the sources, left out by the scan, are left out
