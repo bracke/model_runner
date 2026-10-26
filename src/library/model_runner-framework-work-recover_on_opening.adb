@@ -363,16 +363,23 @@ begin
    --  6: the repository's graph, brought up to date and kept, so what
    --  reads it next reads only what changed since; and the indexes
    --  built again where they are missing or stale.
+   --  Asked first of the kept graph's files alone: where nothing changed
+   --  and the indexes are of it, no relation is read -- they are read when
+   --  something asks for them, not to learn that nothing is to be done.
    declare
       Graph  : Repository.Graph;
       Kept   : E.Error_Info;
       Change : Stores.Transaction;
+      Fresh  : Boolean;
    begin
-      Repository.Current (Item, Graph, Kept);
-      if not Indexes.Current (Item, Graph) then
-         Indexes.Build (Item, Change, Graph, Kept);
-         if E.Is_Ok (Kept) then
-            Stores.Commit (Item, Change, Kept);
+      Repository.Kept_Is_Current (Item, Fresh, Graph);
+      if not (Fresh and then Indexes.Current (Item, Graph)) then
+         Repository.Current (Item, Graph, Kept);
+         if not Indexes.Current (Item, Graph) then
+            Indexes.Build (Item, Change, Graph, Kept);
+            if E.Is_Ok (Kept) then
+               Stores.Commit (Item, Change, Kept);
+            end if;
          end if;
       end if;
    end;

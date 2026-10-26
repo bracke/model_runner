@@ -377,6 +377,23 @@ package Model_Runner.Framework.Repository is
       Found  : out Graph;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Whether the graph kept in the project state is the tree as it is
+   --  now, asked of its record's files alone: not of its relations, which
+   --  for a large tree are seconds to read -- a session in a tree of 2.5
+   --  million references read them all to learn that nothing had changed.
+   --
+   --  @param Item The store.
+   --  @param Fresh True when every kept file is as it is now and none
+   --    came or went, and the graph made now would have the kept one's
+   --    fingerprint.
+   --  @param Files The kept files as the tree has them now, with no
+   --    symbol or relation: a graph for its Graph_Fingerprint, not to be
+   --    read for anything else.
+   procedure Kept_Is_Current
+     (Item  : Stores.Store;
+      Fresh : out Boolean;
+      Files : out Graph);
+
    --  The fingerprint of the graph kept in the project state: known in
    --  this process once it has read or kept one, loaded otherwise.
    --

@@ -304,19 +304,21 @@ package body Model_Runner.Framework.Indexes is
       end;
       Keep (Tests_Index, Lines);
 
-      Lines.Clear;
-      declare
-         Traced : constant Traceability.Graph := Traceability.Build (Item, Found);
-      begin
-         for Index in 1 .. Traceability.Edge_Count (Traced) loop
-            declare
-               One : constant Traceability.Edge := Traceability.Edge_At (Traced, Index);
-            begin
-               Lines.Append (To_String (One.From) & Tab & To_String (One.Kind) & Tab & To_String (One.To));
-            end;
-         end loop;
-      end;
-      Keep (Traceability_Index, Lines);
+      --  Traceability is made when asked (Entries), not kept: millions of
+      --  edges in a large tree -- 2.57 million, 320 MB, for humanize --
+      --  built and written at every change, and read by nothing. A copy an
+      --  earlier version kept, and its parts, are let go.
+      if Stores.Exists (Item, Indexes_Area, Name_Of (Traceability_Index)) then
+         Stores.Remove (Change, Indexes_Area, Name_Of (Traceability_Index));
+         declare
+            Next : Positive := 1;
+         begin
+            while Stores.Exists (Item, Indexes_Area, Part_Name (Traceability_Index, Next)) loop
+               Stores.Remove (Change, Indexes_Area, Part_Name (Traceability_Index, Next));
+               Next := Next + 1;
+            end loop;
+         end;
+      end if;
 
       Lines.Clear;
       for Index in 1 .. Repository.Relation_Count (Found) loop
@@ -364,7 +366,9 @@ package body Model_Runner.Framework.Indexes is
       Read  : E.Error_Info;
    begin
       for Which in Index_Name loop
-         if not Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
+         if Which /= Traceability_Index
+           and then not Stores.Exists (Item, Indexes_Area, Name_Of (Which))
+         then
             return False;
          end if;
       end loop;
@@ -393,6 +397,21 @@ package body Model_Runner.Framework.Indexes is
          end loop;
       end Take;
    begin
+      --  Traceability, made now from the graph as it is.
+      if Which = Traceability_Index then
+         declare
+            Traced : constant Traceability.Graph := Traceability.Build (Item, Repository.Now (Item));
+         begin
+            for Index in 1 .. Traceability.Edge_Count (Traced) loop
+               declare
+                  One : constant Traceability.Edge := Traceability.Edge_At (Traced, Index);
+               begin
+                  Result.Append (To_String (One.From) & Tab & To_String (One.Kind) & Tab & To_String (One.To));
+               end;
+            end loop;
+            return Result;
+         end;
+      end if;
       if Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
          Stores.Read (Item, Indexes_Area, Name_Of (Which), Value, Read);
          if E.Is_Ok (Read) then

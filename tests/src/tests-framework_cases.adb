@@ -3566,6 +3566,23 @@ package body Tests.Framework_Cases is
          Rp.Load (Store, Kept, Status);
          Assert (E.Is_Ok (Status) and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found),
                  "a graph kept whole again did not read back");
+
+         --  Whether the kept graph is the tree as it is, asked of its files
+         --  alone: so just after it is kept; not once a file is added.
+         declare
+            Fresh : Boolean;
+            Files : Rp.Graph;
+         begin
+            Rp.Kept_Is_Current (Store, Fresh, Files);
+            Assert (Fresh and then Rp.Graph_Fingerprint (Files) = Rp.Graph_Fingerprint (Found)
+                    and then Rp.Relation_Count (Files) = 0,
+                    "a graph just kept was not taken as current, or its relations were read to learn so");
+            Put_File (Project & "/src/freshness_probe.ads", "package Freshness_Probe is" & LF
+                      & "end Freshness_Probe;" & LF);
+            Rp.Kept_Is_Current (Store, Fresh, Files);
+            Dirs.Delete_File (Project & "/src/freshness_probe.ads");
+            Assert (not Fresh, "a graph was taken as current with a file added beside it");
+         end;
       exception
          when others =>
             Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
@@ -3640,6 +3657,32 @@ package body Tests.Framework_Cases is
          end;
          Assert (Read >= 1 and then Read < Rp.File_Count (Again),
                  "the refresh read more than changed:" & Natural'Image (Read));
+         --  A spec changed with every name it declares as it was -- a
+         --  comment -- is read again alone (Read counts it): no file that
+         --  can see it is, and the graph is the one a scan makes. Its names
+         --  changed, they are.
+         declare
+            Before : constant Rp.Graph := Rp.Scan (Project);
+            Spec   : constant String := Read_Whole (Project & "/src/parser.ads");
+         begin
+            delay 2.1;
+            Put_File (Project & "/src/parser.ads", "--  A comment, and nothing else changed." & LF & Spec);
+            Refreshed := Rp.Refresh (Project, Before, Read);
+            Again := Rp.Scan (Project);
+            Assert (Read = 1
+                    and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Again)
+                    and then Rp.References_To (Refreshed, "Parser.Next") = Rp.References_To (Again, "Parser.Next"),
+                    "a spec changed with its names as they were had what sees it read again:" & Read'Image);
+            delay 2.1;
+            Put_File (Project & "/src/parser.ads",
+                      Spec (Spec'First .. Ada.Strings.Fixed.Index (Spec, "end Parser;") - 1)
+                      & "   procedure Rewind;" & LF & "end Parser;" & LF);
+            Refreshed := Rp.Refresh (Project, Again, Read);
+            Assert (Read >= 2
+                    and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Rp.Scan (Project)),
+                    "a spec that declares a new name did not have what sees it read again");
+            Put_File (Project & "/src/parser.ads", Spec);
+         end;
          --  Bytes among the sources, left out by the scan, are left out
          --  again by a refresh from that graph when a source beside them
          --  changes -- the refresh looked for their record and raised.
@@ -4757,6 +4800,10 @@ package body Tests.Framework_Cases is
               and then Ix.Entries (Store, Ix.Search_Index).Contains ("read" & ASCII.HT & "IO.Read")
               and then Ix.Entries (Store, Ix.Dependency_Index).Is_Empty,
               "an index does not say what the state and the repository hold");
+      --  Traceability, made when asked and not kept.
+      Assert (not S.Exists (Store, F.Indexes_Area, "traceability")
+              and then not Ix.Entries (Store, Ix.Traceability_Index).Is_Empty,
+              "traceability was kept, or not made when asked");
 
       --  Built again from what has not changed: not written again.
       declare

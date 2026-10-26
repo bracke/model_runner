@@ -69,6 +69,27 @@ package body Model_Runner.CLI.Repo is
       return Result;
    end Roots_In;
 
+   --  The graph of the tree: in a project, the one its state keeps,
+   --  brought up to date -- scanned afresh instead, a tree of 2.5 million
+   --  references took half a minute for a search a kept graph answers in
+   --  seconds; elsewhere, scanned.
+   function Graph_In (Directory : String; Within : Rp.Roots) return Rp.Graph is
+      Store   : S.Store;
+      Report  : S.Recovery_Report;
+      Outcome : E.Error_Info;
+   begin
+      if S.Is_Initialized (Directory) then
+         S.Open (Store, Directory, Report, Outcome);
+         if E.Is_Ok (Outcome) then
+            return Found : constant Rp.Graph := Rp.Now (Store) do
+               S.Close (Store);
+            end return;
+         end if;
+         S.Close (Store);
+      end if;
+      return Rp.Scan (Directory, Within);
+   end Graph_In;
+
    --  A node as a person names it: no file: or symbol: before it, no
    --  @revision after it.
    function Node_Said (Node : String) return String is
@@ -159,7 +180,7 @@ package body Model_Runner.CLI.Repo is
          else From_Here);
       Recovered : Model_Runner.Framework.Name_Lists.Vector;
       Within    : constant Rp.Roots := Roots_In (Directory, Recovered);
-      Found     : constant Rp.Graph := Rp.Scan (Directory, Within);
+      Found     : constant Rp.Graph := Graph_In (Directory, Within);
       Outcome   : E.Error_Info;
 
       procedure Fail (Condition : E.Error_Info) is

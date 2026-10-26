@@ -2051,7 +2051,44 @@ package body Model_Runner.Framework.Repository is
       --  that can see a changed or removed unit; taken as they were for
       --  the rest.
       declare
-         Moved   : Name_Lists.Vector := Units_Of (Result, Changed_Set);
+         --  The changed files whose declarations changed: a file changed
+         --  with every name it declares as it was -- a comment, a body --
+         --  is not one another file's references can read otherwise, and
+         --  reading again every file that can see it took seconds when
+         --  the unit is one that hundreds of files use.
+         function Declaring_Otherwise return Name_Sets.Set is
+            package Text_Sorting is new Name_Lists.Generic_Sorting;
+            Was, Is_Now : Name_Maps.Map;
+            Result_Set  : Name_Sets.Set;
+         begin
+            for Named of Kept.Symbols loop
+               if Changed_Set.Contains (To_String (Named.Path)) then
+                  Add_Name (Was, To_String (Named.Path), To_String (Named.Name) & Tab & To_String (Named.Kind));
+               end if;
+            end loop;
+            for Named of Result.Symbols loop
+               if Changed_Set.Contains (To_String (Named.Path)) then
+                  Add_Name (Is_Now, To_String (Named.Path), To_String (Named.Name) & Tab & To_String (Named.Kind));
+               end if;
+            end loop;
+            for Path of Changed_Set loop
+               declare
+                  Before : Name_Lists.Vector :=
+                    (if Was.Contains (Path) then Was.Element (Path) else Name_Lists.Empty_Vector);
+                  After  : Name_Lists.Vector :=
+                    (if Is_Now.Contains (Path) then Is_Now.Element (Path) else Name_Lists.Empty_Vector);
+               begin
+                  Text_Sorting.Sort (Before);
+                  Text_Sorting.Sort (After);
+                  if not Name_Lists."=" (Before, After) then
+                     Result_Set.Include (Path);
+                  end if;
+               end;
+            end loop;
+            return Result_Set;
+         end Declaring_Otherwise;
+
+         Moved   : Name_Lists.Vector := Units_Of (Result, Declaring_Otherwise);
          Gone_Set : Name_Sets.Set;
          function Gone_Units return Name_Lists.Vector is
          begin
@@ -2468,6 +2505,71 @@ package body Model_Runner.Framework.Repository is
       end loop;
       return Result;
    end Split_Tabs;
+
+   ---------------------
+   -- Kept_Is_Current --
+   ---------------------
+
+   procedure Kept_Is_Current
+     (Item  : Stores.Store;
+      Fresh : out Boolean;
+      Files : out Graph)
+   is
+      Value      : Records.Item;
+      Read       : E.Error_Info;
+      Kept       : Graph;
+      Read_Again : Natural;
+      Unchanged  : Boolean;
+      Directory  : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
+   begin
+      Fresh := False;
+      Files := (others => <>);
+      Stores.Read (Item, Indexes_Area, Index_Name, Value, Read);
+      if E.Is_Error (Read) or else Records.Get (Value, "reader") /= Reader_Version then
+         return;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+         begin
+            if Field'Length > 5 and then Field (Field'First .. Field'First + 4) = "file." then
+               declare
+                  Parts : constant Name_Lists.Vector := Split_Tabs (Records.Field_Value (Value, Index));
+               begin
+                  if Natural (Parts.Length) not in 4 .. 5 then
+                     return;
+                  end if;
+                  Kept.Files.Append
+                    (File_Entry'
+                     (Path        => To_Unbounded_String (Parts (1)),
+                      Language    => To_Unbounded_String (Parts (2)),
+                      Role        => File_Role'Value (Parts (3)),
+                      Fingerprint => To_Unbounded_String (Parts (4)),
+                      Stamp       => To_Unbounded_String
+                                       (if Natural (Parts.Length) = 5 then Parts (5) else "")));
+               end;
+            end if;
+         end;
+      end loop;
+      --  The walk asked first whether anything would change; only then the
+      --  graph it would make of the files, for what it could not read and
+      --  the files of bytes, which the fingerprint holds too.
+      declare
+         Ignored : constant Graph :=
+           Refresh_Or_Check (Directory, Kept, Read_Again, Roots_Of (Item), True, Unchanged);
+         pragma Unreferenced (Ignored);
+      begin
+         if not Unchanged then
+            return;
+         end if;
+      end;
+      Files := Refresh_Or_Check (Directory, Kept, Read_Again, Roots_Of (Item), False, Unchanged);
+      Fresh := Unchanged and then Graph_Fingerprint (Files) = Records.Get (Value, "fingerprint");
+   exception
+      when Constraint_Error =>
+         Fresh := False;
+         Files := (others => <>);
+   end Kept_Is_Current;
 
    ----------
    -- Keep --

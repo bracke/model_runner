@@ -976,12 +976,31 @@ package body Model_Runner.Framework.Consistency is
       --  What a requirement is linked to is there: a symbol the repository
       --  declares, a file it holds, a component the project has.
       declare
-         Graph : constant Repository.Graph := Repository.Now (Item);
+         --  The graph, read the first time a link asks for it: a project
+         --  whose requirements link nothing read a large tree's millions of
+         --  relations at every opening, for nothing.
+         Held   : Repository.Graph;
+         Loaded : Boolean := False;
+
+         procedure Ensure is
+         begin
+            if not Loaded then
+               Held := Repository.Now (Item);
+               Loaded := True;
+            end if;
+         end Ensure;
+
+         function Declares_None (Target : String) return Boolean is
+         begin
+            Ensure;
+            return Repository.Find_Symbols (Held, Target).Is_Empty;
+         end Declares_None;
 
          function Holds_File (Path : String) return Boolean is
          begin
-            for Index in 1 .. Repository.File_Count (Graph) loop
-               if Ada.Strings.Unbounded.To_String (Repository.File_At (Graph, Index).Path) = Path then
+            Ensure;
+            for Index in 1 .. Repository.File_Count (Held) loop
+               if Ada.Strings.Unbounded.To_String (Repository.File_At (Held, Index).Path) = Path then
                   return True;
                end if;
             end loop;
@@ -1026,9 +1045,10 @@ package body Model_Runner.Framework.Consistency is
             Kind : constant String := (if Dot = 0 then "" else Gone (Dot .. Gone'Last));
             Root : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
          begin
-            for Index in 1 .. Repository.File_Count (Graph) loop
+            Ensure;
+            for Index in 1 .. Repository.File_Count (Held) loop
                declare
-                  Path : constant String := To_String (Repository.File_At (Graph, Index).Path);
+                  Path : constant String := To_String (Repository.File_At (Held, Index).Path);
                   Text : Unbounded_String;
                   Read : E.Error_Info;
                begin
@@ -1062,7 +1082,7 @@ package body Model_Runner.Framework.Consistency is
                           Went /= "" and then Intent.Links (Item, Intent.Requirement, Id, Relation).Contains (Went);
                      begin
                         if Followed and then (if Ada.Strings.Fixed.Index (Target, "/") > 0 then not Holds_File (Target)
-                                              else Repository.Find_Symbols (Graph, Target).Is_Empty
+                                              else Declares_None (Target)
                                                    and then not Holds_File (Target))
                         then
                            Found ((if Ada.Strings.Fixed.Index (Target, "/") > 0 then Missing_File
@@ -1075,7 +1095,7 @@ package body Model_Runner.Framework.Consistency is
                                                 else "implementation")
                                   & " " & Target & " takes the old one off");
                         elsif (if Ada.Strings.Fixed.Index (Target, "/") > 0 then not Holds_File (Target)
-                            else Repository.Find_Symbols (Graph, Target).Is_Empty
+                            else Declares_None (Target)
                                  and then not Holds_File (Target))
                         then
                            Found ((if Ada.Strings.Fixed.Index (Target, "/") > 0 then Missing_File
