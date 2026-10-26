@@ -198,6 +198,52 @@ package body Model_Runner.Framework.Repository is
       end if;
    end Add_Symbol;
 
+   --  Each name the graph's relations say -- the file or unit a relation
+   --  is from, the name it is to, the file whose reading found it -- held
+   --  once and shared, where every relation held its own copy: a tree of
+   --  2.5 million references said 1,162 paths and 17,000 names over and
+   --  over, and its graph took 1.7 GB of a session. A copy of an
+   --  unbounded string shares its text, so the graph's later copies share
+   --  them too. Where, a path and a line, is each relation's own.
+   package Shared_Names is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => Unbounded_String,
+      Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
+
+   --  Text as a name held once in Held: the copy already there, or this
+   --  one, kept for the next.
+   function Shared (Held : in out Shared_Names.Map; Text : String) return Unbounded_String is
+      Place : constant Shared_Names.Cursor := Held.Find (Text);
+   begin
+      if Shared_Names.Has_Element (Place) then
+         return Shared_Names.Element (Place);
+      end if;
+      declare
+         Made : constant Unbounded_String := To_Unbounded_String (Text);
+      begin
+         Held.Insert (Text, Made);
+         return Made;
+      end;
+   end Shared;
+
+   procedure Share_Names (Found : in out Graph) is
+      Held : Shared_Names.Map;
+
+      procedure Share (Name : in out Unbounded_String) is
+      begin
+         Name := Shared (Held, To_String (Name));
+      end Share;
+   begin
+      for Index in 1 .. Natural (Found.Relations.Length) loop
+         declare
+            Link : Relation renames Found.Relations.Reference (Index);
+         begin
+            Share (Link.From);
+            Share (Link.To);
+            Share (Link.Origin);
+         end;
+      end loop;
+   end Share_Names;
+
    procedure Add_Relation (Into : in out Graph; Item : Relation) is
       Made : Relation := Item;
    begin
@@ -1640,6 +1686,7 @@ package body Model_Runner.Framework.Repository is
       Result.Reading := Null_Unbounded_String;
       Result.Within := Within;
       Result.Within_Known := True;
+      Share_Names (Result);
       return Result;
    end Scan_All;
 
@@ -2091,6 +2138,7 @@ package body Model_Runner.Framework.Repository is
       Result.Reading := Null_Unbounded_String;
       Result.Within := Within;
       Result.Within_Known := True;
+      Share_Names (Result);
       return Result;
    end Refresh_Or_Check;
 
@@ -2576,6 +2624,11 @@ package body Model_Runner.Framework.Repository is
    is
       Value : Records.Item;
 
+      --  The names its relations say, each held once as it is read: shared
+      --  after the reading instead, the copies were made all the same, and
+      --  the memory they took was the process's from then on.
+      Names : Shared_Names.Map;
+
       --  The graph's files, symbols and relations, from a record of it.
       procedure Take (From : Records.Item) is
       begin
@@ -2611,13 +2664,12 @@ package body Model_Runner.Framework.Repository is
                   Found.Relations.Append
                     (Relation'
                      (Kind   => Relation_Kind'Value (Parts (1)),
-                      From   => To_Unbounded_String (Parts (2)),
-                      To     => To_Unbounded_String (Parts (3)),
+                      From   => Shared (Names, Parts (2)),
+                      To     => Shared (Names, Parts (3)),
                       Source => Derivation'Value (Parts (4)),
                       Sure   => Confidence'Value (Parts (5)),
                       Where  => To_Unbounded_String (Parts (6)),
-                      Origin => To_Unbounded_String
-                                  (if Natural (Parts.Length) = 7 then Parts (7) else "")));
+                      Origin => Shared (Names, (if Natural (Parts.Length) = 7 then Parts (7) else ""))));
                end if;
             end;
          end loop;
