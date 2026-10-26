@@ -3636,7 +3636,10 @@ void main_one() {
     //  row over all sixty-four: the lanes take the same groups of other
     //  rows instead, a cluster of lanes a row, and one clustered sum adds
     //  every cluster's row at once. The sums were what a short row paid.
+    //  Never more clusters than the workgroup has rows: at four rows a
+    //  row of one group would leave each cluster none.
     uint share = groups < IN_FLIGHT && IN_FLIGHT % groups == 0u
+                 && IN_FLIGHT / groups <= NUM_ROWS
                  ? IN_FLIGHT / groups : 1u;
     if (share > 1u) {
         uint g = ix % groups;

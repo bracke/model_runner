@@ -180,6 +180,16 @@ package body Model_Runner.Platform.Device.Products is
    --  was worth more than any change to the decode.
    Low_Wave_Rows  : constant := 8;
 
+   --  The grid formats but IQ1's, one vector at a time: four rows a
+   --  workgroup, twice the workgroups (llama.cpp's own count on this part);
+   --  their few-vector walks keep eight (MANY_ROWS in compile-shaders.sh).
+   --  On the device's clock, three alternated rounds: rows of 17,408 5-9
+   --  per cent faster, rows of 5,120 level but for the IQ3 formats' 4-9
+   --  faster and IQ2_XXS's 3 slower; IQ1_S and IQ1_M 2-5 slower, and
+   --  left at eight.
+   Codebook_Wave_Rows : constant := 4;
+   subtype Four_Row_Codebooks is Weight_Packing range Packed_IQ3_S .. Packed_IQ3_XXS;
+
    --  Q8_0's band on the same kernel: fewer rows a workgroup, more
    --  workgroups, which a format that is read rather than decoded wants.
    Q8_Wave_Rows   : constant := 2;
@@ -1253,6 +1263,7 @@ package body Model_Runner.Platform.Device.Products is
          and then Count not in Multi_Count
        then Many_Rows
        elsif Short then Q8_Short_Rows
+       elsif Packing in Four_Row_Codebooks and then Count not in Many_Count then Codebook_Wave_Rows
        elsif Packing in Low_Packing then Low_Wave_Rows
        elsif Packing in Packed_IQ4_NL | Packed_IQ4_XS | Packed_MXFP4
                         | Legacy_Packing
