@@ -2423,6 +2423,22 @@ package body Model_Runner.Framework.Retrieval is
       return Search_Current (Store, Rp.Brought_Up (Tree, Graph), Tree, Query, Most, Near, May_Read, Records);
    end Search;
 
+   ----------------
+   -- Warm_Index --
+   ----------------
+
+   procedure Warm_Index (Item : Stores.Store; Found : Repository.Graph) is
+      Hits : constant Hit_Lists.Vector :=
+        Search (Item, Found, "", "index", Most => 1, Records => False);
+      pragma Unreferenced (Hits);
+   begin
+      null;
+   exception
+      --  Made by the next search instead.
+      when others =>
+         null;
+   end Warm_Index;
+
    ---------------------------------------------------------------------------
    --  Excerpts.
    ---------------------------------------------------------------------------

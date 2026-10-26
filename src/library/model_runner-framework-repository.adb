@@ -2990,7 +2990,7 @@ package body Model_Runner.Framework.Repository is
 
    --  The reader: one read at a time, a project's graph by its directory.
    task Warmer is
-      entry Take (Project_Directory : String);
+      entry Take (Project_Directory : String; Then_Warm : After_Warm_Up);
    end Warmer;
 
    procedure Stop_Warm_Up is
@@ -4662,30 +4662,41 @@ package body Model_Runner.Framework.Repository is
 
    task body Warmer is
       Directory : Unbounded_String;
+      Action    : After_Warm_Up;
    begin
       loop
          select
-            accept Take (Project_Directory : String) do
+            accept Take (Project_Directory : String; Then_Warm : After_Warm_Up) do
                Directory := To_Unbounded_String (Project_Directory);
+               Action := Then_Warm;
             end Take;
          or
             terminate;
          end select;
          declare
-            Store  : Stores.Store;
-            Status : E.Error_Info;
+            Store    : Stores.Store;
+            Status   : E.Error_Info;
+            --  Let go once: a read claimed after it is another's.
+            Released : Boolean := False;
          begin
             Stores.Open_To_Read (Store, To_String (Directory), Status);
             if E.Is_Ok (Status) then
                declare
                   Found : constant Graph := Now (Store);
-                  pragma Unreferenced (Found);
                begin
-                  null;
+                  --  The graph's askers let go first: what follows is made
+                  --  beside them, not waited for.
+                  Warming.Release;
+                  Released := True;
+                  if Action /= null and then not Warming.Stopping then
+                     Action (Store, Found);
+                  end if;
                end;
             end if;
             Stores.Close (Store);
-            Warming.Release;
+            if not Released then
+               Warming.Release;
+            end if;
          exception
             --  Told to stop, or the read failed: nothing is kept, and what
             --  asks next reads the graph itself.
@@ -4696,7 +4707,9 @@ package body Model_Runner.Framework.Repository is
                   when others =>
                      null;
                end;
-               Warming.Release;
+               if not Released then
+                  Warming.Release;
+               end if;
          end;
       end loop;
    end Warmer;
@@ -4705,7 +4718,7 @@ package body Model_Runner.Framework.Repository is
    -- Warm_Up --
    -------------
 
-   procedure Warm_Up (Project_Directory : String) is
+   procedure Warm_Up (Project_Directory : String; Then_Warm : After_Warm_Up := null) is
       Store  : Stores.Store;
       Status : E.Error_Info;
       Key    : Unbounded_String;
@@ -4721,7 +4734,7 @@ package body Model_Runner.Framework.Repository is
       Warming.Claim (To_String (Key), Got);
       if Got then
          select
-            Warmer.Take (Project_Directory);
+            Warmer.Take (Project_Directory, Then_Warm);
          or
             delay 1.0;
             Warming.Release;

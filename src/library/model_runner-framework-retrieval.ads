@@ -170,6 +170,15 @@ package Model_Runner.Framework.Retrieval is
       May_Read : Path_Check := null;
       Records  : Boolean := True) return Hit_Lists.Vector;
 
+   --  The index of a project's files made ready, as a search makes it:
+   --  given to Repository.Warm_Up, so a session's first search -- and a
+   --  task's first context -- does not read every file for it. 2.3 s of a
+   --  context's 3.4 in a tree of 1,162 files.
+   --
+   --  @param Item The project's store, opened to read.
+   --  @param Found Its graph, as the warm-up read it.
+   procedure Warm_Index (Item : Stores.Store; Found : Repository.Graph);
+
    --  What a search of a tree did not search: the files its graph could
    --  not read, and those the index could not read, could not index or
    --  holds no words of, being too large -- each as PATH: why, sorted. One

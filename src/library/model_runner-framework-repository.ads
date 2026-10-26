@@ -431,6 +431,10 @@ package Model_Runner.Framework.Repository is
       Fresh : out Boolean;
       Files : out Graph);
 
+   --  What a background read does once the graph is read: another layer's
+   --  readiness made from it, given the store it was read by.
+   type After_Warm_Up is access procedure (Item : Stores.Store; Found : Graph);
+
    --  Start reading a project's kept graph in the background, brought up
    --  to date, so that what asks for it next -- a search, a context --
    --  finds it in memory: a session opens without its graph's relations,
@@ -440,7 +444,9 @@ package Model_Runner.Framework.Repository is
    --  under way.
    --
    --  @param Project_Directory The project.
-   procedure Warm_Up (Project_Directory : String);
+   --  @param Then_Warm What else is made ready from the graph once it is
+   --    read, in the same background: the search index of its files.
+   procedure Warm_Up (Project_Directory : String; Then_Warm : After_Warm_Up := null);
 
    --  Stop a read Warm_Up started, for a program ending: it is let go
    --  between one part of the graph and the next.

@@ -40,6 +40,7 @@ with Model_Runner.Framework.Orchestration;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
@@ -2508,7 +2509,8 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       S.Close (Store);
       --  Its graph read meanwhile, for the first question that needs it.
-      Model_Runner.Framework.Repository.Warm_Up (Here);
+      Model_Runner.Framework.Repository.Warm_Up
+        (Here, Model_Runner.Framework.Retrieval.Warm_Index'Access);
    end Recover_Here;
 
    ------------------------
