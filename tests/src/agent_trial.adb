@@ -824,23 +824,44 @@ package body Agent_Trial is
                         Ada.Text_IO.Put_Line
                           (Out_File, "model " & Model & "; began " & Local (Began)
                            & "; quiet since " & Local (Grew));
-                        Start_Search (Search, Tasks_At, "", [Directory => True, others => False]);
-                        while More_Entries (Search) loop
-                           Get_Next_Entry (Search, Item);
-                           declare
-                              Id : constant String := Simple_Name (Item);
-                              At_Task : constant String := Tasks_At & "/" & Id;
-                           begin
-                              if Id /= "." and then Id /= ".." then
-                                 Ada.Text_IO.Put_Line
-                                   (Out_File, Id & " " & First_Line (At_Task & "/comm")
-                                    & " wchan=" & First_Line (At_Task & "/wchan")
-                                    & " syscall=" & First_Line (At_Task & "/syscall")
-                                    & " stat=" & First_Line (At_Task & "/stat"));
-                              end if;
-                           end;
-                        end loop;
-                        End_Search (Search);
+                        declare
+                           Lines   : Unbounded_String;
+                           Running : Natural := 0;
+                        begin
+                           Start_Search (Search, Tasks_At, "", [Directory => True, others => False]);
+                           while More_Entries (Search) loop
+                              Get_Next_Entry (Search, Item);
+                              declare
+                                 Id      : constant String := Simple_Name (Item);
+                                 At_Task : constant String := Tasks_At & "/" & Id;
+                                 Stat    : constant String := First_Line (At_Task & "/stat");
+                                 Closing : constant Natural :=
+                                   Ada.Strings.Fixed.Index (Stat, ") ", Ada.Strings.Backward);
+                              begin
+                                 if Id /= "." and then Id /= ".." then
+                                    if Closing > 0 and then Closing + 2 <= Stat'Last
+                                      and then Stat (Closing + 2) = 'R'
+                                    then
+                                       Running := Running + 1;
+                                    end if;
+                                    Append (Lines, Id & " " & First_Line (At_Task & "/comm")
+                                            & " wchan=" & First_Line (At_Task & "/wchan")
+                                            & " syscall=" & First_Line (At_Task & "/syscall")
+                                            & " stat=" & Stat & ASCII.LF);
+                                 end if;
+                              end;
+                           end loop;
+                           End_Search (Search);
+                           --  A thread running is work going on -- a long
+                           --  prompt read, a large tree's graph -- not the
+                           --  stall this looks for, every thread asleep.
+                           Ada.Text_IO.Put_Line
+                             (Out_File,
+                              (if Running > 0
+                               then "busy:" & Natural'Image (Running) & " threads running -- work, not a stall"
+                               else "asleep: no thread running -- a stall"));
+                           Ada.Text_IO.Put (Out_File, To_String (Lines));
+                        end;
                         declare
                            Fds_At : constant String := Containing_Directory (Tasks_At) & "/fd";
                         begin
