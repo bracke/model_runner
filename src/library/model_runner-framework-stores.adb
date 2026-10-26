@@ -458,6 +458,36 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Read;
 
+   -----------------
+   -- Read_Fields --
+   -----------------
+
+   procedure Read_Fields
+     (Item    : Store;
+      Where   : Area;
+      Name    : String;
+      Process : not null access procedure (Field, Value : String);
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Text : Unbounded_String;
+   begin
+      if not Item.Opened then
+         Not_Open (Item, Status);
+      elsif not Is_Name (Name) then
+         Status := E.Make (E.Framework_Name_Invalid);
+         E.Add_Text (Status, "value", Name);
+      elsif not Exists (Item, Where, Name) then
+         Status := E.Make (E.Framework_Not_Found);
+         E.Add_Text (Status, "name", Name);
+         E.Add_Text (Status, "path", Place_Of (Where, Name), E.Param_Path);
+      else
+         Read_Text (Record_Path (Root (Item), Where, Name), Text, Status);
+         if E.Is_Ok (Status) then
+            Records.Walk (To_String (Text), Place_Of (Where, Name), Process, Status);
+         end if;
+      end if;
+   end Read_Fields;
+
    ------------
    -- Exists --
    ------------

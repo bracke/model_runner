@@ -2562,18 +2562,18 @@ package body Model_Runner.Framework.Repository is
 
    --  Each bucket of the graph kept in Item that may hold a reference to a
    --  name Asked takes -- one whose uses name one, every one where they are
-   --  not kept or Asked is null -- read and given to Take. Known false where
+   --  not kept or Asked is null -- read and its fields given to Take, the
+   --  record not made: parsed and checked whole, the buckets naming one
+   --  name much used took two seconds. Known false where
    --  the graph is not kept in buckets or one could not be read.
    procedure For_Kept_Buckets
      (Item  : Stores.Store;
       Asked : access function (Name : String) return Boolean;
-      Take  : not null access procedure (Held : Records.Item);
+      Take  : not null access procedure (Field, Text : String);
       Known : out Boolean;
       --  Where not empty, only the buckets these files' relations are in.
       Only  : Name_Lists.Vector := Name_Lists.Empty_Vector)
    is
-      Value     : Records.Item;
-      Uses      : Records.Item;
       Read      : E.Error_Info;
       Uses_Read : E.Error_Info;
       Count     : Natural;
@@ -2592,36 +2592,62 @@ package body Model_Runner.Framework.Repository is
          end loop;
          return False;
       end Names_One;
+
+      --  Of the record and the uses, the fields asked here, walked: both
+      --  made whole, the record's 6 MB took longer than the buckets.
+      Reader, Buckets, Print     : Unbounded_String;
+      Uses_Reader, Uses_Print    : Unbounded_String;
+      Said                       : Name_Lists.Vector;
+
+      procedure Take_Main (Field, Text : String) is
+      begin
+         if Field = "reader" then
+            Reader := To_Unbounded_String (Text);
+         elsif Field = "buckets" then
+            Buckets := To_Unbounded_String (Text);
+         elsif Field = "fingerprint" then
+            Print := To_Unbounded_String (Text);
+         end if;
+      end Take_Main;
+
+      procedure Take_Uses (Field, Text : String) is
+      begin
+         if Field = "reader" then
+            Uses_Reader := To_Unbounded_String (Text);
+         elsif Field = "fingerprint" then
+            Uses_Print := To_Unbounded_String (Text);
+         elsif Ada.Strings.Fixed.Index (Field, "bucket.") = Field'First then
+            Said.Append (Text);
+         end if;
+      end Take_Uses;
    begin
       Known := False;
-      Stores.Read (Item, Indexes_Area, Index_Name, Value, Read);
-      if E.Is_Error (Read) or else Records.Get (Value, "reader") /= Reader_Version
-        or else Records.Get (Value, "buckets") = ""
-      then
+      Stores.Read_Fields (Item, Indexes_Area, Index_Name, Take_Main'Access, Read);
+      if E.Is_Error (Read) or else To_String (Reader) /= Reader_Version or else Buckets = "" then
          return;
       end if;
-      Count := Natural'Value (Records.Get (Value, "buckets"));
+      Count := Natural'Value (To_String (Buckets));
       if Asked /= null then
-         Stores.Read (Item, Indexes_Area, Uses_Name, Uses, Uses_Read);
+         Stores.Read_Fields (Item, Indexes_Area, Uses_Name, Take_Uses'Access, Uses_Read);
+      end if;
+      --  Uses of another graph than the record's, or of another reader:
+      --  every bucket read, as where there are none.
+      if Asked /= null and then E.Is_Ok (Uses_Read)
+        and then (To_String (Uses_Reader) /= Reader_Version or else Uses_Print /= Print
+                  or else Natural (Said.Length) /= Count)
+      then
+         Uses_Read := E.Make (E.Framework_Not_Found);
       end if;
       for Bucket in 1 .. Count loop
          if (Only.Is_Empty
              or else (for some Path of Only =>
                         Bucket_Of ((Origin => To_Unbounded_String (Path), others => <>), Count) = Bucket))
-           and then
-             (Asked = null or else E.Is_Error (Uses_Read)
-              or else Records.Get (Uses, "reader") /= Reader_Version
-              or else Names_One (Records.Get (Uses, "bucket." & Records.Numbered (Bucket, Count))))
+           and then (Asked = null or else E.Is_Error (Uses_Read) or else Names_One (Said (Bucket)))
          then
-            declare
-               Held : Records.Item;
-            begin
-               Stores.Read (Item, Indexes_Area, Bucket_Name (Bucket, Count), Held, Read);
-               if E.Is_Error (Read) then
-                  return;
-               end if;
-               Take (Held);
-            end;
+            Stores.Read_Fields (Item, Indexes_Area, Bucket_Name (Bucket, Count), Take, Read);
+            if E.Is_Error (Read) then
+               return;
+            end if;
          end if;
       end loop;
       Known := True;
@@ -2663,19 +2689,15 @@ package body Model_Runner.Framework.Repository is
 
       function Asked (Name : String) return Boolean is (Names.Contains (Name));
 
-      procedure Take (Held : Records.Item) is
+      procedure Take (Field, Text : String) is
+         To_First, To_Last, Origin_First : Natural;
       begin
-         for Index in 1 .. Records.Field_Count (Held) loop
-            declare
-               Text : constant String := Records.Field_Value (Held, Index);
-               To_First, To_Last, Origin_First : Natural;
-            begin
-               Cut_Relation (Text, To_First, To_Last, Origin_First);
-               if To_Last >= To_First and then Names.Contains (Text (To_First .. To_Last)) then
-                  Result.Include (Text (Origin_First .. Text'Last));
-               end if;
-            end;
-         end loop;
+         if Ada.Strings.Fixed.Index (Field, "relation.") = Field'First then
+            Cut_Relation (Text, To_First, To_Last, Origin_First);
+            if To_Last >= To_First and then Names.Contains (Text (To_First .. To_Last)) then
+               Result.Include (Text (Origin_First .. Text'Last));
+            end if;
+         end if;
       end Take;
    begin
       For_Kept_Buckets (Item, Asked'Access, Take'Access, Known);
@@ -2697,41 +2719,34 @@ package body Model_Runner.Framework.Repository is
       Held_Set  : Name_Sets.Set;
       Names     : Shared_Names.Map;
 
-      procedure Take (Held : Records.Item) is
+      procedure Take (Field, Text : String) is
+         To_First, To_Last, Origin_First : Natural;
       begin
-         for Index in 1 .. Records.Field_Count (Held) loop
-            declare
-               Field : constant String := Records.Field_Name (Held, Index);
-               Text  : constant String := Records.Field_Value (Held, Index);
-               To_First, To_Last, Origin_First : Natural;
-            begin
-               if Ada.Strings.Fixed.Index (Field, "relation.") = Field'First then
-                  Cut_Relation (Text, To_First, To_Last, Origin_First);
-                  if To_Last >= To_First
-                    and then (Wanted = null or else Wanted (Text (To_First .. To_Last)))
-                    and then Files_Set.Contains (Text (Origin_First .. Text'Last))
-                    and then not Held_Set.Contains (Text (Origin_First .. Text'Last))
-                    and then (Only.Is_Empty or else Only.Contains (Text (Origin_First .. Text'Last)))
-                  then
-                     declare
-                        Parts : constant Name_Lists.Vector := Split_Tabs (Text);
-                     begin
-                        if Natural (Parts.Length) = 7 then
-                           Into.Append
-                             (Relation'
-                              (Kind   => Relation_Kind'Value (Parts (1)),
-                               From   => Shared (Names, Parts (2)),
-                               To     => Shared (Names, Parts (3)),
-                               Source => Derivation'Value (Parts (4)),
-                               Sure   => Confidence'Value (Parts (5)),
-                               Where  => To_Unbounded_String (Parts (6)),
-                               Origin => Shared (Names, Parts (7))));
-                        end if;
-                     end;
+         if Ada.Strings.Fixed.Index (Field, "relation.") = Field'First then
+            Cut_Relation (Text, To_First, To_Last, Origin_First);
+            if To_Last >= To_First
+              and then (Wanted = null or else Wanted (Text (To_First .. To_Last)))
+              and then Files_Set.Contains (Text (Origin_First .. Text'Last))
+              and then not Held_Set.Contains (Text (Origin_First .. Text'Last))
+              and then (Only.Is_Empty or else Only.Contains (Text (Origin_First .. Text'Last)))
+            then
+               declare
+                  Parts : constant Name_Lists.Vector := Split_Tabs (Text);
+               begin
+                  if Natural (Parts.Length) = 7 then
+                     Into.Append
+                       (Relation'
+                        (Kind   => Relation_Kind'Value (Parts (1)),
+                         From   => Shared (Names, Parts (2)),
+                         To     => Shared (Names, Parts (3)),
+                         Source => Derivation'Value (Parts (4)),
+                         Sure   => Confidence'Value (Parts (5)),
+                         Where  => To_Unbounded_String (Parts (6)),
+                         Origin => Shared (Names, Parts (7))));
                   end if;
-               end if;
-            end;
-         end loop;
+               end;
+            end if;
+         end if;
       end Take;
    begin
       for File of From.Files loop

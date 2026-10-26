@@ -180,6 +180,21 @@ package Model_Runner.Framework.Records is
       Value  : out Item;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Each field of a record's text, headers included, in the order the
+   --  text has them, given to Process without a record being made or
+   --  checked: for a large derived record read for a few of its fields.
+   --
+   --  @param Text The text.
+   --  @param Origin Where it came from, for the diagnostic.
+   --  @param Process Given each field's name and value.
+   --  @param Status Framework_Record_Malformed where the text is framed
+   --    otherwise than a record's.
+   procedure Walk
+     (Text    : String;
+      Origin  : String;
+      Process : not null access procedure (Name, Value : String);
+      Status  : out Model_Runner.Errors.Error_Info);
+
 private
 
    use Ada.Strings.Unbounded;

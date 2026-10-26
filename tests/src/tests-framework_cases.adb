@@ -314,6 +314,25 @@ package body Tests.Framework_Cases is
       Assert (Interfaces."=" (F.Hash_On ("cd", F.Hash ("ab")), F.Hash ("abcd"))
               and then F.Fingerprint_Of (F.Hash ("abcd")) = F.Fingerprint ("abcd"),
               "a hash continued is not the hash of the bytes joined");
+
+      --  Walked, each field is given as the text has it, headers and all,
+      --  and a text framed otherwise refused.
+      declare
+         Walked : Unbounded_String;
+         procedure Note (Name, Value : String) is
+         begin
+            Append (Walked, Name & "=" & Value & ";");
+         end Note;
+      begin
+         R.Walk (R.Serialize (First), "memory", Note'Access, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Ada.Strings.Fixed.Index (To_String (Walked), "revision=3;") > 0
+                 and then Ada.Strings.Fixed.Index (To_String (Walked), "value=" & Awkward & ";") > 0
+                 and then Ada.Strings.Fixed.Index (To_String (Walked), "key=language;") > 0,
+                 "a record walked did not give its fields: " & To_String (Walked));
+         R.Walk (R.Serialize (First) & "stray 9" & ASCII.LF & "x", "memory", Note'Access, Status);
+         Assert (E.Is_Error (Status), "a field running past the end was walked");
+      end;
    end Records_Round_Trip;
 
    --  A list's fields are numbered to sort in its order however long it

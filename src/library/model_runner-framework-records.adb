@@ -275,6 +275,67 @@ package body Model_Runner.Framework.Records is
    function Fingerprint_Of (Value : Item) return String
    is (Fingerprint (Serialize (Value)));
 
+   ----------
+   -- Walk --
+   ----------
+
+   procedure Walk
+     (Text    : String;
+      Origin  : String;
+      Process : not null access procedure (Name, Value : String);
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      At_Byte : Natural;
+      Length  : Natural;
+      Space   : Natural;
+      Break   : Natural;
+
+      procedure Refuse (Detail : String) is
+      begin
+         Status := E.Make (E.Framework_Record_Malformed);
+         E.Add_Text (Status, "path", Origin, E.Param_Path);
+         E.Add_Text (Status, "detail", Detail);
+      end Refuse;
+   begin
+      Status := E.Success;
+      if Text'Length < Signature'Length + 1
+        or else Text (Text'First .. Text'First + Signature'Length - 1) /= Signature
+        or else Text (Text'First + Signature'Length) /= ASCII.LF
+      then
+         Refuse ("it does not begin with " & Signature);
+         return;
+      end if;
+      At_Byte := Text'First + Signature'Length + 1;
+      while At_Byte <= Text'Last loop
+         Space := 0;
+         Break := 0;
+         for Index in At_Byte .. Text'Last loop
+            if Text (Index) = ' ' and then Space = 0 then
+               Space := Index;
+            elsif Text (Index) = ASCII.LF then
+               Break := Index;
+               exit;
+            end if;
+         end loop;
+         if Space = 0 or else Break = 0 or else Space > Break
+           or else Break - Space - 1 not in 1 .. 9
+           or else (for some Char of Text (Space + 1 .. Break - 1) => Char not in '0' .. '9')
+         then
+            Refuse ("a field has no length");
+            return;
+         end if;
+         Length := Natural'Value (Text (Space + 1 .. Break - 1));
+         if Length > Text'Last - Break or else Text'Last - Break - Length < 1
+           or else Text (Break + Length + 1) /= ASCII.LF
+         then
+            Refuse ("field " & Text (At_Byte .. Space - 1) & " runs past the end");
+            return;
+         end if;
+         Process (Text (At_Byte .. Space - 1), Text (Break + 1 .. Break + Length));
+         At_Byte := Break + Length + 2;
+      end loop;
+   end Walk;
+
    -----------
    -- Parse --
    -----------

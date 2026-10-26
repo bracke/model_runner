@@ -181,6 +181,23 @@ package Model_Runner.Framework.Stores is
       Value  : out Records.Item;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Each field of a record, given to Process as its text has it, the
+   --  record neither made nor checked against its schema: for a large
+   --  derived record read for a few of its fields.
+   --
+   --  @param Item The store.
+   --  @param Where Its area.
+   --  @param Name Its name.
+   --  @param Process Given each field's name and value.
+   --  @param Status Framework_Not_Found when there is no such record, and
+   --    a read or format failure otherwise.
+   procedure Read_Fields
+     (Item    : Store;
+      Where   : Area;
+      Name    : String;
+      Process : not null access procedure (Field, Value : String);
+      Status  : out Model_Runner.Errors.Error_Info);
+
    --  Whether a record is there.
    --
    --  @param Item The store.
