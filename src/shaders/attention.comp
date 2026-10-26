@@ -756,6 +756,25 @@ void main() {
         }
     }
 
+    //  A head of 256 read sixteen lanes a key rather than sixty-four,
+    //  sixteen components a lane: four keys a round, and a key's partials
+    //  met by an add across sixteen lanes, not sixty-four. Every head of a
+    //  bundle summed each key across the whole subgroup -- six adds of six
+    //  steps a position for a group of six -- and that, not the reads, was
+    //  what a deep cache cost.
+    bool quad = across && pieces == 64u && gl_SubgroupSize == 64u;
+    uint quarter = gl_SubgroupInvocationID % 16u;
+    vec4 qq[HEADS][4];
+
+    if (quad) {
+        for (uint h = 0u; h < HEADS; h++) {
+            for (uint j = 0u; j < 4u; j++) {
+                qq[h][j] = q4[((q_of[0] + (head + h) * shape.head_size) >> 2u)
+                              + quarter * 4u + j];
+            }
+        }
+    }
+
 //  Four rounds' keys asked for before any is used, so four loads are in
 //  flight a lane rather than one: a round's cluster adds wait on its
 //  load, and thirty-two waits in a row are what a tile costs otherwise.
@@ -802,6 +821,35 @@ void main() {
             } \
         } \
     }
+#define ACROSS_QUAD(DEPTH) \
+    for (uint r = 0u; r < 16u; r += DEPTH) { \
+        if (dealt \
+            && base + r * 4u * gl_NumSubgroups > last_max) { \
+            break; \
+        } \
+        vec4 kk[DEPTH][4]; \
+        for (uint e = 0u; e < DEPTH; e++) { \
+            uint at_tile = AT_TILE (r + e, 16u); \
+            uint pos = min (base + at_tile, last_max); \
+            uint k_at = place_of (held_of[0], pos, shape.k_base, \
+                                  shape.kv_width) \
+                        + group * shape.head_size; \
+            for (uint j = 0u; j < 4u; j++) { \
+                kk[e][j] = FOUR_AT ((k_at >> 2u) + quarter * 4u + j); \
+            } \
+        } \
+        for (uint e = 0u; e < DEPTH; e++) { \
+            uint at_tile = AT_TILE (r + e, 16u); \
+            for (uint h = 0u; h < HEADS; h++) { \
+                float mine = dot (qq[h][0], kk[e][0]) + dot (qq[h][1], kk[e][1]) \
+                             + dot (qq[h][2], kk[e][2]) + dot (qq[h][3], kk[e][3]); \
+                float whole = subgroupClusteredAdd (mine, 16u); \
+                if (quarter == 0u && at_tile < LANES) { \
+                    parts[at_tile * HEADS + h] = whole; \
+                } \
+            } \
+        } \
+    }
 #endif
 
     for (uint base = my_first; !empty_slice && base <= my_last;
@@ -817,12 +865,14 @@ void main() {
             //  This subgroup's positions of the tile, a few keys a round.
             //  A cluster's width has to be a constant the compiler sees,
             //  so the three widths are three copies of the rounds.
-            uint which = gl_SubgroupInvocationID / pieces;
+            uint which = gl_SubgroupInvocationID / (quad ? 16u : pieces);
 
             if (pieces == 32u) {
                 ACROSS_ROUNDS(32u, 4u)
             } else if (pieces == 16u) {
                 ACROSS_ROUNDS(16u, 4u)
+            } else if (quad) {
+                ACROSS_QUAD(4u)
             } else {
                 ACROSS_ROUNDS(64u, 16u)
             }
