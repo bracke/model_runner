@@ -348,9 +348,28 @@ package body Model_Runner.Framework.Code_Queries is
             Rank  : Natural := 0;
 
             --  The files the search could not look in, a few named: what
-            --  was not found may be in one of them.
+            --  was not found may be in one of them. Only those the agent
+            --  may read, as the hits are: named whatever its reads, a file
+            --  it may not read was told it all the same.
+            function Visible_Missed return Name_Lists.Vector is
+               Result : Name_Lists.Vector;
+            begin
+               for One of Rv.Not_Searched (Graph, Tree) loop
+                  declare
+                     Colon : constant Natural := Ada.Strings.Fixed.Index (One, ": ");
+                  begin
+                     if Model_Runner.Tools.Builtin.May_Read_Found
+                          (if Colon > One'First then One (One'First .. Colon - 1) else One)
+                     then
+                        Result.Append (One);
+                     end if;
+                  end;
+               end loop;
+               return Result;
+            end Visible_Missed;
+
             function Left_Out return String is
-               Missed : constant Name_Lists.Vector := Rv.Not_Searched (Graph, Tree);
+               Missed : constant Name_Lists.Vector := Visible_Missed;
                Named  : Unbounded_String;
             begin
                if Missed.Is_Empty then
@@ -373,16 +392,29 @@ package body Model_Runner.Framework.Code_Queries is
             end if;
             for One of Hits loop
                Rank := Rank + 1;
-               Append (Said, Image (Rank) & ". "
-                       & (case One.Kind is
-                            when Rv.Symbol_Hit => To_String (One.What) & " " & To_String (One.Name) & " at "
-                                                  & To_String (One.Path) & ":" & Image (One.Line),
-                            when Rv.File_Hit   => "file " & To_String (One.Name) & " (" & To_String (One.What) & ")",
-                            when Rv.Record_Hit => To_String (One.Name) & " " & To_String (One.What),
-                            when Rv.Text_Hit   => "text " & To_String (One.Path) & ":" & Image (One.Line) & ": "
-                                                  & To_String (One.What))
-                       & " -- score" & Natural'Image (One.Score) & ": " & To_String (One.Why)
-                       & " [" & To_String (One.Authority) & "]" & ASCII.LF);
+               declare
+                  Entry_Text : constant String :=
+                    Image (Rank) & ". "
+                    & (case One.Kind is
+                         when Rv.Symbol_Hit => To_String (One.What) & " " & To_String (One.Name) & " at "
+                                               & To_String (One.Path) & ":" & Image (One.Line),
+                         when Rv.File_Hit   => "file " & To_String (One.Name) & " (" & To_String (One.What) & ")",
+                         when Rv.Record_Hit => To_String (One.Name) & " " & To_String (One.What),
+                         when Rv.Text_Hit   => "text " & To_String (One.Path) & ":" & Image (One.Line) & ": "
+                                               & To_String (One.What))
+                    & " -- score" & Natural'Image (One.Score) & ": " & To_String (One.Why)
+                    & " [" & To_String (One.Authority) & "]" & ASCII.LF;
+               begin
+                  --  Whole hits only, as many as leave room for what is
+                  --  said after them: cut at the end, the last ended
+                  --  part-way through its path.
+                  if Length (Said) + Entry_Text'Length > Room then
+                     Append (Said, "and" & Natural'Image (Natural (Hits.Length) - Rank + 1)
+                             & " more hits not shown for room -- a narrower query shows them" & ASCII.LF);
+                     exit;
+                  end if;
+                  Append (Said, Entry_Text);
+               end;
             end loop;
             Append (Said, Note);
             Append (Said, "find kind declaration with a name or PATH:LINE shows its lines" & ASCII.LF);

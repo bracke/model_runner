@@ -91,6 +91,39 @@ with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
 
+   --  What a background read's follow-on saw: whether it ran, and how many
+   --  files the graph it was given held.
+   protected Warmed is
+      procedure Note (Files : Natural);
+      function Seen return Natural;
+      procedure Reset;
+   private
+      Count : Natural := 0;
+   end Warmed;
+
+   protected body Warmed is
+      procedure Note (Files : Natural) is
+      begin
+         Count := Files;
+      end Note;
+
+      function Seen return Natural is (Count);
+
+      procedure Reset is
+      begin
+         Count := 0;
+      end Reset;
+   end Warmed;
+
+   procedure Note_Warmed
+     (Item  : Model_Runner.Framework.Stores.Store;
+      Found : Model_Runner.Framework.Repository.Graph)
+   is
+      pragma Unreferenced (Item);
+   begin
+      Warmed.Note (Model_Runner.Framework.Repository.File_Count (Found));
+   end Note_Warmed;
+
    use AUnit.Assertions;
    use Ada.Strings.Unbounded;
    use type Model_Runner.Errors.Error_Code;
@@ -3679,9 +3712,19 @@ package body Tests.Framework_Cases is
 
          --  Read in the background, then asked for: the asker waits for that
          --  read rather than making its own, and has the graph a scan makes.
-         Rp.Warm_Up (Project);
+         --  And what follows it -- the search index made ready -- runs
+         --  after, given the graph it read.
+         Warmed.Reset;
+         Rp.Warm_Up (Project, Note_Warmed'Access);
          Assert (Rp.Graph_Fingerprint (Rp.Now (Store)) = Rp.Graph_Fingerprint (Rp.Scan (Project)),
                  "a graph read in the background was not the tree's");
+         for Tries in 1 .. 300 loop
+            exit when Warmed.Seen > 0;
+            delay 0.1;
+         end loop;
+         Assert (Warmed.Seen = Rp.File_Count (Rp.Scan (Project)),
+                 "what follows a background read did not run with its graph:" & Warmed.Seen'Image);
+         Model_Runner.Framework.Retrieval.Warm_Index (Store, Rp.Now (Store));
       exception
          when others =>
             Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
@@ -21849,6 +21892,24 @@ package body Tests.Framework_Cases is
          Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "Parse_Number", "", False, Failed));
          Assert (not Failed and then Ada.Strings.Fixed.Index (To_String (Said), "REQ-") = 0,
                  "records were shown to one without them");
+         --  A file too large to index: named among those not searched to
+         --  one who may read it, and not to one who may not.
+         Put_File (Fresh_Root (Store) & "/docs/huge_table.txt",
+                   Ada.Strings.Fixed."*" (Model_Runner.Framework.Retrieval.Indexed_Most / 8 + 1, "bandicoot "));
+         Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "Parse_Number width", "", True, Failed));
+         Assert (Ada.Strings.Fixed.Index (To_String (Said), "docs/huge_table.txt") > 0,
+                 "a file not searched was not named: " & To_String (Said));
+         declare
+            No_Docs : Pm.Permission_Set := Pm.Unrestricted;
+         begin
+            No_Docs (Pm.Read_Source).Deny.Append ("docs");
+            No_Docs (Pm.Read_Specs).Deny.Append ("docs");
+            Model_Runner.Tools.Builtin.Hold_Reads (Dirs.Full_Name (Fresh_Root (Store)), No_Docs);
+            Said := To_Unbounded_String (Cq.Retrieve (Store, "search", "Parse_Number width", "", True, Failed));
+            Model_Runner.Tools.Builtin.Let_Reads_Go;
+            Assert (Ada.Strings.Fixed.Index (To_String (Said), "docs/") = 0,
+                    "a file not searched was named to one who may not read it: " & To_String (Said));
+         end;
          declare
             Held : Pm.Permission_Set := Pm.Unrestricted;
          begin
@@ -21886,6 +21947,7 @@ package body Tests.Framework_Cases is
                        "a search or a declaration showed a file the agent may not read: " & To_String (Said));
             end;
          end;
+         Dirs.Delete_File (Fresh_Root (Store) & "/docs/huge_table.txt");
       end;
       S.Close (Store);
    end Tasks_Are_Given_What_They_Name;
