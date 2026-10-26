@@ -4704,6 +4704,35 @@ package body Tests.Framework_Cases is
               and then Ix.Entries (Store, Ix.Search_Index).Contains ("read" & ASCII.HT & "IO.Read")
               and then Ix.Entries (Store, Ix.Dependency_Index).Is_Empty,
               "an index does not say what the state and the repository hold");
+
+      --  Past a record's size, an index's entries kept in parts: read back
+      --  the same; kept whole again, its parts let go.
+      declare
+         Before : constant F.Name_Lists.Vector := Ix.Entries (Store, Ix.Search_Index);
+      begin
+         Rp.Keep_Parts_At_Most (40);
+         Put_File (Fresh_Root (Store) & "/src/io.ads", "package IO is" & LF
+                   & "   procedure Read;" & LF & "   procedure Write;" & LF & "end IO;" & LF);
+         Ix.Build (Store, Change, Rp.Now (Store), Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then S.Exists (Store, F.Indexes_Area, "search-part-000002"),
+                 "an index past a record's size was not kept in parts: " & Code_Of (Status));
+         Assert (Ix.Entries (Store, Ix.Search_Index).Contains ("write" & ASCII.HT & "IO.Write")
+                 and then Natural (Ix.Entries (Store, Ix.Search_Index).Length) = Natural (Before.Length) + 1,
+                 "an index kept in parts did not read back whole");
+         Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
+         Put_File (Fresh_Root (Store) & "/src/io.ads", "package IO is" & LF
+                   & "   procedure Read;" & LF & "end IO;" & LF);
+         Ix.Build (Store, Change, Rp.Now (Store), Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then not S.Exists (Store, F.Indexes_Area, "search-part-000001")
+                 and then Ix.Entries (Store, Ix.Search_Index) = Before,
+                 "an index kept whole again left its parts, or did not read back: " & Code_Of (Status));
+      exception
+         when others =>
+            Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
+            raise;
+      end;
       S.Close (Store);
    end Indexes_Are_Derived;
 

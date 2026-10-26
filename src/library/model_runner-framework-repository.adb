@@ -2437,6 +2437,8 @@ package body Model_Runner.Framework.Repository is
       Part_Bytes := Long_Long_Integer (Bytes);
    end Keep_Parts_At_Most;
 
+   function Parts_At_Most return Positive is (Positive (Part_Bytes));
+
    --  The name a part of the graph's relations is kept under.
    function Part_Name (Part : Positive) return String
    is (Index_Name & "-part-" & Records.Numbered (Part, Part));

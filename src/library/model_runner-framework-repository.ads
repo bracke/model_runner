@@ -313,6 +313,12 @@ package Model_Runner.Framework.Repository is
    --  @param Bytes The most a record of the graph holds.
    procedure Keep_Parts_At_Most (Bytes : Positive);
 
+   --  How many bytes a record of a kept graph or index is held to, as
+   --  Keep_Parts_At_Most last set it.
+   --
+   --  @return The most a record holds before it is kept in parts.
+   function Parts_At_Most return Positive;
+
    --  Bring a graph up to date with the project as it is now, reading only
    --  what changed: a file whose size and time are those it was read with
    --  is taken as it was, a changed or new one is read again, a removed one

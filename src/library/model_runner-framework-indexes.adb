@@ -36,6 +36,13 @@ package body Model_Runner.Framework.Indexes is
    --  The record that says what the indexes were last built from.
    Built_Name : constant String := "built";
 
+   --  The name a part of an index's entries is kept under.
+   function Part_Name (Which : Index_Name; Part : Positive) return String
+   is (Name_Of (Which) & "-part-" & Records.Numbered (Part, Part));
+
+   --  What a field takes in a record past its value, about.
+   Field_Bytes : constant := 32;
+
    package Unit_Maps is new Ada.Containers.Indefinite_Hashed_Maps
      (Key_Type => String, Element_Type => Unbounded_String,
       Hash => Ada.Strings.Hash, Equivalent_Keys => "=");
@@ -74,34 +81,91 @@ package body Model_Runner.Framework.Indexes is
       --  An index is written only where what it lists changed: most
       --  changes touch one of them, and the others are megabytes.
       procedure Keep (Which : Index_Name; Lines : Name_Lists.Vector) is
-         Held : Records.Item;
-         Read : E.Error_Info;
+         Count : constant Natural := Natural (Lines.Length);
+
+         --  Its entries' bytes: whether they go in parts.
+         Spread : Long_Long_Integer := 0;
+         Parts  : Natural := 0;
+
+         --  The fields of the entries from First to Last, in Into.
+         procedure Set_Entries (Into : in out Records.Item; First, Last : Natural) is
+         begin
+            for Index in First .. Last loop
+               Records.Set (Into, "entry." & Records.Numbered (Index, Count), Lines (Index));
+            end loop;
+         end Set_Entries;
+
+         --  The part of the entries from First to Last, kept.
+         procedure Put_Part (First, Last : Natural) is
+            Part : Records.Item :=
+              Records.Create
+                (Schemas.Derived_Index_Schema, 1,
+                 "INDEX-" & Ada.Characters.Handling.To_Upper (Name_Of (Which))
+                 & "-PART-" & Records.Numbered (Parts + 1, Parts + 1),
+                 Stores.Current_Revision (Item, Indexes_Area, Part_Name (Which, Parts + 1)) + 1);
+         begin
+            Parts := Parts + 1;
+            Records.Set (Part, "source", Source);
+            Set_Entries (Part, First, Last);
+            Stores.Put (Change, Indexes_Area, Part_Name (Which, Parts), Part);
+         end Put_Part;
       begin
-         if Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
-            Stores.Read (Item, Indexes_Area, Name_Of (Which), Held, Read);
-            if E.Is_Ok (Read)
-              and then not Records.Has
-                             (Held,
-                              "entry." & Records.Numbered (Natural (Lines.Length) + 1, Natural (Lines.Length) + 1))
-              and then (for all Index in 1 .. Natural (Lines.Length) =>
-                          Records.Get (Held, "entry." & Records.Numbered (Index, Natural (Lines.Length)))
-                          = Lines (Index))
-            then
-               return;
-            end if;
+         --  Kept already as it is: not written again.
+         if Stores.Exists (Item, Indexes_Area, Name_Of (Which))
+           and then Name_Lists."=" (Entries (Item, Which), Lines)
+         then
+            return;
          end if;
+         for Line of Lines loop
+            Spread := Spread + Long_Long_Integer (Line'Length + Field_Bytes);
+         end loop;
          declare
             Value : Records.Item :=
               Records.Create
                 (Schemas.Derived_Index_Schema, 1,
                  "INDEX-" & Ada.Characters.Handling.To_Upper (Name_Of (Which)),
-                 (if E.Is_Ok (Read) then Records.Revision (Held) else 0) + 1);
+                 Stores.Current_Revision (Item, Indexes_Area, Name_Of (Which)) + 1);
          begin
+            --  Past what a record holds -- humanize's traceability, 2.5
+            --  million edges and 320 MB, was refused, and every index with
+            --  it -- the entries go in parts of their own; within it, in the
+            --  index's record as always.
+            if Spread <= Long_Long_Integer (Repository.Parts_At_Most) then
+               Set_Entries (Value, 1, Count);
+            else
+               declare
+                  First : Positive := 1;
+                  Bytes : Long_Long_Integer := 0;
+               begin
+                  for Index in 1 .. Count loop
+                     declare
+                        Line : constant String := Lines (Index);
+                        Size : constant Long_Long_Integer := Long_Long_Integer (Line'Length + Field_Bytes);
+                     begin
+                        if Bytes + Size > Long_Long_Integer (Repository.Parts_At_Most) and then Index > First then
+                           Put_Part (First, Index - 1);
+                           First := Index;
+                           Bytes := 0;
+                        end if;
+                        Bytes := Bytes + Size;
+                     end;
+                  end loop;
+                  Put_Part (First, Count);
+               end;
+               Records.Set (Value, "parts", Image (Parts));
+            end if;
             Records.Set (Value, "source", Source);
-            for Index in 1 .. Natural (Lines.Length) loop
-               Records.Set (Value, "entry." & Records.Numbered (Index, Natural (Lines.Length)), Lines (Index));
-            end loop;
             Stores.Put (Change, Indexes_Area, Name_Of (Which), Value);
+         end;
+
+         --  The parts a larger index kept past these: let go.
+         declare
+            Next : Positive := Parts + 1;
+         begin
+            while Stores.Exists (Item, Indexes_Area, Part_Name (Which, Next)) loop
+               Stores.Remove (Change, Indexes_Area, Part_Name (Which, Next));
+               Next := Next + 1;
+            end loop;
          end;
       end Keep;
 
@@ -304,18 +368,43 @@ package body Model_Runner.Framework.Indexes is
       Value  : Records.Item;
       Read   : E.Error_Info;
       Result : Name_Lists.Vector;
+
+      procedure Take (From : Records.Item) is
+      begin
+         for Index in 1 .. Records.Field_Count (From) loop
+            if Ada.Strings.Fixed.Index (Records.Field_Name (From, Index), "entry.") = 1 then
+               Result.Append (Records.Get (From, Records.Field_Name (From, Index)));
+            end if;
+         end loop;
+      end Take;
    begin
       if Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
          Stores.Read (Item, Indexes_Area, Name_Of (Which), Value, Read);
          if E.Is_Ok (Read) then
-            for Index in 1 .. Records.Field_Count (Value) loop
-               if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "entry.") = 1 then
-                  Result.Append (Records.Get (Value, Records.Field_Name (Value, Index)));
-               end if;
-            end loop;
+            Take (Value);
+            --  Its entries in parts: each built from what the index was,
+            --  or the index is taken to say nothing.
+            if Records.Get (Value, "parts") /= "" then
+               for Part in 1 .. Natural'Value (Records.Get (Value, "parts")) loop
+                  declare
+                     Held : Records.Item;
+                  begin
+                     Stores.Read (Item, Indexes_Area, Part_Name (Which, Part), Held, Read);
+                     if E.Is_Error (Read) or else Records.Get (Held, "source") /= Records.Get (Value, "source") then
+                        Result.Clear;
+                        return Result;
+                     end if;
+                     Take (Held);
+                  end;
+               end loop;
+            end if;
          end if;
       end if;
       return Result;
+   exception
+      when Constraint_Error =>
+         Result.Clear;
+         return Result;
    end Entries;
 
 end Model_Runner.Framework.Indexes;

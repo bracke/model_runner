@@ -143,6 +143,7 @@ package body Model_Runner.Framework.Schemas is
        Policy  => Reject_Unknown,
        Rules   => new Rule_List'
          [Rule ("source", Text_Field, True),
+          Rule ("parts", Text_Field, False),
           Rule ("entry.*", Text_Field, False)]),
 
       --  A derivation: what it is, what it was made from, and its answer.
