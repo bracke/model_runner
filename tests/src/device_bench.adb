@@ -1256,6 +1256,12 @@ package body Device_Bench is
            [others => [others => [others => 0.0]]];
          Taken : array (Table'Range) of Boolean := [others => True];
 
+         --  What the device's own clock says one vector's product takes,
+         --  the best over a fifth of a second of passes: the times above
+         --  carry each call's upload, submission and wait, which a
+         --  comparison with another engine's kernel times must leave out.
+         Device_Us : array (Table'Range) of Float := [others => 0.0];
+
          function Median (Of_Cell : Cell_Times) return Long_Float is
             Sorted : Cell_Times := Of_Cell;
             Held   : Long_Float;
@@ -1371,6 +1377,50 @@ package body Device_Bench is
                end loop;
             end loop;
 
+            for Index in Table'Range loop
+               if Taken (Index) then
+                  declare
+                     Which   : Shape renames Table (Index);
+                     Weights : Model_Runner.Bytes.Byte_Array_Access renames Held_Weights (Index);
+                     Order   : Products.Sequence;
+                     Added   : Boolean;
+                     Stamped : Boolean;
+                     Fine    : Boolean;
+                     Stopped : Boolean;
+                     Best    : Float := Float'Last;
+                     From    : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                  begin
+                     Products.Round_Walks
+                       (Engine, (if Which.Name (6) = 'i' then Products.Rounds_Every else Products.Rounds_None));
+                     Products.Open_Sequence (Order);
+                     Products.Add_Product
+                       (Order, Weights.all'Address, Model_Runner.Bytes.Byte_Count (Weights.all'Length), 0,
+                        Which.Packing, Rows, Columns, Added, Key => Weights.all (Weights.all'First)'Address);
+                     Products.Time_Steps (Engine, True, Stamped);
+                     if Added and then Stamped then
+                        for Pass in 1 .. 10_000 loop
+                           Products.Run
+                             (Engine, Order, Asked.all (0 .. N.Element_Count (Columns) - 1), 1,
+                              Got.all (0 .. N.Element_Count (Rows) - 1), Fine, Stopped);
+                           exit when not Fine;
+                           declare
+                              Said : constant Products.Timeline := Products.Last_Timeline (Engine);
+                           begin
+                              if Said.Held > 0 and then Said.Steps (1) > 0.0 then
+                                 Best := Float'Min (Best, Said.Steps (1));
+                              end if;
+                           end;
+                           exit when Pass >= 5 and then Ada.Calendar."-" (Ada.Calendar.Clock, From) >= 0.2;
+                        end loop;
+                        if Best < Float'Last then
+                           Device_Us (Index) := Best;
+                        end if;
+                     end if;
+                     Products.Time_Steps (Engine, False, Stamped);
+                  end;
+               end if;
+            end loop;
+
             Products.Forget_Matrices (Engine);
             for Weights of Held_Weights loop
                Model_Runner.Bytes.Free (Weights);
@@ -1413,6 +1463,11 @@ package body Device_Bench is
                            & (if Count > 1 and then First > 0.0
                               then "," & Long_Float'Image (Each / First)
                                    & " times one vector's"
+                              elsif Count = 1 and then Device_Us (Index) > 0.0
+                              then "; on the device" & Natural'Image (Natural (Device_Us (Index)))
+                                   & " us," & Natural'Image
+                                     (Natural (Long_Float (Room) / Long_Float (Device_Us (Index)) / 1.0E3))
+                                   & " GB/s"
                               else ""));
                      end;
                   end loop;
