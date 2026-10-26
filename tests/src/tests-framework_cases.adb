@@ -3590,9 +3590,30 @@ package body Tests.Framework_Cases is
                Put_File (Project & "/src/parser.ads", Spec (Spec'First .. Next_At - 1) & Spec (After .. Spec'Last));
             end;
             Rp.Patch_Current (Store, Light, Patched, Status);
-            Rp.Load (Store, Kept, Status);
-            Assert (Patched and then E.Is_Ok (Status) and then Same (Kept, Rp.Scan (Project)),
-                    "a graph in buckets put right after a name went is not the one a scan makes");
+            declare
+               --  Held for the session without the references in its
+               --  buckets: those asked for read from them, as kept.
+               Held : constant Rp.Graph := Rp.Now (Store);
+               Main : constant String := Read_Whole (Project & "/src/main.adb");
+               Read : Natural;
+            begin
+               Rp.Load (Store, Kept, Status);
+               Assert (Patched and then E.Is_Ok (Status) and then Same (Kept, Rp.Scan (Project)),
+                       "a graph in buckets put right after a name went is not the one a scan makes");
+               Assert (not Rp.Holds_References (Held) and then Rp.Holds_References (Kept)
+                       and then Rp.Relation_Count (Held) < Rp.Relation_Count (Kept)
+                       and then not Rp.References_To (Kept, "Parser.Token").Is_Empty
+                       and then Rp.References_To (Store, Held, "Parser.Token") = Rp.References_To (Kept, "Parser.Token")
+                       and then Same (Rp.Whole (Store, Held), Kept),
+                       "a graph held without its references did not find them as they are kept");
+               --  A file read again since: its references its own, not
+               --  the bucket's as well.
+               delay 2.1;
+               Put_File (Project & "/src/main.adb", "--  A comment more." & LF & Main);
+               Assert (Same (Rp.Whole (Store, Rp.Refresh (Project, Held, Read)), Rp.Scan (Project)),
+                       "a graph held without its references, a file read again, did not find them as a scan does");
+               Put_File (Project & "/src/main.adb", Main);
+            end;
             Put_File (Project & "/src/parser.ads", Spec);
          end;
 

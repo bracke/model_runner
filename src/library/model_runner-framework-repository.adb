@@ -2178,16 +2178,20 @@ package body Model_Runner.Framework.Repository is
          function Find_Who return Boolean is
          begin
             if Removed_Names.Is_Empty then
-               null;
+               return True;
             elsif Referrers /= null then
                Who := Referrers (Removed_Names, Who_Known);
-            else
-               for Link of Kept.Relations loop
-                  if Is_Reference (Link.Kind) and then Removed_Names.Contains (To_String (Link.To)) then
-                     Who.Include (To_String (Link.Origin));
-                  end if;
-               end loop;
+            elsif Kept.Light then
+               --  Its references not in memory and none to ask.
+               Who_Known := False;
             end if;
+            --  And those it holds: all of them, or for one read without
+            --  them, those of the files read again since.
+            for Link of Kept.Relations loop
+               if Is_Reference (Link.Kind) and then Removed_Names.Contains (To_String (Link.To)) then
+                  Who.Include (To_String (Link.Origin));
+               end if;
+            end loop;
             return True;
          end Find_Who;
 
@@ -2301,6 +2305,17 @@ package body Model_Runner.Framework.Repository is
       for Path of Gone loop
          Result.Touched.Append (Path);
       end loop;
+      --  Read without its references: those of the files read again are
+      --  its own from now on, not the buckets'.
+      Result.Light := Kept.Light;
+      if Kept.Light then
+         Result.Held_Origins := Kept.Held_Origins;
+         for Path of Result.Touched loop
+            if not Result.Held_Origins.Contains (Path) then
+               Result.Held_Origins.Append (Path);
+            end if;
+         end loop;
+      end if;
       Share_Names (Result);
       return Result;
    end Refresh_Or_Check;
@@ -2468,17 +2483,24 @@ package body Model_Runner.Framework.Repository is
       Within            : Roots;
       Found             : out Graph;
       Held              : out Boolean;
-      Kept              : out Unbounded_String)
+      Kept              : out Unbounded_String;
+      --  For a graph read without its references: who has one to a name.
+      Referrers         : access function
+                            (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set := null;
+      --  Only a graph with all its references, or none.
+      Whole             : Boolean := False)
    is
       Read_Again : Natural;
+      Unchanged  : Boolean;
    begin
       Held := False;
       Kept := Null_Unbounded_String;
       Memory_Lock.Seize;
       for Index in Memory'Range loop
-         if Memory (Index).Key = Key then
+         if Memory (Index).Key = Key and then not (Whole and then Memory (Index).Found.Light) then
             begin
-               Found := Refresh (Project_Directory, Memory (Index).Found, Read_Again, Within);
+               Found := Refresh_Or_Check (Project_Directory, Memory (Index).Found, Read_Again, Within, False,
+                                          Unchanged, Referrers);
                if Read_Again > 0
                  or else Natural (Found.Files.Length) /= Natural (Memory (Index).Found.Files.Length)
                then
@@ -2498,6 +2520,328 @@ package body Model_Runner.Framework.Repository is
       end loop;
       Memory_Lock.Release;
    end Refresh_Remembered;
+
+   function Split_Tabs (Text : String) return Name_Lists.Vector is
+      Result : Name_Lists.Vector;
+      Start  : Natural := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = Tab then
+            Result.Append (Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Result;
+   end Split_Tabs;
+
+   --  The name a bucket of the graph's relations is kept under, of Count.
+   function Bucket_Name (Bucket, Count : Positive) return String
+   is (Index_Name & "-bucket-" & Records.Numbered (Bucket, Count));
+
+   --  The record that says, for each bucket, the names its references are
+   --  to: so that the files with a reference to a name are found by reading
+   --  the buckets that have one, not all of them.
+   Uses_Name : constant String := Index_Name & "-uses";
+
+   --  Which of Count buckets a relation is kept in: by the file whose
+   --  reading found it, so that a file read again changes its own bucket
+   --  and no other.
+   function Bucket_Of (Link : Relation; Count : Positive) return Positive
+   is (Natural (Ada.Containers."mod" (Ada.Strings.Hash (To_String (Link.Origin)),
+                                       Ada.Containers.Hash_Type (Count))) + 1);
+
+   ---------------------
+   -- Kept references --
+   ---------------------
+
+   procedure Load_Kept
+     (Item        : Stores.Store;
+      Found       : out Graph;
+      Status      : out Model_Runner.Errors.Error_Info;
+      Record_Only : Boolean);
+
+   --  Each bucket of the graph kept in Item that may hold a reference to a
+   --  name Asked takes -- one whose uses name one, every one where they are
+   --  not kept or Asked is null -- read and given to Take. Known false where
+   --  the graph is not kept in buckets or one could not be read.
+   procedure For_Kept_Buckets
+     (Item  : Stores.Store;
+      Asked : access function (Name : String) return Boolean;
+      Take  : not null access procedure (Held : Records.Item);
+      Known : out Boolean;
+      --  Where not empty, only the buckets these files' relations are in.
+      Only  : Name_Lists.Vector := Name_Lists.Empty_Vector)
+   is
+      Value     : Records.Item;
+      Uses      : Records.Item;
+      Read      : E.Error_Info;
+      Uses_Read : E.Error_Info;
+      Count     : Natural;
+
+      --  Whether a bucket's uses, names a space apart, name one asked.
+      function Names_One (Said : String) return Boolean is
+         Start : Positive := Said'First;
+      begin
+         for Index in Said'First .. Said'Last + 1 loop
+            if Index > Said'Last or else Said (Index) = ' ' then
+               if Index > Start and then Asked (Said (Start .. Index - 1)) then
+                  return True;
+               end if;
+               Start := Index + 1;
+            end if;
+         end loop;
+         return False;
+      end Names_One;
+   begin
+      Known := False;
+      Stores.Read (Item, Indexes_Area, Index_Name, Value, Read);
+      if E.Is_Error (Read) or else Records.Get (Value, "reader") /= Reader_Version
+        or else Records.Get (Value, "buckets") = ""
+      then
+         return;
+      end if;
+      Count := Natural'Value (Records.Get (Value, "buckets"));
+      if Asked /= null then
+         Stores.Read (Item, Indexes_Area, Uses_Name, Uses, Uses_Read);
+      end if;
+      for Bucket in 1 .. Count loop
+         if (Only.Is_Empty
+             or else (for some Path of Only =>
+                        Bucket_Of ((Origin => To_Unbounded_String (Path), others => <>), Count) = Bucket))
+           and then
+             (Asked = null or else E.Is_Error (Uses_Read)
+              or else Records.Get (Uses, "reader") /= Reader_Version
+              or else Names_One (Records.Get (Uses, "bucket." & Records.Numbered (Bucket, Count))))
+         then
+            declare
+               Held : Records.Item;
+            begin
+               Stores.Read (Item, Indexes_Area, Bucket_Name (Bucket, Count), Held, Read);
+               if E.Is_Error (Read) then
+                  return;
+               end if;
+               Take (Held);
+            end;
+         end if;
+      end loop;
+      Known := True;
+   exception
+      when Constraint_Error =>
+         Known := False;
+   end For_Kept_Buckets;
+
+   --  Of a relation's kept text, the name it is to and the file whose
+   --  reading found it; "" for a text that is no relation.
+   procedure Cut_Relation (Text : String; To_First, To_Last, Origin_First : out Natural) is
+      First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab]);
+      Second_Tab : constant Natural :=
+        (if First_Tab = 0 then 0 else Ada.Strings.Fixed.Index (Text (First_Tab + 1 .. Text'Last), [Tab]));
+      Third_Tab  : constant Natural :=
+        (if Second_Tab = 0 then 0 else Ada.Strings.Fixed.Index (Text (Second_Tab + 1 .. Text'Last), [Tab]));
+      Last_Tab   : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab], Ada.Strings.Backward);
+   begin
+      if Third_Tab = 0 then
+         To_First := 1;
+         To_Last := 0;
+         Origin_First := Text'Last + 1;
+      else
+         To_First := Second_Tab + 1;
+         To_Last := Third_Tab - 1;
+         Origin_First := Last_Tab + 1;
+      end if;
+   end Cut_Relation;
+
+   --  The files of a graph kept in Item with a reference to one of Names,
+   --  from the buckets whose uses name one. Known false where that cannot
+   --  be said.
+   function Kept_Referrers
+     (Item  : Stores.Store;
+      Names : Name_Sets.Set;
+      Known : out Boolean) return Name_Sets.Set
+   is
+      Result : Name_Sets.Set;
+
+      function Asked (Name : String) return Boolean is (Names.Contains (Name));
+
+      procedure Take (Held : Records.Item) is
+      begin
+         for Index in 1 .. Records.Field_Count (Held) loop
+            declare
+               Text : constant String := Records.Field_Value (Held, Index);
+               To_First, To_Last, Origin_First : Natural;
+            begin
+               Cut_Relation (Text, To_First, To_Last, Origin_First);
+               if To_Last >= To_First and then Names.Contains (Text (To_First .. To_Last)) then
+                  Result.Include (Text (Origin_First .. Text'Last));
+               end if;
+            end;
+         end loop;
+      end Take;
+   begin
+      For_Kept_Buckets (Item, Asked'Access, Take'Access, Known);
+      return Result;
+   end Kept_Referrers;
+
+   --  Add to Into the references kept for a graph read without them whose
+   --  names Wanted takes (every one where it is null): those of its files,
+   --  but for the files read again since, whose own it holds.
+   procedure Kept_Uses
+     (Item   : Stores.Store;
+      From   : Graph;
+      Wanted : access function (Name : String) return Boolean;
+      Into   : in out Relation_Vectors.Vector;
+      Known  : out Boolean;
+      Only   : Name_Lists.Vector := Name_Lists.Empty_Vector)
+   is
+      Files_Set : Name_Sets.Set;
+      Held_Set  : Name_Sets.Set;
+      Names     : Shared_Names.Map;
+
+      procedure Take (Held : Records.Item) is
+      begin
+         for Index in 1 .. Records.Field_Count (Held) loop
+            declare
+               Field : constant String := Records.Field_Name (Held, Index);
+               Text  : constant String := Records.Field_Value (Held, Index);
+               To_First, To_Last, Origin_First : Natural;
+            begin
+               if Ada.Strings.Fixed.Index (Field, "relation.") = Field'First then
+                  Cut_Relation (Text, To_First, To_Last, Origin_First);
+                  if To_Last >= To_First
+                    and then (Wanted = null or else Wanted (Text (To_First .. To_Last)))
+                    and then Files_Set.Contains (Text (Origin_First .. Text'Last))
+                    and then not Held_Set.Contains (Text (Origin_First .. Text'Last))
+                    and then (Only.Is_Empty or else Only.Contains (Text (Origin_First .. Text'Last)))
+                  then
+                     declare
+                        Parts : constant Name_Lists.Vector := Split_Tabs (Text);
+                     begin
+                        if Natural (Parts.Length) = 7 then
+                           Into.Append
+                             (Relation'
+                              (Kind   => Relation_Kind'Value (Parts (1)),
+                               From   => Shared (Names, Parts (2)),
+                               To     => Shared (Names, Parts (3)),
+                               Source => Derivation'Value (Parts (4)),
+                               Sure   => Confidence'Value (Parts (5)),
+                               Where  => To_Unbounded_String (Parts (6)),
+                               Origin => Shared (Names, Parts (7))));
+                        end if;
+                     end;
+                  end if;
+               end if;
+            end;
+         end loop;
+      end Take;
+   begin
+      for File of From.Files loop
+         Files_Set.Include (To_String (File.Path));
+      end loop;
+      for Path of From.Held_Origins loop
+         Held_Set.Include (Path);
+      end loop;
+      For_Kept_Buckets (Item, Wanted, Take'Access, Known, Only);
+   end Kept_Uses;
+
+   ----------------------
+   -- Holds_References --
+   ----------------------
+
+   function Holds_References (From : Graph) return Boolean is (not From.Light);
+
+   -----------
+   -- Whole --
+   -----------
+
+   function Whole (Item : Stores.Store; From : Graph) return Graph is
+      Known : Boolean;
+   begin
+      if not From.Light then
+         return From;
+      end if;
+      return Result : Graph := From do
+         Kept_Uses (Item, From, null, Result.Relations, Known);
+         if not Known then
+            --  The buckets not as the record says: the kept graph whole,
+            --  brought up to date, as before there were buckets.
+            declare
+               Kept       : Graph;
+               Read       : E.Error_Info;
+               Read_Again : Natural;
+            begin
+               Load (Item, Kept, Read);
+               Result := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                                  Read_Again, Roots_Of (Item));
+            end;
+         end if;
+         Result.Light := False;
+         Result.Held_Origins.Clear;
+         Share_Names (Result);
+      end return;
+   end Whole;
+
+   -------------
+   -- Uses_Of --
+   -------------
+
+   function Uses_Of
+     (Item     : Stores.Store;
+      From     : Graph;
+      Wanted   : not null access function (Name : String) return Boolean;
+      In_Files : Name_Lists.Vector := Name_Lists.Empty_Vector) return Relation_Lists.Vector
+   is
+      Found : Relation_Lists.Vector;
+      Known : Boolean := True;
+
+      function Taken (Link : Relation) return Boolean
+      is (Is_Reference (Link.Kind) and then Wanted (To_String (Link.To))
+          and then (In_Files.Is_Empty or else In_Files.Contains (To_String (Link.Origin))));
+   begin
+      for Link of From.Relations loop
+         if Taken (Link) then
+            Found.Append (Link);
+         end if;
+      end loop;
+      if not From.Light then
+         return Found;
+      end if;
+      Kept_Uses (Item, From, Wanted, Found, Known, In_Files);
+      if not Known then
+         Found.Clear;
+         for Link of Whole (Item, From).Relations loop
+            if Taken (Link) then
+               Found.Append (Link);
+            end if;
+         end loop;
+         return Found;
+      end if;
+      --  In the order of the graph's files, as a graph that holds them has
+      --  them: what is offered first is the same either way.
+      declare
+         package Origin_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+           (Key_Type => String, Element_Type => Relation_Lists.Vector, Hash => Ada.Strings.Hash,
+            Equivalent_Keys => "=", "=" => Relation_Lists."=");
+         By_Origin : Origin_Maps.Map;
+         Result    : Relation_Lists.Vector;
+      begin
+         for Link of Found loop
+            declare
+               Origin : constant String := To_String (Link.Origin);
+            begin
+               if not By_Origin.Contains (Origin) then
+                  By_Origin.Insert (Origin, Relation_Lists.Empty_Vector);
+               end if;
+               By_Origin.Reference (Origin).Append (Link);
+            end;
+         end loop;
+         for File of From.Files loop
+            if By_Origin.Contains (To_String (File.Path)) then
+               Result.Append (By_Origin.Element (To_String (File.Path)));
+            end if;
+         end loop;
+         return Result;
+      end;
+   end Uses_Of;
 
    ----------------
    -- Warming up --
@@ -2584,6 +2928,10 @@ package body Model_Runner.Framework.Repository is
       Kept_Print : Unbounded_String;
       Read       : E.Error_Info;
       Read_Again : Natural;
+      Unchanged  : Boolean;
+
+      function Referrers (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set
+      is (Kept_Referrers (Item, Names, Known));
    begin
       --  Not the background read itself, which reads by a store opened
       --  only to be read, and would wait for its own end.
@@ -2593,11 +2941,13 @@ package body Model_Runner.Framework.Repository is
       return Result : Graph do
          Refresh_Remembered
            (Key, Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item),
-            Result, Held, Kept_Print);
+            Result, Held, Kept_Print, Referrers'Access);
          if not Held then
-            Load (Item, Kept, Read);
-            Result := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
-                               Read_Again, Roots_Of (Item));
+            --  A graph kept in buckets without the references in them: a
+            --  tenth of the memory, and those asked for read when asked.
+            Load_Kept (Item, Kept, Read, Record_Only => True);
+            Result := Refresh_Or_Check (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
+                                        Read_Again, Roots_Of (Item), False, Unchanged, Referrers'Access);
             Remember (Key, Result, (if E.Is_Ok (Read) then Graph_Fingerprint (Kept) else ""));
          end if;
       end return;
@@ -2619,6 +2969,9 @@ package body Model_Runner.Framework.Repository is
       Read       : E.Error_Info;
       Read_Again : Natural;
       Change     : Stores.Transaction;
+
+      function Referrers (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set
+      is (Kept_Referrers (Item, Names, Known));
    begin
       Status := E.Success;
       Wait_For_Warm_Up (Key);
@@ -2627,7 +2980,7 @@ package body Model_Runner.Framework.Repository is
       --  kept where that is not what the state keeps.
       Refresh_Remembered
         (Key, Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item),
-         Found, Held, Kept_Print);
+         Found, Held, Kept_Print, Referrers'Access);
       if Held and then Kept_Print /= Null_Unbounded_String then
          if Graph_Fingerprint (Found) /= To_String (Kept_Print) then
             Keep (Item, Change, Found, Status);
@@ -2686,7 +3039,7 @@ package body Model_Runner.Framework.Repository is
       Kept_Print : Unbounded_String;
    begin
       return Result : Graph do
-         Refresh_Remembered (Key, Project_Directory, Within, Result, Held, Kept_Print);
+         Refresh_Remembered (Key, Project_Directory, Within, Result, Held, Kept_Print, Whole => True);
          if not Held then
             Result := Scan_All (Project_Directory, Within);
             Remember (Key, Result);
@@ -2697,19 +3050,6 @@ package body Model_Runner.Framework.Repository is
    ---------------------------------------------------------------------------
    --  Keeping.
    ---------------------------------------------------------------------------
-
-   function Split_Tabs (Text : String) return Name_Lists.Vector is
-      Result : Name_Lists.Vector;
-      Start  : Natural := Text'First;
-   begin
-      for Index in Text'First .. Text'Last + 1 loop
-         if Index > Text'Last or else Text (Index) = Tab then
-            Result.Append (Text (Start .. Index - 1));
-            Start := Index + 1;
-         end if;
-      end loop;
-      return Result;
-   end Split_Tabs;
 
    ---------------------
    -- Kept_Is_Current --
@@ -2799,16 +3139,6 @@ package body Model_Runner.Framework.Repository is
    function Part_Name (Part : Positive) return String
    is (Index_Name & "-part-" & Records.Numbered (Part, Part));
 
-   --  A relation as its field says it.
-   --  The name a bucket of the graph's relations is kept under, of Count.
-   function Bucket_Name (Bucket, Count : Positive) return String
-   is (Index_Name & "-bucket-" & Records.Numbered (Bucket, Count));
-
-   --  The record that says, for each bucket, the names its references are
-   --  to: so that the files with a reference to a name are found by reading
-   --  the buckets that have one, not all of them.
-   Uses_Name : constant String := Index_Name & "-uses";
-
    --  The names the references of some relation texts are to, each once,
    --  a space apart.
    function Names_Said (Lines : Name_Lists.Vector) return String is
@@ -2836,13 +3166,6 @@ package body Model_Runner.Framework.Repository is
    --  more, by doubling, where a bucket would be past what a record holds.
    Least_Buckets : constant := 64;
 
-   --  Which of Count buckets a relation is kept in: by the file whose
-   --  reading found it, so that a file read again changes its own bucket
-   --  and no other.
-   function Bucket_Of (Link : Relation; Count : Positive) return Positive
-   is (Natural (Ada.Containers."mod" (Ada.Strings.Hash (To_String (Link.Origin)),
-                                       Ada.Containers.Hash_Type (Count))) + 1);
-
    function Relation_Text (Link : Relation) return String
    is (Lower (Relation_Kind'Image (Link.Kind)) & Tab
        & To_String (Link.From) & Tab & To_String (Link.To) & Tab
@@ -2854,7 +3177,23 @@ package body Model_Runner.Framework.Repository is
    --  value's length, and the line breaks, about.
    Field_Bytes : constant := 32;
 
-   procedure Keep
+   --  A graph's files, symbols and what they declare, without its
+   --  references: as a graph kept in buckets is held in memory.
+   function Declared_Of (From : Graph) return Graph is
+   begin
+      return Result : Graph :=
+        (Files => From.Files, Symbols => From.Symbols, Unread => From.Unread, Skipped => From.Skipped,
+         Within => From.Within, Within_Known => From.Within_Known, Light => True, others => <>)
+      do
+         for Link of From.Relations loop
+            if not Is_Reference (Link.Kind) then
+               Result.Relations.Append (Link);
+            end if;
+         end loop;
+      end return;
+   end Declared_Of;
+
+   procedure Keep_Graph
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
       Found  : Graph;
@@ -3085,8 +3424,19 @@ package body Model_Runner.Framework.Repository is
          end loop;
       end;
 
-      --  What the state will keep, known here from now on.
-      Remember (Key_Of (Item), Found, Print);
+      --  What the state will keep, known here from now on: a graph in
+      --  buckets without the references in them.
+      Remember (Key_Of (Item), (if Spread <= Part_Bytes then Found else Declared_Of (Found)), Print);
+   end Keep_Graph;
+
+   procedure Keep
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Found  : Graph;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      --  One read without its references kept with them.
+      Keep_Graph (Item, Change, (if Found.Light then Whole (Item, Found) else Found), Status);
    end Keep;
 
    ----------
@@ -3215,7 +3565,8 @@ package body Model_Runner.Framework.Repository is
       end if;
 
       Take (Value);
-      if Record_Only then
+      if Record_Only and then Records.Get (Value, "buckets") /= "" then
+         Found.Light := True;
          return;
       end if;
       --  Its relations in buckets: each the one the record lists, by its
@@ -3288,6 +3639,15 @@ package body Model_Runner.Framework.Repository is
       Load_Kept (Item, Found, Status, Record_Only => False);
    end Load;
 
+   procedure Load_Declared
+     (Item   : Stores.Store;
+      Found  : out Graph;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+   begin
+      Load_Kept (Item, Found, Status, Record_Only => True);
+   end Load_Declared;
+
    -------------------
    -- Patch_Current --
    -------------------
@@ -3307,56 +3667,8 @@ package body Model_Runner.Framework.Repository is
 
       --  The files with a reference to one of Names: the buckets whose
       --  uses say one of them, read, and their references' files.
-      function Referrers (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set is
-         Uses   : Records.Item;
-         Read   : E.Error_Info;
-         Result : Name_Sets.Set;
-         Count  : Natural;
-      begin
-         Known := False;
-         Stores.Read (Item, Indexes_Area, Uses_Name, Uses, Read);
-         if E.Is_Error (Read) or else Records.Get (Uses, "reader") /= Reader_Version
-           or else Records.Get (Value, "buckets") = ""
-         then
-            return Result;
-         end if;
-         Count := Natural'Value (Records.Get (Value, "buckets"));
-         for Bucket in 1 .. Count loop
-            declare
-               Said : constant String := " " & Records.Get (Uses, "bucket." & Records.Numbered (Bucket, Count)) & " ";
-            begin
-               if (for some Name of Names => Ada.Strings.Fixed.Index (Said, " " & Name & " ") > 0) then
-                  declare
-                     Held : Records.Item;
-                  begin
-                     Stores.Read (Item, Indexes_Area, Bucket_Name (Bucket, Count), Held, Read);
-                     if E.Is_Error (Read) then
-                        return Result;
-                     end if;
-                     for Index in 1 .. Records.Field_Count (Held) loop
-                        declare
-                           Text       : constant String := Records.Field_Value (Held, Index);
-                           First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab]);
-                           Second_Tab : constant Natural :=
-                             (if First_Tab = 0 then 0
-                              else Ada.Strings.Fixed.Index (Text (First_Tab + 1 .. Text'Last), [Tab]));
-                           Third_Tab  : constant Natural :=
-                             (if Second_Tab = 0 then 0
-                              else Ada.Strings.Fixed.Index (Text (Second_Tab + 1 .. Text'Last), [Tab]));
-                           Last_Tab   : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab], Ada.Strings.Backward);
-                        begin
-                           if Third_Tab > 0 and then Names.Contains (Text (Second_Tab + 1 .. Third_Tab - 1)) then
-                              Result.Include (Text (Last_Tab + 1 .. Text'Last));
-                           end if;
-                        end;
-                     end loop;
-                  end;
-               end if;
-            end;
-         end loop;
-         Known := True;
-         return Result;
-      end Referrers;
+      function Referrers (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set
+      is (Kept_Referrers (Item, Names, Known));
    begin
       Patched := False;
       Status := E.Success;
@@ -3522,6 +3834,10 @@ package body Model_Runner.Framework.Repository is
          end if;
          Stores.Commit (Item, Change, Status);
          Patched := E.Is_Ok (Status);
+         --  What the state keeps now, held without its references.
+         if Patched then
+            Remember (Key_Of (Item), Found, Graph_Fingerprint (Found));
+         end if;
       end;
    exception
       when Constraint_Error =>
@@ -4173,6 +4489,22 @@ package body Model_Runner.Framework.Repository is
          if Link.Kind = References and then To_String (Link.To) = Name
            and then not Result.Contains (To_String (Link.Where))
          then
+            Result.Append (To_String (Link.Where));
+         end if;
+      end loop;
+      return Sorted (Result);
+   end References_To;
+
+   function References_To
+     (Item : Stores.Store;
+      From : Graph;
+      Name : String) return Name_Lists.Vector
+   is
+      function Asked (Said : String) return Boolean is (Said = Name);
+      Result : Name_Lists.Vector;
+   begin
+      for Link of Uses_Of (Item, From, Asked'Access) loop
+         if Link.Kind = References and then not Result.Contains (To_String (Link.Where)) then
             Result.Append (To_String (Link.Where));
          end if;
       end loop;

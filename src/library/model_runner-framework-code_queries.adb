@@ -185,7 +185,7 @@ package body Model_Runner.Framework.Code_Queries is
       elsif Named = "find_references" then
          for Name of Rp.Find_Symbols (Graph, Given) loop
             declare
-               Places : constant Name_Lists.Vector := Rp.References_To (Graph, Name);
+               Places : constant Name_Lists.Vector := Rp.References_To (Store, Graph, Name);
             begin
                if not Places.Is_Empty then
                   Append (Said, Name & ":" & ASCII.LF & Listed (Places, 100));

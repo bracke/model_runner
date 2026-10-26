@@ -342,7 +342,7 @@ package body Model_Runner.Framework.Intent is
          Status : E.Error_Info;
          Root   : constant String := Ada.Directories.Containing_Directory (Stores.Root (Item));
       begin
-         Repository.Load (Item, Graph, Status);
+         Repository.Load_Declared (Item, Graph, Status);
          for Index in 1 .. Repository.File_Count (Graph) loop
             declare
                Path : constant String := To_String (Repository.File_At (Graph, Index).Path);

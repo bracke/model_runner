@@ -65,8 +65,10 @@ package body Model_Runner.Framework.Traceability is
 
    function Build
      (Item  : Stores.Store;
-      Files : Repository.Graph) return Graph
+      Given : Repository.Graph) return Graph
    is
+      --  With its references: a graph read without them has them read.
+      Files  : constant Repository.Graph := Repository.Whole (Item, Given);
       Result : Graph;
 
       --  Whether the repository holds a file or declares a symbol by that

@@ -77,11 +77,12 @@ package Model_Runner.Framework.Traceability is
    --  Work the graph out.
    --
    --  @param Item The store.
-   --  @param Files The repository, as scanned.
+   --  @param Given The repository, as scanned; its references read from
+   --  the store where it was read without them.
    --  @return The graph.
    function Build
      (Item  : Stores.Store;
-      Files : Repository.Graph) return Graph;
+      Given : Repository.Graph) return Graph;
 
    --  How many edges a graph holds.
    --

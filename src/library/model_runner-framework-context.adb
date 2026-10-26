@@ -1451,16 +1451,23 @@ package body Model_Runner.Framework.Context is
                   end;
                end if;
 
+               declare
+                  function Named (Name : String) return Boolean is (Named_Symbols.Contains (Name));
+
+                  --  Their uses: from the store, where the graph was read
+                  --  without them.
+                  Used : constant Repository.Relation_Lists.Vector :=
+                    (if Named_Symbols.Is_Empty then Repository.Relation_Lists.Empty_Vector
+                     else Repository.Uses_Of (Item, Graph, Named'Access));
+               begin
                for Name of Named_Symbols loop
-                  for Index in 1 .. Repository.Relation_Count (Graph) loop
+                  for Link of Used loop
                      declare
-                        use type Repository.Relation_Kind;
-                        Link  : constant Repository.Relation := Repository.Relation_At (Graph, Index);
                         Where : constant String := To_String (Link.Where);
                         Colon : constant Natural := Ada.Strings.Fixed.Index (Where, ":", Ada.Strings.Backward);
                      begin
                         exit when Uses_Offered = Uses_Most;
-                        if Link.Kind in Repository.References | Repository.Calls and then To_String (Link.To) = Name
+                        if To_String (Link.To) = Name
                           and then Colon > Where'First and then Colon < Where'Last
                           and then (for all C of Where (Colon + 1 .. Where'Last) => C in '0' .. '9')
                           and then Where'Last - Colon <= 7
@@ -1472,6 +1479,7 @@ package body Model_Runner.Framework.Context is
                      end;
                   end loop;
                end loop;
+               end;
             end;
 
             --  And what uses those files: the units that depend on theirs, their
@@ -1510,22 +1518,23 @@ package body Model_Runner.Framework.Context is
                                  exit when Users_Offered = Users_Most;
                                  if not Named_Files.Contains (Path) then
                                     declare
-                                       use type Repository.Relation_Kind;
+                                       function Of_Unit (Name : String) return Boolean
+                                       is (Ada.Strings.Fixed.Index (Name, Unit & ".") = 1);
+
+                                       --  Where the file uses what the unit declares.
+                                       Used  : constant Repository.Relation_Lists.Vector :=
+                                         (if Whole_Only then Repository.Relation_Lists.Empty_Vector
+                                          else Repository.Uses_Of (Item, Graph, Of_Unit'Access, [Path]));
                                        Text  : Unbounded_String;
                                        Got   : E.Error_Info;
                                        Lines : Natural := 0;
                                     begin
-                                       --  Where the file uses what the unit declares.
-                                       for Index in 1 .. Repository.Relation_Count (Graph) loop
+                                       for Link of Used loop
                                           declare
-                                             Link  : constant Repository.Relation :=
-                                               Repository.Relation_At (Graph, Index);
                                              Where : constant String := To_String (Link.Where);
                                           begin
-                                             exit when Lines = 2 or else Whole_Only;
-                                             if Link.Kind in Repository.References | Repository.Calls
-                                               and then Ada.Strings.Fixed.Index (To_String (Link.To), Unit & ".") = 1
-                                               and then Where'Length > Path'Length + 1
+                                             exit when Lines = 2;
+                                             if Where'Length > Path'Length + 1
                                                and then Where (Where'First .. Where'First + Path'Length) = Path & ":"
                                                and then Where'Last - Where'First - Path'Length <= 7
                                                and then (for all C of Where (Where'First + Path'Length + 1
@@ -1979,7 +1988,7 @@ package body Model_Runner.Framework.Context is
          Loaded : Repository.Graph;
          Read   : E.Error_Info;
       begin
-         Repository.Load (Item, Loaded, Read);
+         Repository.Load_Declared (Item, Loaded, Read);
          Result.Semantic := E.Is_Ok (Read);
       end;
       Graph := (if Tree /= "" then Repository.Scan (Tree, Repository.Roots_Of (Item))

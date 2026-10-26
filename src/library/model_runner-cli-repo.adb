@@ -72,8 +72,9 @@ package body Model_Runner.CLI.Repo is
    --  The graph of the tree: in a project, the one its state keeps,
    --  brought up to date -- scanned afresh instead, a tree of 2.5 million
    --  references took half a minute for a search a kept graph answers in
-   --  seconds; elsewhere, scanned.
-   function Graph_In (Directory : String; Within : Rp.Roots) return Rp.Graph is
+   --  seconds; elsewhere, scanned. With Whole, its references too, where
+   --  a graph kept in buckets was read without them.
+   function Graph_In (Directory : String; Within : Rp.Roots; Whole : Boolean) return Rp.Graph is
       Store   : S.Store;
       Report  : S.Recovery_Report;
       Outcome : E.Error_Info;
@@ -81,7 +82,9 @@ package body Model_Runner.CLI.Repo is
       if S.Is_Initialized (Directory) then
          S.Open (Store, Directory, Report, Outcome);
          if E.Is_Ok (Outcome) then
-            return Found : constant Rp.Graph := Rp.Now (Store) do
+            return Found : constant Rp.Graph :=
+              (if Whole then Rp.Whole (Store, Rp.Now (Store)) else Rp.Now (Store))
+            do
                S.Close (Store);
             end return;
          end if;
@@ -89,6 +92,27 @@ package body Model_Runner.CLI.Repo is
       end if;
       return Rp.Scan (Directory, Within);
    end Graph_In;
+
+   --  The references and calls in a graph Graph_In gave whose names Wanted
+   --  takes: read from the project's state where the graph was read
+   --  without them.
+   function Uses_In
+     (Directory : String;
+      Found     : Rp.Graph;
+      Wanted    : not null access function (Name : String) return Boolean) return Rp.Relation_Lists.Vector
+   is
+      Store   : S.Store;
+      Report  : S.Recovery_Report;
+      Outcome : E.Error_Info;
+   begin
+      if Rp.Holds_References (Found) then
+         return Rp.Uses_Of (Store, Found, Wanted);
+      end if;
+      S.Open (Store, Directory, Report, Outcome);
+      return Used : constant Rp.Relation_Lists.Vector := Rp.Uses_Of (Store, Found, Wanted) do
+         S.Close (Store);
+      end return;
+   end Uses_In;
 
    --  A node as a person names it: no file: or symbol: before it, no
    --  @revision after it.
@@ -180,7 +204,8 @@ package body Model_Runner.CLI.Repo is
          else From_Here);
       Recovered : Model_Runner.Framework.Name_Lists.Vector;
       Within    : constant Rp.Roots := Roots_In (Directory, Recovered);
-      Found     : constant Rp.Graph := Graph_In (Directory, Within);
+      Found     : constant Rp.Graph :=
+        Graph_In (Directory, Within, Whole => Action = "scan");
       Outcome   : E.Error_Info;
 
       procedure Fail (Condition : E.Error_Info) is
@@ -981,43 +1006,29 @@ package body Model_Runner.CLI.Repo is
             --  Each with how it was found and how sure that is: a name that
             --  matches is a guess, and says so.
             declare
-               Any : Boolean := False;
-            begin
-               for Index in 1 .. Rp.Relation_Count (Found) loop
-                  declare
-                     use type Rp.Relation_Kind;
-                     One : constant Rp.Relation := Rp.Relation_At (Found, Index);
-                  begin
-                     Any := Any or else (One.Kind = Rp.References and then Names.Contains (To_String (One.To)));
-                  end;
-               end loop;
-               if not Any then
-                  Pres.Put_Message (Screen, "cli.repo.no_refs", [Loc.Named ("name", Argument)]);
-               end if;
-            end;
-            declare
+               use type Rp.Relation_Kind;
+               function Named (Name : String) return Boolean is (Names.Contains (Name));
+               Used  : constant Rp.Relation_Lists.Vector := Uses_In (Directory, Found, Named'Access);
                Shown : Model_Runner.Framework.Name_Lists.Vector;
             begin
+               if not (for some One of Used => One.Kind = Rp.References) then
+                  Pres.Put_Message (Screen, "cli.repo.no_refs", [Loc.Named ("name", Argument)]);
+               end if;
                for Name of Names loop
-                  for Index in 1 .. Rp.Relation_Count (Found) loop
-                     declare
-                        use type Rp.Relation_Kind;
-                        One : constant Rp.Relation := Rp.Relation_At (Found, Index);
-                     begin
-                        --  Each place once: the surest way it was found.
-                        if One.Kind = Rp.References and then To_String (One.To) = Name
-                          and then not Shown.Contains (Name & " " & To_String (One.Where))
-                        then
-                           Shown.Append (Name & " " & To_String (One.Where));
-                           Pres.Put_Message
-                             (Screen, "cli.repo.reference",
-                              [Loc.Named ("name", Name), Loc.Named ("path", To_String (One.Where)),
-                               Loc.Named ("detail",
-                                          Ada.Characters.Handling.To_Lower
-                                            (Rp.Derivation'Image (One.Source) & ", "
-                                             & Rp.Confidence'Image (One.Sure)))]);
-                        end if;
-                     end;
+                  for One of Used loop
+                     --  Each place once: the surest way it was found.
+                     if One.Kind = Rp.References and then To_String (One.To) = Name
+                       and then not Shown.Contains (Name & " " & To_String (One.Where))
+                     then
+                        Shown.Append (Name & " " & To_String (One.Where));
+                        Pres.Put_Message
+                          (Screen, "cli.repo.reference",
+                           [Loc.Named ("name", Name), Loc.Named ("path", To_String (One.Where)),
+                            Loc.Named ("detail",
+                                       Ada.Characters.Handling.To_Lower
+                                         (Rp.Derivation'Image (One.Source) & ", "
+                                          & Rp.Confidence'Image (One.Sure)))]);
+                     end if;
                   end loop;
                end loop;
             end;
@@ -1876,19 +1887,19 @@ package body Model_Runner.CLI.Repo is
             begin
                for Named of Symbols loop
                   if Action = "users" then
-                     for Index in 1 .. Rp.Relation_Count (Found) loop
-                        declare
-                           One : constant Rp.Relation := Rp.Relation_At (Found, Index);
-                        begin
-                           if One.Kind = Rp.References and then To_String (One.To) = Named then
-                              for Unit of Units_In (To_String (One.From)) loop
-                                 if not Result.Contains (Unit) then
-                                    Result.Append (Unit);
-                                 end if;
-                              end loop;
-                           end if;
-                        end;
+                     declare
+                        function Is_Named (Name : String) return Boolean is (Name = Named);
+                     begin
+                     for One of Uses_In (Directory, Found, Is_Named'Access) loop
+                        if One.Kind = Rp.References then
+                           for Unit of Units_In (To_String (One.From)) loop
+                              if not Result.Contains (Unit) then
+                                 Result.Append (Unit);
+                              end if;
+                           end loop;
+                        end if;
                      end loop;
+                     end;
                   else
                      declare
                         Dot   : constant Natural :=

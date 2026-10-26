@@ -1,4 +1,4 @@
-private with Ada.Containers.Vectors;
+with Ada.Containers.Vectors;
 
 with Ada.Strings.Unbounded;
 
@@ -113,6 +113,9 @@ package Model_Runner.Framework.Repository is
       --  taken out and found again when only it changed.
       Origin : Ada.Strings.Unbounded.Unbounded_String;
    end record;
+
+   package Relation_Lists is new Ada.Containers.Vectors
+     (Index_Type => Positive, Element_Type => Relation);
 
    --  What a scan found.
    type Graph is private;
@@ -360,11 +363,43 @@ package Model_Runner.Framework.Repository is
    function Is_Current (Project_Directory : String; Kept : Graph) return Boolean;
 
    --  The project's graph as it is now: the kept one brought up to date,
-   --  not kept -- for a reader that only reads the store.
+   --  not kept -- for a reader that only reads the store. A graph kept in
+   --  buckets is read without the references in them, which Uses_Of and
+   --  Whole find from the store when asked.
    --
    --  @param Item The store.
    --  @return The graph.
    function Now (Item : Stores.Store) return Graph;
+
+   --  Whether a graph holds all its references: false for one read without
+   --  those kept in buckets.
+   --
+   --  @param From The graph.
+   --  @return Whether it holds them.
+   function Holds_References (From : Graph) return Boolean;
+
+   --  The references and calls of a graph whose names Wanted takes: those
+   --  it holds, and for one read without them, those its store keeps for
+   --  its files as they are -- only the buckets naming one of them read.
+   --
+   --  @param Item The graph's store.
+   --  @param From The graph.
+   --  @param Wanted Whether a name is asked for.
+   --  @param In_Files Where not empty, only those found reading these files.
+   --  @return The relations, in the order of the graph's files.
+   function Uses_Of
+     (Item     : Stores.Store;
+      From     : Graph;
+      Wanted   : not null access function (Name : String) return Boolean;
+      In_Files : Name_Lists.Vector := Name_Lists.Empty_Vector) return Relation_Lists.Vector;
+
+   --  A graph with all its references: itself where it holds them, or with
+   --  those its store keeps for it.
+   --
+   --  @param Item The graph's store.
+   --  @param From The graph.
+   --  @return The graph.
+   function Whole (Item : Stores.Store; From : Graph) return Graph;
 
    --  The project's graph as it is now: the kept one brought up to date,
    --  and kept again where that changed it.
@@ -444,6 +479,18 @@ package Model_Runner.Framework.Repository is
    --  @param Found The graph; empty when none is kept.
    --  @param Status Framework_Not_Found when none is kept.
    procedure Load
+     (Item   : Stores.Store;
+      Found  : out Graph;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The graph kept in the project state, without the references a graph
+   --  kept in buckets keeps in them: its files, symbols and what its files
+   --  declare.
+   --
+   --  @param Item The store.
+   --  @param Found The graph; empty when none is kept.
+   --  @param Status Framework_Not_Found when none is kept.
+   procedure Load_Declared
      (Item   : Stores.Store;
       Found  : out Graph;
       Status : out Model_Runner.Errors.Error_Info);
@@ -531,6 +578,19 @@ package Model_Runner.Framework.Repository is
    --  @return The places, sorted.
    function References_To
      (From : Graph;
+      Name : String) return Name_Lists.Vector
+   with Pre => Holds_References (From);
+
+   --  The places a symbol is referred to, as path:line, from a graph or
+   --  the store it was read from.
+   --
+   --  @param Item The graph's store.
+   --  @param From The graph.
+   --  @param Name The symbol's full name.
+   --  @return The places, sorted.
+   function References_To
+     (Item : Stores.Store;
+      From : Graph;
       Name : String) return Name_Lists.Vector;
 
    --  The units a unit depends on.
@@ -666,8 +726,7 @@ private
    package Symbol_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Symbol);
 
-   package Relation_Vectors is new Ada.Containers.Vectors
-     (Index_Type => Positive, Element_Type => Relation);
+   package Relation_Vectors renames Relation_Lists;
 
    type Graph is record
       Files     : File_Vectors.Vector;
@@ -697,6 +756,11 @@ private
       --  found gone: what a graph kept in buckets has to have put right in
       --  theirs. Not kept with the graph.
       Touched      : Name_Lists.Vector;
+
+      --  Read without the references kept in buckets; the files whose
+      --  references it holds itself all the same, read again since.
+      Light        : Boolean := False;
+      Held_Origins : Name_Lists.Vector;
    end record;
 
 end Model_Runner.Framework.Repository;
