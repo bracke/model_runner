@@ -1711,7 +1711,13 @@ package body Model_Runner.Framework.Repository is
       Read_Again        : out Natural;
       Within            : Roots;
       Check_Only        : Boolean;
-      Unchanged         : out Boolean) return Graph
+      Unchanged         : out Boolean;
+      --  The files whose references are to one of Names, where a graph's
+      --  references are not all in memory -- one read from its record
+      --  alone; Known false where it cannot say. Null: from Kept.
+      Referrers         : access function
+                            (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set := null)
+      return Graph
    is
       Result   : Graph;
 
@@ -2066,6 +2072,12 @@ package body Model_Runner.Framework.Repository is
          Renamed, Grown : Name_Sets.Set;
          Added_Words    : Name_Sets.Set;
 
+         --  The names no longer declared -- lost, changed in kind, or of a
+         --  file gone: a reference only to one of them reads otherwise now,
+         --  so only the files with such a reference (Who) are read again
+         --  for them, not every file that can see their unit.
+         Removed_Names  : Name_Sets.Set;
+
          function Declaring_Otherwise return Boolean is
             Was, Is_Now : Name_Maps.Map;
          begin
@@ -2096,7 +2108,12 @@ package body Model_Runner.Framework.Repository is
                   end if;
                   if not Name_Sets.Is_Subset (Before, After) then
                      Renamed.Include (Path);
-                  elsif not Name_Sets."=" (Before, After) then
+                     for Entry_Of of Name_Sets.Difference (Before, After) loop
+                        Removed_Names.Include
+                          (Entry_Of (Entry_Of'First .. Ada.Strings.Fixed.Index (Entry_Of, [Tab]) - 1));
+                     end loop;
+                  end if;
+                  if not Name_Sets.Is_Subset (After, Before) then
                      Grown.Include (Path);
                      Gained := Name_Sets.Difference (After, Before);
                      for Entry_Of of Gained loop
@@ -2115,6 +2132,12 @@ package body Model_Runner.Framework.Repository is
                      end loop;
                   end if;
                end;
+            end loop;
+            --  And every name a file gone declared.
+            for Named of Kept.Symbols loop
+               if Gone.Contains (To_String (Named.Path)) then
+                  Removed_Names.Include (To_String (Named.Name));
+               end if;
             end loop;
             return True;
          end Declaring_Otherwise;
@@ -2144,6 +2167,32 @@ package body Model_Runner.Framework.Repository is
          --  Renamed, Grown and Added_Words filled, before Moved is.
          Sorted_Out : constant Boolean := Declaring_Otherwise;
          pragma Unreferenced (Sorted_Out);
+
+         --  The files with a reference to a removed name: from the kept
+         --  graph's references, or asked where they are not in memory; not
+         --  known, every file that can see the unit is read again, as
+         --  before.
+         Who       : Name_Sets.Set;
+         Who_Known : Boolean := True;
+
+         function Find_Who return Boolean is
+         begin
+            if Removed_Names.Is_Empty then
+               null;
+            elsif Referrers /= null then
+               Who := Referrers (Removed_Names, Who_Known);
+            else
+               for Link of Kept.Relations loop
+                  if Is_Reference (Link.Kind) and then Removed_Names.Contains (To_String (Link.To)) then
+                     Who.Include (To_String (Link.Origin));
+                  end if;
+               end loop;
+            end if;
+            return True;
+         end Find_Who;
+
+         Who_Found : constant Boolean := Find_Who;
+         pragma Unreferenced (Who_Found);
          Moved   : Name_Lists.Vector := Units_Of (Result, Renamed);
          Grown_Units : constant Name_Lists.Vector := Units_Of (Result, Grown);
          Grown_Set   : Name_Sets.Set;
@@ -2218,11 +2267,13 @@ package body Model_Runner.Framework.Repository is
                      return not Units.Is_Empty and then Language_Of (Path) /= "Ada";
                   end Can_See;
 
-                  --  Read again: changed, or able to see a unit that lost or
-                  --  changed a name, or one that only gained names where the
-                  --  file says one of them.
+                  --  Read again: changed; with a reference to a name no
+                  --  longer declared (or, where that is not known, able to
+                  --  see a unit that lost one); or able to see a unit that
+                  --  gained names where the file says one of them.
                   Sees : constant Boolean :=
-                    Changed_Set.Contains (Path) or else Can_See (Moved, Moved_Set)
+                    Changed_Set.Contains (Path)
+                    or else (if Who_Known then Who.Contains (Path) else Can_See (Moved, Moved_Set))
                     or else (Can_See (Grown_Units, Grown_Set) and then Mentions (Text_Of (Path)));
                begin
                   Result.Reading := To_Unbounded_String (Path);
@@ -2753,6 +2804,34 @@ package body Model_Runner.Framework.Repository is
    function Bucket_Name (Bucket, Count : Positive) return String
    is (Index_Name & "-bucket-" & Records.Numbered (Bucket, Count));
 
+   --  The record that says, for each bucket, the names its references are
+   --  to: so that the files with a reference to a name are found by reading
+   --  the buckets that have one, not all of them.
+   Uses_Name : constant String := Index_Name & "-uses";
+
+   --  The names the references of some relation texts are to, each once,
+   --  a space apart.
+   function Names_Said (Lines : Name_Lists.Vector) return String is
+      Seen : Name_Sets.Set;
+      Said : Unbounded_String;
+   begin
+      for Line of Lines loop
+         declare
+            First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Line, [Tab]);
+            Second_Tab : constant Natural :=
+              (if First_Tab = 0 then 0 else Ada.Strings.Fixed.Index (Line (First_Tab + 1 .. Line'Last), [Tab]));
+            Third_Tab  : constant Natural :=
+              (if Second_Tab = 0 then 0 else Ada.Strings.Fixed.Index (Line (Second_Tab + 1 .. Line'Last), [Tab]));
+         begin
+            if Third_Tab > 0 and then not Seen.Contains (Line (Second_Tab + 1 .. Third_Tab - 1)) then
+               Seen.Include (Line (Second_Tab + 1 .. Third_Tab - 1));
+               Append (Said, (if Length (Said) = 0 then "" else " ") & Line (Second_Tab + 1 .. Third_Tab - 1));
+            end if;
+         end;
+      end loop;
+      return To_String (Said);
+   end Names_Said;
+
    --  The fewest buckets a graph past one record keeps its relations in;
    --  more, by doubling, where a bucket would be past what a record holds.
    Least_Buckets : constant := 64;
@@ -2907,6 +2986,33 @@ package body Model_Runner.Framework.Repository is
                      end;
                   end loop;
                end;
+               --  What each bucket's references are to.
+               declare
+                  Uses : Records.Item :=
+                    Records.Create (Schemas.Repository_Schema, 1, "REPOSITORY-USES",
+                                    Stores.Current_Revision (Item, Indexes_Area, Uses_Name) + 1);
+                  type Name_Set_Array is array (1 .. Count) of Name_Sets.Set;
+                  Said : Name_Set_Array;
+               begin
+                  for Index in 1 .. Relations loop
+                     if Into (Index) > 0 then
+                        Said (Into (Index)).Include (To_String (Found.Relations (Index).To));
+                     end if;
+                  end loop;
+                  for Bucket in 1 .. Count loop
+                     declare
+                        Joined : Unbounded_String;
+                     begin
+                        for Name of Said (Bucket) loop
+                           Append (Joined, (if Length (Joined) = 0 then "" else " ") & Name);
+                        end loop;
+                        Records.Set (Uses, "bucket." & Records.Numbered (Bucket, Count), To_String (Joined));
+                     end;
+                  end loop;
+                  Records.Set (Uses, "fingerprint", Print);
+                  Records.Set (Uses, "reader", Reader_Version);
+                  Stores.Put (Change, Indexes_Area, Uses_Name, Uses);
+               end;
                --  The declared relations, in the record itself.
                declare
                   Shown : Natural := 0;
@@ -2964,6 +3070,9 @@ package body Model_Runner.Framework.Repository is
                end;
             end if;
          end;
+         if Stores.Exists (Item, Indexes_Area, Uses_Name) then
+            Stores.Remove (Change, Indexes_Area, Uses_Name);
+         end if;
       end if;
 
       --  The parts an earlier graph kept, which no graph keeps now: let go.
@@ -3195,6 +3304,59 @@ package body Model_Runner.Framework.Repository is
       Read_Again : Natural;
       Unchanged  : Boolean;
       Change     : Stores.Transaction;
+
+      --  The files with a reference to one of Names: the buckets whose
+      --  uses say one of them, read, and their references' files.
+      function Referrers (Names : Name_Sets.Set; Known : out Boolean) return Name_Sets.Set is
+         Uses   : Records.Item;
+         Read   : E.Error_Info;
+         Result : Name_Sets.Set;
+         Count  : Natural;
+      begin
+         Known := False;
+         Stores.Read (Item, Indexes_Area, Uses_Name, Uses, Read);
+         if E.Is_Error (Read) or else Records.Get (Uses, "reader") /= Reader_Version
+           or else Records.Get (Value, "buckets") = ""
+         then
+            return Result;
+         end if;
+         Count := Natural'Value (Records.Get (Value, "buckets"));
+         for Bucket in 1 .. Count loop
+            declare
+               Said : constant String := " " & Records.Get (Uses, "bucket." & Records.Numbered (Bucket, Count)) & " ";
+            begin
+               if (for some Name of Names => Ada.Strings.Fixed.Index (Said, " " & Name & " ") > 0) then
+                  declare
+                     Held : Records.Item;
+                  begin
+                     Stores.Read (Item, Indexes_Area, Bucket_Name (Bucket, Count), Held, Read);
+                     if E.Is_Error (Read) then
+                        return Result;
+                     end if;
+                     for Index in 1 .. Records.Field_Count (Held) loop
+                        declare
+                           Text       : constant String := Records.Field_Value (Held, Index);
+                           First_Tab  : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab]);
+                           Second_Tab : constant Natural :=
+                             (if First_Tab = 0 then 0
+                              else Ada.Strings.Fixed.Index (Text (First_Tab + 1 .. Text'Last), [Tab]));
+                           Third_Tab  : constant Natural :=
+                             (if Second_Tab = 0 then 0
+                              else Ada.Strings.Fixed.Index (Text (Second_Tab + 1 .. Text'Last), [Tab]));
+                           Last_Tab   : constant Natural := Ada.Strings.Fixed.Index (Text, [Tab], Ada.Strings.Backward);
+                        begin
+                           if Third_Tab > 0 and then Names.Contains (Text (Second_Tab + 1 .. Third_Tab - 1)) then
+                              Result.Include (Text (Last_Tab + 1 .. Text'Last));
+                           end if;
+                        end;
+                     end loop;
+                  end;
+               end if;
+            end;
+         end loop;
+         Known := True;
+         return Result;
+      end Referrers;
    begin
       Patched := False;
       Status := E.Success;
@@ -3211,7 +3373,8 @@ package body Model_Runner.Framework.Repository is
          Status := E.Success;
          return;
       end if;
-      Found := Refresh_Or_Check (Directory, Light, Read_Again, Roots_Of (Item), False, Unchanged);
+      Found := Refresh_Or_Check (Directory, Light, Read_Again, Roots_Of (Item), False, Unchanged,
+                                 Referrers'Access);
       if Unchanged then
          Patched := True;
          return;
@@ -3224,7 +3387,10 @@ package body Model_Runner.Framework.Repository is
            Records.Create (Schemas.Repository_Schema, 1, "REPOSITORY",
                            Stores.Current_Revision (Item, Indexes_Area, Index_Name) + 1);
          Declared : Natural := 0;
+         Uses     : Records.Item;
+         Uses_Read : E.Error_Info;
       begin
+         Stores.Read (Item, Indexes_Area, Uses_Name, Uses, Uses_Read);
          for Path of Found.Touched loop
             Touched.Include (Path);
             declare
@@ -3297,6 +3463,9 @@ package body Model_Runner.Framework.Repository is
                         Stores.Put (Change, Indexes_Area, Bucket_Name (Bucket, Count), Kept);
                      end;
                      Records.Set (Main, Field, Fingerprint_Of (Print));
+                     if E.Is_Ok (Uses_Read) then
+                        Records.Set (Uses, Field, Names_Said (Lines));
+                     end if;
                   end;
                else
                   Records.Set (Main, Field, Records.Get (Value, Field));
@@ -3346,6 +3515,11 @@ package body Model_Runner.Framework.Repository is
             end;
          end loop;
          Stores.Put (Change, Indexes_Area, Index_Name, Main);
+         if E.Is_Ok (Uses_Read) then
+            Records.Set (Uses, "fingerprint", Graph_Fingerprint (Found));
+            Records.Set_Revision (Uses, Records.Revision (Uses) + 1);
+            Stores.Put (Change, Indexes_Area, Uses_Name, Uses);
+         end if;
          Stores.Commit (Item, Change, Status);
          Patched := E.Is_Ok (Status);
       end;

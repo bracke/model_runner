@@ -3580,6 +3580,19 @@ package body Tests.Framework_Cases is
             Rp.Load (Store, Kept, Status);
             Assert (Patched and then E.Is_Ok (Status) and then Same (Kept, Rp.Scan (Project)),
                     "a graph in buckets put right after a new name is not the one a scan makes");
+            --  A name declared no more: the files with a reference to it found
+            --  from the buckets that say it, and read again.
+            delay 2.1;
+            declare
+               Next_At : constant Positive := Ada.Strings.Fixed.Index (Spec, "   procedure Next");
+               After   : constant Positive := Ada.Strings.Fixed.Index (Spec, "Token);", Next_At) + 8;
+            begin
+               Put_File (Project & "/src/parser.ads", Spec (Spec'First .. Next_At - 1) & Spec (After .. Spec'Last));
+            end;
+            Rp.Patch_Current (Store, Light, Patched, Status);
+            Rp.Load (Store, Kept, Status);
+            Assert (Patched and then E.Is_Ok (Status) and then Same (Kept, Rp.Scan (Project)),
+                    "a graph in buckets put right after a name went is not the one a scan makes");
             Put_File (Project & "/src/parser.ads", Spec);
          end;
 
@@ -3722,7 +3735,8 @@ package body Tests.Framework_Cases is
             --  One that only declares a name more: read again alone where
             --  no file says it; with the file that says it -- a use that
             --  found nothing before -- where one does. One that declares a
-            --  name no more: with every file that can see it.
+            --  name no more: with the files whose references are to it
+            --  (main), not every file that can see it.
             declare
                Main   : constant String := Read_Whole (Project & "/src/main.adb");
                Before : Rp.Graph;
@@ -3760,8 +3774,10 @@ package body Tests.Framework_Cases is
                   Put_File (Project & "/src/parser.ads", Spec (Spec'First .. Next_At - 1) & Spec (After .. Spec'Last));
                end;
                Refreshed := Rp.Refresh (Project, Again, Read);
-               Assert (Read >= 3 and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Rp.Scan (Project)),
-                       "a spec declaring a name no more did not have what sees it read again:" & Read'Image);
+               Again := Rp.Scan (Project);
+               Assert (Read = 2 and then Rp.Relation_Count (Refreshed) = Rp.Relation_Count (Again)
+                       and then Rp.References_To (Refreshed, "Parser.Next") = Rp.References_To (Again, "Parser.Next"),
+                       "a spec declaring a name no more did not have only what used it read again:" & Read'Image);
                Put_File (Project & "/src/main.adb", Main);
             end;
             Put_File (Project & "/src/parser.ads", Spec);
