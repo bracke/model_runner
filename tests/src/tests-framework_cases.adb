@@ -302,6 +302,9 @@ package body Tests.Framework_Cases is
       Assert (R.Get (Back, "revision") = "4", "the revision did not change");
       Assert (R.Schema_Version (Back) = 1, "the schema version changed");
 
+      Assert ((for all Index in 1 .. R.Field_Count (Back) =>
+                 R.Field_Value (Back, Index) = R.Get (Back, R.Field_Name (Back, Index))),
+              "a field's value by its place is not its value by its name");
       Assert (R.Is_Field_Name ("next.REQ-PARSER")
               and then not R.Is_Field_Name ("two words")
               and then not R.Is_Field_Name ("9lives"),
