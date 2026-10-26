@@ -149,8 +149,11 @@ package body Model_Runner.Backend.Device is
    --  positions chose them, and a shape a count would be one a run.
    --  Sixteen was fewer than a hybrid of mixed formats runs: a prompt's
    --  shapes filled the table and a drafted round's checks went uncounted.
-   --  A ninety-seventh is counted and not summed.
-   Shape_Limit : constant := 96;
+   --  Ninety-six were fewer than a deep prompt of a model of mixed formats
+   --  runs before its first generated token: Swift-1.5-Qwen3.8-27B's
+   --  prompt layers took them all, and no token's run was summed. A
+   --  257th is counted and not summed.
+   Shape_Limit : constant := 256;
    Label_Limit : constant := 40;
 
    --  Which doubling a count of positions is in: one, two and three, four
