@@ -241,6 +241,9 @@ package body Model_Runner.Framework.Records is
    function Field_Name (Value : Item; Index : Positive) return String
    is (To_String (Value.Fields (Index).Name));
 
+   function Field_Value (Value : Item; Index : Positive) return String
+   is (To_String (Value.Fields (Index).Value));
+
    ---------------
    -- Serialize --
    ---------------

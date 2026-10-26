@@ -261,6 +261,11 @@ package body Model_Runner.Framework.Stores is
    Parsed_Least : constant := 256 * 1024;
    Parsed_Count : constant := 4;
 
+   --  And at most this large: a part of a large graph, 48 MB read once a
+   --  session, was held four deep with its text -- some 300 MB kept for
+   --  nothing -- and every one held copied again as the next came in.
+   Parsed_Most : constant := 16 * 1024 * 1024;
+
    type Parsed_Record is record
       Path  : Unbounded_String;
       Text  : Unbounded_String;
@@ -310,7 +315,7 @@ package body Model_Runner.Framework.Stores is
    begin
       Value := Records.Create ("", 1, "", 0);
       Read_Text (Path, Text, Status);
-      if E.Is_Ok (Status) and then Length (Text) >= Parsed_Least then
+      if E.Is_Ok (Status) and then Length (Text) in Parsed_Least .. Parsed_Most then
          Large := True;
          Parsed_Lock.Seize;
          for One of Parsed loop

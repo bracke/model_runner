@@ -2629,47 +2629,93 @@ package body Model_Runner.Framework.Repository is
       --  the memory they took was the process's from then on.
       Names : Shared_Names.Map;
 
-      --  The graph's files, symbols and relations, from a record of it.
-      procedure Take (From : Records.Item) is
+      --  The last relation's file and the file whose reading found it: the
+      --  next relation is mostly from the same, and the same is taken
+      --  without asking Names.
+      Last_From, Last_Origin : Unbounded_String;
+
+      function Again (Last : in out Unbounded_String; Text : String) return Unbounded_String is
       begin
+         if Last /= Text then
+            Last := Shared (Names, Text);
+         end if;
+         return Last;
+      end Again;
+
+      --  The graph's files, symbols and relations, from a record of it:
+      --  each field by its place, a relation cut at its tabs where it lies
+      --  -- by its name and through a list of its parts, a graph of 2.5
+      --  million relations took nine seconds to read.
+      procedure Take (From : Records.Item) is
+         use type Ada.Containers.Count_Type;
+      begin
+         --  Room for this record's relations at least, grown by doubling:
+         --  reserved a part at a time, every part copied all before it.
+         if Found.Relations.Capacity < Found.Relations.Length + Ada.Containers.Count_Type (Records.Field_Count (From))
+         then
+            Found.Relations.Reserve_Capacity
+              (2 * (Found.Relations.Length + Ada.Containers.Count_Type (Records.Field_Count (From))));
+         end if;
          for Index in 1 .. Records.Field_Count (From) loop
             declare
                Field : constant String := Records.Field_Name (From, Index);
-               Parts : constant Name_Lists.Vector :=
-                 Split_Tabs (Records.Get (From, Field));
+               Text  : constant String := Records.Field_Value (From, Index);
             begin
-               if Ada.Strings.Fixed.Index (Field, "file.") = Field'First
-                 and then Natural (Parts.Length) in 4 .. 5
-               then
-                  Found.Files.Append
-                    (File_Entry'
-                     (Path        => To_Unbounded_String (Parts (1)),
-                      Language    => To_Unbounded_String (Parts (2)),
-                      Role        => File_Role'Value (Parts (3)),
-                      Fingerprint => To_Unbounded_String (Parts (4)),
-                      Stamp       => To_Unbounded_String
-                                       (if Natural (Parts.Length) = 5 then Parts (5) else "")));
-               elsif Ada.Strings.Fixed.Index (Field, "symbol.") = Field'First
-                 and then Natural (Parts.Length) = 4
-               then
-                  Found.Symbols.Append
-                    (Symbol'
-                     (Name => To_Unbounded_String (Parts (1)),
-                      Kind => To_Unbounded_String (Parts (2)),
-                      Path => To_Unbounded_String (Parts (3)),
-                      Line => Natural'Value (Parts (4))));
-               elsif Ada.Strings.Fixed.Index (Field, "relation.") = Field'First
-                 and then Natural (Parts.Length) in 6 .. 7
-               then
-                  Found.Relations.Append
-                    (Relation'
-                     (Kind   => Relation_Kind'Value (Parts (1)),
-                      From   => Shared (Names, Parts (2)),
-                      To     => Shared (Names, Parts (3)),
-                      Source => Derivation'Value (Parts (4)),
-                      Sure   => Confidence'Value (Parts (5)),
-                      Where  => To_Unbounded_String (Parts (6)),
-                      Origin => Shared (Names, (if Natural (Parts.Length) = 7 then Parts (7) else ""))));
+               if Field'Length > 9 and then Field (Field'First .. Field'First + 8) = "relation." then
+                  declare
+                     --  Where each of its six or seven parts begins and
+                     --  ends; an eighth makes it no relation, as before.
+                     First, Last : array (1 .. 8) of Natural := [others => 0];
+                     Count : Natural := 0;
+                     Start : Positive := Text'First;
+                  begin
+                     for At_Char in Text'First .. Text'Last + 1 loop
+                        if At_Char > Text'Last or else Text (At_Char) = Tab then
+                           Count := Count + 1;
+                           First (Count) := Start;
+                           Last (Count) := At_Char - 1;
+                           Start := At_Char + 1;
+                           exit when Count = 8;
+                        end if;
+                     end loop;
+                     if Count in 6 .. 7 then
+                        Found.Relations.Append
+                          (Relation'
+                           (Kind   => Relation_Kind'Value (Text (First (1) .. Last (1))),
+                            From   => Again (Last_From, Text (First (2) .. Last (2))),
+                            To     => Shared (Names, Text (First (3) .. Last (3))),
+                            Source => Derivation'Value (Text (First (4) .. Last (4))),
+                            Sure   => Confidence'Value (Text (First (5) .. Last (5))),
+                            Where  => To_Unbounded_String (Text (First (6) .. Last (6))),
+                            Origin => Again (Last_Origin, (if Count = 7 then Text (First (7) .. Last (7)) else ""))));
+                     end if;
+                  end;
+               else
+                  declare
+                     Parts : constant Name_Lists.Vector := Split_Tabs (Text);
+                  begin
+                     if Ada.Strings.Fixed.Index (Field, "file.") = Field'First
+                       and then Natural (Parts.Length) in 4 .. 5
+                     then
+                        Found.Files.Append
+                          (File_Entry'
+                           (Path        => To_Unbounded_String (Parts (1)),
+                            Language    => To_Unbounded_String (Parts (2)),
+                            Role        => File_Role'Value (Parts (3)),
+                            Fingerprint => To_Unbounded_String (Parts (4)),
+                            Stamp       => To_Unbounded_String
+                                             (if Natural (Parts.Length) = 5 then Parts (5) else "")));
+                     elsif Ada.Strings.Fixed.Index (Field, "symbol.") = Field'First
+                       and then Natural (Parts.Length) = 4
+                     then
+                        Found.Symbols.Append
+                          (Symbol'
+                           (Name => To_Unbounded_String (Parts (1)),
+                            Kind => To_Unbounded_String (Parts (2)),
+                            Path => To_Unbounded_String (Parts (3)),
+                            Line => Natural'Value (Parts (4))));
+                     end if;
+                  end;
                end if;
             end;
          end loop;

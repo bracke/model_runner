@@ -142,6 +142,14 @@ package Model_Runner.Framework.Records is
    --  @return Its name.
    function Field_Name (Value : Item; Index : Positive) return String;
 
+   --  The value of one of those fields, by its place: what Get would find
+   --  by its name, without the search -- for a reader walking every field.
+   --
+   --  @param Value The record.
+   --  @param Index 1 .. Field_Count.
+   --  @return Its value.
+   function Field_Value (Value : Item; Index : Positive) return String;
+
    --  A record as canonical text.
    --
    --  @param Value The record.
