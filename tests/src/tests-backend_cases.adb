@@ -11404,6 +11404,143 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One;
 
+   --------------------------------------------------------
+   -- A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does --
+   --------------------------------------------------------
+
+   --  A round's few positions over a cache past Few_Span take the
+   --  few-position pipeline: a workgroup a group of heads and a slice of
+   --  the cache, its rows the positions times the group's heads, its
+   --  answers records the merge puts together. Groups of six at four
+   --  positions are twenty-four rows, two subgroups that pair; at seven,
+   --  forty-two rows, four. Each says what the queries one at a time say.
+   procedure A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 12;
+      Groups    : constant := 2;
+      Positions : constant := 8_300;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found : Boolean;
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      Near : constant N.Real := 4.0e-3;
+
+      procedure Compare (Head_Size : Positive; Batch : Positive) is
+         Span    : constant N.Element_Count := N.Element_Count (Heads * Head_Size);
+         KV_Span : constant N.Element_Count := N.Element_Count (Groups * Head_Size);
+         Room    : constant N.Element_Count := N.Element_Count (Positions + Batch) * KV_Span;
+
+         type Values is access N.Real_Array;
+         procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
+
+         Cache   : Values := new N.Real_Array (0 .. Room * 2 - 1);
+         Query   : N.Real_Array (0 .. Span * N.Element_Count (Batch) - 1);
+         Alone   : N.Real_Array (0 .. Span * N.Element_Count (Batch) - 1) := [others => 0.0];
+         Batched : N.Real_Array (0 .. Span * N.Element_Count (Batch) - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+      begin
+         for Index in Cache'Range loop
+            Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+         end loop;
+
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+         Assert (Ok, "the cache would not be reserved");
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         Assert (Ok, "the cache would not be written");
+
+         for Which in 0 .. Batch - 1 loop
+            declare
+               One : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            begin
+               Products.Attend_Resident
+                 (Engine, Query (Span * N.Element_Count (Which) .. Span * N.Element_Count (Which + 1) - 1),
+                  Heads => Heads, Head_Size => Head_Size,
+                  Value_Size => Head_Size, Group_Size => Heads / Groups,
+                  First => 0, Last => Positions - 1 + Which,
+                  K_Base => 0, V_Base => Room,
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  Scale => 0.0625, Cap => 0.0, Target => One, Ok => Ok);
+               Assert (Ok, "attention on its own was refused");
+               Alone (Span * N.Element_Count (Which) .. Span * N.Element_Count (Which + 1) - 1) := One;
+            end;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Room,
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.0625, Cap => 0.0, Added => Added);
+         Assert (Added, "a sequence would not take the attention step");
+
+         Products.Run (Engine, Steps, Query, Batch, Batched, Ok, Halted);
+         Assert (Ok, "the round was refused");
+
+         for Index in Batched'Range loop
+            Worst := N.Real'Max (Worst, abs (Alone (Index) - Batched (Index)));
+         end loop;
+         Free (Cache);
+
+         Assert (Worst <= Near,
+                 "a round of" & Positive'Image (Batch) & " positions with heads" & Positive'Image (Head_Size)
+                 & " wide in groups of six answers" & N.Real'Image (Worst)
+                 & " away from the positions one at a time");
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Device_Notes.Skip ("for a few positions deep attend as one at a time does");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Device_Notes.Skip ("for a few positions deep attend as one at a time does");
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      --  Out of the half-precision copy, as a cache of halves -- the
+      --  default -- has it: the few-position pipeline reads only that.
+      Products.Prefer_Halves (Engine, True);
+
+      Compare (Head_Size => 256, Batch => 4);
+      Compare (Head_Size => 256, Batch => 7);
+      Compare (Head_Size => 128, Batch => 4);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does;
+
    ----------------------------------------------
    -- An_Exact_Batch_Reads_Its_Vectors_As_They_Are --
    ----------------------------------------------
@@ -12556,6 +12693,11 @@ package body Tests.Backend_Cases is
          "a batch with heads a hundred and twenty-eight wide attends "
          & "through the matrix instruction and says what the queries one "
          & "at a time say, as a head of sixty-four does");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does'Access,
+         "a round's few positions over a cache past the few-position span, "
+         & "in groups of six at two and four subgroups, say what the "
+         & "positions one at a time say");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, An_Exact_Batch_Reads_Its_Vectors_As_They_Are'Access,
          "a batch long enough for the tile, asked for exactly, reads its "

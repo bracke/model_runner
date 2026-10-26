@@ -213,8 +213,13 @@ const uint DM = 64u;
 #endif
 
 //  Two subgroups answer a pair's rows together where a workgroup has
-//  them: see pacc below. Not for a few at once, whose rows are records.
-const bool PAIRED = SUBS >= 2u && FEW == 0u && BR == 16u && (DM % 32u) == 0u;
+//  them: see pacc below. A few at once too -- each row's record written
+//  by the subgroup whose row it is: a round's check of four positions
+//  over a group of six read every tile of values twice, once a subgroup.
+//  The host makes a few at once at one, two or four subgroups, always a
+//  whole number of pairs; a term on FEW here took the driver's compiler
+//  down with every pipeline of this source.
+const bool PAIRED = SUBS >= 2u && BR == 16u && (DM % 32u) == 0u;
 
 //  IN_PLACE keeps the answer in the instruction's accumulators across the
 //  tiles, rescaled where it sits; see the head of the file. The heads of
@@ -858,8 +863,10 @@ void main() {
                                         : block) * BR + r;
 
                     if (FEW != 0u) {
-                        if (c < dv && row_real (sub, block, r)) {
-                            y[row_record (sub, r) + c] = ss[SS0 + at];
+                        uint owner = PAIRED ? pair0 + m : sub;
+
+                        if (c < dv && row_real (owner, block, r)) {
+                            y[row_record (owner, r) + c] = ss[SS0 + at];
                         }
                     } else if (c < dv) {
                         uint where = slot * shape.heads * dv + head * dv + c;

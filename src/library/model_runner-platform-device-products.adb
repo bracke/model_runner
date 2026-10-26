@@ -16220,8 +16220,12 @@ package body Model_Runner.Platform.Device.Products is
             return;
          end if;
 
+         --  And where a step attends: its slices are put together after a
+         --  barrier, and a few positions deep take their pipeline only
+         --  with one -- a lone attention step was neither, as no step of a
+         --  model's is.
          for Index in 1 .. Steps.Held loop
-            Chains := Chains or else Steps.Items (Index).Chained;
+            Chains := Chains or else Steps.Items (Index).Chained or else Steps.Items (Index).Attends;
          end loop;
 
          if Chains then
