@@ -1,3 +1,4 @@
+with Interfaces;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
@@ -109,16 +110,29 @@ package body Model_Runner.Framework.Indexes is
             Set_Entries (Part, First, Last);
             Stores.Put (Change, Indexes_Area, Part_Name (Which, Parts), Part);
          end Put_Part;
+         --  The fingerprint of its lines, each with its line break, kept in
+         --  its record: an index whose lines are the ones kept is not written
+         --  again -- nor read back to be compared, which for humanize's
+         --  traceability was 320 MB at every opening after a change.
+         Lines_Print : Interfaces.Unsigned_64 := Model_Runner.Framework.Hash ("");
       begin
-         --  Kept already as it is: not written again.
-         if Stores.Exists (Item, Indexes_Area, Name_Of (Which))
-           and then Name_Lists."=" (Entries (Item, Which), Lines)
-         then
-            return;
-         end if;
          for Line of Lines loop
             Spread := Spread + Long_Long_Integer (Line'Length + Field_Bytes);
+            Lines_Print := Model_Runner.Framework.Hash_On (Line & ASCII.LF, Lines_Print);
          end loop;
+         if Stores.Exists (Item, Indexes_Area, Name_Of (Which)) then
+            declare
+               Held : Records.Item;
+               Read : E.Error_Info;
+            begin
+               Stores.Read (Item, Indexes_Area, Name_Of (Which), Held, Read);
+               if E.Is_Ok (Read)
+                 and then Records.Get (Held, "print") = Model_Runner.Framework.Fingerprint_Of (Lines_Print)
+               then
+                  return;
+               end if;
+            end;
+         end if;
          declare
             Value : Records.Item :=
               Records.Create
@@ -154,6 +168,7 @@ package body Model_Runner.Framework.Indexes is
                end;
                Records.Set (Value, "parts", Image (Parts));
             end if;
+            Records.Set (Value, "print", Model_Runner.Framework.Fingerprint_Of (Lines_Print));
             Records.Set (Value, "source", Source);
             Stores.Put (Change, Indexes_Area, Name_Of (Which), Value);
          end;
@@ -373,7 +388,7 @@ package body Model_Runner.Framework.Indexes is
       begin
          for Index in 1 .. Records.Field_Count (From) loop
             if Ada.Strings.Fixed.Index (Records.Field_Name (From, Index), "entry.") = 1 then
-               Result.Append (Records.Get (From, Records.Field_Name (From, Index)));
+               Result.Append (Records.Field_Value (From, Index));
             end if;
          end loop;
       end Take;

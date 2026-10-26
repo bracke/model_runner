@@ -311,6 +311,9 @@ package body Tests.Framework_Cases is
               "field names are not what they should be");
       Assert (F.Fingerprint ("") = "cbf29ce484222325",
               "the fingerprint is not FNV-1a");
+      Assert (Interfaces."=" (F.Hash_On ("cd", F.Hash ("ab")), F.Hash ("abcd"))
+              and then F.Fingerprint_Of (F.Hash ("abcd")) = F.Fingerprint ("abcd"),
+              "a hash continued is not the hash of the bytes joined");
    end Records_Round_Trip;
 
    --  A list's fields are numbered to sort in its order however long it
@@ -3486,41 +3489,88 @@ package body Tests.Framework_Cases is
                        = Rp.References_To (Found, "Parser.Next"),
               "the kept graph did not read back whole");
 
-      --  Past a record's size, its relations kept in parts: read back whole
-      --  and in order; a part of another graph refused; kept in one record
-      --  again, its parts let go.
-      Rp.Keep_Parts_At_Most (400);
-      Rp.Keep (Store, Change, Found, Status);
-      S.Commit (Store, Change, Status);
-      Assert (E.Is_Ok (Status) and then S.Exists (Store, F.Indexes_Area, "repository-part-000002"),
-              "a graph past a record's size was not kept in parts: " & Code_Of (Status));
-      Rp.Load (Store, Kept, Status);
-      Assert (E.Is_Ok (Status)
-              and then Rp.Graph_Fingerprint (Kept) = Rp.Graph_Fingerprint (Found)
-              and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found)
-              and then (for all Index in 1 .. Rp.Relation_Count (Found) =>
-                          Rp."=" (Rp.Relation_At (Kept, Index), Rp.Relation_At (Found, Index))),
-              "a graph kept in parts did not read back whole and in order: " & Code_Of (Status));
+      --  Past a record's size, its relations kept in buckets by the file
+      --  that found them: read back whole; kept again unchanged, no bucket
+      --  written; a file added, only the buckets its relations fall in; a
+      --  bucket of another graph refused; kept in one record again, its
+      --  buckets let go.
       declare
-         Part : R.Item;
+         function Bucket (Index : Positive) return String
+         is ("repository-bucket-" & R.Numbered (Index, 64));
+
+         type Revisions is array (1 .. 64) of Natural;
+         function Now return Revisions is
+           ([for Index in 1 .. 64 => S.Current_Revision (Store, F.Indexes_Area, Bucket (Index))]);
+
+         --  How many buckets were written between two looks.
+         function Written (Before, After : Revisions) return Natural is
+            Count : Natural := 0;
+         begin
+            for Index in Revisions'Range loop
+               if Before (Index) /= After (Index) then
+                  Count := Count + 1;
+               end if;
+            end loop;
+            return Count;
+         end Written;
+
+         Before : Revisions;
+         Added  : Rp.Graph;
       begin
-         S.Read (Store, F.Indexes_Area, "repository-part-000001", Part, Status);
-         R.Set (Part, "fingerprint", "0000000000000000");
-         R.Set_Revision (Part, R.Revision (Part) + 1);
-         S.Put (Change, F.Indexes_Area, "repository-part-000001", Part);
+         Rp.Keep_Parts_At_Most (400);
+         Rp.Keep (Store, Change, Found, Status);
          S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then S.Exists (Store, F.Indexes_Area, Bucket (1)),
+                 "a graph past a record's size was not kept in buckets: " & Code_Of (Status));
          Rp.Load (Store, Kept, Status);
-         Assert (E.Is_Error (Status) and then Rp.Relation_Count (Kept) = 0,
-                 "a part of another graph was taken for this one's");
+         Assert (E.Is_Ok (Status)
+                 and then Rp.Graph_Fingerprint (Kept) = Rp.Graph_Fingerprint (Found)
+                 and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found)
+                 and then (for all Index in 1 .. Rp.Relation_Count (Found) =>
+                             (for some Other in 1 .. Rp.Relation_Count (Kept) =>
+                                Rp."=" (Rp.Relation_At (Kept, Other), Rp.Relation_At (Found, Index)))),
+                 "a graph kept in buckets did not read back whole: " & Code_Of (Status));
+
+         Before := Now;
+         Rp.Keep (Store, Change, Found, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Written (Before, Now) = 0, "a graph kept again unchanged wrote its buckets again");
+
+         Put_File (Project & "/src/bucket_probe.ads", "package Bucket_Probe is" & LF
+                   & "   procedure Probe;" & LF & "end Bucket_Probe;" & LF);
+         Added := Rp.Scan (Project);
+         Before := Now;
+         Rp.Keep (Store, Change, Added, Status);
+         S.Commit (Store, Change, Status);
+         Assert (Written (Before, Now) in 1 .. 2,
+                 "a file added wrote other buckets than its own:" & Written (Before, Now)'Image);
+         Dirs.Delete_File (Project & "/src/bucket_probe.ads");
+
+         declare
+            Part : R.Item;
+         begin
+            S.Read (Store, F.Indexes_Area, Bucket (1), Part, Status);
+            R.Set (Part, "fingerprint", "0000000000000000");
+            R.Set_Revision (Part, R.Revision (Part) + 1);
+            S.Put (Change, F.Indexes_Area, Bucket (1), Part);
+            S.Commit (Store, Change, Status);
+            Rp.Load (Store, Kept, Status);
+            Assert (E.Is_Error (Status) and then Rp.Relation_Count (Kept) = 0,
+                    "a bucket of another graph was taken for this one's");
+         end;
+         Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
+         Rp.Keep (Store, Change, Found, Status);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status) and then not S.Exists (Store, F.Indexes_Area, Bucket (1)),
+                 "a graph kept whole again left its buckets");
+         Rp.Load (Store, Kept, Status);
+         Assert (E.Is_Ok (Status) and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found),
+                 "a graph kept whole again did not read back");
+      exception
+         when others =>
+            Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
+            raise;
       end;
-      Rp.Keep_Parts_At_Most (48 * 1024 * 1024);
-      Rp.Keep (Store, Change, Found, Status);
-      S.Commit (Store, Change, Status);
-      Assert (E.Is_Ok (Status) and then not S.Exists (Store, F.Indexes_Area, "repository-part-000001"),
-              "a graph kept whole again left its parts");
-      Rp.Load (Store, Kept, Status);
-      Assert (E.Is_Ok (Status) and then Rp.Relation_Count (Kept) = Rp.Relation_Count (Found),
-              "a graph kept whole again did not read back");
 
       Put_File (Project & "/src/extra.ads", "package Extra is" & LF
                 & "end Extra;" & LF);
@@ -4707,6 +4757,16 @@ package body Tests.Framework_Cases is
               and then Ix.Entries (Store, Ix.Search_Index).Contains ("read" & ASCII.HT & "IO.Read")
               and then Ix.Entries (Store, Ix.Dependency_Index).Is_Empty,
               "an index does not say what the state and the repository hold");
+
+      --  Built again from what has not changed: not written again.
+      declare
+         Was : constant Natural := S.Current_Revision (Store, F.Indexes_Area, "search");
+      begin
+         Ix.Build (Store, Change, Rp.Now (Store), Status);
+         S.Commit (Store, Change, Status);
+         Assert (S.Current_Revision (Store, F.Indexes_Area, "search") = Was,
+                 "an index whose lines had not changed was written again");
+      end;
 
       --  Past a record's size, an index's entries kept in parts: read back
       --  the same; kept whole again, its parts let go.

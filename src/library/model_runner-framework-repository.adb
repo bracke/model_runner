@@ -1,3 +1,4 @@
+with Ada.Unchecked_Deallocation;
 with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Containers.Indefinite_Hashed_Maps;
@@ -2492,6 +2493,21 @@ package body Model_Runner.Framework.Repository is
    is (Index_Name & "-part-" & Records.Numbered (Part, Part));
 
    --  A relation as its field says it.
+   --  The name a bucket of the graph's relations is kept under, of Count.
+   function Bucket_Name (Bucket, Count : Positive) return String
+   is (Index_Name & "-bucket-" & Records.Numbered (Bucket, Count));
+
+   --  The fewest buckets a graph past one record keeps its relations in;
+   --  more, by doubling, where a bucket would be past what a record holds.
+   Least_Buckets : constant := 64;
+
+   --  Which of Count buckets a relation is kept in: by the file whose
+   --  reading found it, so that a file read again changes its own bucket
+   --  and no other.
+   function Bucket_Of (Link : Relation; Count : Positive) return Positive
+   is (Natural (Ada.Containers."mod" (Ada.Strings.Hash (To_String (Link.Origin)),
+                                       Ada.Containers.Hash_Type (Count))) + 1);
+
    function Relation_Text (Link : Relation) return String
    is (Lower (Relation_Kind'Image (Link.Kind)) & Tab
        & To_String (Link.From) & Tab & To_String (Link.To) & Tab
@@ -2516,9 +2532,9 @@ package body Model_Runner.Framework.Repository is
       Print     : constant String := Graph_Fingerprint (Found);
       Relations : constant Natural := Natural (Found.Relations.Length);
 
-      --  The relations' bytes: whether they go in parts.
+      --  The relations' bytes: whether they go in buckets.
       Spread : Long_Long_Integer := 0;
-      Parts  : Natural := 0;
+      Parts  : constant Natural := 0;
 
       --  The fields of the relations from First to Last, in Into.
       procedure Set_Relations (Into : in out Records.Item; First, Last : Natural) is
@@ -2529,19 +2545,6 @@ package body Model_Runner.Framework.Repository is
          end loop;
       end Set_Relations;
 
-      --  The part of the relations from First to Last, kept.
-      procedure Put_Part (First, Last : Natural) is
-         Part : Records.Item :=
-           Records.Create
-             (Schemas.Repository_Schema, 1, "REPOSITORY-PART-" & Records.Numbered (Parts + 1, Parts + 1),
-              Stores.Current_Revision (Item, Indexes_Area, Part_Name (Parts + 1)) + 1);
-      begin
-         Parts := Parts + 1;
-         Records.Set (Part, "fingerprint", Print);
-         Records.Set (Part, "reader", Reader_Version);
-         Set_Relations (Part, First, Last);
-         Stores.Put (Change, Indexes_Area, Part_Name (Parts), Part);
-      end Put_Part;
    begin
       Status := E.Success;
       for Link of Found.Relations loop
@@ -2565,27 +2568,91 @@ package body Model_Runner.Framework.Repository is
          Records.Set (Value, "reader", Reader_Version);
          Set_Relations (Value, 1, Relations);
       else
+         --  Past one record: in buckets, each relation in the one its
+         --  finder's path falls in, and a bucket written only where what it
+         --  holds changed -- one file read again rewrites its bucket, not
+         --  the graph's 600 MB.
          declare
-            First : Positive := 1;
-            Bytes : Long_Long_Integer := 0;
+            Count : Positive := Least_Buckets;
+            Old   : Records.Item;
+            Read  : E.Error_Info;
+            Had   : Natural := 0;
          begin
-            for Index in 1 .. Relations loop
-               declare
-                  Size : constant Long_Long_Integer :=
-                    Long_Long_Integer (Relation_Text (Found.Relations (Index))'Length + Field_Bytes);
-               begin
-                  if Bytes + Size > Part_Bytes and then Index > First then
-                     Put_Part (First, Index - 1);
-                     First := Index;
-                     Bytes := 0;
-                  end if;
-                  Bytes := Bytes + Size;
-               end;
+            while Spread / Long_Long_Integer (Count) > Part_Bytes / 2 and then Count < 65_536 loop
+               Count := Count * 2;
             end loop;
-            Put_Part (First, Relations);
+            if Stores.Exists (Item, Indexes_Area, Index_Name) then
+               Stores.Read (Item, Indexes_Area, Index_Name, Old, Read);
+               if E.Is_Ok (Read) and then Records.Get (Old, "buckets") /= ""
+                 and then Records.Get (Old, "reader") = Reader_Version
+               then
+                  Had := Natural'Value (Records.Get (Old, "buckets"));
+               end if;
+            end if;
+            declare
+               type Index_List is array (Positive range <>) of Natural;
+               type Index_List_Access is access Index_List;
+               procedure Free is new Ada.Unchecked_Deallocation (Index_List, Index_List_Access);
+               --  Each relation's bucket, and how many each bucket holds.
+               Into  : Index_List_Access := new Index_List (1 .. Natural'Max (1, Relations));
+               Sizes : array (1 .. Count) of Natural := [others => 0];
+            begin
+               for Index in 1 .. Relations loop
+                  Into (Index) := Bucket_Of (Found.Relations (Index), Count);
+                  Sizes (Into (Index)) := Sizes (Into (Index)) + 1;
+               end loop;
+               declare
+                  Hashes : array (1 .. Count) of Interfaces.Unsigned_64 := [others => Hash ("")];
+               begin
+                  for Index in 1 .. Relations loop
+                     Hashes (Into (Index)) :=
+                       Hash_On (Relation_Text (Found.Relations (Index)) & ASCII.LF, Hashes (Into (Index)));
+                  end loop;
+                  for Bucket in 1 .. Count loop
+                     declare
+                        Its   : constant String := Fingerprint_Of (Hashes (Bucket));
+                        Field : constant String := "bucket." & Records.Numbered (Bucket, Count);
+                        Shown : Natural := 0;
+                     begin
+                        Records.Set (Value, Field, Its);
+                        if not (Had = Count and then Records.Get (Old, Field) = Its
+                                and then Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Count)))
+                        then
+                           declare
+                              Kept : Records.Item :=
+                                Records.Create
+                                  (Schemas.Repository_Schema, 1,
+                                   "REPOSITORY-BUCKET-" & Records.Numbered (Bucket, Count),
+                                   Stores.Current_Revision (Item, Indexes_Area, Bucket_Name (Bucket, Count)) + 1);
+                           begin
+                              Records.Set (Kept, "fingerprint", Its);
+                              Records.Set (Kept, "reader", Reader_Version);
+                              for Index in 1 .. Relations loop
+                                 if Into (Index) = Bucket then
+                                    Shown := Shown + 1;
+                                    Records.Set (Kept, "relation." & Records.Numbered (Shown, Sizes (Bucket)),
+                                                 Relation_Text (Found.Relations (Index)));
+                                 end if;
+                              end loop;
+                              Stores.Put (Change, Indexes_Area, Bucket_Name (Bucket, Count), Kept);
+                           end;
+                        end if;
+                     end;
+                  end loop;
+               end;
+               Free (Into);
+            end;
+            Records.Set (Value, "buckets", Image (Count));
+            Records.Set (Value, "reader", Reader_Version);
+            --  The buckets an earlier graph kept in a count this one does not.
+            if Had /= Count then
+               for Bucket in 1 .. Had loop
+                  if Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Had)) then
+                     Stores.Remove (Change, Indexes_Area, Bucket_Name (Bucket, Had));
+                  end if;
+               end loop;
+            end if;
          end;
-         Records.Set (Value, "parts", Image (Parts));
-         Records.Set (Value, "reader", Reader_Version);
       end if;
       for Index in 1 .. Natural (Found.Symbols.Length) loop
          declare
@@ -2599,7 +2666,28 @@ package body Model_Runner.Framework.Repository is
       end loop;
       Stores.Put (Change, Indexes_Area, Index_Name, Value);
 
-      --  The parts an earlier, larger graph kept past these: let go.
+      --  The buckets of an earlier, larger graph, where this one is whole.
+      if Spread <= Part_Bytes and then Stores.Exists (Item, Indexes_Area, Index_Name) then
+         declare
+            Old  : Records.Item;
+            Read : E.Error_Info;
+         begin
+            Stores.Read (Item, Indexes_Area, Index_Name, Old, Read);
+            if E.Is_Ok (Read) and then Records.Get (Old, "buckets") /= "" then
+               declare
+                  Had : constant Natural := Natural'Value (Records.Get (Old, "buckets"));
+               begin
+                  for Bucket in 1 .. Had loop
+                     if Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Had)) then
+                        Stores.Remove (Change, Indexes_Area, Bucket_Name (Bucket, Had));
+                     end if;
+                  end loop;
+               end;
+            end if;
+         end;
+      end if;
+
+      --  The parts an earlier graph kept, which no graph keeps now: let go.
       declare
          Next : Positive := Parts + 1;
       begin
@@ -2735,8 +2823,36 @@ package body Model_Runner.Framework.Repository is
       end if;
 
       Take (Value);
-      --  Its relations in parts of their own: each the same graph's, by its
+      --  Its relations in buckets: each the one the record lists, by its
       --  print, or the graph is not taken.
+      if Records.Get (Value, "buckets") /= "" then
+         declare
+            Count : constant Positive := Positive'Value (Records.Get (Value, "buckets"));
+         begin
+            for Bucket in 1 .. Count loop
+               declare
+                  Held : Records.Item;
+               begin
+                  Stores.Read (Item, Indexes_Area, Bucket_Name (Bucket, Count), Held, Status);
+                  if E.Is_Ok (Status)
+                    and then Records.Get (Held, "fingerprint")
+                             /= Records.Get (Value, "bucket." & Records.Numbered (Bucket, Count))
+                  then
+                     Status := E.Make (E.Framework_Record_Malformed);
+                     E.Add_Text (Status, "path", "indexes/" & Bucket_Name (Bucket, Count), E.Param_Path);
+                     E.Add_Text (Status, "detail", "a bucket of another graph than the one it is kept with");
+                  end if;
+                  if E.Is_Error (Status) then
+                     Found := (others => <>);
+                     return;
+                  end if;
+                  Take (Held);
+               end;
+            end loop;
+         end;
+      end if;
+      --  Its relations in parts of their own, as graphs were kept before
+      --  buckets: each the same graph's, by its print, or not taken.
       if Records.Get (Value, "parts") /= "" then
          for Part in 1 .. Natural'Value (Records.Get (Value, "parts")) loop
             declare

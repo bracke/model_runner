@@ -196,4 +196,20 @@ package Model_Runner.Framework is
    --  @return The fingerprint.
    function Fingerprint (Text : String) return String;
 
+   --  The hash of bytes that follow bytes already hashed to Before: Hash of
+   --  the two joined, without joining them -- for a text of hundreds of
+   --  megabytes given a line at a time.
+   --
+   --  @param Text The bytes that follow.
+   --  @param Before The hash of the bytes before; Hash ("") for none.
+   --  @return The hash of all of them.
+   function Hash_On (Text : String; Before : Interfaces.Unsigned_64) return Interfaces.Unsigned_64;
+
+   --  A hash as a fingerprint: sixteen lower-case hexadecimal digits, as
+   --  Fingerprint gives the hash it takes.
+   --
+   --  @param Value The hash.
+   --  @return The fingerprint.
+   function Fingerprint_Of (Value : Interfaces.Unsigned_64) return String;
+
 end Model_Runner.Framework;

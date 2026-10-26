@@ -269,30 +269,36 @@ package body Model_Runner.Framework is
    -- Hash --
    ----------
 
-   function Hash (Text : String) return Interfaces.Unsigned_64 is
-      Value : Interfaces.Unsigned_64 := 16#CBF2_9CE4_8422_2325#;
+   function Hash (Text : String) return Interfaces.Unsigned_64
+   is (Hash_On (Text, 16#CBF2_9CE4_8422_2325#));
+
+   function Hash_On (Text : String; Before : Interfaces.Unsigned_64) return Interfaces.Unsigned_64 is
+      Value : Interfaces.Unsigned_64 := Before;
    begin
       for Char of Text loop
          Value := Value xor Interfaces.Unsigned_64 (Character'Pos (Char));
          Value := Value * 16#0000_0100_0000_01B3#;
       end loop;
       return Value;
-   end Hash;
+   end Hash_On;
+
+   function Fingerprint_Of (Value : Interfaces.Unsigned_64) return String is
+      Digits_Of : constant String := "0123456789abcdef";
+      Result    : String (1 .. 16);
+      Rest      : Interfaces.Unsigned_64 := Value;
+   begin
+      for Index in reverse Result'Range loop
+         Result (Index) := Digits_Of (Natural (Rest and 16#F#) + 1);
+         Rest := Interfaces.Shift_Right (Rest, 4);
+      end loop;
+      return Result;
+   end Fingerprint_Of;
 
    -----------------
    -- Fingerprint --
    -----------------
 
-   function Fingerprint (Text : String) return String is
-      Digits_Of : constant String := "0123456789abcdef";
-      Value     : Interfaces.Unsigned_64 := Hash (Text);
-      Result    : String (1 .. 16);
-   begin
-      for Index in reverse Result'Range loop
-         Result (Index) := Digits_Of (Natural (Value and 16#F#) + 1);
-         Value := Interfaces.Shift_Right (Value, 4);
-      end loop;
-      return Result;
-   end Fingerprint;
+   function Fingerprint (Text : String) return String
+   is (Fingerprint_Of (Hash (Text)));
 
 end Model_Runner.Framework;

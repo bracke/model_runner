@@ -144,6 +144,7 @@ package body Model_Runner.Framework.Schemas is
        Rules   => new Rule_List'
          [Rule ("source", Text_Field, True),
           Rule ("parts", Text_Field, False),
+          Rule ("print", Text_Field, False),
           Rule ("entry.*", Text_Field, False)]),
 
       --  A derivation: what it is, what it was made from, and its answer.
@@ -295,6 +296,8 @@ package body Model_Runner.Framework.Schemas is
          [Rule ("fingerprint", Text_Field, True),
           Rule ("reader", Text_Field, False),
           Rule ("parts", Text_Field, False),
+          Rule ("buckets", Text_Field, False),
+          Rule ("bucket.*", Text_Field, False),
           Rule ("file.*", Text_Field, False),
           Rule ("symbol.*", Text_Field, False),
           Rule ("relation.*", Text_Field, False)]),
