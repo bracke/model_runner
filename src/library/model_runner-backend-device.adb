@@ -4022,6 +4022,13 @@ package body Model_Runner.Backend.Device is
                         return;
                      end if;
 
+                     --  In rounds of steps that read nothing the round makes,
+                     --  so that each round waits on the one before once:
+                     --  the products; the three stretches out of them; the
+                     --  fold, the queries' turn and the latent's norm; and
+                     --  the queries, key and value laid out. A token is a
+                     --  chain of short dispatches, and laid out a step
+                     --  after the one it reads, every one of them waited.
                      Add_Input_Product (Query, Q_P, False, Added);
                      if not Added then
                         return;
@@ -4036,59 +4043,23 @@ package body Model_Runner.Backend.Device is
                      Step_Rope := Products.Length (Steps);
                      Step_Room (Both.Rows);
 
-                     Products.Add_Assemble
-                       (Steps, 1, Step_Rope, Step_Rope,
-                        [Lat_Rows, 0, 0, Both_Rows, 0, 0, 0, Both_Rows], Added,
-                        Kept => False);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Lat := Products.Length (Steps);
-                     Step_Room (MLA_Latent.Rows);
-
-                     Products.Add_Norm
-                       (Steps, MLA_Norm.all (MLA_Norm.all'First)'Address,
-                        Model_Runner.Bytes.Byte_Count (MLA_Norm.all'Length) * 4, 0,
-                        Natural (MLA_Latent.Rows), Epsilon, Added,
-                        From_Step => Step_Lat,
-                        Key => MLA_Norm.all (MLA_Norm.all'First)'Address,
-                        Kept => False);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Lat_Norm := Products.Length (Steps);
-                     Step_Room (MLA_Latent.Rows);
-
-                     --  The heads' plain parts, end to end, as the gather
-                     --  reads each member's own stretch.
-                     Products.Add_Assemble
-                       (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
-                        [Plain, 0, Q_Width, Natural (Query.Rows), 0, 0, 0, 0], Added,
-                        Kept => False);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Nope := Products.Length (Steps);
-                     Step_Room
-                       (Model_Runner.Numerics.Element_Count (Heads * Plain));
-
-                     Products.Add_Gathered_Product
-                       (Steps, MLA_Absorb.Base, MLA_Absorb.Span, MLA_Absorb.Offset,
-                        Abs_P, Heads * Rank, Rank, Plain, Members, Heads, Added,
-                        Key => At_Offset (MLA_Absorb.Base, MLA_Absorb.Offset),
-                        Kept => False, Chained => True, From_Step => Step_Nope,
-                        Apart => Plain);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Abs := Products.Length (Steps);
-                     Step_Room
-                       (Model_Runner.Numerics.Element_Count (Heads * Rank));
-
-                     --  The heads' rotated slices alone, turned.
                      declare
                         Step_Ropes : Natural;
                      begin
+                        --  The heads' plain parts, end to end, as the gather
+                        --  reads each member's own stretch.
+                        Products.Add_Assemble
+                          (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
+                           [Plain, 0, Q_Width, Natural (Query.Rows), 0, 0, 0, 0], Added,
+                           Kept => False);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_Nope := Products.Length (Steps);
+                        Step_Room
+                          (Model_Runner.Numerics.Element_Count (Heads * Plain));
+
+                        --  The heads' rotated slices alone.
                         Products.Add_Assemble
                           (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
                            [Rotary, Plain, Q_Width, Natural (Query.Rows), 0, 0, 0, 0],
@@ -4099,6 +4070,32 @@ package body Model_Runner.Backend.Device is
                         Step_Ropes := Products.Length (Steps);
                         Step_Room
                           (Model_Runner.Numerics.Element_Count (Heads * Rotary));
+
+                        --  The latent, out of the row it shares with the
+                        --  rotated slice.
+                        Products.Add_Assemble
+                          (Steps, 1, Step_Rope, Step_Rope,
+                           [Lat_Rows, 0, 0, Both_Rows, 0, 0, 0, Both_Rows], Added,
+                           Kept => False);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_Lat := Products.Length (Steps);
+                        Step_Room (MLA_Latent.Rows);
+
+                        Products.Add_Gathered_Product
+                          (Steps, MLA_Absorb.Base, MLA_Absorb.Span, MLA_Absorb.Offset,
+                           Abs_P, Heads * Rank, Rank, Plain, Members, Heads, Added,
+                           Key => At_Offset (MLA_Absorb.Base, MLA_Absorb.Offset),
+                           Kept => False, Chained => True, From_Step => Step_Nope,
+                           Apart => Plain);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_Abs := Products.Length (Steps);
+                        Step_Room
+                          (Model_Runner.Numerics.Element_Count (Heads * Rank));
+
                         Products.Add_Rotation
                           (Steps, Turns (Turns'First)'Address,
                            Model_Runner.Bytes.Byte_Count (Turns'Length) * 8, 0,
@@ -4111,6 +4108,19 @@ package body Model_Runner.Backend.Device is
                         Step_Ropes := Products.Length (Steps);
                         Step_Room
                           (Model_Runner.Numerics.Element_Count (Heads * Rotary));
+
+                        Products.Add_Norm
+                          (Steps, MLA_Norm.all (MLA_Norm.all'First)'Address,
+                           Model_Runner.Bytes.Byte_Count (MLA_Norm.all'Length) * 4, 0,
+                           Natural (MLA_Latent.Rows), Epsilon, Added,
+                           From_Step => Step_Lat,
+                           Key => MLA_Norm.all (MLA_Norm.all'First)'Address,
+                           Kept => False);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_Lat_Norm := Products.Length (Steps);
+                        Step_Room (MLA_Latent.Rows);
 
                         --  Each query head: its turned slice, then its fold
                         --  -- which the gather leaves a member at a time,
