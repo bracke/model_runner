@@ -101,6 +101,17 @@ const uint V_AT_ONCE = 4u;
 
 shared float16_t qs[ROWS * DK];
 shared float ss[ROWS * BC];
+#ifdef SPLIT_DEPTH
+//  A short cache's compilation scores the tile a quarter of the key a
+//  subgroup: each subgroup's every key against nine steps of it, the four
+//  partial scores summed here. Scored a sixteen of the keys a subgroup over
+//  the whole key, each subgroup waited on thirty-six reads one after
+//  another, and a short cache is a workgroup or two -- nothing else to run
+//  meanwhile. A long one has workgroups enough to hide the reads, and the
+//  sum's barrier cost it.
+const uint DEPTH_STEPS = DK / 16u / 4u;
+shared float parts[4u * ROWS * BC];
+#endif
 shared float16_t ps[ROWS * BC];
 shared float rowscale[ROWS];
 shared uint rowmap[256];
@@ -185,6 +196,36 @@ void main() {
         barrier ();
 
         //  This subgroup's positions of the tile scored by every head.
+#ifdef SPLIT_DEPTH
+        {
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc[BC / 16u];
+            uint keys[BC / 16u];
+            [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                sacc[n] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+                keys[n] = place_of (base + n * 16u, shape.k_base, shape.kv_width) + k_at;
+            }
+            [[unroll]] for (uint d = 0u; d < DEPTH_STEPS; d++) {
+                uint t = sub * DEPTH_STEPS + d;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
+                coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
+                    coopMatLoad (km, kvh, keys[n] + min (t * 16u, dk - 16u), shape.kv_width,
+                                 gl_CooperativeMatrixLayoutColumnMajor);
+                    sacc[n] = coopMatMulAdd (qm, km, sacc[n]);
+                }
+            }
+            [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                coopMatStore (sacc[n], parts, sub * ROWS * BC + n * 16u, BC,
+                              gl_CooperativeMatrixLayoutRowMajor);
+            }
+            barrier ();
+            for (uint at = gl_LocalInvocationID.x; at < ROWS * BC; at += 256u) {
+                ss[at] = parts[at] + parts[ROWS * BC + at]
+                         + parts[2u * ROWS * BC + at] + parts[3u * ROWS * BC + at];
+            }
+        }
+#else
         {
             coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc[SUB_TILES];
             uint keys[SUB_TILES];
@@ -208,6 +249,7 @@ void main() {
                               gl_CooperativeMatrixLayoutRowMajor);
             }
         }
+#endif
         barrier ();
 
         //  The softmax, four rows a subgroup and a column a lane -- two in

@@ -11691,10 +11691,13 @@ package body Tests.Backend_Cases is
 
       Products.Prefer_Halves (Engine, True);
 
+      --  One position over the 700 is eleven workgroups, fewer than the
+      --  device's units, and takes the compilation that splits the key
+      --  between the subgroups; three are twenty-four, and take the other.
       Compare (Batch => 1);
       Compare (Batch => 3);
-      --  And a batch long enough for its own kernel, two positions a
-      --  workgroup, one of them odd.
+      --  And a batch long enough for its own kernel, tiles of 128 keys,
+      --  one of them odd.
       Compare (Batch => 17);
       Compare (Batch => 20);
 

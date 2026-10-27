@@ -629,6 +629,10 @@ package body Model_Runner.Platform.Device.Products is
 
    --  A batch of positions is busy enough a slice each: sliced, every
    --  slice staged its position's queries and left a record to merge.
+   --  Workgroups below which a latent attends on its split compilation:
+   --  the device's twelve units.
+   Latent_Split_Below : constant := 12;
+
    function Latent_Slices (Span : Natural; Positions : Natural := 1) return Natural
    is (if Positions >= Latent_Rows then 1
        else Natural'Max
@@ -4164,6 +4168,22 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Attend_Latent_Batch := Made;
                   end if;
                end;
+
+               --  And a short cache's, the key split between the subgroups
+               --  (SPLIT_DEPTH).
+               declare
+                  Split : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Latent_Split;
+               begin
+                  Request.Size := Interfaces.C.size_t (Split'Length * 4);
+                  Request.Code := Split'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Latent_Split := Made;
+                  end if;
+               end;
             end if;
          end;
       end if;
@@ -5317,6 +5337,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Attend_Latent_Split /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Latent_Split;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Latent_Split_Attend := Made;
+            end if;
+         end if;
+
          --  And each of the four again for a batch attending far:
          --  Matrix_Queries a subgroup, as the plain pipeline answers, and
          --  Matrix_Deep_Queries a workgroup, its subgroups reading the
@@ -6269,6 +6299,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Batch_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Latent_Split_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
@@ -6284,6 +6315,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent_Batch, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Latent_Split, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Mid, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
@@ -17116,6 +17148,19 @@ package body Model_Runner.Platform.Device.Products is
                         --  group of heads along the first and a slice of
                         --  the cache along the second.
                         if Few then
+                           --  A latent's few workgroups on the compilation
+                           --  that splits the key between the subgroups:
+                           --  fewer than the device has units, whose reads
+                           --  nothing else would hide.
+                           if Few_Line (Index) = Item.Latent_Attend
+                             and then not Latent_Batch (Index)
+                             and then Item.Latent_Split_Attend /= Null_Handle
+                             and then Slices * Count < Latent_Split_Below
+                           then
+                              Bind_Pipeline
+                                (Item.Buffer, Bind_Point_Compute,
+                                 Item.Latent_Split_Attend);
+                           end if;
                            --  The latent's positions each their own
                            --  workgroups, down the third axis.
                            Dispatch
