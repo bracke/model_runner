@@ -150,7 +150,6 @@ void main() {
     uint rows = min (shape.group_size, ROWS);
     uint head0 = group * shape.group_size;
     uint k_at = group * dk;
-    uint v_at = group * dv;
 
     //  The queries, in half precision, nought past the head and past the
     //  heads the latent has.
@@ -350,13 +349,18 @@ void main() {
                     coopMatLoad (pm[m], ps, m * ROWS * BC + n0, BC,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
-                uint values = place_of (base + n0, shape.v_base, shape.v_width) + v_at;
+                //  The values are the latent, which the keys hold after
+                //  their rotated slice: read there, a key the scores just
+                //  read is a value already near, and the cache is read
+                //  once where it was read twice.
+                uint values = place_of (base + n0, shape.k_base, shape.kv_width) + k_at
+                              + (dk - dv);
 
                 [[unroll]] for (uint g = 0u; g < V_TILES; g += V_AT_ONCE) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> vm[V_AT_ONCE];
                     [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
                         uint col = sub * (DV / 4u) + (g + t) * 16u;
-                        coopMatLoad (vm[t], vh, values + min (col, dv - 16u), shape.v_width,
+                        coopMatLoad (vm[t], kvh, values + min (col, dv - 16u), shape.kv_width,
                                      gl_CooperativeMatrixLayoutRowMajor);
                     }
                     [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {

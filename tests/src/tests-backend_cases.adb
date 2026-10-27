@@ -11586,6 +11586,14 @@ package body Tests.Backend_Cases is
          for Index in Cache'Range loop
             Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
          end loop;
+         --  Each value the latent its key holds after the rotated slice,
+         --  as an absorbed cache has it: the kernel reads the values there.
+         for Pos in 0 .. N.Element_Count (Positions + Batch) - 1 loop
+            for J in N.Element_Count range 0 .. Val_Size - 1 loop
+               Cache (Room + Pos * Val_Size + J) :=
+                 Cache (Pos * Key_Size + (Key_Size - Val_Size) + J);
+            end loop;
+         end loop;
          for Index in Query'Range loop
             Query (Index) := (N.Real (Index mod 7) / 7.0 - 0.4) * 0.2;
          end loop;
@@ -11954,6 +11962,13 @@ package body Tests.Backend_Cases is
       begin
          for I in Cache'Range loop
             Cache (I) := N.Real ((I * 11) mod 23) / 23.0 - 0.5;
+         end loop;
+         --  Each cached value the latent its key holds, as the layer
+         --  places them: the kernel reads the values out of the keys.
+         for Pos in 0 .. Room / Key_W - 1 loop
+            for J in N.Element_Count range 0 .. Rank - 1 loop
+               Cache (Room + Pos * Rank + J) := Cache (Pos * Key_W + Rotary + J);
+            end loop;
          end loop;
          for I in X'Range loop
             X (I) := N.Real (I mod 9) / 9.0 - 0.4;
