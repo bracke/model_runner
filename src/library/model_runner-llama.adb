@@ -4969,6 +4969,9 @@ package body Model_Runner.Llama is
          --  the rest is not asked at all.
          if Room > 0
            and then (Head_Size > Room or else Value_Size > Room)
+           and then not (Settings.Latent_Attention
+                         and then Model_Runner.Backend.Device.Attends_Latent_Heads
+                                    (Head_Size, Value_Size, Settings.Group_Size))
          then
             Why := Heads_Past_Room;
             Asked := Interfaces.Unsigned_64 (Natural'Max (Head_Size, Value_Size));
@@ -7701,6 +7704,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Expert_Down_Bias);
             B.Free (Which.KV_B_Built);
             T.Free (Which.KV_B_Dense);
+            B.Free (Which.KV_B_Absorb_Bytes);
             T.Free (Which.Next_ENorm);
             T.Free (Which.Next_HNorm);
             T.Free (Which.Next_Head_Norm);

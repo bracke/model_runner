@@ -2740,6 +2740,14 @@ private
       --  head's key rows folded into its query and its value rows taking
       --  its blend back out, a column at a time. Null otherwise.
       KV_B_Dense : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  And each head's key rows turned on their side, for the device to
+      --  fold a head's query through as a product of its own: a row a latent
+      --  dimension, a column a key dimension, a head's after another -- in
+      --  Q8_0 where a head's key width is whole blocks of it, binary32
+      --  otherwise. Absent where the attention is not absorbed.
+      KV_B_Absorb       : aliased Model_Runner.Tensors.View;
+      KV_B_Absorb_Bytes : Model_Runner.Bytes.Byte_Array_Access := null;
       Q_A_Norm  : Model_Runner.Tensors.Real_Array_Access;
       KV_A_Norm : Model_Runner.Tensors.Real_Array_Access;
 

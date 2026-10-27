@@ -1600,12 +1600,13 @@ begin
                --  they are placed, by a step of the same sequence; a
                --  round's each into its own member's block, out of the
                --  table, as an exact round's are.
-               --  Absorbed latent attention not yet: the device's layer
-               --  builds the heads it reconstructs, not the latent whole.
+               --  Absorbed latent attention where the device attends the
+               --  latent and the turned key rows are there to fold by.
                if (Turnable or else Settings.Rotary = 0)
                  and then Resident
                  and then Device_Held (Item)
-                 and then not Settings.Latent_Attention
+                 and then (not Settings.Latent_Attention
+                           or else T.Is_Present (Current.KV_B_Absorb))
                  and then (((Settings.Experts = 0
                              or else Dense_Among_Experts (Current)
                              or else Mixture_Whole (Current))
@@ -1637,10 +1638,10 @@ begin
                      Settings.Epsilon,
                      Current.Query,
                      (if Is_MLA (Settings.Kind)
-                      then MLA_Rows (Current.KV_A_MQA, Heads * Head_Size)
+                      then MLA_Rows (Current.KV_A_MQA, KV_Width)
                       else Current.Key),
                      (if Is_MLA (Settings.Kind)
-                      then MLA_Rows (Current.KV_A_MQA, Heads * Value_Size)
+                      then MLA_Rows (Current.KV_A_MQA, V_Width)
                       else Current.Value),
                      (if Turnable
                       then Angles.all (0 .. Count * Pairs * 2 - 1)
@@ -1828,6 +1829,9 @@ begin
                      MLA_Norm      => Current.KV_A_Norm,
                      MLA_Up        =>
                        (if Is_MLA (Settings.Kind) then Current.KV_B
+                        else T.Empty_View),
+                     MLA_Absorb    =>
+                       (if Settings.Latent_Attention then Current.KV_B_Absorb
                         else T.Empty_View));
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.

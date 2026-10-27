@@ -23,7 +23,12 @@ begin
                 (Item.Owner.Settings.Head_Size
                  > Model_Runner.Backend.Device.Attention_Head_Room
                  or else Item.Owner.Settings.Value_Size
-                         > Model_Runner.Backend.Device.Attention_Head_Room))
+                         > Model_Runner.Backend.Device.Attention_Head_Room)
+              and then not (Item.Owner.Settings.Latent_Attention
+                            and then Model_Runner.Backend.Device.Attends_Latent_Heads
+                                       (Item.Owner.Settings.Head_Size,
+                                        Item.Owner.Settings.Value_Size,
+                                        Item.Owner.Settings.Group_Size)))
      or else (Item.Held in Eighth | Fourth
               and then (Item.Byte_Keys = null or else Item.Byte_Values = null
                         or else Item.Key_Scales = null

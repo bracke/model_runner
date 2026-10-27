@@ -69,6 +69,16 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+//  How far apart one position's input is from the next in what a product
+//  reads: a row's width, but for a gather whose members each read their
+//  own stretch (apart), every member's stretch end to end -- the members
+//  being the dispatch's third axis. Only a gather of one member, or one
+//  the router lists, had read a batch this way before, and either reads
+//  it the same.
+uint position_stride() {
+    return shape.apart > 0u ? shape.columns * gl_NumWorkGroups.z : shape.columns;
+}
+
 #ifdef DOTS
 //  Where the rounding's scales begin: past room for eight positions'
 //  bytes, or -- for a walk that reads its experts' runs by slot, which may
@@ -134,7 +144,7 @@ void main() {
               ? (shape.routed == LISTED_BY_POSITION
                    ? route[list_at + run_at + kk] : run_at + kk)
                 * shape.columns
-              : (shape.first + kk) * shape.columns + member * shape.apart;
+              : (shape.first + kk) * position_stride() + member * shape.apart;
     }
 
     uint first_row = NUM_ROWS * gl_WorkGroupID.x;
@@ -316,7 +326,7 @@ void main() {
     uint from_base = listed
           ? (shape.routed == LISTED_BY_POSITION
                ? route[list_at + run_at] : run_at) * shape.columns
-          : min(shape.first, shape.count - 1u) * shape.columns
+          : min(shape.first, shape.count - 1u) * position_stride()
             + member * shape.apart;
 
     uint first_row = NUM_ROWS * gl_WorkGroupID.x;

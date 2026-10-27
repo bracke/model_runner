@@ -1544,6 +1544,95 @@ begin
                         return;
                      end if;
                   end loop;
+
+                  --  Each head's key rows on their side, for the device.
+                  declare
+                     Heads : constant Element_Count :=
+                       Element_Count (Item.Settings.Heads);
+                     Plain : constant Element_Count :=
+                       Element_Count (Head_Query_Width (Item.Settings) - Item.Settings.Rotary);
+                     Each  : constant Element_Count :=
+                       Plain + Element_Count (Head_Blend_Width (Item.Settings));
+                     Dense : T.Real_Array renames Current.KV_B_Dense.all;
+                     Q8    : constant Boolean := Plain mod 32 = 0;
+                     Row_Bytes : constant B.Byte_Count :=
+                       (if Q8 then B.Byte_Count (Plain / 32) * 34
+                        else B.Byte_Count (Plain) * 4);
+                     Turned : constant Element_Count := Heads * Rank;
+                  begin
+                     Current.KV_B_Absorb_Bytes :=
+                       new B.Byte_Array (1 .. B.Byte_Count (Turned) * Row_Bytes);
+                     for Head in 0 .. Heads - 1 loop
+                        for J in 0 .. Rank - 1 loop
+                           declare
+                              Values : T.Real_Array (0 .. Plain - 1);
+                              At_Row : constant B.Byte_Count :=
+                                B.Byte_Count (Head * Rank + J) * Row_Bytes;
+                           begin
+                              for D in 0 .. Plain - 1 loop
+                                 Values (D) := Dense ((Head * Each + D) * Rank + J);
+                              end loop;
+                              if Q8 then
+                                 --  Blocks of 32: a binary16 scale, the
+                                 --  largest magnitude over 127, and the
+                                 --  32 values rounded to it.
+                                 for Block in 0 .. Plain / 32 - 1 loop
+                                    declare
+                                       Most  : Real := 0.0;
+                                       Scale : Real;
+                                       Half  : Model_Runner.Numerics.Half;
+                                       At_Block : constant B.Byte_Count :=
+                                         At_Row + B.Byte_Count (Block) * 34;
+                                       use type Interfaces.Unsigned_16;
+                                    begin
+                                       for I in 0 .. 31 loop
+                                          Most := Real'Max (Most, abs Values (Block * 32 + Element_Count (I)));
+                                       end loop;
+                                       Scale := Most / 127.0;
+                                       Half := Model_Runner.Numerics.To_Half (Scale);
+                                       Scale := Model_Runner.Numerics.To_Real (Half);
+                                       Current.KV_B_Absorb_Bytes (At_Block + 1) :=
+                                         B.Byte (Interfaces.Unsigned_16 (Half) and 16#FF#);
+                                       Current.KV_B_Absorb_Bytes (At_Block + 2) :=
+                                         B.Byte (Interfaces.Shift_Right (Interfaces.Unsigned_16 (Half), 8));
+                                       for I in 0 .. 31 loop
+                                          declare
+                                             Q : constant Integer :=
+                                               (if Scale = 0.0 then 0
+                                                else Integer'Max (-127, Integer'Min (127,
+                                                       Integer (Values (Block * 32 + Element_Count (I)) / Scale))));
+                                          begin
+                                             Current.KV_B_Absorb_Bytes (At_Block + 3 + B.Byte_Count (I)) :=
+                                               B.Byte (if Q < 0 then Q + 256 else Q);
+                                          end;
+                                       end loop;
+                                    end;
+                                 end loop;
+                              else
+                                 declare
+                                    Row : T.Real_Array (0 .. Plain - 1)
+                                      with Import,
+                                           Address => Current.KV_B_Absorb_Bytes (At_Row + 1)'Address;
+                                 begin
+                                    Row := Values;
+                                 end;
+                              end if;
+                           end;
+                        end loop;
+                     end loop;
+                     T.Make
+                       (Format  => (if Q8 then Model_Runner.GGUF.Type_Q8_0
+                                    else Model_Runner.GGUF.Type_F32),
+                        Rows    => Turned,
+                        Columns => Plain,
+                        Data    => Current.KV_B_Absorb_Bytes,
+                        Offset  => 0,
+                        Result  => Current.KV_B_Absorb,
+                        Status  => Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                  end;
                end;
             end if;
          else
@@ -3886,6 +3975,26 @@ begin
             end loop;
          end if;
       end if;
+   end if;
+
+   --  An absorbed latent's two stacks held as a mixture's are: each read
+   --  by a gather a head a member, and a gather streams what the device
+   --  does not hold -- two megabytes a layer copied over every token, the
+   --  device idle a sixth of the time it should have been working.
+   if Item.Settings.Latent_Attention
+     and then Model_Runner.Backend."=" (Item.Able.Kind, Model_Runner.Backend.Backend_Device)
+     and then Item.Layers /= null
+   then
+      for Current of Item.Layers.all loop
+         declare
+            Ignored : E.Error_Info;
+         begin
+            if T.Is_Present (Current.KV_B_Absorb) then
+               Model_Runner.Backend.Device.Hold (Current.KV_B_Absorb, Ignored);
+               Model_Runner.Backend.Device.Hold (Current.KV_B, Ignored);
+            end if;
+         end;
+      end loop;
    end if;
 
    P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));

@@ -11541,6 +11541,648 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does;
 
+   --  An absorbed latent's attention -- sixteen query heads over one key-
+   --  value head 576 wide, its values 512 -- answers as the softmax over
+   --  every cached position worked out on the host: one position, and a
+   --  few at once, each over its own window.
+   procedure A_Latent_Attends_As_The_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads     : constant := 16;
+      Key_Size  : constant := 576;
+      Val_Size  : constant := 512;
+      Positions : constant := 700;
+      Scale     : constant N.Real := 0.0625;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found : Boolean;
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      procedure Compare (Batch : Positive) is
+         Room  : constant N.Element_Count :=
+           N.Element_Count (Positions + Batch) * Key_Size;
+         Span  : constant N.Element_Count := Heads * Key_Size;
+         Out_Span : constant N.Element_Count := Heads * Val_Size;
+
+         type Values is access N.Real_Array;
+         procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
+
+         Cache  : Values := new N.Real_Array (0 .. Room * 2 - 1);
+         Query  : N.Real_Array (0 .. Span * N.Element_Count (Batch) - 1);
+         Device : N.Real_Array (0 .. Out_Span * N.Element_Count (Batch) - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+         Most   : N.Real := 0.0;
+      begin
+         for Index in Cache'Range loop
+            Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := (N.Real (Index mod 7) / 7.0 - 0.4) * 0.2;
+         end loop;
+
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+         Assert (Ok, "the cache would not be reserved");
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         Assert (Ok, "the cache would not be written");
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Key_Size, Value_Size => Val_Size,
+            Group_Size => Heads, First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Room,
+            KV_Width => Key_Size, V_Width => Val_Size,
+            Scale => Scale, Cap => 0.0, Added => Added);
+         Assert (Added, "a sequence would not take the latent's attention");
+
+         Products.Run (Engine, Steps, Query, Batch, Device, Ok, Halted);
+         Assert (Ok, "the latent's attention was refused");
+
+         for P in 0 .. Batch - 1 loop
+            for H in 0 .. Heads - 1 loop
+               declare
+                  Last   : constant Natural := Positions - 1 + P;
+                  Scores : N.Real_Array (0 .. N.Element_Count (Last));
+                  Top    : N.Real := N.Real'First;
+                  Sum    : N.Real := 0.0;
+                  Q_At   : constant N.Element_Count :=
+                    (N.Element_Count (P) * Heads + N.Element_Count (H)) * Key_Size;
+               begin
+                  for Pos in 0 .. N.Element_Count (Last) loop
+                     declare
+                        Dot : N.Real := 0.0;
+                     begin
+                        for D in 0 .. Key_Size - 1 loop
+                           Dot := Dot + Query (Q_At + N.Element_Count (D))
+                             * Cache.all (Pos * Key_Size + N.Element_Count (D));
+                        end loop;
+                        Scores (Pos) := Dot * Scale;
+                        Top := N.Real'Max (Top, Scores (Pos));
+                     end;
+                  end loop;
+                  for Pos in Scores'Range loop
+                     Scores (Pos) := N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                              (Float (Scores (Pos) - Top)));
+                     Sum := Sum + Scores (Pos);
+                  end loop;
+                  for C in 0 .. Val_Size - 1 loop
+                     declare
+                        Blend : N.Real := 0.0;
+                     begin
+                        for Pos in Scores'Range loop
+                           Blend := Blend + Scores (Pos)
+                             * Cache.all (Room + Pos * Val_Size + N.Element_Count (C));
+                        end loop;
+                        Blend := Blend / Sum;
+                        Most := N.Real'Max (Most, abs Blend);
+                        Worst := N.Real'Max
+                          (Worst,
+                           abs (Blend - Device ((N.Element_Count (P) * Heads + N.Element_Count (H)) * Val_Size
+                                                + N.Element_Count (C))));
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+         Free (Cache);
+
+         Assert (Most > 0.01, "the answers are all near nought, which tells nothing");
+         Assert (Worst <= 4.0e-3,
+                 "the latent's attention at" & Positive'Image (Batch) & " positions answers"
+                 & N.Real'Image (Worst) & " away from the host's");
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Device_Notes.Skip ("for a latent to attend as the host does");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready or else not Products.Takes_Latent (Engine, Key_Size, Val_Size, Heads) then
+         Device_Notes.Skip ("for a latent to attend as the host does");
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Prefer_Halves (Engine, True);
+
+      Compare (Batch => 1);
+      Compare (Batch => 3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Latent_Attends_As_The_Host_Does;
+
+   --  An absorbed latent's queries folded and its blends taken back out on
+   --  the device, step by step as the whole layer builds them, against the
+   --  same arithmetic on the host: the plain parts packed end to end, a
+   --  gather of the turned key rows a head a member, the heads assembled
+   --  rotated slice first; and a gather of the up-projection a head a
+   --  member, its value rows picked.
+   procedure A_Latent_Folds_And_Takes_Out_As_The_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads   : constant := 16;
+      Rotary  : constant := 64;
+      Plain   : constant := 128;
+      Q_Width : constant := Rotary + Plain;
+      Rank    : constant := 512;
+      V_Head  : constant := 128;
+      Each_Up : constant := Plain + V_Head;
+      Width   : constant := 64;
+
+      Members : constant Products.Member_List :=
+        [for I in 1 .. Products.Max_Gather => I - 1];
+
+      type Values is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
+
+      Wq     : Values := new N.Real_Array (0 .. Heads * Q_Width * Width - 1);
+      Turned : Values := new N.Real_Array (0 .. Heads * Rank * Plain - 1);
+      Up     : Values := new N.Real_Array (0 .. Heads * Each_Up * Rank - 1);
+      --  The blends made on the device from X, so that the gather reads a
+      --  step's answer, as the layer's reads the attention's.
+      Wb     : Values := new N.Real_Array (0 .. Heads * Rank * Width - 1);
+      X      : N.Real_Array (0 .. Width - 1);
+      Blend  : N.Real_Array (0 .. Heads * Rank - 1);
+
+      --  A run's answer holds every step's, one after another; the last is
+      --  what is compared.
+      Fold_Before : constant N.Element_Count :=
+        Heads * Q_Width + Heads * Plain + Heads * Rank;
+      Take_Before : constant N.Element_Count := Heads * Rank + Heads * Each_Up;
+      Folded_All : N.Real_Array (0 .. Fold_Before + Heads * (Rotary + Rank) - 1) :=
+        [others => 0.0];
+      Taken_All  : N.Real_Array (0 .. Take_Before + Heads * V_Head - 1) := [others => 0.0];
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Steps  : Products.Sequence;
+      Found, Ready, Ok, Added, Halted : Boolean;
+      Worst  : N.Real := 0.0;
+
+      function Bytes (Item : N.Real_Array) return B.Byte_Count
+      is (B.Byte_Count (Item'Length) * 4);
+   begin
+      for I in Wq'Range loop
+         Wq (I) := N.Real ((I * 37) mod 101) / 101.0 - 0.5;
+      end loop;
+      for I in Turned'Range loop
+         Turned (I) := N.Real ((I * 53) mod 97) / 97.0 - 0.5;
+      end loop;
+      for I in Up'Range loop
+         Up (I) := N.Real ((I * 29) mod 89) / 89.0 - 0.5;
+      end loop;
+      for I in X'Range loop
+         X (I) := N.Real (I mod 9) / 9.0 - 0.4;
+      end loop;
+      for I in Wb'Range loop
+         Wb (I) := N.Real ((I * 7) mod 31) / 31.0 - 0.5;
+      end loop;
+      for R in Blend'Range loop
+         Blend (R) := 0.0;
+         for C in N.Element_Count range 0 .. Width - 1 loop
+            Blend (R) := Blend (R) + Wb (R * Width + C) * X (C);
+         end loop;
+      end loop;
+
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         Free (Wq); Free (Turned); Free (Up); Free (Wb);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+      end if;
+      if not Ready then
+         Device_Notes.Skip ("for a latent to fold and take out as the host does");
+         Devices.Close (Held);
+         Free (Wq); Free (Turned); Free (Up); Free (Wb);
+         return;
+      end if;
+
+      --  The fold.
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Wq (Wq'First)'Address, Bytes (Wq.all), 0,
+         Products.Values_F32, Heads * Q_Width, Width, Added, Key => Wq.all'Address,
+         Kept => False);
+      Assert (Added, "the query product was refused");
+      Products.Add_Assemble
+        (Steps, Heads, 1, 1, [Plain, 0, Q_Width, Heads * Q_Width, 0, 0, 0, 0], Added,
+         Kept => False);
+      Assert (Added, "packing the plain parts was refused");
+      Products.Add_Gathered_Product
+        (Steps, Turned (Turned'First)'Address, Bytes (Turned.all), 0,
+         Products.Values_F32, Heads * Rank, Rank, Plain, Members, Heads, Added,
+         Key => Turned.all'Address, Kept => False, Chained => True, From_Step => 2,
+         Apart => Plain);
+      Assert (Added, "the fold's gather was refused");
+      Products.Add_Assemble
+        (Steps, Heads, 1, 3,
+         [Rotary, Plain, Q_Width, Heads * Q_Width, Rank, 0, Rank, Heads * Rank], Added);
+      Assert (Added, "assembling the queries was refused");
+      Products.Run (Engine, Steps, X, 1, Folded_All, Ok, Halted);
+      Assert (Ok, "the fold was refused");
+
+      declare
+         Q : N.Real_Array (0 .. Heads * Q_Width - 1) := [others => 0.0];
+      begin
+         for R in Q'Range loop
+            for C in N.Element_Count range 0 .. Width - 1 loop
+               Q (R) := Q (R) + Wq (R * Width + C) * X (C);
+            end loop;
+         end loop;
+         for H in N.Element_Count range 0 .. Heads - 1 loop
+            for I in N.Element_Count range 0 .. Rotary - 1 loop
+               Worst := N.Real'Max
+                 (Worst, abs (Folded_All (Fold_Before + H * (Rotary + Rank) + I) - Q (H * Q_Width + Plain + I)));
+            end loop;
+            for J in N.Element_Count range 0 .. Rank - 1 loop
+               declare
+                  Sum : N.Real := 0.0;
+               begin
+                  for D in N.Element_Count range 0 .. Plain - 1 loop
+                     Sum := Sum + Q (H * Q_Width + D) * Turned ((H * Rank + J) * Plain + D);
+                  end loop;
+                  Worst := N.Real'Max
+                    (Worst, abs (Folded_All (Fold_Before + H * (Rotary + Rank) + Rotary + J) - Sum) / (1.0 + abs Sum));
+               end;
+            end loop;
+         end loop;
+      end;
+      Assert (Worst <= 1.0e-3,
+              "the fold answers" & N.Real'Image (Worst) & " away from the host's");
+
+      --  The taking out.
+      Worst := 0.0;
+      Products.Open_Sequence (Steps);
+      Products.Add_Product
+        (Steps, Wb (Wb'First)'Address, Bytes (Wb.all), 0,
+         Products.Values_F32, Heads * Rank, Width, Added, Key => Wb.all'Address,
+         Kept => False);
+      Assert (Added, "the blends' product was refused");
+      Products.Add_Gathered_Product
+        (Steps, Up (Up'First)'Address, Bytes (Up.all), 0,
+         Products.Values_F32, Heads * Each_Up, Each_Up, Rank, Members, Heads, Added,
+         Key => Up.all'Address, Kept => False, Chained => True, From_Step => 1,
+         Apart => Rank);
+      Assert (Added, "the taking out's gather was refused");
+      Products.Add_Pick (Steps, Heads * V_Head, V_Head, Plain / V_Head, Each_Up / V_Head, Added,
+                         From_Step => 2);
+      Assert (Added, "picking the value rows was refused");
+      Products.Run (Engine, Steps, X, 1, Taken_All, Ok, Halted);
+      Assert (Ok, "the taking out was refused");
+      for H in N.Element_Count range 0 .. Heads - 1 loop
+         for V in N.Element_Count range 0 .. V_Head - 1 loop
+            declare
+               Sum : N.Real := 0.0;
+            begin
+               for J in N.Element_Count range 0 .. Rank - 1 loop
+                  Sum := Sum + Up ((H * Each_Up + Plain + V) * Rank + J) * Blend (H * Rank + J);
+               end loop;
+               Worst := N.Real'Max (Worst, abs (Taken_All (Take_Before + H * V_Head + V) - Sum) / (1.0 + abs Sum));
+            end;
+         end loop;
+      end loop;
+      Assert (Worst <= 1.0e-3,
+              "the taking out answers" & N.Real'Image (Worst) & " away from the host's");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+      Free (Wq); Free (Turned); Free (Up);
+   end A_Latent_Folds_And_Takes_Out_As_The_Host_Does;
+
+   --  An absorbed latent's layer front, attention and taking out, as the
+   --  device's whole layer builds them for one token over a cache of forty
+   --  positions, against the same arithmetic on the host: what each piece
+   --  answers alone, put together.
+   procedure A_Latent_Layer_Attends_As_The_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Heads   : constant := 16;
+      Rotary  : constant := 64;
+      Plain   : constant := 128;
+      Q_Width : constant := Rotary + Plain;
+      Rank    : constant := 512;
+      Key_W   : constant := Rotary + Rank;
+      V_Head  : constant := 128;
+      Each_Up : constant := Plain + V_Head;
+      Width   : constant := 64;
+      Before  : constant := 40;
+      Scale   : constant N.Real := 0.07;
+      Epsilon : constant N.Real := 1.0e-6;
+
+      Members : constant Products.Member_List :=
+        [for I in 1 .. Products.Max_Gather => I - 1];
+
+      type Values is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
+
+      Room   : constant N.Element_Count := N.Element_Count (Before + 16) * Key_W;
+      Wq     : Values := new N.Real_Array (0 .. Heads * Q_Width * Width - 1);
+      Wkv    : Values := new N.Real_Array (0 .. Key_W * Width - 1);
+      Gain   : N.Real_Array (0 .. Rank - 1) := [others => 1.0];
+      Turned : Values := new N.Real_Array (0 .. Heads * Rank * Plain - 1);
+      Up     : Values := new N.Real_Array (0 .. Heads * Each_Up * Rank - 1);
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok : Boolean;
+
+      function Bytes (Item : N.Real_Array) return B.Byte_Count
+      is (B.Byte_Count (Item'Length) * 4);
+
+      --  The layer for Positions positions after Before cached ones, as the
+      --  whole layer builds it, against the host.
+      procedure Compare (Positions : Positive) is
+         Count  : constant N.Element_Count := N.Element_Count (Positions);
+         Cache  : Values := new N.Real_Array (0 .. Room * 2 - 1);
+         X      : N.Real_Array (0 .. Count * Width - 1);
+         Turns  : N.Wide_Real_Array (0 .. Count * Rotary - 1);
+         Steps  : Products.Sequence;
+         Added, Halted : Boolean;
+         Rows   : N.Element_Count := 0;
+         Worst, Most : N.Real := 0.0;
+
+         procedure Grow (By : N.Element_Count) is
+         begin
+            Rows := Rows + By;
+         end Grow;
+      begin
+         for I in Cache'Range loop
+            Cache (I) := N.Real ((I * 11) mod 23) / 23.0 - 0.5;
+         end loop;
+         for I in X'Range loop
+            X (I) := N.Real (I mod 9) / 9.0 - 0.4;
+         end loop;
+         for I in Turns'Range loop
+            Turns (I) := (if I mod 2 = 0 then 1.0 else 0.0);
+         end loop;
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+         Assert (Ok, "the cache would not be reserved");
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         Assert (Ok, "the cache would not be written");
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Wq (Wq'First)'Address, Bytes (Wq.all), 0, Products.Values_F32,
+            Heads * Q_Width, Width, Added, Key => Wq.all'Address, Kept => False);
+         Grow (Heads * Q_Width);                                                --  1
+         Products.Add_Product
+           (Steps, Wkv (Wkv'First)'Address, Bytes (Wkv.all), 0, Products.Values_F32,
+            Key_W, Width, Added, Key => Wkv.all'Address, Kept => False);
+         Grow (Key_W);                                                          --  2
+         Products.Add_Assemble (Steps, 1, 2, 2, [Rank, 0, 0, Key_W, 0, 0, 0, Key_W], Added, Kept => False);
+         Grow (Rank);                                                           --  3
+         Products.Add_Norm
+           (Steps, Gain (Gain'First)'Address, Bytes (Gain), 0, Rank, Epsilon, Added,
+            From_Step => 3, Key => Gain'Address, Kept => False);
+         Grow (Rank);                                                           --  4
+         Products.Add_Assemble
+           (Steps, Heads, 1, 1, [Plain, 0, Q_Width, Heads * Q_Width, 0, 0, 0, 0], Added, Kept => False);
+         Grow (Heads * Plain);                                                  --  5
+         Products.Add_Gathered_Product
+           (Steps, Turned (Turned'First)'Address, Bytes (Turned.all), 0, Products.Values_F32,
+            Heads * Rank, Rank, Plain, Members, Heads, Added, Key => Turned.all'Address,
+            Kept => False, Chained => True, From_Step => 5, Apart => Plain);
+         Grow (Heads * Rank);                                                   --  6
+         Products.Add_Assemble
+           (Steps, Heads, 1, 1, [Rotary, Plain, Q_Width, Heads * Q_Width, 0, 0, 0, 0], Added, Kept => False);
+         Grow (Heads * Rotary);                                                 --  7
+         Products.Add_Rotation
+           (Steps, Turns (Turns'First)'Address, B.Byte_Count (Turns'Length) * 8, 0,
+            Heads * Rotary, Heads, Rotary, Products.Split, Added, From_Step => 7, Kept => False);
+         Grow (Heads * Rotary);                                                 --  8
+         Products.Add_Assemble
+           (Steps, Heads, 8, 6,
+            [Rotary, 0, Rotary, Heads * Rotary, Rank, 0, Positions * Rank, Rank],
+            Added, Kept => False);
+         Grow (Heads * Key_W);                                                  --  9
+         Products.Add_Assemble (Steps, 1, 2, 4, [Rotary, Rank, 0, Key_W, Rank, 0, 0, Rank], Added, Kept => False);
+         Grow (Key_W);                                                          --  10
+         Products.Add_Pick (Steps, Rank, Rank, 0, 1, Added, From_Step => 4, Kept => False);
+         Grow (Rank);                                                           --  11
+         Products.Add_Rotation
+           (Steps, Turns (Turns'First)'Address, B.Byte_Count (Turns'Length) * 8, 0,
+            Key_W, 1, Rotary, Products.Split, Added, From_Step => 10, Kept => False);
+         Grow (Key_W);                                                          --  12
+         Products.Add_Place (Steps, Key_W, Key_W, N.Element_Count (Before) * Key_W, Added, From_Step => 12);
+         Grow (Key_W);                                                          --  13
+         Products.Add_Place (Steps, Rank, Rank, Room + N.Element_Count (Before) * Rank, Added, From_Step => 11);
+         Grow (Rank);                                                           --  14
+         Products.Add_Attention
+           (Steps, Heads => Heads, Head_Size => Key_W, Value_Size => Rank, Group_Size => Heads,
+            First => 0, Last => Before, K_Base => 0, V_Base => Room,
+            KV_Width => Key_W, V_Width => Rank, Scale => Scale, Cap => 0.0, Added => Added,
+            Chained => True, From_Step => 9, Kept => False);
+         Assert (Added, "the attention step was refused");
+         Grow (Heads * Rank);                                                   --  15
+         Products.Add_Gathered_Product
+           (Steps, Up (Up'First)'Address, Bytes (Up.all), 0, Products.Values_F32,
+            Heads * Each_Up, Each_Up, Rank, Members, Heads, Added, Key => Up.all'Address,
+            Kept => False, Chained => True, From_Step => 15, Apart => Rank);
+         Grow (Heads * Each_Up);                                                --  16
+         Products.Add_Assemble
+           (Steps, Heads, 16, 16, [V_Head, Plain, Positions * Each_Up, Each_Up, 0, 0, 0, 0], Added);
+         Assert (Added, "the last assemble was refused");
+
+         declare
+            Answer : N.Real_Array (0 .. (Rows + Heads * V_Head) * Count - 1) := [others => 0.0];
+            Last_At : constant N.Element_Count := Rows * Count;
+         begin
+            Products.Run (Engine, Steps, X, Positions, Answer, Ok, Halted);
+            Assert (Ok, "the latent layer was refused at" & Positions'Image & " positions");
+
+            --  Each position's key and value into the host's cache first,
+            --  then each attends to what precedes it and itself.
+            declare
+               type Row_Set is array (0 .. Count - 1) of N.Real_Array (0 .. Heads * Q_Width - 1);
+               Q : Row_Set := [others => [others => 0.0]];
+            begin
+               for P in 0 .. Count - 1 loop
+                  declare
+                     KV   : N.Real_Array (0 .. Key_W - 1) := [others => 0.0];
+                     Mean : N.Real := 0.0;
+                     At_K : constant N.Element_Count := (N.Element_Count (Before) + P) * Key_W;
+                     At_V : constant N.Element_Count := Room + (N.Element_Count (Before) + P) * Rank;
+                  begin
+                     for R in Q (P)'Range loop
+                        for I in N.Element_Count range 0 .. Width - 1 loop
+                           Q (P) (R) := Q (P) (R) + Wq (R * Width + I) * X (P * Width + I);
+                        end loop;
+                     end loop;
+                     for R in KV'Range loop
+                        for I in N.Element_Count range 0 .. Width - 1 loop
+                           KV (R) := KV (R) + Wkv (R * Width + I) * X (P * Width + I);
+                        end loop;
+                     end loop;
+                     for I in N.Element_Count range 0 .. Rank - 1 loop
+                        Mean := Mean + KV (I) * KV (I);
+                     end loop;
+                     Mean := Mean / N.Real (Rank);
+                     for I in N.Element_Count range 0 .. Rotary - 1 loop
+                        Cache (At_K + I) := KV (Rank + I);
+                     end loop;
+                     for I in N.Element_Count range 0 .. Rank - 1 loop
+                        declare
+                           C : constant N.Real :=
+                             KV (I) / N.Real (Ada.Numerics.Elementary_Functions.Sqrt (Float (Mean + Epsilon)));
+                        begin
+                           Cache (At_K + Rotary + I) := C;
+                           Cache (At_V + I) := C;
+                        end;
+                     end loop;
+                  end;
+               end loop;
+
+               for P in 0 .. Count - 1 loop
+                  for H in N.Element_Count range 0 .. Heads - 1 loop
+                     declare
+                        Last   : constant N.Element_Count := N.Element_Count (Before) + P;
+                        Query  : N.Real_Array (0 .. Key_W - 1);
+                        Scores : N.Real_Array (0 .. Last);
+                        Top    : N.Real := N.Real'First;
+                        Sum    : N.Real := 0.0;
+                        Lat    : N.Real_Array (0 .. Rank - 1) := [others => 0.0];
+                     begin
+                        for I in N.Element_Count range 0 .. Rotary - 1 loop
+                           Query (I) := Q (P) (H * Q_Width + Plain + I);
+                        end loop;
+                        for J in N.Element_Count range 0 .. Rank - 1 loop
+                           Query (Rotary + J) := 0.0;
+                           for D in N.Element_Count range 0 .. Plain - 1 loop
+                              Query (Rotary + J) := Query (Rotary + J)
+                                + Q (P) (H * Q_Width + D) * Turned ((H * Rank + J) * Plain + D);
+                           end loop;
+                        end loop;
+                        for Pos in Scores'Range loop
+                           Scores (Pos) := 0.0;
+                           for D in Query'Range loop
+                              Scores (Pos) := Scores (Pos) + Query (D) * Cache (Pos * Key_W + D);
+                           end loop;
+                           Scores (Pos) := Scores (Pos) * Scale;
+                           Top := N.Real'Max (Top, Scores (Pos));
+                        end loop;
+                        for Pos in Scores'Range loop
+                           Scores (Pos) := N.Real (Ada.Numerics.Elementary_Functions.Exp (Float (Scores (Pos) - Top)));
+                           Sum := Sum + Scores (Pos);
+                        end loop;
+                        for J in Lat'Range loop
+                           for Pos in Scores'Range loop
+                              Lat (J) := Lat (J) + Scores (Pos) * Cache (Room + Pos * Rank + J);
+                           end loop;
+                           Lat (J) := Lat (J) / Sum;
+                        end loop;
+                        for V in N.Element_Count range 0 .. V_Head - 1 loop
+                           declare
+                              Out_V : N.Real := 0.0;
+                           begin
+                              for J in Lat'Range loop
+                                 Out_V := Out_V + Up ((H * Each_Up + Plain + V) * Rank + J) * Lat (J);
+                              end loop;
+                              Most := N.Real'Max (Most, abs Out_V);
+                              Worst := N.Real'Max
+                                (Worst,
+                                 abs (Answer (Last_At + (P * Heads + H) * V_Head + V) - Out_V)
+                                 / (1.0 + abs Out_V));
+                           end;
+                        end loop;
+                     end;
+                  end loop;
+               end loop;
+            end;
+         end;
+         Free (Cache);
+         Assert (Most > 0.01, "the answers are all near nought, which tells nothing");
+         Assert (Worst <= 1.0e-2,
+                 "the latent layer at" & Positions'Image & " positions answers"
+                 & N.Real'Image (Worst) & " away from the host's");
+      end Compare;
+
+      procedure Release is
+      begin
+         Free (Wq); Free (Wkv); Free (Turned); Free (Up);
+      end Release;
+   begin
+      for I in Wq'Range loop
+         Wq (I) := N.Real ((I * 37) mod 101) / 101.0 - 0.5;
+      end loop;
+      for I in Wkv'Range loop
+         Wkv (I) := N.Real ((I * 41) mod 103) / 103.0 - 0.5;
+      end loop;
+      for I in Turned'Range loop
+         Turned (I) := (N.Real ((I * 53) mod 97) / 97.0 - 0.5) * 0.1;
+      end loop;
+      for I in Up'Range loop
+         Up (I) := N.Real ((I * 29) mod 89) / 89.0 - 0.5;
+      end loop;
+
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         Release;
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+      end if;
+      if not Ready or else not Products.Takes_Latent (Engine, Key_W, Rank, Heads) then
+         Device_Notes.Skip ("for a latent layer to attend as the host does");
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Held);
+         Release;
+         return;
+      end if;
+      Products.Prefer_Halves (Engine, True);
+
+      Compare (Positions => 1);
+      Compare (Positions => 3);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+      Release;
+   end A_Latent_Layer_Attends_As_The_Host_Does;
+
    ----------------------------------------------
    -- An_Exact_Batch_Reads_Its_Vectors_As_They_Are --
    ----------------------------------------------
@@ -12698,6 +13340,15 @@ package body Tests.Backend_Cases is
          "a round's few positions over a cache past the few-position span, "
          & "in groups of six at two and four subgroups, say what the "
          & "positions one at a time say");
+      Register_Routine
+        (T, A_Latent_Attends_As_The_Host_Does'Access,
+         "an absorbed latent attends as the host does, one position and a few");
+      Register_Routine
+        (T, A_Latent_Folds_And_Takes_Out_As_The_Host_Does'Access,
+         "an absorbed latent's queries folded and blends taken out on the device as the host does");
+      Register_Routine
+        (T, A_Latent_Layer_Attends_As_The_Host_Does'Access,
+         "an absorbed latent's layer, folded, attended and taken out on the device, as the host does");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, An_Exact_Batch_Reads_Its_Vectors_As_They_Are'Access,
          "a batch long enough for the tile, asked for exactly, reads its "

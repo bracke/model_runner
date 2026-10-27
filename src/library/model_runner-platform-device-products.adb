@@ -595,6 +595,41 @@ package body Model_Runner.Platform.Device.Products is
                  + Natural'Max (1, Groups) - 1)
                 / Natural'Max (1, Groups)))));
 
+   --  Whether attention_latent.comp takes a head of this shape: an absorbed
+   --  latent's one key-value head, wider than the matrix kernels stage --
+   --  576 for DeepSeek-V2, its rotated slice and its rank -- its values up
+   --  to 512, and at most the sixteen query heads one tile of the
+   --  instruction holds reading it.
+   Latent_Head  : constant := 576;
+   Latent_Value : constant := 512;
+   Latent_Rows  : constant := 16;
+
+   function Latent_Fits
+     (Item       : Engine;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural) return Boolean
+   is (Item.Latent_Attend /= Null_Handle
+       and then Head_Size > Matrix_Wider_Head
+       and then Head_Size <= Latent_Head
+       and then Head_Size mod 16 = 0
+       and then Value_Size in 16 .. Latent_Value
+       and then Value_Size mod 16 = 0
+       and then Group_Size in 1 .. Latent_Rows);
+
+   --  How many slices it cuts a cache of Span positions into: a tile of it
+   --  at least, and no more than its workgroups of 25 KB of shared memory
+   --  that the part holds at once.
+   function Takes_Latent
+     (Item       : Engine;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural) return Boolean
+   is (Latent_Fits (Item, Head_Size, Value_Size, Group_Size));
+
+   function Latent_Slices (Span : Natural) return Natural
+   is (Natural'Max (1, Natural'Min (Few_Wide_Busy, (Span + 63) / 64)));
+
    --  The few-position pipeline for a step of Positions, or none: two to
    --  eight positions whose heads in a group, times the positions, fill at
    --  most four subgroups of sixteen rows, out of the half-precision copy,
@@ -759,6 +794,10 @@ package body Model_Runner.Platform.Device.Products is
    is (if Rounding then Attends_By_Halves (Item, True)
        elsif Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then True
+       --  An absorbed latent's head, past every other kernel's width, is
+       --  attention_latent.comp's at any batch, and it reads the copy.
+       elsif Head_Size > Matrix_Wider_Head and then Item.Latent_Attend /= Null_Handle
+       then Attends_By_Halves (Item, False)
        elsif Item.Tile_Line /= Null_Handle and then Positions >= Query_Block
        then False
        else Attends_By_Halves (Item, False));
@@ -4090,6 +4129,21 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Attend_Matrix_Wider := Made;
                   end if;
                end;
+
+               --  And the absorbed latent's.
+               declare
+                  Latent : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Latent;
+               begin
+                  Request.Size := Interfaces.C.size_t (Latent'Length * 4);
+                  Request.Code := Latent'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Latent := Made;
+                  end if;
+               end;
             end if;
          end;
       end if;
@@ -5222,6 +5276,17 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         --  Four subgroups of sixty-four, fixed in its source.
+         if Item.Attend_Latent /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Latent;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Latent_Attend := Made;
+            end if;
+         end if;
+
          --  And each of the four again for a batch attending far:
          --  Matrix_Queries a subgroup, as the plain pipeline answers, and
          --  Matrix_Deep_Queries a workgroup, its subgroups reading the
@@ -6172,6 +6237,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Latent_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
@@ -6185,6 +6251,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Latent, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Mid, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
@@ -13952,7 +14019,12 @@ package body Model_Runner.Platform.Device.Products is
         or else Heads = 0
         or else Head_Size = 0
         or else Value_Size = 0
-        or else Value_Size > Attention_Room
+        --  Past the room only an absorbed latent's head, which its own
+        --  kernel takes; whether it runs is the run's to say.
+        or else (Value_Size > Attention_Room
+                 and then not (Head_Size > Matrix_Wider_Head
+                               and then Head_Size <= Latent_Head
+                               and then Value_Size <= Latent_Value))
         or else Group_Size = 0
         or else Last < First
       then
@@ -14178,6 +14250,23 @@ package body Model_Runner.Platform.Device.Products is
       --  Few_Kernel.
       function Few_Line (Which : Positive) return Address
       is (if Steps.Items (Which).Attends
+            and then Steps.Items (Which).Packed.K_Bits = 0
+            and then Steps.Items (Which).Causal
+            and then Steps.Items (Which).Window = 0
+            and then Steps.Items (Which).Sinks = 0
+            and then Model_Runner.Numerics."=" (Steps.Items (Which).Max_Bias, 0.0)
+            and then Model_Runner.Numerics."=" (Steps.Items (Which).Cap, 0.0)
+            and then Latent_Fits
+                       (Item, Steps.Items (Which).Head_Size,
+                        Steps.Items (Which).Value_Size,
+                        Steps.Items (Which).Group_Size)
+            and then Reads_Copy
+                       (Item, Count, Steps.Items (Which).Head_Size,
+                        Steps.Items (Which).Value_Size, False)
+          --  An absorbed latent's, at any depth and any count of positions
+          --  -- each its own workgroups -- since nothing else attends it.
+          then Item.Latent_Attend
+          elsif Steps.Items (Which).Attends
             and then Steps.Items (Which).Packed.K_Bits = 0
             and then Steps.Items (Which).Causal
             and then Steps.Items (Which).Window = 0
@@ -14490,6 +14579,19 @@ package body Model_Runner.Platform.Device.Products is
       if Taps_Untiled then
          return;
       end if;
+
+      --  A head past the attention's room is an absorbed latent's, read by
+      --  its own kernel or by none: refused here, the caller attends it
+      --  another way rather than a kernel reading past what it holds.
+      for Index in 1 .. Steps.Held loop
+         if Steps.Items (Index).Attends
+           and then (Steps.Items (Index).Value_Size > Attention_Room
+                     or else Steps.Items (Index).Head_Size > Attention_Room)
+           and then Few_Line (Index) /= Item.Latent_Attend
+         then
+            return;
+         end if;
+      end loop;
 
       --  What the whole run needs, and whether it is askable at all. Every
       --  product reads the same activation, so they must agree about how
@@ -16882,6 +16984,8 @@ package body Model_Runner.Platform.Device.Products is
                      --  Merged_Slices gives the heads at this depth.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
+                        elsif Few and then Few_Line (Index) = Item.Latent_Attend
+                        then Latent_Slices (This.Last - This.First + 1)
                         elsif Few
                         then Few_Slices
                                (This.Heads / Natural'Max (1, This.Group_Size),
@@ -16917,12 +17021,17 @@ package body Model_Runner.Platform.Device.Products is
                         --  group of heads along the first and a slice of
                         --  the cache along the second.
                         if Few then
+                           --  The latent's positions each their own
+                           --  workgroups, down the third axis.
                            Dispatch
                              (Item.Buffer,
                               C.unsigned
                                 (This.Heads
                                  / Natural'Max (1, This.Group_Size)),
-                              C.unsigned (Slices), 1);
+                              C.unsigned (Slices),
+                              C.unsigned
+                                (if Few_Line (Index) = Item.Latent_Attend
+                                 then Count else 1));
                         elsif Attends_By_Matrix
                              (Item, Seated, This.Head_Size, This.Value_Size)
                         then
@@ -17686,7 +17795,10 @@ package body Model_Runner.Platform.Device.Products is
                         others  => <>);
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
-                     Dispatch (Item.Buffer, C.unsigned (Count), 1, 1);
+                     --  A workgroup a thousand elements of a position.
+                     Dispatch
+                       (Item.Buffer, C.unsigned (Count),
+                        C.unsigned (Natural'Max (1, (This.Rows + 1023) / 1024)), 1);
                   end;
 
                   Bind_Pipeline

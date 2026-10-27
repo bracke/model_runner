@@ -513,10 +513,11 @@ package Model_Runner.Platform.Device.Products is
    --
    --  Task safety: a sequence belongs to the task that opened it.
 
-   --  Products one sequence may hold. A layer of a large model names fewer
-   --  than a dozen matrices, and a bound that cannot be reached is a bound
-   --  nothing has to grow.
-   Sequence_Limit : constant := 32;
+   --  Steps one sequence may hold. A layer of a large model names fewer
+   --  than a dozen matrices, but its steps are more: DeepSeek's mixture
+   --  layer read absorbed -- its latent folded and taken out, its routed
+   --  and shared experts -- is thirty-three, past the thirty-two this was.
+   Sequence_Limit : constant := 40;
 
    --  What the device's own clock said each step of a sequence took.
    --
@@ -2695,6 +2696,21 @@ package Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural) return Boolean;
 
+   --  Whether this engine attends an absorbed latent of this shape: one
+   --  key-value head wider than the matrix kernels stage, read by Group_Size
+   --  query heads at once (attention_latent.comp).
+   --
+   --  @param Item The engine.
+   --  @param Head_Size Elements the latent's key holds.
+   --  @param Value_Size Elements its value holds.
+   --  @param Group_Size Query heads reading it.
+   --  @return True where the kernel is here and takes the shape.
+   function Takes_Latent
+     (Item       : Engine;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Group_Size : Natural) return Boolean;
+
    --  Write whole numbers into that cache.
    --
    --  A round's per-row table, which a kernel reads back with
@@ -3655,6 +3671,11 @@ private
       Attend_Matrix_Mid : System.Address := System.Null_Address;
       Attend_Matrix_Wider : System.Address := System.Null_Address;
 
+      --  And attention_latent.comp: an absorbed latent's one key-value
+      --  head, past the matrix kernels' widest, read by every query head
+      --  of its group at once.
+      Attend_Latent : System.Address := System.Null_Address;
+
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
       --  answer at a time, and the copy of the batch in half precision that
@@ -3998,6 +4019,7 @@ private
       Matrix_Wide_Attend : System.Address := System.Null_Address;
       Matrix_Mid_Attend : System.Address := System.Null_Address;
       Matrix_Wider_Attend : System.Address := System.Null_Address;
+      Latent_Attend : System.Address := System.Null_Address;
 
       --  The same four at Matrix_Deep_Queries a workgroup, for a batch
       --  attending far.

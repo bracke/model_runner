@@ -1,0 +1,278 @@
+#version 450
+
+//  Attention over an absorbed latent: DeepSeek's multi-head latent
+//  attention read the way its cache can hold it, one key-value head of the
+//  rotated slice and the latent -- 576 halves a position for DeepSeek-V2,
+//  where its sixteen heads of 192 and 128 were 5,120 -- that every query
+//  head reads, each query folded through its own key rows beforehand and
+//  its blend taken back out through its value rows after.
+//
+//  The heads that share the latent are the sixteen rows of one tile of the
+//  device's matrix instruction, so a workgroup answers them all for one
+//  position over its slice of the cache, and every key and value it reads
+//  is read once for the sixteen. The four subgroups share a tile of sixty-
+//  four positions: each scores the sixteen heads against its sixteen of
+//  them, thirty-six steps of sixteen down the key; the softmax goes four
+//  rows a subgroup; and each subgroup weighs a quarter of the 512 value
+//  columns, eight of the instruction's tiles held where they are across the
+//  walk and rescaled in place as attention_matrix.comp rescales its own.
+//
+//  Its slices are put together by merge.comp, as a few positions' are:
+//  every row leaves its unnormalized blend, largest score and sum, laid out
+//  as attention_matrix.comp's records are.
+//
+//  What it leaves out the host does not ask of it: a bound on the scores,
+//  slopes, sinks and a sliding window, none of which DeepSeek has.
+
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+
+//  Four subgroups of sixty-four, as the host has established a subgroup
+//  here is.
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
+layout(std430, binding = 1) readonly  buffer Query { float q[]; };
+layout(std430, binding = 2) writeonly buffer Blend { float y[]; };
+layout(std430, binding = 5) readonly buffer Halves { float16_t kvh[]; };
+layout(std430, binding = 6) readonly buffer Values { float16_t vh[]; };
+
+//  attention_matrix.comp's block, word for word: the host fills one for
+//  either.
+layout(push_constant) uniform Shape {
+    uint heads;
+    uint head_size;
+    uint value_size;
+    uint group_size;
+    uint first;
+    uint last;
+    uint k_base;
+    uint v_base;
+    uint kv_width;
+    uint v_width;
+    float scale;
+    float cap;
+    uint positions;
+    uint window;
+    uint causal;
+    float max_bias;
+    uint table_at;
+    uint sinks_at;
+    uint pages_at;
+    uint page_shift;
+} shape;
+
+uint place_of (uint pos, uint offset, uint width) {
+    if (shape.page_shift == 0u) {
+        return offset + pos * width;
+    }
+    return floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)])
+           + offset + (pos & ((1u << shape.page_shift) - 1u)) * width;
+}
+
+//  The heads a latent answers, the widest key and value it stages, and the
+//  positions a tile holds.
+const uint ROWS = 16u;
+const uint DK   = 576u;
+const uint DV   = 512u;
+const uint BC   = 64u;
+
+//  A subgroup's quarter of the value columns, in tiles of sixteen, and how
+//  many of them are read before they are multiplied: all eight spilled
+//  attention_matrix.comp's registers at a head of 256.
+const uint V_TILES = DV / 64u;
+const uint V_AT_ONCE = 4u;
+
+shared float16_t qs[ROWS * DK];
+shared float ss[ROWS * BC];
+shared float16_t ps[ROWS * BC];
+shared float rowscale[ROWS];
+shared uint rowmap[256];
+
+void main() {
+    uint sub  = gl_LocalInvocationID.x / 64u;
+    uint lane = gl_LocalInvocationID.x % 64u;
+    //  A group of keys and values along the first axis, a slice of the
+    //  cache along the second and a position along the third, as the
+    //  few-position dispatch lays them out with positions added.
+    uint group  = gl_WorkGroupID.x;
+    uint slices = gl_NumWorkGroups.y;
+    uint slice  = gl_WorkGroupID.y;
+    uint p      = gl_WorkGroupID.z;
+
+    uint dk = shape.head_size;
+    uint dv = shape.value_size;
+    uint rows = min (shape.group_size, ROWS);
+    uint head0 = group * shape.group_size;
+    uint k_at = group * dk;
+    uint v_at = group * dv;
+
+    //  The queries, in half precision, nought past the head and past the
+    //  heads the latent has.
+    for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
+        uint r = at / DK;
+        uint c = at % DK;
+        qs[at] = r < rows && c < dk
+                 ? float16_t (q[(p * shape.heads + head0 + r) * dk + c])
+                 : float16_t (0.0);
+    }
+
+    //  This position's window of the cache and this workgroup's slice of
+    //  it, whole tiles, so the slices meet without sharing a position.
+    //  The flag is the low bit of its word; the copy's room, which this
+    //  does not use, is above it.
+    uint last_p  = shape.last + ((shape.causal & 1u) != 0u ? p : 0u);
+    uint first_p = shape.first;
+    uint from_tile = shape.page_shift != 0u ? (first_p & ~15u) : first_p;
+    uint span  = last_p + 1u - from_tile;
+    uint per   = ((span + slices - 1u) / slices + BC - 1u) / BC * BC;
+    uint walk_from = from_tile + slice * per;
+    uint walk_to   = min (walk_from + per - 1u, last_p);
+
+    //  Which row each element of an accumulator is, asked once.
+    uint mine_rows[8];
+    {
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> probe;
+        uint many = uint (probe.length ());
+        for (int e = 0; e < probe.length (); ++e) {
+            probe[e] = float (lane * many + uint (e));
+        }
+        if (sub == 0u) {
+            coopMatStore (probe, ss, 0u, 16u, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        barrier ();
+        if (sub == 0u) {
+            for (uint at = lane; at < 256u; at += 64u) {
+                rowmap[uint (ss[at])] = at / 16u;
+            }
+        }
+        barrier ();
+        for (uint e = 0u; e < 8u; ++e) {
+            mine_rows[e] = e < many ? rowmap[lane * many + e] : 0u;
+        }
+    }
+
+    //  A subgroup's four rows' largest score and sum so far.
+    float top[4];
+    float total[4];
+    [[unroll]] for (uint i = 0u; i < 4u; i++) {
+        top[i] = -1.0 / 0.0;
+        total[i] = 0.0;
+    }
+
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> pacc[V_TILES];
+    [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
+        pacc[t] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+    }
+
+    for (uint base = walk_from; base <= walk_to; base += BC) {
+        barrier ();
+
+        //  This subgroup's sixteen positions scored by every head.
+        {
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc =
+              coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+            uint keys = place_of (base + sub * 16u, shape.k_base, shape.kv_width) + k_at;
+            [[unroll]] for (uint t = 0u; t < DK / 16u; t++) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
+                coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad (km, kvh, keys + min (t * 16u, dk - 16u), shape.kv_width,
+                             gl_CooperativeMatrixLayoutColumnMajor);
+                sacc = coopMatMulAdd (qm, km, sacc);
+            }
+            coopMatStore (sacc, ss, sub * 16u, BC, gl_CooperativeMatrixLayoutRowMajor);
+        }
+        barrier ();
+
+        //  The softmax, four rows a subgroup and a column a lane.
+        [[unroll]] for (uint i = 0u; i < 4u; i++) {
+            uint r = sub * 4u + i;
+            uint pos = base + lane;
+            float score = pos >= first_p && pos <= walk_to
+                          ? ss[r * BC + lane] * shape.scale
+                          : -1.0 / 0.0;
+            float raised = max (top[i], subgroupMax (score));
+            bool  empty  = isinf (raised) && raised < 0.0;
+            float carry  = empty ? 1.0 : exp (top[i] - raised);
+            float w      = empty ? 0.0 : exp (score - raised);
+
+            ps[r * BC + lane] = float16_t (w);
+            total[i] = total[i] * carry + subgroupAdd (w);
+            top[i] = raised;
+            if (lane == 0u) {
+                rowscale[r] = carry;
+            }
+        }
+        barrier ();
+
+        //  This subgroup's quarter of the values, rescaled and weighed.
+        {
+            float scale_of[8];
+            for (uint e = 0u; e < 8u; ++e) {
+                scale_of[e] = rowscale[mine_rows[e]];
+            }
+            [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
+                for (int e = 0; e < pacc[t].length (); ++e) {
+                    pacc[t][e] *= scale_of[e];
+                }
+            }
+
+            [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> pm;
+                coopMatLoad (pm, ps, n0, BC, gl_CooperativeMatrixLayoutRowMajor);
+                uint values = place_of (base + n0, shape.v_base, shape.v_width) + v_at;
+
+                [[unroll]] for (uint g = 0u; g < V_TILES; g += V_AT_ONCE) {
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> vm[V_AT_ONCE];
+                    [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
+                        uint col = sub * (DV / 4u) + (g + t) * 16u;
+                        coopMatLoad (vm[t], vh, values + min (col, dv - 16u), shape.v_width,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+                    }
+                    [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
+                        pacc[g + t] = coopMatMulAdd (pm, vm[t], pacc[g + t]);
+                    }
+                }
+            }
+        }
+    }
+
+    //  The records: each row's unnormalized blend, its largest score and
+    //  its sum, for merge.comp.
+    barrier ();
+    uint stride = dv + 2u;
+    uint records = shape.positions * shape.heads * dv;
+    [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
+        uint col0 = sub * (DV / 4u) + t * 16u;
+        coopMatStore (pacc[t], ss, sub * 256u, 16u, gl_CooperativeMatrixLayoutRowMajor);
+        //  A subgroup's own quarter of ss, read back by the same subgroup.
+        subgroupBarrier ();
+        memoryBarrierShared ();
+        for (uint at = lane; at < 256u; at += 64u) {
+            uint r = at / 16u;
+            uint c = col0 + at % 16u;
+            if (r < rows && c < dv) {
+                uint record = records
+                  + ((slice * shape.positions + p) * shape.heads + head0 + r) * stride;
+                y[record + c] = ss[sub * 256u + at];
+            }
+        }
+        subgroupBarrier ();
+        memoryBarrierShared ();
+    }
+    [[unroll]] for (uint i = 0u; i < 4u; i++) {
+        uint r = sub * 4u + i;
+        if (lane == 0u && r < rows) {
+            uint record = records
+              + ((slice * shape.positions + p) * shape.heads + head0 + r) * stride;
+            y[record + dv]      = top[i];
+            y[record + dv + 1u] = total[i];
+        }
+    }
+}

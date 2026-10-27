@@ -865,6 +865,17 @@ package Model_Runner.Backend.Device is
    --  past what it kept would be worse than one that says no.
    --
    --  @return The width in elements, or zero where no device is open.
+   --  Whether the device attends an absorbed latent of this shape, its key
+   --  past Attention_Head_Room: the room does not bound a session that
+   --  attends one.
+   --
+   --  @param Head_Size Elements the latent's key holds.
+   --  @param Value_Size Elements its value holds.
+   --  @param Group_Size Query heads reading it.
+   --  @return True where the device is up and takes it.
+   function Attends_Latent_Heads
+     (Head_Size, Value_Size, Group_Size : Natural) return Boolean;
+
    function Attention_Head_Room return Natural;
 
    --  Attend over a cache kept packed on the device -- a byte an element
@@ -2001,6 +2012,10 @@ package Model_Runner.Backend.Device is
    --  @param MLA_Norm The latent's normalization gain.
    --  @param MLA_Up The latent's up projection, each head's keys' plain
    --    part then its values.
+   --  @param MLA_Absorb Each head's key rows of MLA_Up turned on their side,
+   --    where the attention is absorbed: present, the layer's cache is the
+   --    latent and its rotated slice, every query head folded through its
+   --    own and its blend taken back out through MLA_Up's value rows.
    --  @param Stream_Feed Whether the dense feed-forward's gate, up and down
    --    are uploaded for this batch alone rather than kept: a split dense
    --    model's layer whose feed-forward the processor holds, run whole on
@@ -2115,7 +2130,9 @@ package Model_Runner.Backend.Device is
       MLA_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
       MLA_Up         : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
-      Stream_Feed    : Boolean := False);
+      Stream_Feed    : Boolean := False;
+      MLA_Absorb     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View);
 
    --  Whether the last Whole_Layer refused a layer it was carried into and
    --  could not bring that layer's input home from the device. A caller

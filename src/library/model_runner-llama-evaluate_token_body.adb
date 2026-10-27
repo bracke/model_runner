@@ -185,11 +185,15 @@ is
        --  DeepSeek's latent attention goes whole where its queries are
        --  one projection (V2-Lite's); a query through a latent of its
        --  own is not a shape the device's layer builds yet.
-       --  Absorbed, not yet: the device's layer builds the heads it
-       --  reconstructs from the latent, not the latent read whole.
+       --  Absorbed, where the device attends the latent whole and the
+       --  turned key rows are there to fold the queries through.
        and then (not Is_MLA (Settings.Kind)
                  or else (Settings.Q_Lora_Rank = 0
-                          and then not Settings.Latent_Attention
+                          and then (not Settings.Latent_Attention
+                                    or else (T.Is_Present (L.KV_B_Absorb)
+                                             and then Model_Runner.Backend.Device.Attends_Latent_Heads
+                                                        (Settings.Head_Size, Settings.Value_Size,
+                                                         Settings.Group_Size)))
                           and then T.Is_Present (L.KV_A_Lat)
                           and then T.Is_Present (L.KV_A_Rope)
                           and then L.KV_A_Norm /= null)));
@@ -1144,10 +1148,10 @@ begin
                      Settings.Epsilon,
                      Current.Query,
                      (if Is_MLA (Settings.Kind)
-                      then MLA_Rows (Current.KV_A_MQA, Heads * Head_Size)
+                      then MLA_Rows (Current.KV_A_MQA, KV_Width)
                       else Current.Key),
                      (if Is_MLA (Settings.Kind)
-                      then MLA_Rows (Current.KV_A_MQA, Heads * Value_Size)
+                      then MLA_Rows (Current.KV_A_MQA, V_Width)
                       else Current.Value),
                      Angles, Natural (Head_Size), Settings.Rotary,
                      K."=" (Settings.Pairing, K.Split),
@@ -1290,6 +1294,9 @@ begin
                      MLA_Norm      => Current.KV_A_Norm,
                      MLA_Up        =>
                        (if Is_MLA (Settings.Kind) then Current.KV_B
+                        else T.Empty_View),
+                     MLA_Absorb    =>
+                       (if Settings.Latent_Attention then Current.KV_B_Absorb
                         else T.Empty_View));
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.

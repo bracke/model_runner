@@ -58,7 +58,11 @@ void main() {
     uint width = shape.heads * head_len;
     uint into = slot * width;
 
-    for (uint c = lane; c < width; c += LANES) {
+    //  A position's row over the workgroups the second axis gives it: one
+    //  workgroup a position took sixteen microseconds over an absorbed
+    //  latent's sixteen heads of 576.
+    for (uint c = gl_WorkGroupID.y * LANES + lane; c < width;
+         c += LANES * gl_NumWorkGroups.y) {
         uint head = c / head_len;
         uint at = c - head * head_len;
 

@@ -1690,6 +1690,11 @@ package body Model_Runner.Backend.Device is
    function Attention_Head_Room return Natural
    is (if Ready_Now then Products.Attention_Room else 0);
 
+   function Attends_Latent_Heads
+     (Head_Size, Value_Size, Group_Size : Natural) return Boolean
+   is (Ready_Now
+       and then Products.Takes_Latent (Engine, Head_Size, Value_Size, Group_Size));
+
    -------------------
    -- Attend_Packed --
    -------------------
@@ -3342,7 +3347,9 @@ package body Model_Runner.Backend.Device is
       MLA_Norm       : Model_Runner.Tensors.Real_Array_Access := null;
       MLA_Up         : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
-      Stream_Feed    : Boolean := False)
+      Stream_Feed    : Boolean := False;
+      MLA_Absorb     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -3383,6 +3390,11 @@ package body Model_Runner.Backend.Device is
          Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
          Step_Router, Step_Route, Step_Downs, Step_Gates, Step_Mix : Natural := 0;
 
+         --  Whether Step_Q is turned already: an absorbed latent's queries,
+         --  whose rotated slices are turned before the heads are laid out,
+         --  so the turning does not copy each head's 512 that are not.
+         Q_Turned_Early : Boolean := False;
+
          --  The queries, keys and values were one bias-less matmul, so the
          --  ready-the-heads dispatches read their own rows out of the one
          --  fused step, strided.
@@ -3398,8 +3410,12 @@ package body Model_Runner.Backend.Device is
 
          --  The query rows the heads take: the projection's, or half of them
          --  where the other half are the gates beside the heads.
+         --  Absorbed, the queries attended are the heads at the latent's
+         --  width, not the projection's.
          Q_Rows : constant Model_Runner.Numerics.Element_Count :=
-           (if Head_Gates then Query.Rows / 2 else Query.Rows);
+           (if T.Is_Present (MLA_Absorb)
+            then Model_Runner.Numerics.Element_Count (Heads * Head_Size)
+            elsif Head_Gates then Query.Rows / 2 else Query.Rows);
 
          --  A normalization's weight: the gain, and after it the shift where
          --  the normalization is the centred one.
@@ -3969,6 +3985,176 @@ package body Model_Runner.Backend.Device is
                  Lat_Rows + Natural (MLA_Rope.Rows);
             begin
                Both.Rows := MLA_Latent.Rows + MLA_Rope.Rows;
+
+               --  Absorbed: the cache is one head of the rotated slice and
+               --  the normalized latent, the value the latent itself; each
+               --  query head its own rotated slice, then its plain part
+               --  folded through its key rows of the up-projection -- a
+               --  gather of the turned rows, a head a member, each member
+               --  its own head's plain part. See attention_latent.comp.
+               if T.Is_Present (MLA_Absorb) then
+                  declare
+                     Q_Width : constant Natural :=
+                       Natural (Query.Rows) / Natural'Max (1, Heads);
+                     Plain   : constant Natural := Q_Width - Rotary;
+                     Rank    : constant Natural := Lat_Rows;
+                     Abs_P   : Products.Weight_Packing;
+                     Step_Nope, Step_Abs : Natural;
+                     Members : constant Products.Member_List :=
+                       [for I in 1 .. Products.Max_Gather => I - 1];
+                  begin
+                     if MLA_Norm = null or else not Joint
+                       or else Rotary = 0 or else Q_Width <= Rotary
+                       or else Heads > Products.Max_Gather
+                       or else Head_Size /= Rotary + Rank
+                       or else Value_Size /= Rank
+                       or else Natural (MLA_Absorb.Rows) /= Heads * Rank
+                       or else Natural (MLA_Absorb.Columns) /= Plain
+                     then
+                        return;
+                     end if;
+                     Packing_Of (MLA_Latent.Format, Lat_P, Known);
+                     if not Known then
+                        return;
+                     end if;
+                     Packing_Of (MLA_Absorb.Format, Abs_P, Known);
+                     if not Known then
+                        return;
+                     end if;
+
+                     Add_Input_Product (Query, Q_P, False, Added);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Q_Raw := Products.Length (Steps);
+                     Step_Room (Query.Rows);
+
+                     Add_Input_Product (Both, Lat_P, False, Added);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Rope := Products.Length (Steps);
+                     Step_Room (Both.Rows);
+
+                     Products.Add_Assemble
+                       (Steps, 1, Step_Rope, Step_Rope,
+                        [Lat_Rows, 0, 0, Both_Rows, 0, 0, 0, Both_Rows], Added,
+                        Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Lat := Products.Length (Steps);
+                     Step_Room (MLA_Latent.Rows);
+
+                     Products.Add_Norm
+                       (Steps, MLA_Norm.all (MLA_Norm.all'First)'Address,
+                        Model_Runner.Bytes.Byte_Count (MLA_Norm.all'Length) * 4, 0,
+                        Natural (MLA_Latent.Rows), Epsilon, Added,
+                        From_Step => Step_Lat,
+                        Key => MLA_Norm.all (MLA_Norm.all'First)'Address,
+                        Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Lat_Norm := Products.Length (Steps);
+                     Step_Room (MLA_Latent.Rows);
+
+                     --  The heads' plain parts, end to end, as the gather
+                     --  reads each member's own stretch.
+                     Products.Add_Assemble
+                       (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
+                        [Plain, 0, Q_Width, Natural (Query.Rows), 0, 0, 0, 0], Added,
+                        Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Nope := Products.Length (Steps);
+                     Step_Room
+                       (Model_Runner.Numerics.Element_Count (Heads * Plain));
+
+                     Products.Add_Gathered_Product
+                       (Steps, MLA_Absorb.Base, MLA_Absorb.Span, MLA_Absorb.Offset,
+                        Abs_P, Heads * Rank, Rank, Plain, Members, Heads, Added,
+                        Key => At_Offset (MLA_Absorb.Base, MLA_Absorb.Offset),
+                        Kept => False, Chained => True, From_Step => Step_Nope,
+                        Apart => Plain);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Abs := Products.Length (Steps);
+                     Step_Room
+                       (Model_Runner.Numerics.Element_Count (Heads * Rank));
+
+                     --  The heads' rotated slices alone, turned.
+                     declare
+                        Step_Ropes : Natural;
+                     begin
+                        Products.Add_Assemble
+                          (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
+                           [Rotary, Plain, Q_Width, Natural (Query.Rows), 0, 0, 0, 0],
+                           Added, Kept => False);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_Ropes := Products.Length (Steps);
+                        Step_Room
+                          (Model_Runner.Numerics.Element_Count (Heads * Rotary));
+                        Products.Add_Rotation
+                          (Steps, Turns (Turns'First)'Address,
+                           Model_Runner.Bytes.Byte_Count (Turns'Length) * 8, 0,
+                           Heads * Rotary, Heads, Rotary,
+                           (if Split then Products.Split else Products.Interleaved),
+                           Added, From_Step => Step_Ropes, Kept => False);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_Ropes := Products.Length (Steps);
+                        Step_Room
+                          (Model_Runner.Numerics.Element_Count (Heads * Rotary));
+
+                        --  Each query head: its turned slice, then its fold
+                        --  -- which the gather leaves a member at a time,
+                        --  every position of one head before the next.
+                        Products.Add_Assemble
+                          (Steps, Heads, Step_Ropes, Step_Abs,
+                           [Rotary, 0, Rotary, Heads * Rotary,
+                            Rank, 0, Positions * Rank, Rank], Added,
+                           Kept => False);
+                        if not Added then
+                           return;
+                        end if;
+                        Q_Turned_Early := True;
+                     end;
+                     Step_Q := Products.Length (Steps);
+                     Step_Room
+                       (Model_Runner.Numerics.Element_Count (Heads * Head_Size));
+
+                     --  The one key: the rotated slice, then the latent.
+                     Products.Add_Assemble
+                       (Steps, 1, Step_Rope, Step_Lat_Norm,
+                        [Rotary, Lat_Rows, 0, Both_Rows, Rank, 0, 0, Rank], Added,
+                        Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_K := Products.Length (Steps);
+                     Step_Room (Model_Runner.Numerics.Element_Count (Head_Size));
+
+                     --  And its value, the latent.
+                     Products.Add_Pick
+                       (Steps, Rank, Rank, 0, 1, Added,
+                        From_Step => Step_Lat_Norm, Kept => Mirror);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_V := Products.Length (Steps);
+                     Step_Room (Model_Runner.Numerics.Element_Count (Rank));
+                     At_Keys := Wanted;
+                     At_Values := Wanted;
+                     goto After_Projections;
+                  end;
+               end if;
+
                if MLA_Norm = null
                  or else not T.Is_Present (MLA_Latent)
                  or else not T.Is_Present (MLA_Rope)
@@ -4538,15 +4724,19 @@ package body Model_Runner.Backend.Device is
             Pairing : constant Products.Rotary_Pairing :=
               (if Split then Products.Split else Products.Interleaved);
          begin
-            Products.Add_Rotation
-              (Steps, At_Turn, Span, 0, Natural (Q_Rows),
-               Natural (Q_Rows) / Head_Size, Rotary, Pairing, Added,
-               From_Step => Step_Q, Kept => False);
-            if not Added then
-               return;
+            if Q_Turned_Early then
+               Step_Q_Turned := Step_Q;
+            else
+               Products.Add_Rotation
+                 (Steps, At_Turn, Span, 0, Natural (Q_Rows),
+                  Natural (Q_Rows) / Head_Size, Rotary, Pairing, Added,
+                  From_Step => Step_Q, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Q_Turned := Products.Length (Steps);
+               Step_Room (Q_Rows);
             end if;
-            Step_Q_Turned := Products.Length (Steps);
-            Step_Room (Q_Rows);
 
             Products.Add_Rotation
               (Steps, At_Turn, Span, 0, Natural (Key.Rows),
@@ -4654,6 +4844,54 @@ package body Model_Runner.Backend.Device is
             Step_Attend := Products.Length (Steps);
             Step_Room
               (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
+         end if;
+
+         --  Absorbed, each head's blend taken back out of the latent: a
+         --  gather of the up-projection, a head a member reading its own
+         --  blend, and of each head's rows the value ones kept.
+         if T.Is_Present (MLA_Absorb) and then not Linear_Layer then
+            declare
+               Q_Width : constant Natural :=
+                 Natural (Query.Rows) / Natural'Max (1, Heads);
+               Plain   : constant Natural := Q_Width - Rotary;
+               Each_Up : constant Natural :=
+                 Natural (MLA_Up.Rows) / Natural'Max (1, Heads);
+               V_Head  : constant Natural := Each_Up - Natural'Min (Each_Up, Plain);
+               Up_P    : Products.Weight_Packing;
+               Members : constant Products.Member_List :=
+                 [for I in 1 .. Products.Max_Gather => I - 1];
+               Step_Exp : Natural;
+            begin
+               if V_Head = 0 then
+                  return;
+               end if;
+               Packing_Of (MLA_Up.Format, Up_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Products.Add_Gathered_Product
+                 (Steps, MLA_Up.Base, MLA_Up.Span, MLA_Up.Offset, Up_P,
+                  Natural (MLA_Up.Rows), Each_Up, Value_Size, Members, Heads,
+                  Added,
+                  Key => At_Offset (MLA_Up.Base, MLA_Up.Offset), Kept => False,
+                  Chained => True, From_Step => Step_Attend, Apart => Value_Size);
+               if not Added then
+                  return;
+               end if;
+               Step_Exp := Products.Length (Steps);
+               Step_Room (MLA_Up.Rows);
+               --  The value rows of each head's answer, which the gather
+               --  leaves a member at a time, laid out a position at a time.
+               Products.Add_Assemble
+                 (Steps, Heads, Step_Exp, Step_Exp,
+                  [V_Head, Plain, Positions * Each_Up, Each_Up, 0, 0, 0, 0],
+                  Added, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Attend := Products.Length (Steps);
+               Step_Room (Model_Runner.Numerics.Element_Count (Heads * V_Head));
+            end;
          end if;
 
          --  The second half, as Attend_And_Feed builds it, with the residual
