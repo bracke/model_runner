@@ -80,7 +80,18 @@ uint place_of (uint pos, uint offset, uint width) {
 const uint ROWS = 16u;
 const uint DK   = 576u;
 const uint DV   = 512u;
+
+//  A batch's compilation (WIDE_TILE) walks tiles of 128: a subgroup scores
+//  thirty-two keys as two chains of the instruction, each query read out of
+//  shared memory feeding two products where it fed one. Holding the queries
+//  in the instruction's operands instead spilled 225 registers.
+#ifdef WIDE_TILE
+const uint BC   = 128u;
+#else
 const uint BC   = 64u;
+#endif
+const uint SUB_KEYS = BC / 4u;
+const uint SUB_TILES = SUB_KEYS / 16u;
 
 //  A subgroup's quarter of the value columns, in tiles of sixteen, and how
 //  many of them are read before they are multiplied: all eight spilled
@@ -173,37 +184,55 @@ void main() {
     for (uint base = walk_from; base <= walk_to; base += BC) {
         barrier ();
 
-        //  This subgroup's sixteen positions scored by every head.
+        //  This subgroup's positions of the tile scored by every head.
         {
-            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc =
-              coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
-            uint keys = place_of (base + sub * 16u, shape.k_base, shape.kv_width) + k_at;
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc[SUB_TILES];
+            uint keys[SUB_TILES];
+            [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
+                sacc[n] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+                keys[n] = place_of (base + sub * SUB_KEYS + n * 16u, shape.k_base, shape.kv_width)
+                          + k_at;
+            }
             [[unroll]] for (uint t = 0u; t < DK / 16u; t++) {
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
-                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
                 coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
-                coopMatLoad (km, kvh, keys + min (t * 16u, dk - 16u), shape.kv_width,
-                             gl_CooperativeMatrixLayoutColumnMajor);
-                sacc = coopMatMulAdd (qm, km, sacc);
+                [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
+                    coopMatLoad (km, kvh, keys[n] + min (t * 16u, dk - 16u), shape.kv_width,
+                                 gl_CooperativeMatrixLayoutColumnMajor);
+                    sacc[n] = coopMatMulAdd (qm, km, sacc[n]);
+                }
             }
-            coopMatStore (sacc, ss, sub * 16u, BC, gl_CooperativeMatrixLayoutRowMajor);
+            [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
+                coopMatStore (sacc[n], ss, sub * SUB_KEYS + n * 16u, BC,
+                              gl_CooperativeMatrixLayoutRowMajor);
+            }
         }
         barrier ();
 
-        //  The softmax, four rows a subgroup and a column a lane.
+        //  The softmax, four rows a subgroup and a column a lane -- two in
+        //  a tile of 128.
         [[unroll]] for (uint i = 0u; i < 4u; i++) {
             uint r = sub * 4u + i;
-            uint pos = base + lane;
-            float score = pos >= first_p && pos <= walk_to
-                          ? ss[r * BC + lane] * shape.scale
-                          : -1.0 / 0.0;
-            float raised = max (top[i], subgroupMax (score));
+            float score[BC / 64u];
+            float best = -1.0 / 0.0;
+            [[unroll]] for (uint c = 0u; c < BC / 64u; c++) {
+                uint pos = base + c * 64u + lane;
+                score[c] = pos >= first_p && pos <= walk_to
+                           ? ss[r * BC + c * 64u + lane] * shape.scale
+                           : -1.0 / 0.0;
+                best = max (best, score[c]);
+            }
+            float raised = max (top[i], subgroupMax (best));
             bool  empty  = isinf (raised) && raised < 0.0;
             float carry  = empty ? 1.0 : exp (top[i] - raised);
-            float w      = empty ? 0.0 : exp (score - raised);
-
-            ps[r * BC + lane] = float16_t (w);
-            total[i] = total[i] * carry + subgroupAdd (w);
+            float run    = 0.0;
+            [[unroll]] for (uint c = 0u; c < BC / 64u; c++) {
+                float w = empty ? 0.0 : exp (score[c] - raised);
+                ps[r * BC + c * 64u + lane] = float16_t (w);
+                run += w;
+            }
+            total[i] = total[i] * carry + subgroupAdd (run);
             top[i] = raised;
             if (lane == 0u) {
                 rowscale[r] = carry;

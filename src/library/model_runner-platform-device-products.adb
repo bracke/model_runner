@@ -627,8 +627,13 @@ package body Model_Runner.Platform.Device.Products is
       Group_Size : Natural) return Boolean
    is (Latent_Fits (Item, Head_Size, Value_Size, Group_Size));
 
-   function Latent_Slices (Span : Natural) return Natural
-   is (Natural'Max (1, Natural'Min (Few_Wide_Busy, (Span + 63) / 64)));
+   --  A batch of positions is busy enough a slice each: sliced, every
+   --  slice staged its position's queries and left a record to merge.
+   function Latent_Slices (Span : Natural; Positions : Natural := 1) return Natural
+   is (if Positions >= Latent_Rows then 1
+       else Natural'Max
+              (1, Natural'Min (Few_Wide_Busy / Natural'Max (1, Positions),
+                               (Span + 63) / 64)));
 
    --  The few-position pipeline for a step of Positions, or none: two to
    --  eight positions whose heads in a group, times the positions, fill at
@@ -4144,6 +4149,21 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Attend_Latent := Made;
                   end if;
                end;
+
+               --  And its batch's, tiles of 128 (WIDE_TILE).
+               declare
+                  Batch : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Latent_Batch;
+               begin
+                  Request.Size := Interfaces.C.size_t (Batch'Length * 4);
+                  Request.Code := Batch'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Latent_Batch := Made;
+                  end if;
+               end;
             end if;
          end;
       end if;
@@ -5287,6 +5307,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Attend_Latent_Batch /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Latent_Batch;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Latent_Batch_Attend := Made;
+            end if;
+         end if;
+
          --  And each of the four again for a batch attending far:
          --  Matrix_Queries a subgroup, as the plain pipeline answers, and
          --  Matrix_Deep_Queries a workgroup, its subgroups reading the
@@ -6238,6 +6268,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Latent_Batch_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
@@ -6252,6 +6283,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Latent_Batch, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Mid, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
@@ -14246,6 +14278,11 @@ package body Model_Runner.Platform.Device.Products is
                or else Steps.Items (Which).Inverts
                or else Steps.Items (Which).Blends));
 
+      --  Whether an attending step's latent is read by the batch's
+      --  compilation, tiles of 128 and one slice a position: a batch of a
+      --  tile's rows or more, which is busy enough without slicing.
+      function Latent_Batch (Which : Positive) return Boolean;
+
       --  The few-position pipeline an attending step takes, or none; see
       --  Few_Kernel.
       function Few_Line (Which : Positive) return Address
@@ -14286,6 +14323,11 @@ package body Model_Runner.Platform.Device.Products is
                   Steps.Items (Which).Head_Size,
                   Steps.Items (Which).Value_Size)
           else Null_Handle);
+
+      function Latent_Batch (Which : Positive) return Boolean
+      is (Count >= Latent_Rows
+          and then Item.Latent_Batch_Attend /= Null_Handle
+          and then Few_Line (Which) = Item.Latent_Attend);
 
       function Tiled (Which : Positive) return Boolean
       is (Is_Product (Which)
@@ -16882,7 +16924,8 @@ package body Model_Runner.Platform.Device.Products is
                   --  share a cache.
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
-                     (if Few_Line (Index) /= Null_Handle and then Barrier /= null
+                     (if Latent_Batch (Index) then Item.Latent_Batch_Attend
+                      elsif Few_Line (Index) /= Null_Handle and then Barrier /= null
                       then Few_Line (Index)
                       else
                      Attend_Kernel (Item, Count, This.Head_Size,
@@ -16984,8 +17027,9 @@ package body Model_Runner.Platform.Device.Products is
                      --  Merged_Slices gives the heads at this depth.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
+                        elsif Latent_Batch (Index) then 1
                         elsif Few and then Few_Line (Index) = Item.Latent_Attend
-                        then Latent_Slices (This.Last - This.First + 1)
+                        then Latent_Slices (This.Last - This.First + 1, Count)
                         elsif Few
                         then Few_Slices
                                (This.Heads / Natural'Max (1, This.Group_Size),

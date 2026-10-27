@@ -167,6 +167,7 @@ compile attention_matrix_wide        attention_matrix.comp vulkan1.3 WIDE_HEAD
 compile attention_matrix_mid         attention_matrix.comp vulkan1.3 MID_HEAD
 compile attention_matrix_wider       attention_matrix.comp vulkan1.3 WIDER_HEAD
 compile attention_latent             attention_latent.comp vulkan1.3
+compile attention_latent_batch       attention_latent.comp vulkan1.3 WIDE_TILE
 compile norm                         norm.comp             vulkan1.1
 compile norm_rounds                  norm.comp             vulkan1.1 ROUNDS
 compile rotate                       rotate.comp           vulkan1.0

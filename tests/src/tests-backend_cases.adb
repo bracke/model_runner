@@ -11693,6 +11693,10 @@ package body Tests.Backend_Cases is
 
       Compare (Batch => 1);
       Compare (Batch => 3);
+      --  And a batch long enough for its own kernel, two positions a
+      --  workgroup, one of them odd.
+      Compare (Batch => 17);
+      Compare (Batch => 20);
 
       Products.Close (Engine);
       Devices.Close (Opened);
@@ -13342,7 +13346,7 @@ package body Tests.Backend_Cases is
          & "positions one at a time say");
       Register_Routine
         (T, A_Latent_Attends_As_The_Host_Does'Access,
-         "an absorbed latent attends as the host does, one position and a few");
+         "an absorbed latent attends as the host does, one position, a few and a batch");
       Register_Routine
         (T, A_Latent_Folds_And_Takes_Out_As_The_Host_Does'Access,
          "an absorbed latent's queries folded and blends taken out on the device as the host does");
