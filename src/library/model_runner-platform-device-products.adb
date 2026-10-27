@@ -14485,50 +14485,141 @@ package body Model_Runner.Platform.Device.Products is
       --  them and the down's copy of its answer go, and the up's copy of
       --  what the gate's already holds. None of the three splits its short
       --  runs off to a walk: the batch is long enough that they are few.
-      function Fold_Gate (G : Natural) return Boolean
-      is (G >= 1
-          and then G + 3 <= Steps.Held
-          and then Listed_Tiled (G)
-          and then Listed_Tiled (G + 1)
-          and then Listed_Tiled (G + 3)
-          and then not Steps.Items (G).By_Slot
-          and then not Steps.Items (G + 1).By_Slot
-          and then Steps.Items (G + 3).By_Slot
-          and then not Steps.Items (G).Exact
-          and then not Steps.Items (G + 1).Exact
-          and then not Steps.Items (G + 3).Exact
-          and then not Steps.Items (G).Kept
-          and then not Steps.Items (G + 1).Kept
-          and then not Steps.Items (G + 2).Kept
-          and then not Steps.Items (G).Joins
-          and then not Steps.Items (G + 1).Joins
-          and then Steps.Items (G).Columns = Steps.Items (G + 1).Columns
-          and then Steps.Items (G).Each = Steps.Items (G + 1).Each
-          and then Steps.Items (G).Rows = Steps.Items (G + 1).Rows
-          and then Steps.Items (G).Gathers = Steps.Items (G + 1).Gathers
-          and then Steps.Items (G).Used = Steps.Items (G + 1).Used
-          and then Reads_From (G) = Reads_From (G + 1)
-          and then Steps.Items (G + 2).Blends
-          and then Steps.Items (G + 2).Unit in 0 | 1
-          and then Steps.Items (G + 2).Reads in 0 | G
-          and then Steps.Items (G + 2).Reads_Two in 0 | G + 1
-          and then Steps.Items (G + 2).Rows = Steps.Items (G + 1).Rows
-          and then Reads_From (G + 3) = G + 2
-          and then Steps.Items (G + 3).Columns = Steps.Items (G + 1).Each
-          --  Runs long enough that few are short, whichever tile takes
-          --  them.
-          and then Count * Steps.Items (G).Used
-                   >= Listed_Wide_Run
-                      * Natural'Max (Steps.Items (G).Gathers, 1));
+      function Fold_Gate (G : Natural) return Natural;
+
+      --  A biasing step a folded expert product's store can take in: an
+      --  expert's bias over its runs, a row an expert, read from its stack.
+      function Fold_Bias (B : Natural; Product : Positive) return Boolean
+      is (B in 1 .. Steps.Held
+          and then Steps.Items (B).Biases
+          and then Steps.Items (B).Reads = Product
+          --  The inversion its slots' experts are read from.
+          and then Steps.Items (B).Reads_Two in 1 .. Steps.Held
+          and then Steps.Items (Steps.Items (B).Reads_Two).Inverts
+          and then Steps.Items (B).Base /= System.Null_Address
+          and then Model_Runner.Numerics."=" (Steps.Items (B).Cap, 0.0)
+          and then Steps.Items (B).Reads_Stride = 0
+          and then Steps.Items (B).Reads_At = 0
+          and then Steps.Items (B).Each = Steps.Items (Product).Each
+          and then not Steps.Items (B).Kept);
+
+      --  The combination of a fold: the gate's arm and the up's, plain
+      --  units or, after the two biases, the clamped one too.
+      function Fold_Combines
+        (C : Natural; Gate, Up : Positive; Clamped : Boolean) return Boolean
+      is (C in 1 .. Steps.Held
+          and then Steps.Items (C).Blends
+          and then (Steps.Items (C).Unit in 0 | 1
+                    or else (Clamped and then Steps.Items (C).Unit = 3))
+          and then Steps.Items (C).Reads in 0 | Gate
+          and then Steps.Items (C).Reads_Two in 0 | Up
+          and then not Steps.Items (C).Kept);
+
+      --  And its down: by slot, over the combination.
+      function Fold_Downs (D : Natural; Combined, Up : Positive) return Boolean
+      is (D in 1 .. Steps.Held
+          and then Listed_Tiled (D)
+          and then Steps.Items (D).By_Slot
+          and then not Steps.Items (D).Exact
+          and then Reads_From (D) = Combined
+          and then Steps.Items (D).Columns = Steps.Items (Up).Each);
+
+      --  A mixture's experts folded on the matrix tile over a long batch:
+      --  the gate stores its answers as halves, a slot at a time, into the
+      --  first region; the up reads the copy the gate laid out, applies the
+      --  unit to the gate's halves as it stores, and stores the gated
+      --  middle as halves into the second; the combination is not run;
+      --  and the down reads the middle there, laid out by slot as its own
+      --  copy would have been. The f32 arms, the combination's pass over
+      --  them and the down's copy of its answer go, and the up's copy of
+      --  what the gate's already holds. Where each arm has its experts'
+      --  biases after it -- gpt-oss -- the gate and the up add them as
+      --  they store and the biasing steps are not run either. None of the
+      --  three splits its short runs off to a walk: the batch is long
+      --  enough that they are few. One for the plain form, two for the
+      --  biased, nought where G does not begin one.
+      function Fold_Gate (G : Natural) return Natural is
+      begin
+         if not
+           (G >= 1
+            and then G + 3 <= Steps.Held
+            and then Listed_Tiled (G)
+            and then Listed_Tiled (G + 1)
+            and then not Steps.Items (G).By_Slot
+            and then not Steps.Items (G + 1).By_Slot
+            and then not Steps.Items (G).Exact
+            and then not Steps.Items (G + 1).Exact
+            and then not Steps.Items (G).Kept
+            and then not Steps.Items (G + 1).Kept
+            and then not Steps.Items (G).Joins
+            and then not Steps.Items (G + 1).Joins
+            and then Steps.Items (G).Columns = Steps.Items (G + 1).Columns
+            and then Steps.Items (G).Each = Steps.Items (G + 1).Each
+            and then Steps.Items (G).Rows = Steps.Items (G + 1).Rows
+            and then Steps.Items (G).Gathers = Steps.Items (G + 1).Gathers
+            and then Steps.Items (G).Used = Steps.Items (G + 1).Used
+            and then Reads_From (G) = Reads_From (G + 1)
+            --  Runs long enough that few are short, whichever tile takes
+            --  them.
+            and then Count * Steps.Items (G).Used
+                     >= Listed_Wide_Run
+                        * Natural'Max (Steps.Items (G).Gathers, 1))
+         then
+            return 0;
+         elsif Fold_Combines (G + 2, G, G + 1, Clamped => False)
+           and then Fold_Downs (G + 3, G + 2, G + 1)
+         then
+            return 1;
+         elsif Fold_Bias (G + 2, G)
+           and then Fold_Bias (G + 3, G + 1)
+           and then Fold_Combines (G + 4, G + 2, G + 3, Clamped => True)
+           and then Fold_Downs (G + 5, G + 4, G + 1)
+         then
+            return 2;
+         else
+            return 0;
+         end if;
+      end Fold_Gate;
 
       --  A step's part in such a fold: the gate one, the up two, the
-      --  combination three, the down four; nought for any other step.
-      function Fold_Role (Which : Positive) return Natural
-      is (if Fold_Gate (Which) then 1
-          elsif Which > 1 and then Fold_Gate (Which - 1) then 2
-          elsif Which > 2 and then Fold_Gate (Which - 2) then 3
-          elsif Which > 3 and then Fold_Gate (Which - 3) then 4
+      --  combination three, the down four, a bias five; nought for any
+      --  other step.
+      function Fold_Role (Which : Positive) return Natural is
+      begin
+         for Back in 0 .. 5 loop
+            exit when Back >= Which;
+            declare
+               Form : constant Natural := Fold_Gate (Which - Back);
+            begin
+               if Form /= 0 then
+                  case Back is
+                     when 0 => return 1;
+                     when 1 => return 2;
+                     when 2 => return (if Form = 1 then 3 else 5);
+                     when 3 => return (if Form = 1 then 4 else 5);
+                     when 4 => return (if Form = 2 then 3 else 0);
+                     when others => return (if Form = 2 then 4 else 0);
+                  end case;
+               end if;
+            end;
+         end loop;
+         return 0;
+      end Fold_Role;
+
+      --  For a folded gate or up, its bias step, or nought: two on in the
+      --  biased form, whichever of the two it is.
+      function Fold_Bias_Of (Which : Positive) return Natural
+      is (if Fold_Role (Which) = 1 and then Fold_Gate (Which) = 2
+          then Which + 2
+          elsif Fold_Role (Which) = 2 and then Fold_Gate (Which - 1) = 2
+          then Which + 2
           else 0);
+
+      --  For a folded up, its combination.
+      function Fold_Combination_Of (Which : Positive) return Natural
+      is (if Fold_Role (Which) /= 2 then 0
+          elsif Fold_Gate (Which - 1) = 2 then Which + 3
+          else Which + 1);
 
       function Split_Listed (Which : Positive) return Boolean
       is (Fold_Role (Which) = 0
@@ -16279,6 +16370,15 @@ package body Model_Runner.Platform.Device.Products is
 
             Told (6) := Copy_Descriptor (Item);
 
+            --  A folded expert product's biases, where its store adds them:
+            --  the bias step's stack, at the binding the tile reads them.
+            if Listed_Tiled (Index) and then Fold_Bias_Of (Index) /= 0 then
+               Told (6) :=
+                 (Buffer => Places (Fold_Bias_Of (Index)).Buffer, Offset => 0,
+                  Extent => Places (Fold_Bias_Of (Index)).Base
+                            + Places (Fold_Bias_Of (Index)).Weight);
+            end if;
+
             --  And the rounded activations, for a walk that reads them:
             --  its own rounding's, or the normalization's it reads.
             Told (7) :=
@@ -16793,9 +16893,9 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
-               --  Nor a folded mixture's combination, which its up stored
-               --  (Fold_Role).
-               if Fold_Role (Index) = 3 then
+               --  Nor a folded mixture's combination, which its up stored,
+               --  nor its biases, which its gate and up added (Fold_Role).
+               if Fold_Role (Index) in 3 | 5 then
                   goto Next_Dispatch;
                end if;
 
@@ -18608,7 +18708,8 @@ package body Model_Runner.Platform.Device.Products is
                         --  The up's unit, on the gate's halves.
                         Table   =>
                           (if Role = 2
-                           then C.unsigned (Steps.Items (Index + 1).Unit)
+                           then C.unsigned
+                                  (Steps.Items (Fold_Combination_Of (Index)).Unit)
                            else 0),
                         Members => [0 => C.unsigned (This.Gathers),
                                     1 => (if Splits (Index)
@@ -18616,6 +18717,28 @@ package body Model_Runner.Platform.Device.Products is
                                     --  And the down's operand, the middle
                                     --  the up stored.
                                     2 => (if Role = 4 then C.unsigned (Region_Two)
+                                          else 0),
+                                    --  The experts' biases a folded gate or
+                                    --  up adds, in floats and plus one, at
+                                    --  the binding its bias step's stack is.
+                                    3 => (if Fold_Bias_Of (Index) /= 0
+                                          then C.unsigned
+                                                 (Places (Fold_Bias_Of (Index)).Base
+                                                  / 4 + 1)
+                                          else 0),
+                                    --  And the clamped unit's slope and
+                                    --  limit, by their bits.
+                                    4 => (if Role = 2
+                                          then Float_Bits
+                                                 (C.C_float
+                                                    (Steps.Items
+                                                       (Fold_Combination_Of (Index)).Alpha))
+                                          else 0),
+                                    5 => (if Role = 2
+                                          then Float_Bits
+                                                 (C.C_float
+                                                    (Steps.Items
+                                                       (Fold_Combination_Of (Index)).Limit))
                                           else 0),
                                     others => 0],
                         Stride  => C.unsigned (Slice_Bytes (Index)),

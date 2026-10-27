@@ -9432,6 +9432,209 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Split_Batch_Leaves_Its_Long_Runs_To_The_Tile;
 
+   --  A batch's mixture whose experts carry biases and the clamped unit --
+   --  gpt-oss's form -- over runs long enough that the gate, the up, their
+   --  biases and the combination fold into the products' stores (the
+   --  engine's Fold_Role): what the positions gathered one at a time say,
+   --  each step its own there.
+   procedure A_Folded_Biased_Mixture_Says_What_The_Gathered_One_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Experts : constant := 4;
+      Used    : constant := 2;
+      Width   : constant := 256;
+      Feed    : constant := 256;
+      --  Runs of fifty: past Listed_Wide_Run, so the experts fold.
+      Count   : constant := 100;
+      Alpha   : constant N.Real := 1.702;
+      Limit   : constant N.Real := 0.6;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+
+      Router : N.Real_Array (0 .. Experts * Width - 1);
+      Gates  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Ups    : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+      Downs  : constant T.Real_Array_Access :=
+        new N.Real_Array (0 .. Experts * Width * Feed - 1);
+      G_Bias : N.Real_Array (0 .. Experts * Feed - 1);
+      U_Bias : N.Real_Array (0 .. Experts * Feed - 1);
+      D_Bias : N.Real_Array (0 .. Experts * Width - 1);
+
+      Inputs : N.Real_Array (0 .. N.Element_Count (Count * Width) - 1);
+      Padded : constant Natural := Products.Run_Slots (Experts, Used, Count);
+
+      type Byte_Access is access B.Byte_Array;
+      G_Bytes, U_Bytes, D_Bytes : Byte_Access;
+
+      function Bytes (Item : N.Real_Array) return B.Byte_Count
+      is (B.Byte_Count (Item'Length) * 4);
+
+      Worst, Most : N.Real := 0.0;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+      end if;
+      if not Ready then
+         Device_Notes.Skip ("for a folded biased mixture says what the gathered one says");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Router'Range loop
+         Router (Index) := N.Real (Index mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Gates'Range loop
+         Gates (Index) := (N.Real (Index mod 7) / 7.0 - 0.5) * 0.2;
+         Ups (Index) := (N.Real ((Index * 3) mod 5) / 5.0 - 0.4) * 0.2;
+      end loop;
+      for Index in Downs'Range loop
+         Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
+      end loop;
+      for Index in G_Bias'Range loop
+         G_Bias (Index) := N.Real (Index mod 5) / 5.0 - 0.3;
+         U_Bias (Index) := N.Real (Index mod 3) / 3.0 - 0.4;
+      end loop;
+      for Index in D_Bias'Range loop
+         D_Bias (Index) := N.Real (Index mod 4) / 4.0 - 0.5;
+      end loop;
+      for Index in Inputs'Range loop
+         Inputs (Index) := N.Real ((Index * 13) mod 17) / 17.0 - 0.45;
+      end loop;
+
+      G_Bytes := new B.Byte_Array'(Fixtures.Encode_Q8_0 (Gates.all));
+      U_Bytes := new B.Byte_Array'(Fixtures.Encode_Q8_0 (Ups.all));
+      D_Bytes := new B.Byte_Array'(Fixtures.Encode_Q8_0 (Downs.all));
+
+      declare
+         --  Every step's room, a position at a time: the router's scores,
+         --  the routing, the inversion's, the gate, the up, their biases,
+         --  the combination, the down and its bias, then the mix.
+         At_Mix : constant N.Element_Count :=
+           N.Element_Count (Count)
+           * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+                              + 5 * Padded * Feed + 2 * Padded * Width);
+         Batch : T.Real_Array_Access :=
+           new N.Real_Array'(0 .. At_Mix + N.Element_Count (Count * Width) - 1 => 0.0);
+         One_Mix : constant N.Element_Count :=
+           N.Element_Count (Experts + 2 * Used + 5 * Used * Feed
+                            + 2 * Used * Width);
+         One : N.Real_Array (0 .. One_Mix + Width - 1) := [others => 0.0];
+         Steps : Products.Sequence;
+      begin
+         Products.Open_Sequence (Steps);
+         Products.Add_Product
+           (Steps, Router (Router'First)'Address, Bytes (Router), 0,
+            Products.Values_F32, Experts, Width, Added, Kept => False);
+         Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+         Products.Add_Invert (Steps, Experts, Used, 2, Added);
+         Products.Add_Listed_Product
+           (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+            Products.Packed_Q8_0, Experts * Feed, Feed, Width, Experts, Used, 3,
+            Count, Added, Kept => False, Chained => False);
+         Products.Add_Listed_Product
+           (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
+            Products.Packed_Q8_0, Experts * Feed, Feed, Width, Experts, Used, 3,
+            Count, Added, Kept => False, Chained => False);
+         Products.Add_Bias
+           (Steps, G_Bias (G_Bias'First)'Address, Bytes (G_Bias), 0,
+            Experts, Feed, 4, 3, Added, Key => G_Bias'Address, Kept => False);
+         Assert (Added, "the gates' biases were refused");
+         Products.Add_Bias
+           (Steps, U_Bias (U_Bias'First)'Address, Bytes (U_Bias), 0,
+            Experts, Feed, 5, 3, Added, Key => U_Bias'Address, Kept => False);
+         Assert (Added, "the ups' biases were refused");
+         Products.Add_Combination
+           (Steps, 3, Added, Kept => False, Alpha => Alpha, Limit => Limit);
+         Assert (Added, "the clamped combination was refused");
+         Products.Add_Listed_Product
+           (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+            Products.Packed_Q8_0, Experts * Width, Width, Feed, Experts, Used, 3,
+            Count, Added, Kept => False, By_Slot => True);
+         Assert (Added, "the listed downs were refused");
+         Products.Add_Bias
+           (Steps, D_Bias (D_Bias'First)'Address, Bytes (D_Bias), 0,
+            Experts, Width, 9, 3, Added, Key => D_Bias'Address, Kept => False);
+         Assert (Added, "the downs' biases were refused");
+         Products.Add_Mix (Steps, Width, Used, 10, 3, Added);
+         Assert (Added, "the mix was refused");
+
+         Products.Run (Engine, Steps, Inputs, Count, Batch.all, Ok, Halted);
+         Assert (Ok, "the folded mixture was refused");
+
+         for Position in 0 .. Count - 1 loop
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Router (Router'First)'Address, Bytes (Router), 0,
+               Products.Values_F32, Experts, Width, Added, Kept => False);
+            Products.Add_Route (Steps, Experts, Used, Added, Kept => False);
+            Products.Add_Gathered_Product
+              (Steps, G_Bytes (G_Bytes'First)'Address, G_Bytes'Length, 0,
+               Products.Packed_Q8_0, Experts * Feed, Feed, Width, [others => 0],
+               Used, Added, Kept => False, Chained => False, Routed => 2);
+            Products.Add_Gathered_Product
+              (Steps, U_Bytes (U_Bytes'First)'Address, U_Bytes'Length, 0,
+               Products.Packed_Q8_0, Experts * Feed, Feed, Width, [others => 0],
+               Used, Added, Kept => False, Chained => False, Routed => 2);
+            Products.Add_Bias
+              (Steps, G_Bias (G_Bias'First)'Address, Bytes (G_Bias), 0,
+               Experts, Feed, 3, 2, Added, Key => G_Bias'Address, Kept => False);
+            Products.Add_Bias
+              (Steps, U_Bias (U_Bias'First)'Address, Bytes (U_Bias), 0,
+               Experts, Feed, 4, 2, Added, Key => U_Bias'Address, Kept => False);
+            Products.Add_Combination
+              (Steps, 3, Added, Kept => False, Alpha => Alpha, Limit => Limit);
+            Products.Add_Gathered_Product
+              (Steps, D_Bytes (D_Bytes'First)'Address, D_Bytes'Length, 0,
+               Products.Packed_Q8_0, Experts * Width, Width, Feed, [others => 0],
+               Used, Added, Kept => False, Chained => True, Apart => Feed,
+               Routed => 2);
+            Products.Add_Bias
+              (Steps, D_Bias (D_Bias'First)'Address, Bytes (D_Bias), 0,
+               Experts, Width, 8, 2, Added, Key => D_Bias'Address, Kept => False);
+            Products.Add_Mix (Steps, Width, Used, 9, 2, Added);
+            Assert (Added, "the gathered mixture was refused");
+
+            Products.Run
+              (Engine, Steps,
+               Inputs (N.Element_Count (Position * Width)
+                       .. N.Element_Count (Position * Width + Width - 1)),
+               1, One, Ok, Halted);
+            Assert (Ok, "the gathered mixture would not run");
+
+            for Row in 0 .. Width - 1 loop
+               Most := N.Real'Max (Most, abs One (One_Mix + N.Element_Count (Row)));
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (Batch (At_Mix + N.Element_Count (Position * Width + Row))
+                       - One (One_Mix + N.Element_Count (Row))));
+            end loop;
+         end loop;
+         T.Free (Batch);
+      end;
+
+      Assert (Most > 0.05, "the mixes are all near nought, which tells nothing");
+      Assert (Worst < 2.0E-2,
+              "the folded biased mixture answers" & N.Real'Image (Worst)
+              & " away from the positions gathered one at a time");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Folded_Biased_Mixture_Says_What_The_Gathered_One_Says;
+
    procedure A_Listed_Mixture_Says_What_The_Gathered_One_Says
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -13340,6 +13543,11 @@ package body Tests.Backend_Cases is
          "a batch packed once and read by members multiplies as the pool "
          & "multiplies the same rows, to the bit, and refuses a member past "
          & "the batch");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Folded_Biased_Mixture_Says_What_The_Gathered_One_Says'Access,
+         "a batch's mixture with biased experts and the clamped unit, folded "
+         & "into its products' stores, says what the positions gathered one "
+         & "at a time say");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Listed_Mixture_Says_What_The_Gathered_One_Says'Access,
          "a batch's mixture -- the routing inverted and every expert run "

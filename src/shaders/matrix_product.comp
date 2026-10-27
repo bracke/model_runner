@@ -154,6 +154,13 @@ layout(std430, binding = 4) readonly buffer Residual { float rj[]; };
 //  every expert's over its run: see the push block.
 layout(std430, binding = 4) readonly buffer Lists { uint lists[]; };
 
+#ifdef LISTED
+//  And a folded mixture's expert biases, a stack of them a row an expert,
+//  where its gate and up add them as they store (members[3], in floats
+//  and plus one; nought for none).
+layout(std430, binding = 5) readonly buffer Biases { float bias[]; };
+#endif
+
 layout(push_constant) uniform Shape {
     uint rows;
     uint columns;
@@ -2868,6 +2875,21 @@ void main() {
                 continue;
             }
 
+#ifdef LISTED
+            //  This expert's bias for these rows, the same down every
+            //  vector: loaded with no stride between them.
+            if (shape.members[3] > 0u) {
+                coopmat<float, gl_ScopeSubgroup, 16, 16,
+                        gl_MatrixUseAccumulator> lean;
+
+                coopMatLoad(lean, bias,
+                            shape.members[3] - 1u + expert * shape.rows
+                            + row0 + i * 16u, 0u,
+                            gl_CooperativeMatrixLayoutColumnMajor);
+                acc[i][j] += lean;
+            }
+#endif
+
             if (shape.apart > 0u) {
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
                         gl_MatrixUseAccumulator> gate;
@@ -2880,8 +2902,22 @@ void main() {
 
                 for (int e = 0; e < both.length(); ++e) {
                     float g = float (gate[e]);
-                    both[e] *= shape.table == 1u ? gaussian_tanh(g)
-                                                 : logistic_weighted(g);
+                    if (shape.table == 3u) {
+                        //  The clamped one, gpt-oss's: the gate held at
+                        //  a limit through the logistic at a slope, this
+                        //  arm held to the limit either way, plus one
+                        //  (combine.comp's third unit; a listed product's
+                        //  members[4] and [5] carry the two by their bits).
+                        float slope = uintBitsToFloat (shape.members[4]);
+                        float limit = uintBitsToFloat (shape.members[5]);
+                        float held = min (g, limit);
+                        float other = max (-limit, min (both[e], limit));
+                        both[e] = held / (1.0 + exp (-slope * held))
+                                  * (other + 1.0);
+                    } else {
+                        both[e] *= shape.table == 1u ? gaussian_tanh(g)
+                                                     : logistic_weighted(g);
+                    }
                     //  Held to the largest half before it is stored as
                     //  one: past it the next product reads an infinity.
                     both[e] = clamp (both[e], -65504.0, 65504.0);
