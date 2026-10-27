@@ -19579,6 +19579,24 @@ package body Tests.Inference_Cases is
       end;
    end One_State_Models_Keep_No_Ring;
 
+   --  Rounds from the block adapt as a draft model's do on a small dense
+   --  model and on a mixture of any size, and hold their length on a
+   --  dense model whose token reads Large_Dense_Bytes.
+   procedure Block_Rounds_Adapt_But_A_Large_Dense_Models
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package P renames Model_Runner.Draft_Policy;
+      Large : constant Float := P.Large_Dense_Bytes;
+   begin
+      Assert (P.Next_Adapts (0, Large * 0.9),
+              "a small dense model's block rounds hold their length");
+      Assert (P.Next_Adapts (256, Large * 2.0),
+              "a large mixture's block rounds hold their length");
+      Assert (not P.Next_Adapts (0, Large),
+              "a large dense model's block rounds adapt");
+   end Block_Rounds_Adapt_But_A_Large_Dense_Models;
+
    --  Nor is a draft looked for beside a model nothing drafts on: the
    --  plan was empty, but a paired draft was still found, loaded and
    --  counted against the device's budget, then never asked a token.
@@ -20663,6 +20681,10 @@ package body Tests.Inference_Cases is
         (T, One_State_Models_Keep_No_Ring'Access,
          "a model whose linear layers read one state keeps no ring, answers "
          & "as the straight run after one is asked, and drafts nothing");
+      Register_Routine
+        (T, Block_Rounds_Adapt_But_A_Large_Dense_Models'Access,
+         "rounds from the block adapt on a small dense model and a "
+         & "mixture, and hold their length on a large dense one");
       Register_Routine
         (T, A_Model_That_Never_Drafts_Seeks_No_Draft'Access,
          "a model nothing drafts on looks for no draft beside it");

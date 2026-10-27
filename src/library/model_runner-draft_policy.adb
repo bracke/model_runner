@@ -86,9 +86,16 @@ package body Model_Runner.Draft_Policy is
          then Request.Tokens else 0);
       Result.From_Context := Request.Lookup and then not Draft_Ready;
 
-      --  A draft model's rounds follow what the rounds before kept, unless
-      --  a length was named.
-      Result.Adapts := Draft_Ready and then not Request.Tokens_Set;
+      --  A draft model's rounds follow what the rounds before kept, and
+      --  the block's but a large dense model's (see Next_Adapts), unless a
+      --  length was named.
+      Result.Adapts :=
+        not Request.Tokens_Set
+        and then (Draft_Ready
+                  or else (Result.From_Next
+                           and then Next_Adapts
+                                      (L.Config (Prepared).Experts,
+                                       L.Token_Bytes (Prepared))));
 
       --  And where nothing drafts, a model large enough that a round pays
       --  -- a dense one of Next_Draft_Bytes a token, or a mixture -- drafts

@@ -25,6 +25,19 @@ package Model_Runner.Draft_Policy is
    Split_Next_Draft_Tokens : constant := 4;
    Store_Draft_Tokens      : constant := 3;
 
+   --  Whether rounds from the block follow what the rounds before kept,
+   --  as a draft model's do: where a token reads less than this, or the
+   --  model is a mixture. Unasked, a short prompt, tokens a second, held
+   --  at three against adapting from three: qwen3.5-4b 40.3-40.8 -> 44.3-
+   --  44.5, Qwen3.6-35B-A3B 39.9-40.2 -> 40.9-41.1; but Swift-1.5-Qwen3.8-
+   --  27B 13.2-13.3 -> 13.1-13.2 (level at 24,702 positions) and Underdog-
+   --  Saluki-27B 14.3-14.5 -> 13.8, whose longer rounds cost more of a
+   --  token than they keep.
+   Large_Dense_Bytes : constant Float := 6.0 * 1024.0 ** 3;
+
+   function Next_Adapts (Experts : Natural; Token_Bytes : Float) return Boolean
+   is (Experts > 0 or else Token_Bytes < Large_Dense_Bytes);
+
    --  What the caller asked of drafting.
    type Asked is record
       --  --draft-tokens, and whether it was named; 0 turns drafting off.
