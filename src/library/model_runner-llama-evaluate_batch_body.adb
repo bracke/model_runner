@@ -53,6 +53,11 @@ is
    KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
    KV_Width  : constant Element_Count := KV_Heads * Head_Size;
    V_Width   : constant Element_Count := KV_Heads * Value_Size;
+
+   --  And from one position's cached values to the next's: a value's
+   --  width, or a key's where the values are the keys' rows
+   --  (Values_In_Keys). The batch's own rows stay V_Width apart.
+   V_Stride  : constant Element_Count := Value_Stride (Item);
    Wide      : constant Element_Count := Heads * Head_Size;
    Blend     : constant Element_Count := Heads * Value_Size;
    Reserved  : constant Element_Count := Element_Count (Item.Committed);
@@ -1656,8 +1661,8 @@ begin
                      (if Item.Paged then Page_Value_Base (Item)
                       else Block_Base (Item)
                            + Cell_Of (Item, Natural (Index),
-                                      Reserved) * V_Width
-                           + Exact_Keys (Item) + V_Base),
+                                      Reserved) * V_Stride
+                           + Values_Front (Item) + V_Base),
                      Natural (Heads), Natural (Value_Size),
                      Settings.Group_Size,
                      --  The lowest and highest cached positions this
@@ -1678,8 +1683,8 @@ begin
                       else Block_Base (Item) + Base),
                      (if Item.Paged then Page_Value_Base (Item)
                       else Block_Base (Item)
-                           + Exact_Keys (Item) + V_Base),
-                     Natural (KV_Width), Natural (V_Width),
+                           + Values_Front (Item) + V_Base),
+                     Natural (KV_Width), Natural (V_Stride),
                      Scale, Settings.Attention_Cap,
                      Current.Attention_Out,
                      Feed_Gate (Current), Feed_Up (Current),
@@ -2183,7 +2188,7 @@ begin
                   V_Place : constant Element_Count :=
                     V_Base
                     + Cell_Of (Item, Natural (Index), Sits_At (Which))
-                      * V_Width;
+                      * V_Stride;
                begin
                   --  The same bias as the single-token path adds, on each
                   --  token of the batch. A batch that skipped it would
@@ -2443,8 +2448,8 @@ begin
                         Natural (Value_Size), Settings.Group_Size,
                         Natural (First_Step), Natural (Last_Step),
                         Seat_At + Base,
-                        Seat_At + Exact_Keys (Item) + V_Base,
-                        Natural (KV_Width), Natural (V_Width), Scale,
+                        Seat_At + Values_Front (Item) + V_Base,
+                        Natural (KV_Width), Natural (V_Stride), Scale,
                         Settings.Attention_Cap, Current.Attention_Out,
                         Current.Feed_Norm.all, Settings.Epsilon,
                         Current.Gate, Current.Up, Current.Down,
@@ -2473,7 +2478,7 @@ begin
                        (Item, Source, Query.all (0 .. Count * Wide - 1),
                         Heads, Head_Size, Value_Size,
                         First_Step, Last_Step,
-                        Base, V_Base, KV_Width, V_Width, Scale,
+                        Base, V_Base, KV_Width, V_Stride, Scale,
                         Attend.all (0 .. Count * Blend - 1), Usable,
                         Positions => Count, Window => Window_Here,
                         Sinks => Current.Sinks);
@@ -2626,7 +2631,7 @@ begin
                                 (Query.all (Q_At .. Q_At + Wide - 1),
                                  Item'Unchecked_Access.Keys.all,
                                  Item'Unchecked_Access.Values.all,
-                                 Base, V_Base, KV_Width, V_Width, Heads,
+                                 Base, V_Base, KV_Width, V_Stride, Heads,
                                  Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
                                  First_Cell, Last_Cell, Scale,
@@ -2640,7 +2645,7 @@ begin
                                 (Query.all (Q_At .. Q_At + Wide - 1),
                                  Item'Unchecked_Access.Half_Keys.all,
                                  Item'Unchecked_Access.Half_Values.all,
-                                 Base, V_Base, KV_Width, V_Width, Heads,
+                                 Base, V_Base, KV_Width, V_Stride, Heads,
                                  Head_Size, Value_Size,
                                  Element_Count (Settings.Group_Size),
                                  First_Cell, Last_Cell, Scale,
@@ -2686,7 +2691,7 @@ begin
                                        Query.all, Slot (Next, Wide), Wide,
                                        Item'Unchecked_Access.Keys.all,
                                        Item'Unchecked_Access.Values.all,
-                                       Base, V_Base, KV_Width, V_Width,
+                                       Base, V_Base, KV_Width, V_Stride,
                                        Head_Size, Value_Size,
                                        Element_Count (Settings.Group_Size),
                                        Heads, Firsts, Lasts, Queries, Scale,
@@ -2701,7 +2706,7 @@ begin
                                        Query.all, Slot (Next, Wide), Wide,
                                        Item'Unchecked_Access.Half_Keys.all,
                                        Item'Unchecked_Access.Half_Values.all,
-                                       Base, V_Base, KV_Width, V_Width,
+                                       Base, V_Base, KV_Width, V_Stride,
                                        Head_Size, Value_Size,
                                        Element_Count (Settings.Group_Size),
                                        Heads, Firsts, Lasts, Queries, Scale,
@@ -3148,7 +3153,7 @@ begin
                     Layer_Keys + Cell * KV_Width;
 
                   V_At : constant Element_Count :=
-                    Layer_Vals + Cell * V_Width;
+                    Layer_Vals + Cell * V_Stride;
                begin
                   if Item.Paged and then Item.Held in Exact | Halved then
                      Read_Pages_Layer
@@ -3169,7 +3174,7 @@ begin
                           (Base .. Base + Count * KV_Width - 1),
                         Read);
 
-                     if Read then
+                     if Read and then not Item.Values_In_Keys then
                         Model_Runner.Backend.Device.Get_Cache
                           (Block_Base (Item) + Item.Keys.all'Length
                            + V_At,

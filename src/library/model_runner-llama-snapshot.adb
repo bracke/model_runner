@@ -10,8 +10,17 @@ is
    Held     : constant B.Byte_Count := B.Byte_Count (Item.Committed);
    KV_Width : constant B.Byte_Count :=
      B.Byte_Count (Settings.KV_Heads * Settings.Head_Size);
+   --  A position's values as stored: none where they are the keys' rows.
    V_Width  : constant B.Byte_Count :=
-     B.Byte_Count (Settings.KV_Heads * Settings.Value_Size);
+     (if Item.Values_In_Keys then 0
+      else B.Byte_Count (Settings.KV_Heads * Settings.Value_Size));
+
+   --  And the block past the stack's, which keeps its own values whole
+   --  where it keeps its own rows.
+   Block_V  : constant B.Byte_Count :=
+     (if Item.Next_Keys /= null
+      then B.Byte_Count (Settings.KV_Heads * Settings.Value_Size)
+      else V_Width);
    Layers   : constant B.Byte_Count := B.Byte_Count (Settings.Layers);
 
    --  Where each layer's run begins, and how long it is. A layer that
@@ -65,7 +74,7 @@ is
    --  block's rows as they are.
    Block : constant B.Byte_Count :=
      (if Drafts_Next (Item)
-      then 8 + Held * (KV_Width + V_Width) * 4
+      then 8 + Held * (KV_Width + Block_V) * 4
       else 0);
 
    --  Whether the caches go as halves: a session holding halves, or an
@@ -300,7 +309,8 @@ begin
    Put_Count (Cache_Precision'Pos (Item.Held)
               + (if Item.Held_Values /= Item.Held
                  then 8 * Cache_Precision'Pos (Item.Held_Values) else 0)
-              + (if Narrow then Narrow_Elements else 0));
+              + (if Narrow then Narrow_Elements else 0)
+              + (if Item.Values_In_Keys then Values_In_Keys_Flag else 0));
 
    for Index in 0 .. Item.Committed - 1 loop
       Put_Count (Natural (Item.History.all (Index)));
@@ -460,7 +470,7 @@ begin
          for Index in 0 .. Element_Count (Held * KV_Width) - 1 loop
             Put_Bits (N.Bits (Keys.all (Base + Index)));
          end loop;
-         for Index in 0 .. Element_Count (Held * V_Width) - 1 loop
+         for Index in 0 .. Element_Count (Held * Block_V) - 1 loop
             Put_Bits (N.Bits (Values.all (V_Base + Index)));
          end loop;
       end;

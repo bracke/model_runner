@@ -137,6 +137,14 @@ package body Model_Runner.Llama is
    function Values_At (Item : Session; Layer : Natural) return Element_Count
    is (if Item.At_Values = null then 0 else Item.At_Values.all (Layer));
 
+   --  From one position's values to the next's: a value's width, or a
+   --  key's where the values are the keys' rows (Values_In_Keys).
+   function Value_Stride (Item : Session) return Element_Count
+   is (Element_Count
+         (if Item.Values_In_Keys
+          then Item.Owner.Settings.KV_Heads * Item.Owner.Settings.Head_Size
+          else Item.Owner.Settings.KV_Heads * Item.Owner.Settings.Value_Size));
+
    function Rows_At (Item : Session; Layer : Natural) return Element_Count
    is (if Item.At_Rows = null then 0 else Item.At_Rows.all (Layer));
 
@@ -4863,6 +4871,7 @@ package body Model_Runner.Llama is
    function Block_Span_Of (Item : Session) return Element_Count
    is (if Item.Held = Exact
        then (if Item.Keys = null or else Item.Values = null then 0
+             elsif Item.Values_In_Keys then Item.Keys.all'Length
              else Item.Keys.all'Length + Item.Values.all'Length)
        elsif Item.Held in Eighth | Fourth then Packed_Layout (Item).Span
        else 0);
@@ -5073,7 +5082,10 @@ package body Model_Runner.Llama is
                         Written);
                   end if;
 
-                  if Written and then Held > 0 then
+                  --  Values in the keys' rows went with them.
+                  if Written and then Held > 0
+                    and then not Item.Values_In_Keys
+                  then
                      Model_Runner.Backend.Device.Put_Cache
                        (Base + Item.Keys.all'Length
                         + Values_At (Item.all, Layer),
@@ -5195,11 +5207,14 @@ package body Model_Runner.Llama is
                     (At_Value => Keys_At (Item.all, Layer),
                      Count    => Held * KV_Width);
 
-                  Last := Last + 1;
-                  Runs (Last) :=
-                    (At_Value =>
-                       Item.Keys.all'Length + Values_At (Item.all, Layer),
-                     Count    => Held * V_Width);
+                  --  Values in the keys' rows move with them.
+                  if not Item.Values_In_Keys then
+                     Last := Last + 1;
+                     Runs (Last) :=
+                       (At_Value =>
+                          Item.Keys.all'Length + Values_At (Item.all, Layer),
+                        Count    => Held * V_Width);
+                  end if;
                end if;
             end;
          end loop;
@@ -5463,7 +5478,7 @@ package body Model_Runner.Llama is
               (Item, Base + Into * KV_Width, Keys_Base + Low * KV_Width,
                Span * KV_Width, Keys => True, Ok => Written);
 
-            if Written then
+            if Written and then not Item.Values_In_Keys then
                Put_Host_Rows
                  (Item,
                   Base + Element_Count (Page_Positions) * KV_Width
@@ -5523,7 +5538,7 @@ package body Model_Runner.Llama is
                Keys_Base + Lo * KV_Width, Count * KV_Width,
                Keys => True, Ok => Read);
 
-            if Read then
+            if Read and then not Item.Values_In_Keys then
                Get_Host_Rows
                  (Item, Base + P * KV_Width + (Lo - Low) * V_Width,
                   Vals_Base + Lo * V_Width, Count * V_Width,
@@ -5702,7 +5717,8 @@ package body Model_Runner.Llama is
    is (Element_Count
          (Item.Owner.Settings.KV_Heads
           * (Item.Owner.Settings.Head_Size
-             + Item.Owner.Settings.Value_Size)));
+             + (if Item.Values_In_Keys then 0
+                else Item.Owner.Settings.Value_Size))));
 
    --  Give every page a session holds back to the pool: its slots freed,
    --  the count of pages in use brought down, and where the buffer has been
@@ -5828,11 +5844,15 @@ package body Model_Runner.Llama is
       pragma Unreferenced (Dealt);
    end Reserve_Ahead;
 
-   --  Where a page's values begin inside it: after its positions' keys.
+   --  Where a page's values begin inside it: after its positions' keys,
+   --  or past the first key's rotated slice where they are the keys' rows.
    function Page_Value_Base (Item : Session) return Element_Count
-   is (Element_Count (Page_Positions)
-       * Element_Count (Item.Owner.Settings.KV_Heads
-                        * Item.Owner.Settings.Head_Size));
+   is (if Item.Values_In_Keys
+       then Element_Count (Item.Owner.Settings.Head_Size
+                           - Item.Owner.Settings.Value_Size)
+       else Element_Count (Page_Positions)
+            * Element_Count (Item.Owner.Settings.KV_Heads
+                             * Item.Owner.Settings.Head_Size));
 
    ------------------
    -- Holds_Block --
@@ -6163,7 +6183,7 @@ package body Model_Runner.Llama is
                     (Block_Base (Item) + Base,
                      Item.Keys.all (Base .. Base + Span * KV_Width - 1), Read);
 
-                  if Read then
+                  if Read and then not Item.Values_In_Keys then
                      Model_Runner.Backend.Device.Get_Cache
                        (Block_Base (Item) + Item.Keys.all'Length + V_At,
                         Item.Values.all (V_At .. V_At + Span * V_Width - 1),
@@ -6231,7 +6251,7 @@ package body Model_Runner.Llama is
          Model_Runner.Backend.Device.Put_Cache
            (Base + At_Key, Key_Row, Resident);
 
-         if Resident then
+         if Resident and then not Item.Values_In_Keys then
             --  The values follow the keys in the device's copy, which is one
             --  buffer because attention wants four arrays and the pipeline
             --  layout carries three.
@@ -6322,6 +6342,12 @@ package body Model_Runner.Llama is
    --  @return The keys' element count, or zero.
    function Exact_Keys (Item : Session) return Element_Count
    is (if Item.Keys = null then 0 else Item.Keys.all'Length);
+
+   --  Where a session's exact values begin on the device, before a layer's
+   --  own place (Values_At): past the keys, or at their front where the
+   --  values are the keys' rows.
+   function Values_Front (Item : Session) return Element_Count
+   is (if Item.Values_In_Keys then 0 else Exact_Keys (Item));
 
    --  A packed session's block on the device, for this layer's rows: the
    --  rows' bases in bytes and the scales' in floats, each from where the
@@ -6694,7 +6720,7 @@ package body Model_Runner.Llama is
            (Query, Natural (Heads), Natural (Head_Size), Natural (Value_Size),
             Source.Settings.Group_Size, Natural (First), Natural (Last),
             Block_Base (Item) + K_Base,
-            Block_Base (Item) + Item.Keys.all'Length + V_Base,
+            Block_Base (Item) + Values_Front (Item) + V_Base,
             Natural (KV_Width), Natural (V_Width),
             Scale, Source.Settings.Attention_Cap, Target, Took,
             Positions => Natural (Positions), Window => Window,
@@ -7954,6 +7980,11 @@ package body Model_Runner.Llama is
    --  refuses such a file as another precision.
    Narrow_Elements : constant := 64;
 
+   --  And beside it, a session whose values are its keys' rows
+   --  (Values_In_Keys): its runs hold no values, and a file of one is
+   --  adopted only by another.
+   Values_In_Keys_Flag : constant := 128;
+
    ------------------
    -- Fingerprint --
    ------------------
@@ -8258,8 +8289,8 @@ package body Model_Runner.Llama is
          * A.To_Checked (Interfaces.Unsigned_64 (Settings.Head_Size))
          * A.To_Checked (Cache_Element_Sixteenths (Cache))
          + A.To_Checked (Positions)
-           * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
-           * A.To_Checked (Interfaces.Unsigned_64 (Settings.Value_Size))
+           * A.To_Checked
+               (Interfaces.Unsigned_64 (Stored_Values (Settings, Cache, Values)))
            * A.To_Checked (Cache_Element_Sixteenths (Values_Held (Cache, Values))))
         / A.To_Checked (Interfaces.Unsigned_64'(16));
    begin
@@ -8307,7 +8338,8 @@ package body Model_Runner.Llama is
       subtype U64 is Interfaces.Unsigned_64;
 
       Row   : constant U64 :=
-        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size + Settings.Value_Size);
+        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size)
+        + U64 (Stored_Values (Settings, Held));
       Sinks : constant U64 := U64 (Sink_Footprint (Settings));
       Cells : U64 := 0;
    begin
@@ -8481,7 +8513,8 @@ package body Model_Runner.Llama is
       subtype U64 is Interfaces.Unsigned_64;
 
       Row   : constant U64 :=
-        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size + Settings.Value_Size);
+        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size)
+        + U64 (Stored_Values (Settings, Held));
       Sinks : constant U64 := U64 (Sink_Footprint (Settings));
 
       --  The widest layer's positions.
@@ -8702,6 +8735,13 @@ package body Model_Runner.Llama is
       Item.Paged := False;
       Item.Paged_In := False;
 
+      --  Values that are the keys' rows are the keys' arrays, freed with
+      --  them.
+      if Item.Values_In_Keys then
+         Item.Values := null;
+         Item.Half_Values := null;
+         Item.Values_In_Keys := False;
+      end if;
       T.Free (Item.Keys);
       T.Free (Item.Values);
       B.Free (Item.Byte_Keys);

@@ -905,6 +905,39 @@ package Model_Runner.Llama is
      (Cache : Cache_Precision; Values : Value_Precision) return Boolean
    is (Values = Same_As_Keys or else Cache in Eighth | Fourth);
 
+   --  Whether a session keeps its values in its keys' rows: a latent read
+   --  absorbed (Configuration.Latent_Attention), whose value is its key
+   --  past the rotated slice, in a cache whose values are held as its
+   --  keys are and neither packed.
+   --
+   --  @param Settings The model's configuration.
+   --  @param Cache The keys' storage.
+   --  @param Values The values' choice.
+   --  @return True where the values are not stored apart.
+   function Values_In_Keys
+     (Settings : Configuration;
+      Cache    : Cache_Precision;
+      Values   : Value_Precision := Same_As_Keys) return Boolean
+   is (Settings.Latent_Attention
+       and then Values = Same_As_Keys
+       and then Cache in Exact | Halved
+       and then Settings.KV_Heads = 1
+       and then Settings.Head_Size > Settings.Value_Size);
+
+   --  The elements a position's values take in their own storage: none
+   --  where they are the keys' rows.
+   --
+   --  @param Settings The model's configuration.
+   --  @param Cache The keys' storage.
+   --  @param Values The values' choice.
+   --  @return Elements a position's values are stored in.
+   function Stored_Values
+     (Settings : Configuration;
+      Cache    : Cache_Precision;
+      Values   : Value_Precision := Same_As_Keys) return Natural
+   is (if Values_In_Keys (Settings, Cache, Values) then 0
+       else Settings.KV_Heads * Settings.Value_Size);
+
    --  The identifier a caller names a cache precision by.
    --
    --  @param Item Precision to name.
@@ -3397,6 +3430,14 @@ private
       --  where the host's copy is exact and the device attends out of its
       --  own half-precision copy: what Precision reports as Halved.
       Device_Halves : Boolean := False;
+
+      --  Whether the values are the keys' own rows: a latent read absorbed,
+      --  whose value is its key past the rotated slice, kept once. Values
+      --  and Half_Values are then Keys and Half_Keys, a layer's values
+      --  begin that slice into its keys (At_Values), and a position's
+      --  value is a key's width from the last (Value_Stride). Nothing is
+      --  stored for the values, and a copy of the keys is one of them.
+      Values_In_Keys : Boolean := False;
       Keys       : Model_Runner.Tensors.Real_Array_Access := null;
       Values     : Model_Runner.Tensors.Real_Array_Access := null;
       Half_Keys  : Model_Runner.Tensors.Half_Array_Access := null;

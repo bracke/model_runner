@@ -19,6 +19,10 @@ is
    --  The values are their own width, so they are their own cache. The
    --  two were one number until a model stated them apart.
    V_Width   : constant Element_Count := KV_Heads * Value_Size;
+
+   --  And from one position's values to the next's: a value's width, or a
+   --  key's where the values are the keys' rows (Values_In_Keys).
+   V_Stride  : constant Element_Count := Value_Stride (Item);
    Reserved  : constant Element_Count := Element_Count (Item.Committed);
    Scale     : constant Real := Score_Scale (Settings);
 
@@ -425,7 +429,7 @@ is
                   Blend_Exact_Four
                     (Size, Item.Query.all, Item.Query.all'First, Head_Size,
                      Item.Keys.all, Item.Values.all,
-                     Share.Base, Share.V_Base, KV_Width, V_Width,
+                     Share.Base, Share.V_Base, KV_Width, V_Stride,
                      Head_Size, Value_Size, Group_Size, Heads,
                      Earliest, Same, Same, Scale, Settings.Attention_Cap,
                      Settings.Max_Bias, null, Head, Head,
@@ -439,7 +443,7 @@ is
                   Blend_Halved_Four
                     (Size, Item.Query.all, Item.Query.all'First, Head_Size,
                      Item.Half_Keys.all, Item.Half_Values.all,
-                     Share.Base, Share.V_Base, KV_Width, V_Width,
+                     Share.Base, Share.V_Base, KV_Width, V_Stride,
                      Head_Size, Value_Size, Group_Size, Heads,
                      Earliest, Same, Same, Scale, Settings.Attention_Cap,
                      Settings.Max_Bias, null, Head, Head,
@@ -452,7 +456,7 @@ is
                elsif Item.Held = Exact then
                   Blend_Exact
                     (Item.Query.all, Item.Keys.all, Item.Values.all,
-                     Share.Base, Share.V_Base, KV_Width, V_Width, Heads,
+                     Share.Base, Share.V_Base, KV_Width, V_Stride, Heads,
                      Head_Size, Value_Size, Group_Size,
                      Share.Earliest, Share.Upto, Scale,
                      Settings.Attention_Cap, Settings.Max_Bias, Share.Upto,
@@ -462,7 +466,7 @@ is
                   Blend_Halved
                     (Item.Query.all, Item.Half_Keys.all,
                      Item.Half_Values.all,
-                     Share.Base, Share.V_Base, KV_Width, V_Width, Heads,
+                     Share.Base, Share.V_Base, KV_Width, V_Stride, Heads,
                      Head_Size, Value_Size, Group_Size,
                      Share.Earliest, Share.Upto, Scale,
                      Settings.Attention_Cap, Settings.Max_Bias, Share.Upto,
@@ -749,7 +753,7 @@ begin
            Rows_At (Item, Natural (Index));
          V_Base  : constant Element_Count :=
            Values_At (Item, Natural (Index));
-         V_Slot  : constant Element_Count := V_Base + Cell * V_Width;
+         V_Slot  : constant Element_Count := V_Base + Cell * V_Stride;
 
          --  Whether this position reached the device's own cache, which
          --  is what says attention may be done there. False leaves
@@ -1159,7 +1163,7 @@ begin
                       else Block_Base (Item) + Slot),
                      (if Item.Paged then Page_Value_Base (Item)
                       else Block_Base (Item)
-                           + Exact_Keys (Item) + V_Slot),
+                           + Values_Front (Item) + V_Slot),
                      Natural (Heads), Natural (Value_Size),
                      Settings.Group_Size,
                      Natural (Cell_Of (Item, Natural (Index),
@@ -1170,8 +1174,8 @@ begin
                       else Block_Base (Item) + Base),
                      (if Item.Paged then Page_Value_Base (Item)
                       else Block_Base (Item)
-                           + Exact_Keys (Item) + V_Base),
-                     Natural (KV_Width), Natural (V_Width),
+                           + Values_Front (Item) + V_Base),
+                     Natural (KV_Width), Natural (V_Stride),
                      Scale, Settings.Attention_Cap,
                      Current.Attention_Out,
                      Current.Gate, Current.Up, Current.Down,
@@ -1679,8 +1683,8 @@ begin
                      Block_Base (Item) + Base,
                      --  A packed session has no exact rows for the
                      --  values to follow; its step reads neither base.
-                     Block_Base (Item) + Exact_Keys (Item) + V_Base,
-                     Natural (KV_Width), Natural (V_Width), Scale,
+                     Block_Base (Item) + Values_Front (Item) + V_Base,
+                     Natural (KV_Width), Natural (V_Stride), Scale,
                      Settings.Attention_Cap, Current.Attention_Out,
                      Current.Feed_Norm.all, Settings.Epsilon,
                      Current.Gate, Current.Up, Current.Down,
@@ -1702,7 +1706,7 @@ begin
                         Value_Size,
                         Cell_Of (Item, Natural (Index), First), Cell,
                         Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable,
+                        V_Stride, Scale, Item.Attention.all, Usable,
                         Sinks => Current.Sinks);
                   end if;
                elsif Resident then
@@ -1716,8 +1720,8 @@ begin
                      Natural (Value_Size), Settings.Group_Size,
                      Natural (Cell_Of (Item, Natural (Index), First)),
                      Natural (Cell), Base,
-                     Exact_Keys (Item) + V_Base,
-                     Natural (KV_Width), Natural (V_Width), Scale,
+                     Values_Front (Item) + V_Base,
+                     Natural (KV_Width), Natural (V_Stride), Scale,
                      Settings.Attention_Cap, Current.Attention_Out,
                      Item.Normalized, Projected,
                      Max_Bias => Settings.Max_Bias,
@@ -1733,7 +1737,7 @@ begin
                         Value_Size,
                         Cell_Of (Item, Natural (Index), First), Cell,
                         Base, V_Base, KV_Width,
-                        V_Width, Scale, Item.Attention.all, Usable,
+                        V_Stride, Scale, Item.Attention.all, Usable,
                         Sinks => Current.Sinks);
                   end if;
                end if;
@@ -2023,7 +2027,7 @@ begin
 
                At_Val : constant Element_Count :=
                  Values_At (Item, Natural (Index))
-                 + Cell_Of (Item, Natural (Index), Reserved) * V_Width;
+                 + Cell_Of (Item, Natural (Index), Reserved) * V_Stride;
 
                Read : Boolean;
             begin
@@ -2045,7 +2049,7 @@ begin
                     (Block_Base (Item) + At_Key,
                      Item.Keys.all (At_Key .. At_Key + KV_Width - 1), Read);
 
-                  if Read then
+                  if Read and then not Item.Values_In_Keys then
                      Model_Runner.Backend.Device.Get_Cache
                        (Block_Base (Item) + Item.Keys.all'Length + At_Val,
                         Item.Values.all (At_Val .. At_Val + V_Width - 1),

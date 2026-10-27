@@ -294,14 +294,34 @@ begin
          return;
       end if;
 
+      --  A latent read absorbed keeps its values in its keys' rows: each
+      --  layer's values begin past the rotated slice of its keys, and the
+      --  values' arrays are the keys'. See Values_In_Keys.
+      Item.Values_In_Keys := Values_In_Keys (Settings, Item.Held, Values);
+      if Item.Values_In_Keys then
+         for Layer in Item.At_Values.all'Range loop
+            Item.At_Values.all (Layer) :=
+              Item.At_Keys.all (Layer)
+              + Element_Count (Settings.Head_Size - Settings.Value_Size);
+         end loop;
+      end if;
+
       case Item.Held is
          when Exact =>
             T.Allocate (Rows * KV, Item.Keys);
-            T.Allocate (Rows * KV_Out, Item.Values);
+            if Item.Values_In_Keys then
+               Item.Values := Item.Keys;
+            else
+               T.Allocate (Rows * KV_Out, Item.Values);
+            end if;
 
          when Halved =>
             T.Allocate (Rows * KV, Item.Half_Keys);
-            T.Allocate (Rows * KV_Out, Item.Half_Values);
+            if Item.Values_In_Keys then
+               Item.Half_Values := Item.Half_Keys;
+            else
+               T.Allocate (Rows * KV_Out, Item.Half_Values);
+            end if;
 
          when Eighth | Fourth =>
             --  The bytes, and the scales: one a row a position a layer
@@ -344,7 +364,9 @@ begin
             Advise (Item.Keys.all (Item.Keys.all'First)'Address,
                     Storage_Count (Item.Keys.all'Length) * 4);
          end if;
-         if Item.Values /= null and then Item.Values.all'Length > 0 then
+         if Item.Values /= null and then Item.Values.all'Length > 0
+           and then not Item.Values_In_Keys
+         then
             Advise (Item.Values.all (Item.Values.all'First)'Address,
                     Storage_Count (Item.Values.all'Length) * 4);
          end if;
@@ -355,6 +377,7 @@ begin
          end if;
          if Item.Half_Values /= null
            and then Item.Half_Values.all'Length > 0
+           and then not Item.Values_In_Keys
          then
             Advise
               (Item.Half_Values.all (Item.Half_Values.all'First)'Address,

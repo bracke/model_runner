@@ -15278,6 +15278,107 @@ package body Tests.Inference_Cases is
       end loop;
    end Absorbed_Latent_Answers_As_Expanded;
 
+   --  A latent read absorbed keeps its values in its keys' rows -- the
+   --  value is the key past the rotated slice -- and stores none apart.
+   --  A snapshot of such a session, adopted into a fresh one, answers the
+   --  next token exactly as the session would have; and a shift, which
+   --  moves the keys and with them the values, answers as the expanded
+   --  reading does after the same shift.
+   procedure Absorbed_Latent_Keeps_Values_In_Keys
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      function Worst (Left, Right : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in Left'Range loop
+            Most := N.Real'Max (Most, abs (Left (Index) - Right (Index)));
+         end loop;
+         return Most;
+      end Worst;
+
+      --  After the prompt shifted (the first kept, the next two dropped),
+      --  the next token's logits, read absorbed or not; and, absorbed,
+      --  the next token straight on and after a snapshot adopted.
+      procedure Answer
+        (Absorbed : Boolean; Shifted, Direct, Restored : out Logit_Vector)
+      is
+         Image  : B.Byte_Array_Access;
+         Kept   : B.Byte_Array_Access;
+      begin
+         Direct := [others => 0.0];
+         Restored := [others => 0.0];
+         Tiny_Model.Build (Image, Kind => Tiny_Model.Deepseek2);
+         L.Absorb_Latent := Absorbed;
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+            Ignore : Logit_Vector;
+         begin
+            Start (Under);
+            L.Absorb_Latent := False;
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            Assert (L.Values_In_Keys
+                      (L.Config (Under.Ready), L.Precision (Live)) = Absorbed,
+                    "the values were not kept as the reading says");
+            L.Evaluate_Batch (Live, Under.Ready, Prompt, Ignore, Status => Status);
+            Assert (E.Is_Ok (Status), "the batch failed");
+
+            if Absorbed then
+               L.Snapshot (Live, Under.Ready, Kept, Status);
+               Assert (E.Is_Ok (Status), "the session did not snapshot");
+               L.Evaluate (Live, Under.Ready, 6, Direct, Status => Status);
+               Assert (E.Is_Ok (Status), "the token after the snapshot failed");
+               L.Close (Live);
+
+               L.Open (Live, Under.Ready, Status => Status);
+               L.Adopt (Live, Under.Ready, Kept.all, Status);
+               Assert (E.Is_Ok (Status),
+                       "the snapshot was not adopted: "
+                       & E.Error_Code'Image (Status.Code));
+               L.Evaluate (Live, Under.Ready, 6, Restored, Status => Status);
+               Assert (E.Is_Ok (Status), "the token after adopting failed");
+               L.Close (Live);
+               B.Free (Kept);
+
+               L.Open (Live, Under.Ready, Status => Status);
+               L.Evaluate_Batch (Live, Under.Ready, Prompt, Ignore, Status => Status);
+            end if;
+
+            L.Shift (Live, Under.Ready, Keep => 1, Drop => 2, Status => Status);
+            Assert (E.Is_Ok (Status), "the shift was refused");
+            L.Evaluate (Live, Under.Ready, 6, Shifted, Status => Status);
+            Assert (E.Is_Ok (Status), "the token after the shift failed");
+            L.Close (Live);
+         end;
+         B.Free (Image);
+      exception
+         when others =>
+            L.Absorb_Latent := False;
+            raise;
+      end Answer;
+
+      Expanded_Shift, Absorbed_Shift, Direct, Restored : Logit_Vector;
+      Unused_Direct, Unused_Restored : Logit_Vector;
+   begin
+      Answer (False, Expanded_Shift, Unused_Direct, Unused_Restored);
+      Answer (True, Absorbed_Shift, Direct, Restored);
+
+      Assert (Worst (Direct, Restored) = 0.0,
+              "an adopted snapshot of an absorbed latent answers otherwise, by"
+              & N.Real'Image (Worst (Direct, Restored)));
+      Assert (Worst (Expanded_Shift, Absorbed_Shift) < 1.0E-4,
+              "an absorbed latent shifted answers otherwise than the heads "
+              & "shifted, by" & N.Real'Image (Worst (Expanded_Shift, Absorbed_Shift)));
+   end Absorbed_Latent_Keeps_Values_In_Keys;
+
    procedure Baichuan_At_Forty_Layers_Turns_To_Alibi
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -20871,6 +20972,10 @@ package body Tests.Inference_Cases is
         (T, Absorbed_Latent_Answers_As_Expanded'Access,
          "deepseek2 read absorbed answers as read a head at a time, a "
          & "token at a time and as a batch");
+      Register_Routine
+        (T, Absorbed_Latent_Keeps_Values_In_Keys'Access,
+         "deepseek2 read absorbed keeps its values in its keys' rows: a "
+         & "snapshot adopted answers exactly, a shift as the heads shifted");
       Register_Routine
         (T, Sigmoid_Mixture_Chooses_By_Its_Bias'Access,
          "a sigmoid-gated mixture chooses its experts by the selection bias "

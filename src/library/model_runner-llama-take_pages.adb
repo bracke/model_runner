@@ -86,7 +86,8 @@ begin
 
    V_Width := Element_Count (Item.Owner.Settings.KV_Heads
                              * Item.Owner.Settings.Value_Size);
-   KV_Width := Page_Row (Item.all) - V_Width;
+   KV_Width := Page_Row (Item.all)
+               - (if Item.Values_In_Keys then 0 else V_Width);
 
    --  Positions a call on the processor wrote while the session kept its
    --  pages are owed to them (Device_Behind). A note at or past what is

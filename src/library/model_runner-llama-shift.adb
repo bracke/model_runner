@@ -213,16 +213,21 @@ begin
                      elsif Item.Held = Exact then
                         Item.Keys.all (Into .. Into + KV_Width - 1) :=
                           Item.Key_Row.all (0 .. KV_Width - 1);
-                        Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
-                          Item.Values.all (V_From .. V_From + V_Width - 1);
+                        --  Values in the keys' rows moved with them.
+                        if not Item.Values_In_Keys then
+                           Item.Values.all (V_Into .. V_Into + V_Width - 1) :=
+                             Item.Values.all (V_From .. V_From + V_Width - 1);
+                        end if;
                      else
                         Model_Runner.Kernels.To_Halves
                           (Item.Key_Row.all (0 .. KV_Width - 1),
                            Item.Half_Keys.all (Into .. Into + KV_Width - 1));
-                        for Offset in 0 .. V_Width - 1 loop
-                           Item.Half_Values.all (V_Into + Offset) :=
-                             Item.Half_Values.all (V_From + Offset);
-                        end loop;
+                        if not Item.Values_In_Keys then
+                           for Offset in 0 .. V_Width - 1 loop
+                              Item.Half_Values.all (V_Into + Offset) :=
+                                Item.Half_Values.all (V_From + Offset);
+                           end loop;
+                        end if;
                      end if;
                   end if;
                end;
@@ -275,8 +280,10 @@ begin
                   Settings.Pairing, Backwards => True);
                Keys.all (Into .. Into + KV_Width - 1) :=
                  Item.Key_Row.all (0 .. KV_Width - 1);
-               Values.all (V_Into .. V_Into + V_Width - 1) :=
-                 Values.all (V_From .. V_From + V_Width - 1);
+               if Own or else not Item.Values_In_Keys then
+                  Values.all (V_Into .. V_Into + V_Width - 1) :=
+                    Values.all (V_From .. V_From + V_Width - 1);
+               end if;
             end;
          end loop;
       end;
@@ -297,7 +304,7 @@ begin
          Model_Runner.Backend.Device.Put_Cache
            (Block_Base (Item), Item.Keys.all, Sent);
 
-         if Sent then
+         if Sent and then not Item.Values_In_Keys then
             Model_Runner.Backend.Device.Put_Cache
               (Block_Base (Item) + Item.Keys.all'Length,
                Item.Values.all, Sent);

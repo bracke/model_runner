@@ -150,7 +150,8 @@ begin
             Position : constant Natural := First + Natural (I);
             Cell     : constant Element_Count := Element_Count (Position);
             Slot     : constant Element_Count := Base + Cell * KV_Width;
-            V_Slot   : constant Element_Count := V_Base + Cell * V_Width;
+            V_Slot   : constant Element_Count :=
+              V_Base + Cell * (if Own then V_Width else Value_Stride (Item));
             K_At     : constant Element_Count := Row (Keyed, I, KV_Width);
             V_At     : constant Element_Count := Row (Valued, I, V_Width);
          begin

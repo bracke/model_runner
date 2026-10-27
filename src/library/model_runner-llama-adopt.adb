@@ -11,8 +11,17 @@ is
 
    KV_Width : constant Element_Count :=
      Element_Count (Settings.KV_Heads * Settings.Head_Size);
+   --  A position's values as stored: none where they are the keys' rows.
    V_Width  : constant Element_Count :=
-     Element_Count (Settings.KV_Heads * Settings.Value_Size);
+     (if Item.Values_In_Keys then 0
+      else Element_Count (Settings.KV_Heads * Settings.Value_Size));
+
+   --  And the block past the stack's, which keeps its own values whole
+   --  where it keeps its own rows.
+   Block_V  : constant Element_Count :=
+     (if Item.Next_Keys /= null
+      then Element_Count (Settings.KV_Heads * Settings.Value_Size)
+      else V_Width);
 
    At_Byte : B.Byte_Count := 0;
    Trouble : Boolean := False;
@@ -282,7 +291,13 @@ begin
          Refuse (E.Lifecycle_Cache_Mismatched, "another context");
       end if;
 
-      Narrow := Packed >= Narrow_Elements;
+      Narrow := Packed mod Values_In_Keys_Flag >= Narrow_Elements;
+
+      if not Trouble
+        and then (Packed >= Values_In_Keys_Flag) /= Item.Values_In_Keys
+      then
+         Refuse (E.Lifecycle_Cache_Mismatched, "another precision");
+      end if;
 
       if not Trouble
         and then Packed mod Narrow_Elements
@@ -506,7 +521,7 @@ begin
                   end if;
                end;
             end loop;
-            for Index in 0 .. Held * V_Width - 1 loop
+            for Index in 0 .. Held * Block_V - 1 loop
                declare
                   Value : constant Real := N.From_Bits (Get_Bits);
                begin

@@ -28,6 +28,8 @@ is
       Keys   : Model_Runner.Tensors.Real_Array_Access := null;
       Values : Model_Runner.Tensors.Real_Array_Access := null;
       Base, V_Base, First, Cell : Element_Count := 0;
+      --  From one position's values to the next's; see Value_Stride.
+      V_Stride : Element_Count := 0;
       Ok     : Boolean := True;
    end record;
 
@@ -45,7 +47,7 @@ is
    begin
       Blend_Exact
         (Item.Query.all, Share.Keys.all, Share.Values.all,
-         Share.Base, Share.V_Base, KV_Width, V_Width, Heads, Head_Size,
+         Share.Base, Share.V_Base, KV_Width, Share.V_Stride, Heads, Head_Size,
          Value_Size, Element_Count (Settings.Group_Size),
          First => Share.First, Last => Share.Cell, Scale => Scale,
          Cap => Settings.Attention_Cap, Max_Bias => Settings.Max_Bias,
@@ -102,7 +104,11 @@ begin
       V_Base  : constant Element_Count := (if Own then 0 else Values_At (Item, Layer_Index));
       Cell    : constant Element_Count := Element_Count (Position);
       Slot    : constant Element_Count := Base + Cell * KV_Width;
-      V_Slot  : constant Element_Count := V_Base + Cell * V_Width;
+      --  The block's own values are a value apart; the stack's, where it
+      --  keeps them, as the session keeps them.
+      V_Stride : constant Element_Count :=
+        (if Own then V_Width else Value_Stride (Item));
+      V_Slot  : constant Element_Count := V_Base + Cell * V_Stride;
       Usable  : Boolean := True;
 
       --  Whether the block's queries carry a gate a head, as a hybrid's
@@ -202,6 +208,7 @@ begin
          Share.Values := Values;
          Share.Base := Base;
          Share.V_Base := V_Base;
+         Share.V_Stride := V_Stride;
          Share.First :=
            (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0);
          Share.Cell := Cell;

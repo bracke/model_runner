@@ -85,11 +85,14 @@ begin
                           Item.Keys.all
                             (Keys_Base + From * KV_Width
                              .. Keys_Base + (From + Moved) * KV_Width - 1);
-                        Item.Values.all
-                          (Vals_Base .. Vals_Base + Moved * V_Width - 1) :=
-                          Item.Values.all
-                            (Vals_Base + From * V_Width
-                             .. Vals_Base + (From + Moved) * V_Width - 1);
+                        --  Values in the keys' rows moved with them.
+                        if not Item.Values_In_Keys then
+                           Item.Values.all
+                             (Vals_Base .. Vals_Base + Moved * V_Width - 1) :=
+                             Item.Values.all
+                               (Vals_Base + From * V_Width
+                                .. Vals_Base + (From + Moved) * V_Width - 1);
+                        end if;
 
                      when Halved =>
                         Item.Half_Keys.all
@@ -97,11 +100,13 @@ begin
                           Item.Half_Keys.all
                             (Keys_Base + From * KV_Width
                              .. Keys_Base + (From + Moved) * KV_Width - 1);
-                        Item.Half_Values.all
-                          (Vals_Base .. Vals_Base + Moved * V_Width - 1) :=
-                          Item.Half_Values.all
-                            (Vals_Base + From * V_Width
-                             .. Vals_Base + (From + Moved) * V_Width - 1);
+                        if not Item.Values_In_Keys then
+                           Item.Half_Values.all
+                             (Vals_Base .. Vals_Base + Moved * V_Width - 1) :=
+                             Item.Half_Values.all
+                               (Vals_Base + From * V_Width
+                                .. Vals_Base + (From + Moved) * V_Width - 1);
+                        end if;
 
                      when Eighth | Fourth =>
                         --  Whole rows move, so the bytes and the
@@ -166,13 +171,15 @@ begin
                           (Keys_Base
                            .. Keys_Base + Moved * KV_Width - 1),
                         Sent);
-                     Model_Runner.Backend.Device.Put_Cache
-                       (Block_Base (Item)
-                        + Item.Keys.all'Length + Vals_Base,
-                        Item.Values.all
-                          (Vals_Base
-                           .. Vals_Base + Moved * V_Width - 1),
-                        Sent);
+                     if not Item.Values_In_Keys then
+                        Model_Runner.Backend.Device.Put_Cache
+                          (Block_Base (Item)
+                           + Item.Keys.all'Length + Vals_Base,
+                           Item.Values.all
+                             (Vals_Base
+                              .. Vals_Base + Moved * V_Width - 1),
+                           Sent);
+                     end if;
                   end;
                elsif Moved > 0
                  and then Item.Seat >= 0
