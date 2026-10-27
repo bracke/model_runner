@@ -1839,7 +1839,24 @@ void main() {
     //  in a dispatch of its own rather than round up to a whole wide one.
     uint run_at = listed ? lists[shape.members[0] + expert] : shape.members[2];
     uint run_count = listed ? lists[expert] : shape.count;
+    //  A plain tile dispatched over several members -- a gather's, each
+    //  head its own matrix -- reads member z's slice of the stack, its
+    //  own stretch of every vector, and stores its answers as a run of
+    //  their own: members[6] bytes a slice, members[7] halves from one
+    //  member's stretch to the next, members[8] halves a vector (nought:
+    //  the columns), members[9] answers from one member's run to the
+    //  next. Nought throughout for every other product, of one member.
+#ifdef LISTED
     uint slice = listed ? expert * shape.stride : 0u;
+    const uint x_stride = shape.columns;
+    const uint member_at = 0u;
+    const bool member_runs = false;
+#else
+    uint slice = expert * shape.members[6];
+    uint x_stride = shape.members[8] != 0u ? shape.members[8] : shape.columns;
+    uint member_at = expert * shape.members[9];
+    bool member_runs = shape.members[9] > 0u;
+#endif
 
     if (listed && gl_WorkGroupID.y * TILE_V >= run_count) {
         return;
@@ -2008,7 +2025,8 @@ void main() {
     const uint tap_x = 0u;
 #else
     uint tap_w = tap * shape.members[4];
-    uint tap_x = (tap / 3u) * shape.members[5] + (tap % 3u) * shape.columns;
+    uint tap_x = (tap / 3u) * shape.members[5] + (tap % 3u) * shape.columns
+                 + expert * shape.members[7];
 #endif
     //  The block scales the narrow tiles hold are a row's, and a tap's
     //  rows are another matrix's: read afresh.
@@ -2774,8 +2792,8 @@ void main() {
     #ifndef LISTED
                                 shape.stride +
     #endif
-                                tap_x + (vec0 + j * 16u) * shape.columns + kb + step,
-                                shape.columns,
+                                tap_x + (vec0 + j * 16u) * x_stride + kb + step,
+                                x_stride,
                                 gl_CooperativeMatrixLayoutColumnMajor);
                 }
 
@@ -2813,8 +2831,8 @@ void main() {
     #ifndef LISTED
                                 shape.stride +
     #endif
-                                tap_x + (vec0 + j * 16u) * shape.columns + kb + step,
-                                shape.columns,
+                                tap_x + (vec0 + j * 16u) * x_stride + kb + step,
+                                x_stride,
                                 gl_CooperativeMatrixLayoutColumnMajor);
                 }
 
@@ -2834,12 +2852,13 @@ void main() {
     for (uint i = 0u; i < AR; ++i) {
         for (uint j = 0u; j < AV; ++j) {
             uint where = (vec0 + j * 16u) * shape.rows
-                         + row0 + i * 16u;
+                         + row0 + i * 16u + member_at;
 
             //  A block of sixteen vectors past this expert's run is the
             //  next expert's, and is left to it; and a block of rows past
             //  the matrix's is nobody's.
             if ((listed && vec0 + j * 16u >= run_at + run_count)
+                || (member_runs && vec0 + j * 16u >= run_at + run_count)
                 || row0 + i * 16u >= shape.rows) {
                 continue;
             }

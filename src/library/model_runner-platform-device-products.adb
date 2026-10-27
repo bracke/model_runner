@@ -8412,7 +8412,15 @@ package body Model_Runner.Platform.Device.Products is
       --  and plus one, and its epsilon: the copy is then made normed
       --  (half_batch.comp's fourth way). Nought for a plain copy.
       Gain_At : Interfaces.Unsigned_64 := 0;
-      Epsilon : Float := 0.0)
+      Epsilon : Float := 0.0;
+
+      --  A gather's members, each its own slice of the stack -- Slice bytes
+      --  apart -- reading its own stretch of every vector, the members'
+      --  stretches end to end, and answering into a run of its own, a
+      --  member's every position before the next's. One for every other
+      --  product. See matrix_product.comp's members[6].
+      Members : Positive := 1;
+      Slice   : Interfaces.Unsigned_64 := 0)
    is
       Bind_Pipeline : constant Bind_Pipeline_Call :=
         To_Bind_Pipeline (Point ("vkCmdBindPipeline"));
@@ -8424,12 +8432,14 @@ package body Model_Runner.Platform.Device.Products is
 
       Wall : aliased Memory_Barrier;
 
+      --  What a vector of the copy holds: every member's stretch.
+      Copy_Columns : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Members);
+
       Held : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Count)
-        + Reach;
+        Copy_Columns * Interfaces.Unsigned_64 (Count) + Reach;
       Made : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Columns) * Interfaces.Unsigned_64 (Room)
-        + Reach;
+        Copy_Columns * Interfaces.Unsigned_64 (Room) + Reach;
    begin
       Good := False;
 
@@ -8460,7 +8470,7 @@ package body Model_Runner.Platform.Device.Products is
                      Product_Bytes, Shape'Address);
                Dispatch
                  (Item.Buffer,
-                  C.unsigned ((Made / Interfaces.Unsigned_64 (Columns) + 7) / 8), 1, 1);
+                  C.unsigned ((Made / Copy_Columns + 7) / 8), 1, 1);
             end;
          else
             declare
@@ -8500,7 +8510,8 @@ package body Model_Runner.Platform.Device.Products is
          Rest : constant Natural :=
            (if Widened (Count) then Count mod Wider_Vectors else 0);
          Split : constant Boolean :=
-           Rest > 0 and then Rest <= Tile_Vectors
+           Members = 1
+           and then Rest > 0 and then Rest <= Tile_Vectors
            and then Count > Wider_Vectors
            and then Tile_Pipeline (Item, Packing, Rest) /= Null_Handle;
          Aligned : constant Natural := Count - (if Split then Rest else 0);
@@ -8537,6 +8548,12 @@ package body Model_Runner.Platform.Device.Products is
                Members (4) := C.unsigned (Tap_Bytes);
                Members (5) := C.unsigned (Tap_Row);
             end if;
+            if Tile_Product.Members > 1 then
+               Members (6) := C.unsigned (Slice);
+               Members (7) := C.unsigned (Columns);
+               Members (8) := C.unsigned (Copy_Columns);
+               Members (9) := C.unsigned (Rows * Count);
+            end if;
             Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Pipeline);
             declare
                Shape : aliased Shape_Constants :=
@@ -8558,7 +8575,7 @@ package body Model_Runner.Platform.Device.Products is
                Dispatch
                  (Item.Buffer,
                   C.unsigned ((Rows + Height (Pipeline) - 1) / Height (Pipeline)),
-                  C.unsigned (Groups), 1);
+                  C.unsigned (Groups), C.unsigned (Tile_Product.Members));
             end;
          end Run_Tiles;
       begin
@@ -14341,6 +14358,30 @@ package body Model_Runner.Platform.Device.Products is
                       Steps.Items (Which).Columns, Count,
                       Rounded => Steps.Items (Which).Rounded));
 
+      --  Whether a gather goes to the tile, its members a dispatch's third
+      --  dimension (Tile_Product's Members): each member its own slice and
+      --  its own stretch of every position, the members in order, a batch
+      --  of whole blocks of sixteen -- the tile stores a block of sixteen
+      --  positions at once, and a member's run is not padded. A latent's
+      --  absorbing and expanding gathers over a prompt's batch, which the
+      --  row kernel took at a twentieth of the tile's rate.
+      function Member_Tiled (Which : Positive) return Boolean
+      is (Is_Product (Which)
+          and then Steps.Items (Which).Gathers > 1
+          and then not Steps.Items (Which).Glu
+          and then not Steps.Items (Which).Listed
+          and then not Steps.Items (Which).Joins
+          and then Steps.Items (Which).Routed = 0
+          and then Steps.Items (Which).Region_At = 0
+          and then Steps.Items (Which).Apart = Steps.Items (Which).Columns
+          and then Count mod 16 = 0
+          and then (for all Member in 1 .. Steps.Items (Which).Gathers =>
+                      Steps.Items (Which).Members (Member) = Member - 1)
+          and then Uses_Matrix
+                     (Item, Steps.Items (Which).Packing,
+                      Steps.Items (Which).Each,
+                      Steps.Items (Which).Columns, Count));
+
       --  Bytes from one tap's matrix to the next, for a tap product.
       function Tap_Stride (Which : Positive) return Interfaces.Unsigned_64
       is (Interfaces.Unsigned_64 (Steps.Items (Which).Rows)
@@ -14731,6 +14772,13 @@ package body Model_Runner.Platform.Device.Products is
                    * Interfaces.Unsigned_64 (Room)
                    + Interfaces.Unsigned_64 (This.At_Vector)
                    + Interfaces.Unsigned_64 (Tap_Reach (This))) * 2);
+            elsif Member_Tiled (Index) then
+               --  Every member's stretch of every position, rounded up.
+               Half_Bytes := Interfaces.Unsigned_64'Max
+                 (Half_Bytes,
+                  Interfaces.Unsigned_64 (This.Columns)
+                  * Interfaces.Unsigned_64 (This.Gathers)
+                  * Interfaces.Unsigned_64 (Whole_Tiles (Count)) * 2);
             elsif Listed_Tiled (Index) then
                --  The runs' vectors, laid out by slot.
                Half_Bytes := Interfaces.Unsigned_64'Max
@@ -16101,6 +16149,7 @@ package body Model_Runner.Platform.Device.Products is
                      Offset => Places (Steps.Items (Index).Routed).At_Byte,
                      Extent => Places (Steps.Items (Index).Routed).Bytes)
                elsif Tiled (Index) or else Listed_Tiled (Index)
+                 or else Member_Tiled (Index)
                then Half_Descriptor (Item)
                else (Buffer => Item.Vector_Buffer, Offset => 0,
                      Extent => 4));
@@ -16500,7 +16549,8 @@ package body Model_Runner.Platform.Device.Products is
                                 and then Between = Which + 1);
                   begin
                      if That.Norms or else That.Blends or else That.Attends
-                       or else (Tiled (Between) and then not Reads_It)
+                       or else ((Tiled (Between) or else Member_Tiled (Between))
+                                and then not Reads_It)
                      then
                         return False;
                      end if;
@@ -16770,9 +16820,10 @@ package body Model_Runner.Platform.Device.Products is
                        or else This.Rwkvs or else This.Wkvs
                     or else This.Mambas
                      then False
-                     else Tiled (Index)
-                          and then (Was_From /= Source
-                                    or else Was_Wide /= This.Columns));
+                     else Member_Tiled (Index)
+                          or else (Tiled (Index)
+                                   and then (Was_From /= Source
+                                             or else Was_Wide /= This.Columns)));
 
                   Wanted : constant Natural :=
                     Natural'Max
@@ -18275,6 +18326,32 @@ package body Model_Runner.Platform.Device.Products is
                      else
                         Half_From := Reading;
                      end if;
+                     Half_Wide := This.Columns;
+                  end;
+
+                  goto Next_Dispatch;
+               end if;
+
+               if Member_Tiled (Index) then
+                  declare
+                     Done : Boolean;
+                  begin
+                     Tile_Product
+                       (Item, This.Each, This.Columns, Count,
+                        Whole_Tiles (Count), This.Packing,
+                        Places (Index).Base,
+                        Fresh => True, Reach => 0, Into => 0,
+                        Joins => False, Good => Done,
+                        Members => This.Gathers,
+                        Slice => Slice_Bytes (Index));
+                     if not Done then
+                        Release_All;
+                        return;
+                     end if;
+
+                     --  The copy holds every member's stretch, which no
+                     --  other product reads as its own.
+                     Half_From := -1;
                      Half_Wide := This.Columns;
                   end;
 

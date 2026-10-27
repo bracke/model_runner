@@ -11890,8 +11890,8 @@ package body Tests.Backend_Cases is
    end A_Latent_Folds_And_Takes_Out_As_The_Host_Does;
 
    --  An absorbed latent's layer front, attention and taking out, as the
-   --  device's whole layer builds them for one token over a cache of forty
-   --  positions, against the same arithmetic on the host: what each piece
+   --  device's whole layer builds them for one token, three and thirty-two
+   --  over a cache of forty positions, against the same arithmetic on the host: what each piece
    --  answers alone, put together.
    procedure A_Latent_Layer_Attends_As_The_Host_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
@@ -11917,7 +11917,7 @@ package body Tests.Backend_Cases is
       type Values is access N.Real_Array;
       procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
 
-      Room   : constant N.Element_Count := N.Element_Count (Before + 16) * Key_W;
+      Room   : constant N.Element_Count := N.Element_Count (Before + 32) * Key_W;
       Wq     : Values := new N.Real_Array (0 .. Heads * Q_Width * Width - 1);
       Wkv    : Values := new N.Real_Array (0 .. Key_W * Width - 1);
       Gain   : N.Real_Array (0 .. Rank - 1) := [others => 1.0];
@@ -12027,17 +12027,21 @@ package body Tests.Backend_Cases is
          Assert (Added, "the last assemble was refused");
 
          declare
-            Answer : N.Real_Array (0 .. (Rows + Heads * V_Head) * Count - 1) := [others => 0.0];
+            --  On the heap: thirty-two positions' answers are past a frame.
+            Answer : Values :=
+              new N.Real_Array'(0 .. (Rows + Heads * V_Head) * Count - 1 => 0.0);
             Last_At : constant N.Element_Count := Rows * Count;
          begin
-            Products.Run (Engine, Steps, X, Positions, Answer, Ok, Halted);
+            Products.Run (Engine, Steps, X, Positions, Answer.all, Ok, Halted);
             Assert (Ok, "the latent layer was refused at" & Positions'Image & " positions");
 
             --  Each position's key and value into the host's cache first,
             --  then each attends to what precedes it and itself.
             declare
                type Row_Set is array (0 .. Count - 1) of N.Real_Array (0 .. Heads * Q_Width - 1);
-               Q : Row_Set := [others => [others => 0.0]];
+               type Rows_Of is access Row_Set;
+               procedure Free is new Ada.Unchecked_Deallocation (Row_Set, Rows_Of);
+               Q : Rows_Of := new Row_Set'[others => [others => 0.0]];
             begin
                for P in 0 .. Count - 1 loop
                   declare
@@ -12130,7 +12134,9 @@ package body Tests.Backend_Cases is
                      end;
                   end loop;
                end loop;
+               Free (Q);
             end;
+            Free (Answer);
          end;
          Free (Cache);
          Assert (Most > 0.01, "the answers are all near nought, which tells nothing");
@@ -12180,6 +12186,9 @@ package body Tests.Backend_Cases is
 
       Compare (Positions => 1);
       Compare (Positions => 3);
+      --  A batch of whole sixteens: the gathers on the tile, a head a
+      --  member.
+      Compare (Positions => 32);
 
       Products.Close (Engine);
       Devices.Close (Opened);
