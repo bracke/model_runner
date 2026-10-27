@@ -578,13 +578,13 @@ begin
       --  output projection reads is the heads' worth of value width,
       --  which is the embedding width only when the two agree.
       Wide   : constant Element_Count :=
-        Element_Count (Item.Settings.Heads * Item.Settings.Head_Size);
+        Element_Count (Item.Settings.Heads * Head_Query_Width (Item.Settings));
       KV     : constant Element_Count :=
         Element_Count (Item.Settings.KV_Heads * Item.Settings.Head_Size);
       KV_Out : constant Element_Count :=
         Element_Count (Item.Settings.KV_Heads * Item.Settings.Value_Size);
       Blend  : constant Element_Count :=
-        Element_Count (Item.Settings.Heads * Item.Settings.Value_Size);
+        Element_Count (Item.Settings.Heads * Head_Blend_Width (Item.Settings));
       --  DeepSeek's key-value up-projection, put back together from the two
       --  halves the current converter splits it into: attn_k_b, each
       --  head's key part transposed to a row a latent dimension, and
@@ -603,9 +603,9 @@ begin
          Rank  : constant Element_Count :=
            Element_Count (Item.Settings.KV_Lora_Rank);
          Plain : constant Element_Count :=
-           Element_Count (Item.Settings.Head_Size - Item.Settings.Rotary);
+           Element_Count (Head_Query_Width (Item.Settings) - Item.Settings.Rotary);
          Wide  : constant Element_Count :=
-           Element_Count (Item.Settings.Value_Size);
+           Element_Count (Head_Blend_Width (Item.Settings));
          Each  : constant Element_Count := Plain + Wide;
 
          Keys, Values : T.View;
@@ -1517,13 +1517,34 @@ begin
                  (Item, Source, Layer_Key (Index, "attn_kv_b.weight"),
                   Element_Count
                     (Item.Settings.Heads
-                     * (Item.Settings.Head_Size - Item.Settings.Rotary
-                        + Item.Settings.Value_Size)),
+                     * (Head_Query_Width (Item.Settings) - Item.Settings.Rotary
+                        + Head_Blend_Width (Item.Settings))),
                   Element_Count (Item.Settings.KV_Lora_Rank),
                   Current.KV_B, Status, Repack);
             end if;
             if E.Is_Error (Status) then
                return;
+            end if;
+
+            --  Absorbed, the up-projection decoded whole for the heads to
+            --  fold into their queries and take their blends back out by.
+            if Item.Settings.Latent_Attention then
+               declare
+                  Rows : constant Element_Count := Current.KV_B.Rows;
+                  Rank : constant Element_Count :=
+                    Element_Count (Item.Settings.KV_Lora_Rank);
+               begin
+                  T.Allocate (Rows * Rank, Current.KV_B_Dense);
+                  for Row in 0 .. Rows - 1 loop
+                     T.Dequantize_Row
+                       (Current.KV_B, Row,
+                        Current.KV_B_Dense.all (Row * Rank .. Row * Rank + Rank - 1),
+                        Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                  end loop;
+               end;
             end if;
          else
             --  Twice as wide where the query projection carries a

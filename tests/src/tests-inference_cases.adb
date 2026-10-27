@@ -15202,6 +15202,82 @@ package body Tests.Inference_Cases is
               & "whole, by" & Long_Float'Image (Worst));
    end A_Split_Latent_Reads_As_The_Whole;
 
+   --  DeepSeek's latent attention read absorbed -- the cache the latent and
+   --  its rotated slice, each query head folded through its key rows and
+   --  its blend taken back out through its value rows -- answers as read
+   --  with a key and a value a head, the up-projection whole or split.
+   procedure Absorbed_Latent_Answers_As_Expanded
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Prompt : constant Vocab.Token_Array := [4, 4, 4, 5, 5, 6, 7, 8];
+
+      --  The engine's last logits over Prompt, a token at a time and then
+      --  as one batch.
+      procedure Answer (Split, Absorbed : Boolean; One, Batch : out Logit_Vector) is
+         Image  : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Deepseek2, Split_Latent => Split);
+         L.Absorb_Latent := Absorbed;
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under);
+            L.Absorb_Latent := False;
+            Assert (L.Config (Under.Ready).Latent_Attention = Absorbed,
+                    "the model was not read as asked");
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the session did not open");
+            for Token of Prompt loop
+               L.Evaluate (Live, Under.Ready, Token, One, Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "evaluation failed: "
+                       & E.Error_Code'Image (Status.Code));
+            end loop;
+            L.Close (Live);
+
+            L.Open (Live, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "the second session did not open");
+            L.Evaluate_Batch (Live, Under.Ready, Prompt, Batch, Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the batch failed: " & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end;
+         B.Free (Image);
+      exception
+         when others =>
+            L.Absorb_Latent := False;
+            raise;
+      end Answer;
+   begin
+      for Split in Boolean loop
+         declare
+            Expanded_One, Expanded_Batch, Absorbed_One, Absorbed_Batch : Logit_Vector;
+            Worst : Long_Float := 0.0;
+         begin
+            Answer (Split, False, Expanded_One, Expanded_Batch);
+            Answer (Split, True, Absorbed_One, Absorbed_Batch);
+            for Index in Expanded_One'Range loop
+               Worst := Long_Float'Max
+                 (Worst,
+                  Long_Float'Max
+                    (abs (Long_Float (Expanded_One (Index)) - Long_Float (Absorbed_One (Index))),
+                     abs (Long_Float (Expanded_Batch (Index)) - Long_Float (Absorbed_Batch (Index)))));
+            end loop;
+            Assert (Worst < 1.0E-4,
+                    "deepseek2 read absorbed answers otherwise than read a head at a "
+                    & "time" & (if Split then ", split," else "") & " by"
+                    & Long_Float'Image (Worst));
+         end;
+      end loop;
+   end Absorbed_Latent_Answers_As_Expanded;
+
    procedure Baichuan_At_Forty_Layers_Turns_To_Alibi
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -20791,6 +20867,10 @@ package body Tests.Inference_Cases is
          & "the head widths under the _mla keys and the key-value up "
          & "projection split in two -- answers as the same model written "
          & "whole, a token at a time and as a batch");
+      Register_Routine
+        (T, Absorbed_Latent_Answers_As_Expanded'Access,
+         "deepseek2 read absorbed answers as read a head at a time, a "
+         & "token at a time and as a batch");
       Register_Routine
         (T, Sigmoid_Mixture_Chooses_By_Its_Bias'Access,
          "a sigmoid-gated mixture chooses its experts by the selection bias "

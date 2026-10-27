@@ -1600,9 +1600,12 @@ begin
                --  they are placed, by a step of the same sequence; a
                --  round's each into its own member's block, out of the
                --  table, as an exact round's are.
+               --  Absorbed latent attention not yet: the device's layer
+               --  builds the heads it reconstructs, not the latent whole.
                if (Turnable or else Settings.Rotary = 0)
                  and then Resident
                  and then Device_Held (Item)
+                 and then not Settings.Latent_Attention
                  and then (((Settings.Experts = 0
                              or else Dense_Among_Experts (Current)
                              or else Mixture_Whole (Current))
@@ -2772,8 +2775,25 @@ begin
                      end loop;
                   end if;
 
-                  Product_Batch
-                    (Item, Current.Attention_Out, Attend, Count, Norm, Status);
+                  if Settings.Latent_Attention then
+                     --  Each head's blend taken back out of the latent.
+                     declare
+                        Out_Width : constant Element_Count :=
+                          Heads * Element_Count (Head_Blend_Width (Settings));
+                        Taken     : T.Real_Array_Access;
+                     begin
+                        T.Allocate (Count * Out_Width, Taken);
+                        MLA_Expand
+                          (Item, Current, Attend.all (0 .. Count * Blend - 1),
+                           Taken.all, Count);
+                        Product_Batch
+                          (Item, Current.Attention_Out, Taken, Count, Norm, Status);
+                        T.Free (Taken);
+                     end;
+                  else
+                     Product_Batch
+                       (Item, Current.Attention_Out, Attend, Count, Norm, Status);
+                  end if;
                   exit when E.Is_Error (Status);
                end if;
                Charge (Item, Projecting, Mark);

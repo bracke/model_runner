@@ -1,3 +1,4 @@
+with Ada.Environment_Variables;
 with System.Atomic_Operations.Integer_Arithmetic;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
@@ -201,7 +202,9 @@ package body Model_Runner.Llama is
                       or else (Settings.Kind = Gemma2 and then Settings.Layers = 46))
                      and then Settings.Heads > 0
                   then Settings.Embedding / Settings.Heads
-                  else Settings.Head_Size)))
+                  --  Absorbed, the scores are the heads' own: their sums
+                  --  run over the latent, their scale over the head.
+                  else Head_Query_Width (Settings))))
          * Settings.Score_Gain);
 
    --  A view that says only how many rows DeepSeek's keys or values are:
@@ -2857,6 +2860,12 @@ package body Model_Runner.Llama is
       V_At : constant Element_Count := Item.Value_Row.all'First;
       L_At : constant Element_Count := Item.MLA_KV.all'First;
       R_At : constant Element_Count := Item.MLA_KV_Lat.all'First;
+
+      --  Absorbed, the query heads come out at their own width beside the
+      --  latent queries they are folded into.
+      Latent   : constant Boolean := Settings.Latent_Attention;
+      Q_Out    : constant T.Real_Array_Access :=
+        (if Latent then Item.MLA_Q_Heads else Item.Query);
    begin
       --  The query, through a latent and a norm or straight where the file
       --  states no query latent.
@@ -2873,7 +2882,7 @@ package body Model_Runner.Llama is
                Normed);
             Item.MLA_Q_Lat.all := Normed;
          end;
-         Product (Item, Current.Q_B, Item.MLA_Q_Lat, Item.Query, Status);
+         Product (Item, Current.Q_B, Item.MLA_Q_Lat, Q_Out, Status);
          if E.Is_Error (Status) then
             return;
          end if;
@@ -2884,9 +2893,66 @@ package body Model_Runner.Llama is
          --  rather than two, the row quantized once.
          Product_Group
            (Item, [Current.Query, Current.KV_A_MQA], Item.Normalized,
-            [Item.Query, Item.MLA_KV_Lat], Status);
+            [Q_Out, Item.MLA_KV_Lat], Status);
       end if;
       if E.Is_Error (Status) then
+         return;
+      end if;
+
+      if Latent then
+         --  The key is the rotated slice and the normalized latent, the
+         --  value the latent -- one key-value head every query head reads --
+         --  and each query head its own rotated slice, then its nope part
+         --  through its key rows of the up-projection: the score it makes
+         --  against the latent is the one it made against its own key.
+         declare
+            Q_Width : constant Element_Count :=
+              Element_Count (Head_Query_Width (Settings));
+            Plain   : constant Element_Count := Q_Width - Rope;
+            Rank    : constant Element_Count := KV_Lora;
+            Each    : constant Element_Count :=
+              Plain + Element_Count (Head_Blend_Width (Settings));
+            Dense   : T.Real_Array renames Current.KV_B_Dense.all;
+            Q_At    : constant Element_Count := Item.MLA_Q_Heads.all'First;
+            C_At    : constant Element_Count := Item.MLA_C_Norm.all'First;
+            Out_At  : constant Element_Count := Item.Query.all'First;
+         begin
+            K.RMS_Norm
+              (Item.MLA_KV_Lat.all (R_At .. R_At + KV_Lora - 1),
+               Current.KV_A_Norm.all, Settings.Epsilon, Item.MLA_C_Norm.all);
+            for I in 0 .. Rope - 1 loop
+               Item.Key_Row.all (K_At + I) := Item.MLA_KV_Lat.all (R_At + KV_Lora + I);
+            end loop;
+            for I in 0 .. Rank - 1 loop
+               Item.Key_Row.all (K_At + Rope + I) := Item.MLA_C_Norm.all (C_At + I);
+               Item.Value_Row.all (V_At + I) := Item.MLA_C_Norm.all (C_At + I);
+            end loop;
+
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  From : constant Element_Count := Q_At + Head * Q_Width;
+                  To   : constant Element_Count := Out_At + Head * Head_Size;
+                  Sums : T.Real_Array (0 .. Rank - 1) := [others => 0.0];
+               begin
+                  --  The file's head is its nope part, then its slice.
+                  for I in 0 .. Rope - 1 loop
+                     Item.Query.all (To + I) := Item.MLA_Q_Heads.all (From + Plain + I);
+                  end loop;
+                  for D in 0 .. Plain - 1 loop
+                     declare
+                        Q   : constant Real := Item.MLA_Q_Heads.all (From + D);
+                        Row : constant Element_Count := (Head * Each + D) * Rank;
+                     begin
+                        for J in 0 .. Rank - 1 loop
+                           Sums (J) := Sums (J) + Q * Dense (Row + J);
+                        end loop;
+                     end;
+                  end loop;
+                  Item.Query.all (To + Rope .. To + Rope + Rank - 1) := Sums;
+               end;
+            end loop;
+         end;
+         Status := E.Success;
          return;
       end if;
 
@@ -2924,6 +2990,49 @@ package body Model_Runner.Llama is
 
       Status := E.Success;
    end MLA_Project;
+
+   --  Absorbed latent attention's blends, each head's taken back out of the
+   --  latent through its value rows of the up-projection, into what the
+   --  output projection reads: Count positions' worth, from Blends to Into.
+   procedure MLA_Expand
+     (Item    : Session;
+      Current : Layer;
+      Blends  : Real_Array;
+      Into    : in out Real_Array;
+      Count   : Element_Count)
+   is
+      Settings : Configuration renames Item.Owner.Settings;
+      Heads    : constant Element_Count := Element_Count (Settings.Heads);
+      Rank     : constant Element_Count := Element_Count (Settings.KV_Lora_Rank);
+      Plain    : constant Element_Count :=
+        Element_Count (Head_Query_Width (Settings) - Settings.Rotary);
+      V_Width  : constant Element_Count := Element_Count (Head_Blend_Width (Settings));
+      Each     : constant Element_Count := Plain + V_Width;
+      Dense    : T.Real_Array renames Current.KV_B_Dense.all;
+   begin
+      for P in 0 .. Count - 1 loop
+         for Head in 0 .. Heads - 1 loop
+            declare
+               From : constant Element_Count :=
+                 Blends'First + (P * Heads + Head) * Rank;
+               To   : constant Element_Count :=
+                 Into'First + (P * Heads + Head) * V_Width;
+            begin
+               for V in 0 .. V_Width - 1 loop
+                  declare
+                     Row : constant Element_Count := (Head * Each + Plain + V) * Rank;
+                     Sum : Real := 0.0;
+                  begin
+                     for J in 0 .. Rank - 1 loop
+                        Sum := Sum + Dense (Row + J) * Blends (From + J);
+                     end loop;
+                     Into (To + V) := Sum;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end loop;
+   end MLA_Expand;
 
    procedure Product_Batch
      (Item    : Session;
@@ -2970,15 +3079,29 @@ package body Model_Runner.Llama is
 
       Q_Lat, KV_Lat, C_Norm, KV : T.Real_Array_Access;
 
+      --  Absorbed, the query heads at their own width, before each is
+      --  folded into a latent query in Query; see MLA_Project.
+      Latent  : constant Boolean := Settings.Latent_Attention;
+      Q_Width : constant Element_Count := Element_Count (Head_Query_Width (Settings));
+      Q_Heads : T.Real_Array_Access;
+      Q_Out   : T.Real_Array_Access := Query;
+
       procedure Release is
       begin
          T.Free (Q_Lat); T.Free (KV_Lat); T.Free (C_Norm); T.Free (KV);
+         T.Free (Q_Heads);
       end Release;
    begin
       Status := E.Success;
       T.Allocate (Count * Lat_Width, KV_Lat);
       T.Allocate (Count * KV_Lora, C_Norm);
-      T.Allocate (Count * Heads * KV_Stride, KV);
+      if Latent then
+         T.Allocate (Count * Heads * Q_Width, Q_Heads);
+         Q_Out := Q_Heads;
+         T.Allocate (1, KV);
+      else
+         T.Allocate (Count * Heads * KV_Stride, KV);
+      end if;
       if Q_Lora > 0 then
          T.Allocate (Count * Q_Lora, Q_Lat);
       end if;
@@ -3004,10 +3127,10 @@ package body Model_Runner.Llama is
                   Q_Lat.all (P * Q_Lora .. P * Q_Lora + Q_Lora - 1) := Normed;
                end;
             end loop;
-            Product_Batch (Item, Current.Q_B, Q_Lat, Count, Query, Status);
+            Product_Batch (Item, Current.Q_B, Q_Lat, Count, Q_Out, Status);
          end if;
       else
-         Product_Batch (Item, Current.Query, Rows, Count, Query, Status);
+         Product_Batch (Item, Current.Query, Rows, Count, Q_Out, Status);
       end if;
       if E.Is_Error (Status) then
          Release;
@@ -3027,6 +3150,50 @@ package body Model_Runner.Llama is
             Current.KV_A_Norm.all, Settings.Epsilon,
             C_Norm.all (P * KV_Lora .. P * KV_Lora + KV_Lora - 1));
       end loop;
+      if Latent then
+         --  Each position's key the rotated slice and the latent, its
+         --  value the latent, and each query head folded through its key
+         --  rows of the up-projection, rotated slice first.
+         declare
+            Plain : constant Element_Count := Q_Width - Rope;
+            Each  : constant Element_Count :=
+              Plain + Element_Count (Head_Blend_Width (Settings));
+            Dense : T.Real_Array renames Current.KV_B_Dense.all;
+         begin
+            for P in 0 .. Count - 1 loop
+               Keys.all (P * Head_Size .. P * Head_Size + Rope - 1) :=
+                 KV_Lat.all (P * Lat_Width + KV_Lora .. P * Lat_Width + KV_Lora + Rope - 1);
+               Keys.all (P * Head_Size + Rope .. P * Head_Size + Head_Size - 1) :=
+                 C_Norm.all (P * KV_Lora .. P * KV_Lora + KV_Lora - 1);
+               Values.all (P * KV_Lora .. P * KV_Lora + KV_Lora - 1) :=
+                 C_Norm.all (P * KV_Lora .. P * KV_Lora + KV_Lora - 1);
+               for Head in 0 .. Heads - 1 loop
+                  declare
+                     From : constant Element_Count := (P * Heads + Head) * Q_Width;
+                     To   : constant Element_Count := (P * Heads + Head) * Head_Size;
+                     Sums : Real_Array (0 .. KV_Lora - 1) := [others => 0.0];
+                  begin
+                     Query.all (To .. To + Rope - 1) :=
+                       Q_Heads.all (From + Plain .. From + Plain + Rope - 1);
+                     for D in 0 .. Plain - 1 loop
+                        declare
+                           Q   : constant Real := Q_Heads.all (From + D);
+                           Row : constant Element_Count := (Head * Each + D) * KV_Lora;
+                        begin
+                           for J in 0 .. KV_Lora - 1 loop
+                              Sums (J) := Sums (J) + Q * Dense (Row + J);
+                           end loop;
+                        end;
+                     end loop;
+                     Query.all (To + Rope .. To + Rope + KV_Lora - 1) := Sums;
+                  end;
+               end loop;
+            end loop;
+         end;
+         Release;
+         return;
+      end if;
+
       Product_Batch (Item, Current.KV_B, C_Norm, Count, KV, Status);
       if E.Is_Error (Status) then
          Release;
@@ -7533,6 +7700,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Expert_Up_Bias);
             T.Free (Which.Expert_Down_Bias);
             B.Free (Which.KV_B_Built);
+            T.Free (Which.KV_B_Dense);
             T.Free (Which.Next_ENorm);
             T.Free (Which.Next_HNorm);
             T.Free (Which.Next_Head_Norm);
@@ -8550,6 +8718,8 @@ package body Model_Runner.Llama is
       T.Free (Item.MLA_KV_Lat);
       T.Free (Item.MLA_C_Norm);
       T.Free (Item.MLA_KV);
+      T.Free (Item.MLA_Q_Heads);
+      T.Free (Item.MLA_Blend);
       T.Free (Item.Scores);
       T.Free (Item.Gate);
       T.Free (Item.Up);

@@ -272,6 +272,11 @@ package Model_Runner.Llama is
    function Is_MLA (Item : Architecture) return Boolean
    is (Item = Deepseek2);
 
+   --  Whether a latent-attention model is read absorbed (see
+   --  Configuration.Latent_Attention). Off until every backend attends a
+   --  head that wide; set by the tests that check the absorbed reading.
+   Absorb_Latent : Boolean := False;
+
    --  Whether an architecture normalizes after adding a sublayer to the
    --  residual rather than before handing the block its input.
    --
@@ -674,6 +679,18 @@ package Model_Runner.Llama is
       KV_Lora_Rank    : Natural := 0;
       Leading_Dense   : Natural := 0;
 
+      --  Whether the latent attention is read absorbed: the cache keeps a
+      --  position's latent and rotated slice -- one key-value head, Head_Size
+      --  the rank and the slice, Value_Size the rank -- and every query head
+      --  reads it through its own key up-projection folded into the query,
+      --  its blend taken back out a head through the value one. MLA_Key and
+      --  MLA_Value are then the heads' own widths, the query's and what the
+      --  output projection reads; nought otherwise, where Head_Size and
+      --  Value_Size are those.
+      Latent_Attention : Boolean := False;
+      MLA_Key          : Natural := 0;
+      MLA_Value        : Natural := 0;
+
       --  Jamba's mixers: true where the layer keeps a Mamba state, false
       --  where it attends. Read from the file's per-layer key-value head
       --  count -- nought heads is a Mamba layer -- and all false for every
@@ -694,6 +711,16 @@ package Model_Runner.Llama is
    --  @param Settings The model's configuration.
    --  @return The factor a score is multiplied by.
    function Score_Scale (Settings : Configuration) return Real;
+
+   --  A query head's width as its projection makes it, and a head's blend
+   --  as the output projection reads it: Head_Size and Value_Size, but for
+   --  absorbed latent attention, whose attention reads the latent and whose
+   --  heads are MLA_Key and MLA_Value wide on either side of it.
+   function Head_Query_Width (Settings : Configuration) return Natural
+   is (if Settings.Latent_Attention then Settings.MLA_Key else Settings.Head_Size);
+
+   function Head_Blend_Width (Settings : Configuration) return Natural
+   is (if Settings.Latent_Attention then Settings.MLA_Value else Settings.Value_Size);
 
    --  Whether a block past the stack drafts on an architecture: where its
    --  layer is the shape Draft_Next and Feed_Next compute -- normalized
@@ -2707,6 +2734,12 @@ private
       --  the current converter writes -- put back together as one matrix
       --  here at load. Null where KV_B views the file's own attn_kv_b.
       KV_B_Built : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  KV_B decoded whole, a row a head's key or value dimension and
+      --  the width of the latent, where the attention is absorbed: each
+      --  head's key rows folded into its query and its value rows taking
+      --  its blend back out, a column at a time. Null otherwise.
+      KV_B_Dense : Model_Runner.Tensors.Real_Array_Access := null;
       Q_A_Norm  : Model_Runner.Tensors.Real_Array_Access;
       KV_A_Norm : Model_Runner.Tensors.Real_Array_Access;
 
@@ -3400,6 +3433,14 @@ private
       MLA_KV_Lat : Model_Runner.Tensors.Real_Array_Access := null;
       MLA_C_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       MLA_KV     : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Absorbed, the query projection's heads at their own width, before
+      --  each is folded into a latent query in Query; and the blends taken
+      --  back out a head through the value up-projection, which the output
+      --  projection reads where it reads Attention otherwise. Null where the
+      --  attention is not absorbed.
+      MLA_Q_Heads : Model_Runner.Tensors.Real_Array_Access := null;
+      MLA_Blend   : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  Room for one head, for an architecture that normalizes each of them
       --  before the rotation. Null for one that does not.

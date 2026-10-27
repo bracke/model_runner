@@ -407,9 +407,17 @@ begin
          T.Allocate
            (Element_Count
               (Settings.Heads
-               * (Settings.Head_Size - Settings.Rotary
-                  + Settings.Value_Size)),
+               * (Head_Query_Width (Settings) - Settings.Rotary
+                  + Head_Blend_Width (Settings))),
             Item.MLA_KV);
+         if Settings.Latent_Attention then
+            T.Allocate
+              (Element_Count (Settings.Heads * Head_Query_Width (Settings)),
+               Item.MLA_Q_Heads);
+            T.Allocate
+              (Element_Count (Settings.Heads * Head_Blend_Width (Settings)),
+               Item.MLA_Blend);
+         end if;
       end if;
       Item.Score_Room := Element_Count (Capacity);
       T.Allocate

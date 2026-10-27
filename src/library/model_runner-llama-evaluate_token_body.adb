@@ -185,8 +185,11 @@ is
        --  DeepSeek's latent attention goes whole where its queries are
        --  one projection (V2-Lite's); a query through a latent of its
        --  own is not a shape the device's layer builds yet.
+       --  Absorbed, not yet: the device's layer builds the heads it
+       --  reconstructs from the latent, not the latent read whole.
        and then (not Is_MLA (Settings.Kind)
                  or else (Settings.Q_Lora_Rank = 0
+                          and then not Settings.Latent_Attention
                           and then T.Is_Present (L.KV_A_Lat)
                           and then T.Is_Present (L.KV_A_Rope)
                           and then L.KV_A_Norm /= null)));
@@ -1618,10 +1621,15 @@ begin
 
                --  A layer with sinks the device has no room for attends
                --  on the host; the pair below is given the others'.
+               --  Absorbed latent attention's blends are taken back out of
+               --  the latent before the output projection reads them, so
+               --  the pairs below, which hand the blend straight on, are
+               --  not its; nor yet a device kernel a head that wide.
                if Item.Held = Halved or else not Resident
                  or else not Sinks_Fit
                                (Current.Sinks, Natural (Index), Item.Paged)
                  or else Hybrid (Settings.Kind)
+                 or else Settings.Latent_Attention
                then
                   --  How much arithmetic the heads are between them: every
                   --  head reads the positions the cache holds, a head's
@@ -1750,9 +1758,17 @@ begin
                      Gate_Heads (Item);
                   end if;
 
-                  Product
-                    (Item, Current.Attention_Out, Item.Attention,
-                     Item.Normalized, Status);
+                  if Settings.Latent_Attention then
+                     MLA_Expand
+                       (Item, Current, Item.Attention.all, Item.MLA_Blend.all, 1);
+                     Product
+                       (Item, Current.Attention_Out, Item.MLA_Blend,
+                        Item.Normalized, Status);
+                  else
+                     Product
+                       (Item, Current.Attention_Out, Item.Attention,
+                        Item.Normalized, Status);
+                  end if;
                   exit when E.Is_Error (Status);
 
                end if;
