@@ -14475,8 +14475,61 @@ package body Model_Runner.Platform.Device.Products is
       --  hundred spreads eight hundred choices over 256 experts, three or
       --  four an expert, and a tile of sixty-four decoding the weights for
       --  three is the tile's whole cost: the walk reads them as bytes.
+      --  A mixture's experts folded on the matrix tile over a long batch:
+      --  the gate stores its answers as halves, a slot at a time, into the
+      --  first region; the up reads the copy the gate laid out, applies the
+      --  unit to the gate's halves as it stores, and stores the gated
+      --  middle as halves into the second; the combination is not run;
+      --  and the down reads the middle there, laid out by slot as its own
+      --  copy would have been. The f32 arms, the combination's pass over
+      --  them and the down's copy of its answer go, and the up's copy of
+      --  what the gate's already holds. None of the three splits its short
+      --  runs off to a walk: the batch is long enough that they are few.
+      function Fold_Gate (G : Natural) return Boolean
+      is (G >= 1
+          and then G + 3 <= Steps.Held
+          and then Listed_Tiled (G)
+          and then Listed_Tiled (G + 1)
+          and then Listed_Tiled (G + 3)
+          and then not Steps.Items (G).By_Slot
+          and then not Steps.Items (G + 1).By_Slot
+          and then Steps.Items (G + 3).By_Slot
+          and then not Steps.Items (G).Exact
+          and then not Steps.Items (G + 1).Exact
+          and then not Steps.Items (G + 3).Exact
+          and then not Steps.Items (G).Kept
+          and then not Steps.Items (G + 1).Kept
+          and then not Steps.Items (G + 2).Kept
+          and then not Steps.Items (G).Joins
+          and then not Steps.Items (G + 1).Joins
+          and then Steps.Items (G).Columns = Steps.Items (G + 1).Columns
+          and then Steps.Items (G).Each = Steps.Items (G + 1).Each
+          and then Steps.Items (G).Rows = Steps.Items (G + 1).Rows
+          and then Steps.Items (G).Gathers = Steps.Items (G + 1).Gathers
+          and then Steps.Items (G).Used = Steps.Items (G + 1).Used
+          and then Reads_From (G) = Reads_From (G + 1)
+          and then Steps.Items (G + 2).Blends
+          and then Steps.Items (G + 2).Unit in 0 | 1
+          and then Steps.Items (G + 2).Reads in 0 | G
+          and then Steps.Items (G + 2).Reads_Two in 0 | G + 1
+          and then Steps.Items (G + 2).Rows = Steps.Items (G + 1).Rows
+          and then Reads_From (G + 3) = G + 2
+          and then Steps.Items (G + 3).Columns = Steps.Items (G + 1).Each
+          and then Listed_Wide (Item, Steps.Items (G).Packing, Count,
+                                Steps.Items (G).Used, Steps.Items (G).Gathers));
+
+      --  A step's part in such a fold: the gate one, the up two, the
+      --  combination three, the down four; nought for any other step.
+      function Fold_Role (Which : Positive) return Natural
+      is (if Fold_Gate (Which) then 1
+          elsif Which > 1 and then Fold_Gate (Which - 1) then 2
+          elsif Which > 2 and then Fold_Gate (Which - 2) then 3
+          elsif Which > 3 and then Fold_Gate (Which - 3) then 4
+          else 0);
+
       function Split_Listed (Which : Positive) return Boolean
-      is (Listed_Tiled (Which)
+      is (Fold_Role (Which) = 0
+          and then Listed_Tiled (Which)
           and then not Steps.Items (Which).Exact
           and then Rounds_Walks (Item) = Rounds_Every
           and then Steps.Items (Which).Columns mod 32 = 0
@@ -16737,6 +16790,12 @@ package body Model_Runner.Platform.Device.Products is
                   goto Next_Dispatch;
                end if;
 
+               --  Nor a folded mixture's combination, which its up stored
+               --  (Fold_Role).
+               if Fold_Role (Index) = 3 then
+                  goto Next_Dispatch;
+               end if;
+
                --  Nor a merged combination, whose answer the projection up
                --  stored; the copy now holds it, in that product's region.
                if Merged (Index) then
@@ -16863,7 +16922,10 @@ package body Model_Runner.Platform.Device.Products is
 
                   Wanted : constant Natural :=
                     Natural'Max
-                      (Gated (Index),
+                      (Natural'Max
+                         (Gated (Index),
+                          --  A folded up reads the gate's halves.
+                          (if Fold_Role (Index) = 2 then Index - 1 else 0)),
                        (if Writes_Copy then Index - 1
                         elsif This.Attends then Natural'Max (Source, Cached)
                         else Source));
@@ -18504,6 +18566,14 @@ package body Model_Runner.Platform.Device.Products is
                                     This.Gathers);
                      Vectors : constant Positive :=
                        (if Wide then Listed_Wide_Vectors else Listed_Vectors);
+
+                     --  Its part in a folded mixture (Fold_Role), and the
+                     --  two regions the fold's halves go to, in halves.
+                     Role : constant Natural := Fold_Role (Index);
+                     Region_One : constant Interfaces.Unsigned_64 :=
+                       Item.Half_Region / 2;
+                     Region_Two : constant Interfaces.Unsigned_64 :=
+                       Item.Half_Region;
                      Halved_Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Columns),
                         Columns => C.unsigned (Slots),
@@ -18521,34 +18591,58 @@ package body Model_Runner.Platform.Device.Products is
                        (Rows    => C.unsigned (This.Each),
                         Columns => C.unsigned (This.Columns),
                         Count   => C.unsigned (Count),
-                        First   => 0,
+                        --  Folded, the gate stores into the first region
+                        --  and the up into the second, as halves.
+                        First   =>
+                          (case Role is
+                             when 1 => C.unsigned (Region_One + 1),
+                             when 2 => C.unsigned (Region_Two + 1),
+                             when others => 0),
                         Packing =>
                           C.unsigned (Weight_Packing'Pos (This.Packing)),
                         Base    => C.unsigned (Places (Index).Base),
                         Joins   => 0,
-                        Table   => 0,
+                        --  The up's unit, on the gate's halves.
+                        Table   =>
+                          (if Role = 2
+                           then C.unsigned (Steps.Items (Index + 1).Unit)
+                           else 0),
                         Members => [0 => C.unsigned (This.Gathers),
                                     1 => (if Splits (Index)
                                           then C.unsigned (Split_Most) else 0),
+                                    --  And the down's operand, the middle
+                                    --  the up stored.
+                                    2 => (if Role = 4 then C.unsigned (Region_Two)
+                                          else 0),
                                     others => 0],
                         Stride  => C.unsigned (Slice_Bytes (Index)),
-                        Apart   => 0,
+                        Apart   =>
+                          (if Role = 2 then C.unsigned (Region_One + 1) else 0),
                         Routed  => (if This.By_Slot then 3 else 2));
                   begin
-                     Bind_Pipeline
-                       (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
-                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                           Product_Bytes, Halved_Shape'Address);
-                     Dispatch
-                       (Item.Buffer,
-                        C.unsigned
-                          ((Slots * This.Columns / 2 + Group_Size - 1)
-                           / Group_Size), 1, 1);
+                     --  Folded, the up reads the copy the gate laid out
+                     --  and the down the middle the up stored: neither
+                     --  lays out its own.
+                     if Role not in 2 | 4 then
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute, Item.Halve_Line);
+                        Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                              Product_Bytes, Halved_Shape'Address);
+                        Dispatch
+                          (Item.Buffer,
+                           C.unsigned
+                             ((Slots * This.Columns / 2 + Group_Size - 1)
+                              / Group_Size), 1, 1);
 
-                     Barrier
-                       (Item.Buffer, Pipeline_Stage_Compute,
-                        Pipeline_Stage_Compute, 0, 1, Wall'Address,
-                        0, Null_Handle, 0, Null_Handle);
+                        Barrier
+                          (Item.Buffer, Pipeline_Stage_Compute,
+                           Pipeline_Stage_Compute, 0, 1, Wall'Address,
+                           0, Null_Handle, 0, Null_Handle);
+                     end if;
+
+                     --  What the copy's front holds now is the runs' own
+                     --  layout, which no plain product reads as its copy.
+                     Half_From := -1;
 
                      Bind_Pipeline
                        (Item.Buffer, Bind_Point_Compute,

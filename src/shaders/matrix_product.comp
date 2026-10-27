@@ -185,7 +185,6 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
-#ifndef LISTED
 //  Three of the listed words, read otherwise by a plain tile. Stride is
 //  where its operand begins in the half-precision buffer, in halves: the
 //  front, as it always was, but for the projection down of a gated
@@ -194,7 +193,10 @@ layout(push_constant) uniform Shape {
 //  projection up: its answer is the gated middle, the unit table names
 //  applied to the gate and multiplied by what this product made, and the
 //  step that used to combine the two arms does not run. Zero for every
-//  other product.
+//  other product. A listed product reads Apart and Table the same way --
+//  a mixture's experts' up projection, their gate arm stored by slot --
+//  and takes its operand's offset from members[2], its stride being its
+//  experts' slices.
 float logistic_weighted(float v) {
     return v / (1.0 + exp(-clamp(v, -60.0, 60.0)));
 }
@@ -205,7 +207,6 @@ float gaussian_tanh(float v) {
     float inner = root * (v + bend * v * v * v);
     return 0.5 * v * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
 }
-#endif
 
 //  Rows and vectors of the answer one workgroup computes, and how much of
 //  the columns it takes at a time. The step is one Q8_0 block deep, which
@@ -2791,6 +2792,8 @@ void main() {
                     coopMatLoad(b[j], x,
     #ifndef LISTED
                                 shape.stride +
+    #else
+                                shape.members[2] +
     #endif
                                 tap_x + (vec0 + j * 16u) * x_stride + kb + step,
                                 x_stride,
@@ -2830,6 +2833,8 @@ void main() {
                     coopMatLoad(b[j], x,
     #ifndef LISTED
                                 shape.stride +
+    #else
+                                shape.members[2] +
     #endif
                                 tap_x + (vec0 + j * 16u) * x_stride + kb + step,
                                 x_stride,
@@ -2863,7 +2868,6 @@ void main() {
                 continue;
             }
 
-#ifndef LISTED
             if (shape.apart > 0u) {
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
                         gl_MatrixUseAccumulator> gate;
@@ -2890,7 +2894,6 @@ void main() {
                    gl_CooperativeMatrixLayoutColumnMajor);
                 continue;
             }
-#endif
 
             if (shape.first > 0u) {
                 coopMatStore
