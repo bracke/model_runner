@@ -221,6 +221,12 @@ const uint DM = 64u;
 //  down with every pipeline of this source.
 const bool PAIRED = SUBS >= 2u && BR == 16u && (DM % 32u) == 0u;
 
+//  Value tiles a subgroup reads before their products: four of a
+//  half's eight at a 256 head. All eight at once spilled eleven registers
+//  out of 256 and held the few-position check of Swift-1.5-Qwen3.8-27B
+//  8,188 deep at 853-855 us a layer; four read 797-824, two 868-878.
+const uint VALUES_AT_ONCE = DM / 32u >= 4u ? 4u : DM / 32u;
+
 //  IN_PLACE keeps the answer in the instruction's accumulators across the
 //  tiles, rescaled where it sits; see the head of the file. The heads of
 //  sixty-four keep the older way, a product a tile added into registers:
@@ -773,29 +779,33 @@ void main() {
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
-                //  The half's values read all at once, a sixteen past the
-                //  head at the head's last, before any is multiplied: read
+                //  The half's values read VALUES_AT_ONCE at a time, a
+                //  sixteen past the head at the head's last, before any of
+                //  them is multiplied: read
                 //  where they were used, each waited out the one before --
                 //  twenty-eight microseconds a tile of the same check.
-                coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
-                        gl_MatrixUseB> vm[DM / 32u];
+                [[unroll]] for (uint g = 0u; g < DM / 32u; g += VALUES_AT_ONCE) {
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                            gl_MatrixUseB> vm[VALUES_AT_ONCE];
 
-                [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
-                    uint tg = half_of * (DM / 32u) + t;
+                    [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
+                        uint tg = half_of * (DM / 32u) + g + t;
 
-                    coopMatLoad (vm[t], vh,
-                                 place_of (base + n0, shape.v_base,
-                                           shape.v_width)
-                                 + v_at + min (tg * 16u, dv - 16u),
-                                 shape.v_width,
-                                 gl_CooperativeMatrixLayoutRowMajor);
-                }
+                        coopMatLoad (vm[t], vh,
+                                     place_of (base + n0, shape.v_base,
+                                               shape.v_width)
+                                     + v_at + min (tg * 16u, dv - 16u),
+                                     shape.v_width,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+                    }
 
-                [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
-                    if ((half_of * (DM / 32u) + t) * 16u < dv) {
-                        [[unroll]] for (uint m = 0u; m < 2u; m++) {
-                            pacc[m * (DM / 32u) + t] =
-                                coopMatMulAdd (pm[m], vm[t], pacc[m * (DM / 32u) + t]);
+                    [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
+                        if ((half_of * (DM / 32u) + g + t) * 16u < dv) {
+                            [[unroll]] for (uint m = 0u; m < 2u; m++) {
+                                pacc[m * (DM / 32u) + g + t] =
+                                    coopMatMulAdd (pm[m], vm[t],
+                                                   pacc[m * (DM / 32u) + g + t]);
+                            }
                         }
                     }
                 }

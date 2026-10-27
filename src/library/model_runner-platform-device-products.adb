@@ -573,14 +573,26 @@ package body Model_Runner.Platform.Device.Products is
    Few_Busy        : constant := 48;
    Few_Most_Slices : constant := 32;
 
-   function Few_Slices (Groups : Natural; Span : Natural) return Natural
+   --  And for a head wider than Matrix_Wide_Head, whose workgroup stages
+   --  its queries in 30 KB of shared memory: two of them to a compute
+   --  unit, twenty-four on this part at once, so forty-eight ran as two
+   --  rounds and every workgroup's start and end were paid twice.
+   --  Swift-1.5-Qwen3.8-27B's check of four positions 8,188 deep attended
+   --  a layer in 945-960 us at 48, 851 at 24, 1,136 at 32.
+   Few_Wide_Busy : constant := 24;
+
+   function Few_Slices
+     (Groups : Natural;
+      Span   : Natural;
+      Wide   : Boolean := False) return Natural
    is (Natural'Max
          (1,
           Natural'Min
             (Few_Most_Slices,
              Natural'Min
                (Span / Slice_Least,
-                (Few_Busy + Natural'Max (1, Groups) - 1)
+                ((if Wide then Few_Wide_Busy else Few_Busy)
+                 + Natural'Max (1, Groups) - 1)
                 / Natural'Max (1, Groups)))));
 
    --  The few-position pipeline for a step of Positions, or none: two to
@@ -16873,7 +16885,10 @@ package body Model_Runner.Platform.Device.Products is
                         elsif Few
                         then Few_Slices
                                (This.Heads / Natural'Max (1, This.Group_Size),
-                                This.Last - This.First + 1)
+                                This.Last - This.First + 1,
+                                Wide => This.Head_Size > Matrix_Wide_Head
+                                        or else This.Value_Size
+                                                > Matrix_Wide_Head)
                         else Natural'Min
                                (Attend_Slices
                                   (Item, Count, This.Head_Size,
