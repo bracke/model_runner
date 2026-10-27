@@ -99,7 +99,12 @@ const uint SUB_TILES = SUB_KEYS / 16u;
 const uint V_TILES = DV / 64u;
 const uint V_AT_ONCE = 4u;
 
+//  A batch's compilation reads its queries where they lie rather than out
+//  of shared memory, their 18 KB the half of what held a unit to four
+//  workgroups.
+#ifndef WIDE_TILE
 shared float16_t qs[ROWS * DK];
+#endif
 shared float ss[ROWS * BC];
 #ifdef SPLIT_DEPTH
 //  A short cache's compilation scores the tile a quarter of the key a
@@ -136,6 +141,7 @@ void main() {
 
     //  The queries, in half precision, nought past the head and past the
     //  heads the latent has.
+#ifndef WIDE_TILE
     for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
         uint r = at / DK;
         uint c = at % DK;
@@ -143,6 +149,9 @@ void main() {
                  ? float16_t (q[(p * shape.heads + head0 + r) * dk + c])
                  : float16_t (0.0);
     }
+#else
+    uint q_at = (p * shape.heads + head0) * dk;
+#endif
 
     //  This position's window of the cache and this workgroup's slice of
     //  it, whole tiles, so the slices meet without sharing a position.
@@ -235,8 +244,15 @@ void main() {
                           + k_at;
             }
             [[unroll]] for (uint t = 0u; t < DK / 16u; t++) {
+#ifdef WIDE_TILE
+                coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
+                coopMatLoad (qf, q, q_at + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm =
+                  coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
+#else
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
                 coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+#endif
                 [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
                     coopMatLoad (km, kvh, keys[n] + min (t * 16u, dk - 16u), shape.kv_width,
