@@ -4168,6 +4168,87 @@ package body Tests.Framework_Cases is
       end;
    end Repository_Is_Scanned;
 
+   --  A tree of many Ada files has their references found several files at
+   --  once: every one is found, at its line, and they come in the order
+   --  the files were walked -- the graph a file at a time made -- with a
+   --  file of another language among them read in its turn.
+   procedure Many_Files_References_Found_Together
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Rp.Relation_Kind;
+
+      Project : constant String := Fresh ("many-references");
+      Units   : constant := 40;
+      Found   : Rp.Graph;
+
+      function Name (Index : Positive) return String is
+         Image : constant String := Natural'Image (100 + Index);
+      begin
+         return "Unit_" & Image (Image'Last - 1 .. Image'Last);
+      end Name;
+
+      function File (Index : Positive) return String is
+         Image : constant String := Natural'Image (100 + Index);
+      begin
+         return "src/unit_" & Image (Image'Last - 1 .. Image'Last) & ".adb";
+      end File;
+   begin
+      Dirs.Create_Path (Project & "/src");
+      for Index in 1 .. Units loop
+         Put_File (Project & "/" & File (Index) (1 .. File (Index)'Last - 1) & "s",
+                   "package " & Name (Index) & " is" & LF
+                   & "   procedure Run;" & LF
+                   & "end " & Name (Index) & ";" & LF);
+         Put_File (Project & "/" & File (Index),
+                   (if Index > 1 then "with " & Name (Index - 1) & ";" & LF else "")
+                   & "package body " & Name (Index) & " is" & LF
+                   & "   procedure Run is" & LF
+                   & "   begin" & LF
+                   & (if Index > 1 then "      " & Name (Index - 1) & ".Run;" & LF
+                      else "      null;" & LF)
+                   & "   end Run;" & LF
+                   & "end " & Name (Index) & ";" & LF);
+      end loop;
+      Put_File (Project & "/src/unit_20_tool.py",
+                "import os" & LF & "def run():" & LF & "    return os.getcwd()" & LF);
+
+      Found := Rp.Scan (Project);
+
+      for Index in 2 .. Units loop
+         Assert (Rp.References_To (Found, Name (Index - 1) & ".Run").Contains
+                   (File (Index) & ":5"),
+                 Name (Index) & "'s call of " & Name (Index - 1)
+                 & ".Run was not found");
+      end loop;
+
+      --  In the walk's order: a file's references all before the next's.
+      declare
+         Order : Natural := 0;
+         Last  : Natural := 0;
+      begin
+         for Index in 1 .. Rp.Relation_Count (Found) loop
+            declare
+               Link : constant Rp.Relation := Rp.Relation_At (Found, Index);
+               From : constant String := To_String (Link.From);
+            begin
+               if Link.Kind = Rp.References
+                 and then From'Length > 9
+                 and then From (From'First .. From'First + 8) = "src/unit_"
+                 and then From (From'Last - 3 .. From'Last) = ".adb"
+               then
+                  Order := Natural'Value (From (From'First + 9 .. From'First + 10));
+                  Assert (Order >= Last,
+                          "a reference of " & From & " came after one of unit"
+                          & Natural'Image (Last));
+                  Last := Order;
+               end if;
+            end;
+         end loop;
+         Assert (Last = Units, "no reference of the last unit was found");
+      end;
+   end Many_Files_References_Found_Together;
+
    --  C, Rust and Python are read by their own adapters: units, what each
    --  brings in, what each declares, and where those names are used.
    procedure Other_Languages_Are_Read
@@ -22301,6 +22382,10 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Repository_Is_Scanned'Access,
          "a scan finds files, units, symbols and references, and says how");
+      Register_Routine
+        (T, Many_Files_References_Found_Together'Access,
+         "a tree of many Ada files has every reference found, in the order "
+         & "its files are walked");
       Register_Routine
         (T, Other_Languages_Are_Read'Access,
          "C, Rust and Python files are read for their units, symbols and uses");

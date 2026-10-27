@@ -1,4 +1,5 @@
 with Interfaces;
+with System.Multiprocessors;
 with Ada.Unchecked_Deallocation;
 with Ada.Calendar;
 with Ada.Characters.Handling;
@@ -1357,11 +1358,15 @@ package body Model_Runner.Framework.Repository is
    end Catch_Up;
 
    --  The references a file makes to the symbols of the units it withs
-   --  and its own: every word that is such a symbol's last name.
+   --  and its own: every word that is such a symbol's last name. Read out
+   --  of Known, which is only read -- its indexes caught up before -- and
+   --  put down in Made, so that several files' are found at once: see
+   --  Scan_Into.
    procedure Find_References
-     (Path : String;
-      Text : String;
-      Into : in out Graph)
+     (Path  : String;
+      Text  : String;
+      Known : Graph;
+      Made  : in out Relation_Lists.Vector)
    is
       Tokens : constant Token_Vectors.Vector := Tokens_Of (Text);
       Unit   : constant String := Unit_Of (Tokens);
@@ -1435,16 +1440,15 @@ package body Model_Runner.Framework.Repository is
       --  The units whose names this file can use: its own, what it
       --  withs, and the parents of each, which a child sees and a with of
       --  a child names too.
-      Catch_Up (Into);
       Seen.Append (Unit);
       declare
          Withs : Name_Lists.Vector;
          Lines : Name_Lists.Vector;
       begin
-         if Into.Depends_By_Unit.Contains (Unit) then
-            for Place of Into.Depends_By_Unit.Constant_Reference (Unit) loop
+         if Known.Depends_By_Unit.Contains (Unit) then
+            for Place of Known.Depends_By_Unit.Constant_Reference (Unit) loop
                declare
-                  Link : Relation renames Into.Relations (Place);
+                  Link : Relation renames Known.Relations (Place);
                begin
                   Seen.Append (To_String (Link.To));
                   if Ada.Strings.Fixed.Index (To_String (Link.Where), Path & ":") = 1 then
@@ -1457,9 +1461,8 @@ package body Model_Runner.Framework.Repository is
 
          --  Its with clause is a use of the unit it names.
          for Index in 1 .. Natural (Withs.Length) loop
-            Add_Relation
-              (Into,
-               (Kind   => References,
+            Made.Append
+              (Relation'(Kind   => References,
                 From   => To_Unbounded_String (Path),
                 To     => To_Unbounded_String (Withs (Index)),
                 Source => Explicit,
@@ -1510,15 +1513,15 @@ package body Model_Runner.Framework.Repository is
          package Place_Sorting is new Place_Lists.Generic_Sorting;
       begin
          for Position in Places.Iterate loop
-            if Into.Symbols_By_Last.Contains (Word_Places.Key (Position)) then
-               Chosen.Append (Into.Symbols_By_Last.Element (Word_Places.Key (Position)));
+            if Known.Symbols_By_Last.Contains (Word_Places.Key (Position)) then
+               Chosen.Append (Known.Symbols_By_Last.Element (Word_Places.Key (Position)));
             end if;
          end loop;
          Place_Sorting.Sort (Chosen);
       end;
       for Place of Chosen loop
          declare
-            Item  : constant Symbol := Into.Symbols (Place);
+            Item  : constant Symbol := Known.Symbols (Place);
             Full  : constant String := To_String (Item.Name);
             Dot   : constant Natural :=
               Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
@@ -1559,9 +1562,8 @@ package body Model_Runner.Framework.Repository is
                        and then not (At_Index > 1 and then Is_Mark (Tokens (At_Index - 1), '''))
                        and then (To_String (Item.Kind) /= "package" or else Qualified)
                      then
-                        Add_Relation
-                          (Into,
-                           (Kind  => References,
+                        Made.Append
+                          (Relation'(Kind  => References,
                             From  => To_Unbounded_String (Path),
                             To    => Item.Name,
                             Source => (if Spelled_Whole (At_Index, Owner) then Explicit else Heuristic),
@@ -1581,9 +1583,8 @@ package body Model_Runner.Framework.Repository is
                                                                    "function")
                                                   or else Is_Word (Tokens (At_Index - 1), "end")))
                         then
-                           Add_Relation
-                             (Into,
-                              (Kind  => Calls,
+                           Made.Append
+                             (Relation'(Kind  => Calls,
                                From  => To_Unbounded_String (Unit),
                                To    => Item.Name,
                                Source => Heuristic,
@@ -1603,9 +1604,15 @@ package body Model_Runner.Framework.Repository is
      (Self : Ada_Adapter;
       Path : String;
       Text : String;
-      Into : in out Graph) is
+      Into : in out Graph)
+   is
+      Found : Relation_Lists.Vector;
    begin
-      Find_References (Path, Text, Into);
+      Catch_Up (Into);
+      Find_References (Path, Text, Into, Found);
+      for Item of Found loop
+         Add_Relation (Into, Item);
+      end loop;
    end Read_References;
 
    ---------------------------------------------------------------------------
@@ -1634,12 +1641,15 @@ package body Model_Runner.Framework.Repository is
    -- Scan --
    ----------
 
-   function Scan_All
+   --  A scan into the graph given, which it begins empty: returned, a
+   --  large tree's graph was copied out -- a second of humanize's /init,
+   --  2.5 million references -- and copied again where it was assigned.
+   procedure Scan_Into
      (Project_Directory : String;
-      Within            : Roots) return Graph
+      Within            : Roots;
+      Result            : in out Graph)
    is
       Skip_File : exception;
-      Result   : Graph;
       Texts    : Name_Lists.Vector;
       Paths    : Name_Lists.Vector;
 
@@ -1749,20 +1759,107 @@ package body Model_Runner.Framework.Repository is
               ((if Prefix = "" then "." else Prefix) & ": " & Why (Failure));
       end Walk;
    begin
+      declare
+         Fresh : Graph;
+      begin
+         Result := Fresh;
+      end;
       Walk (Project_Directory, "");
 
-      --  References need every symbol, so they come after every file.
-      for Index in 1 .. Natural (Paths.Length) loop
-         Result.Reading := To_Unbounded_String (Paths (Index));
-         Languages.Adapter_For (Language_Of (Paths (Index))).Read_References
-           (Paths (Index), Texts (Index), Result);
-      end loop;
+      --  References need every symbol, so they come after every file. An
+      --  Ada file's are found from the graph as it stands, which nothing
+      --  changes while they are, so several files' at once, each into a
+      --  list of its own, and the lists added in the files' order: the
+      --  same graph as one file at a time. humanize's 1,162 files spent
+      --  four of /init's ten seconds here, on one processor of eight.
+      Catch_Up (Result);
+      declare
+         Count : constant Natural := Natural (Paths.Length);
+         Found : array (1 .. Count) of Relation_Lists.Vector;
+         Is_Ada : array (1 .. Count) of Boolean;
+         Failed : Ada.Exceptions.Exception_Occurrence;
+         Fails  : Boolean := False;
+
+         protected Dealer is
+            procedure Next (Index : out Natural);
+            procedure Fail (Failure : Ada.Exceptions.Exception_Occurrence);
+         private
+            Given : Natural := 0;
+         end Dealer;
+
+         protected body Dealer is
+            procedure Next (Index : out Natural) is
+            begin
+               --  Past a failure no more are dealt: it is raised as a
+               --  file at a time raised it.
+               while Given < Count and then not Fails loop
+                  Given := Given + 1;
+                  if Is_Ada (Given) then
+                     Index := Given;
+                     return;
+                  end if;
+               end loop;
+               Index := 0;
+            end Next;
+
+            procedure Fail (Failure : Ada.Exceptions.Exception_Occurrence) is
+            begin
+               if not Fails then
+                  Ada.Exceptions.Save_Occurrence (Failed, Failure);
+                  Fails := True;
+               end if;
+            end Fail;
+         end Dealer;
+
+         task type Finder;
+         task body Finder is
+            Index : Natural;
+         begin
+            loop
+               Dealer.Next (Index);
+               exit when Index = 0;
+               Find_References (Paths (Index), Texts (Index), Result, Found (Index));
+            end loop;
+         exception
+            when Failure : others =>
+               Dealer.Fail (Failure);
+         end Finder;
+
+         Workers : constant Positive :=
+           Positive'Max
+             (1, Positive'Min
+                   (Natural (System.Multiprocessors.Number_Of_CPUs),
+                    Natural'Max (1, Count / 16)));
+      begin
+         for Index in 1 .. Count loop
+            Is_Ada (Index) := Language_Of (Paths (Index)) = "Ada";
+         end loop;
+         declare
+            Finders : array (1 .. Workers) of Finder with Unreferenced;
+         begin
+            null;
+         end;
+         if Fails then
+            Ada.Exceptions.Reraise_Occurrence (Failed);
+         end if;
+         for Index in 1 .. Count loop
+            Result.Reading := To_Unbounded_String (Paths (Index));
+            if Is_Ada (Index) then
+               for Item of Found (Index) loop
+                  Add_Relation (Result, Item);
+               end loop;
+               Found (Index).Clear;
+            else
+               Languages.Adapter_For (Language_Of (Paths (Index))).Read_References
+                 (Paths (Index), Texts (Index), Result);
+            end if;
+         end loop;
+      end;
       Result.Reading := Null_Unbounded_String;
       Result.Within := Within;
       Result.Within_Known := True;
       Share_Names (Result);
-      return Result;
-   end Scan_All;
+   end Scan_Into;
 
    -------------
    -- Refresh --
@@ -3076,7 +3173,7 @@ package body Model_Runner.Framework.Repository is
       if E.Is_Error (Read) then
          --  None kept: the tree scanned, not refreshed from nothing -- the
          --  same graph, its references read without asking what changed.
-         Found := Scan_All (Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item));
+         Scan_Into (Ada.Directories.Containing_Directory (Stores.Root (Item)), Roots_Of (Item), Found);
          Read_Again := 0;
       else
          Found := Refresh (Ada.Directories.Containing_Directory (Stores.Root (Item)), Kept,
@@ -3129,7 +3226,7 @@ package body Model_Runner.Framework.Repository is
       return Result : Graph do
          Refresh_Remembered (Key, Project_Directory, Within, Result, Held, Kept_Print, Whole => True);
          if not Held then
-            Result := Scan_All (Project_Directory, Within);
+            Scan_Into (Project_Directory, Within, Result);
             Remember (Key, Result);
          end if;
       end return;
