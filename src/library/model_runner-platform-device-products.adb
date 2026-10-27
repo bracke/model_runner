@@ -14515,8 +14515,11 @@ package body Model_Runner.Platform.Device.Products is
           and then Steps.Items (G + 2).Rows = Steps.Items (G + 1).Rows
           and then Reads_From (G + 3) = G + 2
           and then Steps.Items (G + 3).Columns = Steps.Items (G + 1).Each
-          and then Listed_Wide (Item, Steps.Items (G).Packing, Count,
-                                Steps.Items (G).Used, Steps.Items (G).Gathers));
+          --  Runs long enough that few are short, whichever tile takes
+          --  them.
+          and then Count * Steps.Items (G).Used
+                   >= Listed_Wide_Run
+                      * Natural'Max (Steps.Items (G).Gathers, 1));
 
       --  A step's part in such a fold: the gate one, the up two, the
       --  combination three, the down four; nought for any other step.
