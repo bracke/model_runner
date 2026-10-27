@@ -885,6 +885,90 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Bad_Changes_Write_Nothing;
 
+   --  A change of many records is staged several records at once: the
+   --  first refusal in the change's order is the one said, and nothing of
+   --  it is written; a good one is written whole, read back as it was put,
+   --  and opened again with nothing left to finish.
+   procedure Many_Records_Staged_Together
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Project : constant String := Fresh ("many-records");
+      Store   : S.Store;
+      Report  : S.Recovery_Report;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Records_Put : constant := 12;
+
+      function Name (Index : Positive) return String is
+         Image : constant String := Natural'Image (100 + Index);
+      begin
+         return "fact.k" & Image (Image'Last - 1 .. Image'Last);
+      end Name;
+
+      function Fact (Index : Positive; Revision : Positive := 1) return R.Item is
+         Image : constant String := Natural'Image (100 + Index);
+         Value : R.Item :=
+           R.Create ("project.fact", 1, "FACT-K" & Image (Image'Last - 1 .. Image'Last), Revision);
+      begin
+         R.Set (Value, "key", "k" & Image (Image'Last - 1 .. Image'Last));
+         R.Set (Value, "value", "value" & Image);
+         R.Set (Value, "source", "explicit");
+         R.Set (Value, "confidence", "authoritative");
+         return Value;
+      end Fact;
+   begin
+      S.Create (Store, Project, "Many", Status);
+      Assert (E.Is_Ok (Status), "the store was not made");
+
+      --  The fifth breaks its schema and the ninth is a second revision of
+      --  nothing: the fifth is said.
+      for Index in 1 .. Records_Put loop
+         declare
+            Value : R.Item := Fact (Index, Revision => (if Index = 9 then 2 else 1));
+         begin
+            if Index = 5 then
+               R.Remove (Value, "source");
+            end if;
+            S.Put (Change, F.Project_Area, Name (Index), Value);
+         end;
+      end loop;
+      S.Commit (Store, Change, Status);
+      Assert (Status.Code = E.Framework_Schema_Violation,
+              "the first refusal in the change's order was not the one said: "
+              & Code_Of (Status));
+      for Index in 1 .. Records_Put loop
+         Assert (not S.Exists (Store, F.Project_Area, Name (Index)),
+                 "part of a refused change was written: " & Name (Index));
+      end loop;
+
+      Change := S.No_Changes;
+      for Index in 1 .. Records_Put loop
+         S.Put (Change, F.Project_Area, Name (Index), Fact (Index));
+      end loop;
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "a good change of many records was refused: "
+              & Code_Of (Status));
+      S.Close (Store);
+
+      S.Open (Store, Project, Report, Status);
+      Assert (E.Is_Ok (Status), "the store did not open again: " & Code_Of (Status));
+      Assert (Report.Rolled_Forward = 0 and then Report.Rolled_Back = 0,
+              "a committed change was left to finish");
+      for Index in 1 .. Records_Put loop
+         declare
+            Value : R.Item;
+         begin
+            S.Read (Store, F.Project_Area, Name (Index), Value, Status);
+            Assert (E.Is_Ok (Status)
+                    and then R.Get (Value, "value") = R.Get (Fact (Index), "value")
+                    and then R.Revision (Value) = 1,
+                    Name (Index) & " was not read back as it was put");
+         end;
+      end loop;
+      S.Close (Store);
+   end Many_Records_Staged_Together;
+
    --  The entity index can be thrown away and is built again to the same
    --  thing.
    procedure Index_Is_Rebuilt (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -22070,6 +22154,10 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Bad_Changes_Write_Nothing'Access,
          "a change against an old revision or a schema writes nothing");
+      Register_Routine
+        (T, Many_Records_Staged_Together'Access,
+         "a change of many records says its first refusal and writes "
+         & "nothing, or writes them all whole");
       Register_Routine
         (T, Index_Is_Rebuilt'Access,
          "the entity index is built again to the same thing");

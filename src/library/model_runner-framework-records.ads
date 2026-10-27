@@ -58,6 +58,13 @@ package Model_Runner.Framework.Records is
       Entity_Id      : String;
       Revision       : Natural) return Item;
 
+   --  Target made Source, and Source left empty: a record handed on whole,
+   --  its fields moved rather than copied.
+   --
+   --  @param Target The record to become Source.
+   --  @param Source The record handed on.
+   procedure Take (Target : in out Item; Source : in out Item);
+
    --  The schema a record keeps to.
    --
    --  @param Value The record.

@@ -3485,43 +3485,122 @@ package body Model_Runner.Framework.Repository is
                         Held (Into (Index)).Append (Index);
                      end if;
                   end loop;
-                  for Bucket in 1 .. Count loop
-                     declare
-                        Field : constant String := "bucket." & Records.Numbered (Bucket, Count);
-                        Print : Interfaces.Unsigned_64 := Hash ("");
-                        Kept  : Records.Item :=
-                          Records.Create
-                            (Schemas.Repository_Schema, 1,
-                             "REPOSITORY-BUCKET-" & Records.Numbered (Bucket, Count),
-                             Stores.Current_Revision (Item, Indexes_Area, Bucket_Name (Bucket, Count)) + 1);
-                        Shown : Natural := 0;
-                     begin
-                        --  Its fields set in their order: fingerprint, reader
-                        --  and then the relations are placed as they come.
-                        Records.Set (Kept, "fingerprint", "");
-                        Records.Set (Kept, "reader", Reader_Version);
-                        for Index of Held (Bucket) loop
-                           declare
-                              Text : constant String := Relation_Text (Found.Relations (Index));
-                           begin
-                              Print := Hash_On (Text & ASCII.LF, Print);
-                              Shown := Shown + 1;
-                              Records.Set (Kept, "relation." & Records.Numbered (Shown, Sizes (Bucket)), Text);
-                           end;
-                        end loop;
+                  --  The buckets made a processor's worth at a time, each
+                  --  from the graph, which nothing changes meanwhile, into
+                  --  a record of its own; then, in their order, each one's
+                  --  print set and the bucket staged, handed on whole.
+                  declare
+                     Batch : constant Positive :=
+                       Positive'Max (1, Natural (System.Multiprocessors.Number_Of_CPUs));
+                     First : Positive := 1;
+                  begin
+                     while First <= Count loop
                         declare
-                           Its : constant String := Fingerprint_Of (Print);
+                           Last  : constant Positive := Positive'Min (Count, First + Batch - 1);
+                           Made  : array (First .. Last) of Records.Item;
+                           Its   : array (First .. Last) of Unbounded_String;
+                           Revisions : array (First .. Last) of Natural;
+                           Failed : Ada.Exceptions.Exception_Occurrence;
+                           Fails  : Boolean := False;
+
+                           protected Dealer is
+                              procedure Next (Bucket : out Natural);
+                              procedure Fail (Failure : Ada.Exceptions.Exception_Occurrence);
+                           private
+                              Given : Natural := First - 1;
+                           end Dealer;
+
+                           protected body Dealer is
+                              procedure Next (Bucket : out Natural) is
+                              begin
+                                 if Given < Last and then not Fails then
+                                    Given := Given + 1;
+                                    Bucket := Given;
+                                 else
+                                    Bucket := 0;
+                                 end if;
+                              end Next;
+
+                              procedure Fail (Failure : Ada.Exceptions.Exception_Occurrence) is
+                              begin
+                                 if not Fails then
+                                    Ada.Exceptions.Save_Occurrence (Failed, Failure);
+                                    Fails := True;
+                                 end if;
+                              end Fail;
+                           end Dealer;
+
+                           --  Its fields set in their order: fingerprint,
+                           --  reader and then the relations as they come.
+                           procedure Make (Bucket : Positive) is
+                              Print : Interfaces.Unsigned_64 := Hash ("");
+                              Shown : Natural := 0;
+                           begin
+                              Made (Bucket) :=
+                                Records.Create
+                                  (Schemas.Repository_Schema, 1,
+                                   "REPOSITORY-BUCKET-" & Records.Numbered (Bucket, Count),
+                                   Revisions (Bucket) + 1);
+                              Records.Set (Made (Bucket), "fingerprint", "");
+                              Records.Set (Made (Bucket), "reader", Reader_Version);
+                              for Index of Held (Bucket) loop
+                                 declare
+                                    Text : constant String := Relation_Text (Found.Relations (Index));
+                                 begin
+                                    Print := Hash_On (Text & ASCII.LF, Print);
+                                    Shown := Shown + 1;
+                                    Records.Set (Made (Bucket),
+                                                 "relation." & Records.Numbered (Shown, Sizes (Bucket)), Text);
+                                 end;
+                              end loop;
+                              Its (Bucket) := To_Unbounded_String (Fingerprint_Of (Print));
+                              Records.Set (Made (Bucket), "fingerprint", To_String (Its (Bucket)));
+                           end Make;
+
+                           task type Maker;
+                           task body Maker is
+                              Bucket : Natural;
+                           begin
+                              loop
+                                 Dealer.Next (Bucket);
+                                 exit when Bucket = 0;
+                                 Make (Bucket);
+                              end loop;
+                           exception
+                              when Failure : others =>
+                                 Dealer.Fail (Failure);
+                           end Maker;
                         begin
-                           Records.Set (Value, Field, Its);
-                           Records.Set (Kept, "fingerprint", Its);
-                           if not (Had = Count and then Records.Get (Old, Field) = Its
-                                   and then Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Count)))
-                           then
-                              Stores.Put (Change, Indexes_Area, Bucket_Name (Bucket, Count), Kept);
+                           for Bucket in First .. Last loop
+                              Revisions (Bucket) :=
+                                Stores.Current_Revision (Item, Indexes_Area, Bucket_Name (Bucket, Count));
+                           end loop;
+                           declare
+                              Makers : array (First .. Last) of Maker with Unreferenced;
+                           begin
+                              null;
+                           end;
+                           if Fails then
+                              Ada.Exceptions.Reraise_Occurrence (Failed);
                            end if;
+                           for Bucket in First .. Last loop
+                              declare
+                                 Field : constant String := "bucket." & Records.Numbered (Bucket, Count);
+                                 Print : constant String := To_String (Its (Bucket));
+                              begin
+                                 Records.Set (Value, Field, Print);
+                                 if not (Had = Count and then Records.Get (Old, Field) = Print
+                                         and then Stores.Exists (Item, Indexes_Area, Bucket_Name (Bucket, Count)))
+                                 then
+                                    Stores.Put_Taken
+                                      (Change, Indexes_Area, Bucket_Name (Bucket, Count), Made (Bucket));
+                                 end if;
+                              end;
+                           end loop;
+                           First := Last + 1;
                         end;
-                     end;
-                  end loop;
+                     end loop;
+                  end;
                end;
                --  What each bucket's references are to.
                declare

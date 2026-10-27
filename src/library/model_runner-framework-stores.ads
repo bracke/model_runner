@@ -238,6 +238,19 @@ package Model_Runner.Framework.Stores is
       Name   : String;
       Value  : Records.Item);
 
+   --  As Put, Value handed on rather than copied, and left empty: a large
+   --  record staged as it is made, without a copy of its fields.
+   --
+   --  @param Change The transaction.
+   --  @param Where Its area.
+   --  @param Name Its name.
+   --  @param Value The record, emptied.
+   procedure Put_Taken
+     (Change : in out Transaction;
+      Where  : Area;
+      Name   : String;
+      Value  : in out Records.Item);
+
    --  Stage a record to be removed.
    --
    --  @param Change The transaction.

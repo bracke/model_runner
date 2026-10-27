@@ -10,6 +10,7 @@ with Hostkit.Directory_Listing;
 with Hostkit.Fs;
 with Hostkit.Host;
 with Hostkit.Process;
+with System.Multiprocessors;
 
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
@@ -582,6 +583,35 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Put;
 
+   ---------------
+   -- Put_Taken --
+   ---------------
+
+   procedure Put_Taken
+     (Change : in out Transaction;
+      Where  : Area;
+      Name   : String;
+      Value  : in out Records.Item)
+   is
+      Held  : constant Natural := Position (Change, Where, Name);
+      Place : Positive;
+   begin
+      if Held = 0 then
+         Change.Operations.Append
+           (Operation'(Kind  => Put_Operation,
+                       Where => Where,
+                       Name  => To_Unbounded_String (Name),
+                       Value => <>));
+         Place := Change.Operations.Last_Index;
+      else
+         Place := Held;
+         Change.Operations (Place).Kind := Put_Operation;
+         Change.Operations (Place).Where := Where;
+         Change.Operations (Place).Name := To_Unbounded_String (Name);
+      end if;
+      Records.Take (Change.Operations (Place).Value, Value);
+   end Put_Taken;
+
    ------------
    -- Remove --
    ------------
@@ -969,16 +999,20 @@ package body Model_Runner.Framework.Stores is
    -- Stage --
    -----------
 
-   procedure Stage
+   --  Stage, with each change's print as it was staged -- a put's, or
+   --  nothing -- for Apply.
+   procedure Stage_Printed
      (Item   : in out Store;
       Change : Transaction;
-      Status : out Model_Runner.Errors.Error_Info)
+      Status : out Model_Runner.Errors.Error_Info;
+      Prints : out Name_Lists.Vector)
    is
       Journal  : constant String := Journal_Directory (Root (Item));
       Manifest : Records.Item :=
         Records.Create (Schemas.Manifest_Schema, 1, Journal_Entity, 1);
    begin
       Status := E.Success;
+      Prints.Clear;
       if not Item.Opened then
          Not_Open (Item, Status);
          return;
@@ -1000,99 +1034,203 @@ package body Model_Runner.Framework.Stores is
          return;
       end if;
 
-      for Index in 1 .. Natural (Change.Operations.Length) loop
-         declare
+      --  Each change's name and the record it replaces, in turn; then each
+      --  record put checked against its schema, written into the journal
+      --  and synced, several at once -- they are files of their own --
+      --  with its print taken as it is written, for Apply; then, in the
+      --  changes' order, the first refusal or the manifest. A graph's
+      --  64 buckets, 580 MB, were two seconds of humanize's /init a record
+      --  at a time.
+      declare
+         Count : constant Natural := Natural (Change.Operations.Length);
+
+         type Staging is record
+            Said    : E.Error_Info := E.Success;
+            Found   : Boolean := False;
+            Current : Natural := 0;
+            Entity  : Unbounded_String;
+            Print   : Unbounded_String;
+         end record;
+         package Staging_Vectors is new Ada.Containers.Vectors (Positive, Staging);
+         Done : Staging_Vectors.Vector;
+
+         --  One record put: the work that goes several at once.
+         procedure Put_One (Index : Positive) is
             Next   : Operation renames Change.Operations (Index);
             Name   : constant String := To_String (Next.Name);
             Origin : constant String := Place_Of (Next.Where, Name);
-            Held   : Records.Item;
-            Found  : Boolean := False;
+            Mine   : Staging renames Done (Index);
+            Said   : E.Error_Info;
          begin
-            if not Is_Name (Name) then
-               Status := E.Make (E.Framework_Name_Invalid);
-               E.Add_Text (Status, "value", Name);
+            Schemas.Validate (Next.Value, Origin, Said);
+            if E.Is_Error (Said) then
+               Mine.Said := Said;
                return;
             end if;
 
-            if Exists (Item, Next.Where, Name) then
-               Read (Item, Next.Where, Name, Held, Status);
-               if E.Is_Error (Status) then
-                  return;
-               end if;
-               Found := True;
+            if Records.Revision (Next.Value) /= Mine.Current + 1 then
+               Said := E.Make (E.Framework_Revision_Conflict);
+               E.Add_Text (Said, "name", Origin);
+               E.Add_Integer (Said, "actual", Long_Long_Integer (Mine.Current));
+               E.Add_Integer
+                 (Said, "expected",
+                  Long_Long_Integer (Records.Revision (Next.Value)) - 1);
+               Mine.Said := Said;
+               return;
             end if;
 
-            case Next.Kind is
-               when Put_Operation =>
-                  Schemas.Validate (Next.Value, Origin, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
+            --  A record no read takes whole is refused here, before the
+            --  mark: written, its change could be neither read back nor
+            --  finished at the next opening -- a graph of 2.5 million
+            --  references (580 MB) left every later opening a journal to
+            --  finish that never could be.
+            declare
+               Text : constant String := Records.Serialize (Next.Value);
+            begin
+               if Text'Length > Records.Max_Bytes then
+                  Said := E.Make (E.IO_File_Too_Large);
+                  E.Add_Text (Said, "path", Origin, E.Param_Path);
+                  E.Add_Integer (Said, "size", Long_Long_Integer (Text'Length), E.Param_Bytes);
+                  E.Add_Integer (Said, "limit", Records.Max_Bytes, E.Param_Bytes);
+                  Mine.Said := Said;
+                  return;
+               end if;
+               Write_Text (Join (Journal, "op-" & Six (Index) & Record_Suffix), Text, Said);
+               Mine.Print := To_Unbounded_String (Fingerprint (Text));
+            end;
+            Made_Durable
+              (Join (Journal, "op-" & Six (Index) & Record_Suffix), False, Said);
+            Mine.Said := Said;
+         end Put_One;
 
-                  declare
-                     Current : constant Natural :=
-                       (if Found then Records.Revision (Held) else 0);
-                  begin
-                     if Records.Revision (Next.Value) /= Current + 1 then
-                        Status := E.Make (E.Framework_Revision_Conflict);
-                        E.Add_Text (Status, "name", Origin);
-                        E.Add_Integer
-                          (Status, "actual", Long_Long_Integer (Current));
-                        E.Add_Integer
-                          (Status, "expected",
-                           Long_Long_Integer
-                             (Records.Revision (Next.Value)) - 1);
+         Puts : Natural := 0;
+      begin
+         Done.Set_Length (Ada.Containers.Count_Type (Count));
+         for Index in 1 .. Count loop
+            declare
+               Next  : Operation renames Change.Operations (Index);
+               Name  : constant String := To_String (Next.Name);
+               Held  : Records.Item;
+               Read_Said : E.Error_Info;
+            begin
+               if not Is_Name (Name) then
+                  Done (Index).Said := E.Make (E.Framework_Name_Invalid);
+                  E.Add_Text (Done (Index).Said, "value", Name);
+               elsif Exists (Item, Next.Where, Name) then
+                  Read (Item, Next.Where, Name, Held, Read_Said);
+                  if E.Is_Error (Read_Said) then
+                     Done (Index).Said := Read_Said;
+                  else
+                     Done (Index).Found := True;
+                     Done (Index).Current := Records.Revision (Held);
+                     Done (Index).Entity := To_Unbounded_String (Records.Entity_Id (Held));
+                  end if;
+               end if;
+               if E.Is_Ok (Done (Index).Said) and then Next.Kind = Put_Operation then
+                  Puts := Puts + 1;
+               end if;
+            end;
+         end loop;
+
+         declare
+            Workers : constant Natural :=
+              Natural'Min (Puts, Natural (System.Multiprocessors.Number_Of_CPUs));
+
+            protected Dealer is
+               procedure Next (Index : out Natural);
+            private
+               Given : Natural := 0;
+            end Dealer;
+
+            protected body Dealer is
+               procedure Next (Index : out Natural) is
+               begin
+                  while Given < Count loop
+                     Given := Given + 1;
+                     if E.Is_Ok (Done (Given).Said)
+                       and then Change.Operations (Given).Kind = Put_Operation
+                     then
+                        Index := Given;
                         return;
                      end if;
-                  end;
+                  end loop;
+                  Index := 0;
+               end Next;
+            end Dealer;
 
-                  --  A record no read takes whole is refused here, before
-                  --  the mark: written, its change could be neither read
-                  --  back nor finished at the next opening -- a graph of
-                  --  2.5 million references (580 MB) left every later
-                  --  opening a journal to finish that never could be.
-                  declare
-                     Text : constant String := Records.Serialize (Next.Value);
+            task type Stager;
+            task body Stager is
+               Index : Natural;
+            begin
+               loop
+                  Dealer.Next (Index);
+                  exit when Index = 0;
                   begin
-                     if Text'Length > Records.Max_Bytes then
-                        Status := E.Make (E.IO_File_Too_Large);
-                        E.Add_Text (Status, "path", Place_Of (Next.Where, Name), E.Param_Path);
-                        E.Add_Integer (Status, "size", Long_Long_Integer (Text'Length), E.Param_Bytes);
-                        E.Add_Integer (Status, "limit", Records.Max_Bytes, E.Param_Bytes);
-                        return;
-                     end if;
-                     Write_Text (Join (Journal, "op-" & Six (Index) & Record_Suffix), Text, Status);
+                     Put_One (Index);
+                  exception
+                     when others =>
+                        Write_Failed
+                          (Join (Journal, "op-" & Six (Index) & Record_Suffix),
+                           Done (Index).Said);
                   end;
-                  Made_Durable
-                    (Join (Journal, "op-" & Six (Index) & Record_Suffix), False, Status);
-                  if E.Is_Error (Status) then
-                     return;
-                  end if;
-
-                  Records.Set
-                    (Manifest, "op." & Six (Index),
-                     "put " & Directory_Name (Next.Where) & " " & Name & " "
-                     & Records.Entity_Id (Next.Value));
-
-               when Remove_Operation =>
-                  --  Removed on what it said at a revision since replaced:
-                  --  the newer is not taken away unseen.
-                  if Found and then Records.Revision (Next.Value) > 0
-                    and then Records.Revision (Held) /= Records.Revision (Next.Value)
+               end loop;
+            end Stager;
+         begin
+            if Workers <= 1 then
+               for Index in 1 .. Count loop
+                  if E.Is_Ok (Done (Index).Said)
+                    and then Change.Operations (Index).Kind = Put_Operation
                   then
-                     Status := E.Make (E.Framework_Revision_Conflict);
-                     E.Add_Text (Status, "name", Name);
-                     E.Add_Integer (Status, "actual", Long_Long_Integer (Records.Revision (Held)));
-                     E.Add_Integer (Status, "expected", Long_Long_Integer (Records.Revision (Next.Value)));
-                     return;
+                     Put_One (Index);
                   end if;
-                  Records.Set
-                    (Manifest, "op." & Six (Index),
-                     "remove " & Directory_Name (Next.Where) & " " & Name & " "
-                     & (if Found then Records.Entity_Id (Held) else "-"));
-            end case;
+               end loop;
+            else
+               declare
+                  Stagers : array (1 .. Workers) of Stager with Unreferenced;
+               begin
+                  null;
+               end;
+            end if;
          end;
-      end loop;
+
+         for Index in 1 .. Count loop
+            declare
+               Next : Operation renames Change.Operations (Index);
+               Name : constant String := To_String (Next.Name);
+               Mine : Staging renames Done (Index);
+            begin
+               if E.Is_Error (Mine.Said) then
+                  Status := Mine.Said;
+                  return;
+               end if;
+               Prints.Append (To_String (Mine.Print));
+               case Next.Kind is
+                  when Put_Operation =>
+                     Records.Set
+                       (Manifest, "op." & Six (Index),
+                        "put " & Directory_Name (Next.Where) & " " & Name & " "
+                        & Records.Entity_Id (Next.Value));
+
+                  when Remove_Operation =>
+                     --  Removed on what it said at a revision since
+                     --  replaced: the newer is not taken away unseen.
+                     if Mine.Found and then Records.Revision (Next.Value) > 0
+                       and then Mine.Current /= Records.Revision (Next.Value)
+                     then
+                        Status := E.Make (E.Framework_Revision_Conflict);
+                        E.Add_Text (Status, "name", Name);
+                        E.Add_Integer (Status, "actual", Long_Long_Integer (Mine.Current));
+                        E.Add_Integer (Status, "expected", Long_Long_Integer (Records.Revision (Next.Value)));
+                        return;
+                     end if;
+                     Records.Set
+                       (Manifest, "op." & Six (Index),
+                        "remove " & Directory_Name (Next.Where) & " " & Name & " "
+                        & (if Mine.Found then To_String (Mine.Entity) else "-"));
+               end case;
+            end;
+         end loop;
+      end;
 
       Records.Set
         (Manifest, "operations", Image (Natural (Change.Operations.Length)));
@@ -1103,6 +1241,16 @@ package body Model_Runner.Framework.Stores is
         (Join (Journal, Pending_File), Records.Serialize (Manifest), Status);
       Made_Durable (Join (Journal, Pending_File), False, Status);
       Made_Durable (Journal, True, Status);
+   end Stage_Printed;
+
+   procedure Stage
+     (Item   : in out Store;
+      Change : Transaction;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Prints : Name_Lists.Vector;
+   begin
+      Stage_Printed (Item, Change, Status, Prints);
    end Stage;
 
    ----------
@@ -1151,9 +1299,15 @@ package body Model_Runner.Framework.Stores is
       end if;
    end Crash_Here;
 
-   procedure Finish
+   --  Finish, where Prints may say each put's print as it was staged: a
+   --  commit finishing its own journal took every staged file back off
+   --  the device to see it whole and print it -- what it had just written
+   --  and synced. An opening finishing a journal left by another gives
+   --  none, and each is read back as before.
+   procedure Apply
      (Item   : in out Store;
-      Status : out Model_Runner.Errors.Error_Info)
+      Status : out Model_Runner.Errors.Error_Info;
+      Prints : Name_Lists.Vector)
    is
       Journal  : constant String := Journal_Directory (Root (Item));
       Manifest : Records.Item;
@@ -1246,7 +1400,12 @@ package body Model_Runner.Framework.Stores is
                   --  What is installed is a record: a staged file cut short
                   --  -- by a machine that went down before it was on the
                   --  device -- is not taken for one.
-                  if Dirs.Exists (Staged) then
+                  if Dirs.Exists (Staged)
+                    and then Op <= Natural (Prints.Length)
+                    and then Prints (Op) /= ""
+                  then
+                     Written.Note_Print (Root (Item), Record_Name (Where, Name), Prints (Op));
+                  elsif Dirs.Exists (Staged) then
                      declare
                         Text   : Unbounded_String;
                         Read   : E.Error_Info;
@@ -1351,6 +1510,13 @@ package body Model_Runner.Framework.Stores is
       if not Clear_Journal (Root (Item)) then
          Write_Failed (Journal, Status);
       end if;
+   end Apply;
+
+   procedure Finish
+     (Item   : in out Store;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Apply (Item, Status, Name_Lists.Empty_Vector);
    end Finish;
 
    -----------
@@ -1376,7 +1542,10 @@ package body Model_Runner.Framework.Stores is
      (Item     : in out Store;
       Change   : in out Transaction;
       Status   : out Model_Runner.Errors.Error_Info;
-      Own_Mark : out Boolean) is
+      Own_Mark : out Boolean)
+   is
+      --  Each put's print as it was staged, for Apply.
+      Prints : Name_Lists.Vector;
    begin
       Own_Mark := False;
       Status := E.Success;
@@ -1405,7 +1574,7 @@ package body Model_Runner.Framework.Stores is
          end if;
       end if;
 
-      Stage (Item, Change, Status);
+      Stage_Printed (Item, Change, Status, Prints);
       --  Refused while staged -- a record that does not keep to its schema
       --  -- nothing of it is left to be found as an interrupted change.
       if E.Is_Error (Status) and then Clear_Journal (Root (Item)) then
@@ -1429,7 +1598,7 @@ package body Model_Runner.Framework.Stores is
          return;
       end if;
       if E.Is_Ok (Status) then
-         Finish (Item, Status);
+         Apply (Item, Status, Prints);
       end if;
       if E.Is_Ok (Status) then
          Change.Operations.Clear;

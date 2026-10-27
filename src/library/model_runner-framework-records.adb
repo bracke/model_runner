@@ -83,6 +83,19 @@ package body Model_Runner.Framework.Records is
    -- Create --
    ------------
 
+   ----------
+   -- Take --
+   ----------
+
+   procedure Take (Target : in out Item; Source : in out Item) is
+   begin
+      Target.Schema_Id := Source.Schema_Id;
+      Target.Schema_Version := Source.Schema_Version;
+      Target.Entity_Id := Source.Entity_Id;
+      Target.Revision := Source.Revision;
+      Field_Vectors.Move (Target => Target.Fields, Source => Source.Fields);
+   end Take;
+
    function Create
      (Schema_Id      : String;
       Schema_Version : Positive;
