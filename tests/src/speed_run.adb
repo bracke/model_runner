@@ -148,7 +148,8 @@ package body Speed_Run is
       Cache       : L.Cache_Precision := L.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Penalty     : Model_Runner.Numerics.Real := 1.1;
+      Penalty     : Model_Runner.Numerics.Real :=
+        Model_Runner.Sampling.Configuration'(others => <>).Repeat_Penalty;
       Draft       : String := "";
       Draft_Tokens : Natural := 4;
       Draft_Tokens_Set : Boolean := False;

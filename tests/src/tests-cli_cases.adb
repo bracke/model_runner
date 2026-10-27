@@ -13093,6 +13093,62 @@ package body Tests.CLI_Cases is
       CPU.Use_Integer_Activations (Saved);
    end The_Speed_Tool_Takes_Runs_Arithmetic;
 
+   --  `tests speed` repeats as run repeats: with no --repeat-penalty, the
+   --  command's own. It kept 1.1 after run's went to 1.0, and DeepSeek-
+   --  Coder-V2-Lite's first token after a 529-token prompt was its end --
+   --  a figure of nothing generated.
+   procedure The_Speed_Tool_Takes_Runs_Penalty
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package L renames Model_Runner.Llama;
+
+      Model  : constant String := "obj/speed-penalty-llama.gguf";
+      Prompt : constant String := "obj/speed-penalty-prompt.txt";
+
+      function Said (Penalty : Model_Runner.Numerics.Real; Named : Boolean) return String is
+         Report : Speed_Run.Report;
+      begin
+         if Named then
+            Speed_Run.Run
+              (Path => Model, Prompt_Path => Prompt, Tokens => 24, Threads => 1,
+               Batch => 32, Repack => L.No_Repack, Repeats => 1, Result => Report,
+               Penalty => Penalty);
+         else
+            Speed_Run.Run
+              (Path => Model, Prompt_Path => Prompt, Tokens => 24, Threads => 1,
+               Batch => 32, Repack => L.No_Repack, Repeats => 1, Result => Report);
+         end if;
+         Assert (Report.Ran, "the tool would not measure: " & Speed_Run.Summary (Report));
+         return Report.Digest;
+      end Said;
+
+      Runs : constant Model_Runner.Numerics.Real :=
+        Model_Runner.Sampling.Configuration'(others => <>).Repeat_Penalty;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      declare
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Prompt);
+         Ada.Text_IO.Put_Line (Handle, "abababab");
+         Ada.Text_IO.Close (Handle);
+      end;
+
+      declare
+         Unnamed : constant String := Said (0.0, Named => False);
+         As_Run  : constant String := Said (Runs, Named => True);
+         Harder  : constant String := Said (Runs + 0.5, Named => True);
+      begin
+         Assert (As_Run /= Harder,
+                 "the fixture says the same under either penalty, so this "
+                 & "cannot tell them apart");
+         Assert (Unnamed = As_Run,
+                 "with no penalty named the tool repeated otherwise than run: "
+                 & Unnamed & " against " & As_Run);
+      end;
+   end The_Speed_Tool_Takes_Runs_Penalty;
+
    ---------------------------------------------
    -- Restamping_Takes_Only_The_Groups_Named --
    ---------------------------------------------
@@ -16190,6 +16246,9 @@ package body Tests.CLI_Cases is
         (T, The_Speed_Tool_Takes_Runs_Arithmetic'Access,
          "the speed tool tells the backends the arithmetic run takes for "
          & "the model");
+      Register_Routine
+        (T, The_Speed_Tool_Takes_Runs_Penalty'Access,
+         "the speed tool repeats with run's own penalty unless one is named");
       Register_Routine
         (T, Restamping_Takes_Only_The_Groups_Named'Access,
          "a restamp records only the groups it names, and leaves another "

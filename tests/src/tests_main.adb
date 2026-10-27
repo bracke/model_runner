@@ -62,6 +62,7 @@ with Model_Runner.Backend.Device;
 with Model_Runner.Numerics;
 with Model_Runner.Llama;
 with Model_Runner.Generation;
+with Model_Runner.Sampling;
 with Model_Runner.Schema;
 with Model_Runner.Tools;
 with Model_Runner.Images;
@@ -3369,7 +3370,13 @@ begin
                   --  what the command keeps by default.
                   Cache       => Cache_Asked,
                   Backend     => Backend_Of (Chosen_Backend),
-                  Penalty     => Real_Of (Option ("--repeat-penalty", "1.1")),
+                  --  run's own default unless named: it stayed at 1.1 here
+                  --  after run's went to 1.0, and DeepSeek-Coder-V2-Lite's
+                  --  first token after a 529-token prompt was then its end.
+                  Penalty     =>
+                    (if Given ("--repeat-penalty")
+                     then Real_Of (Option ("--repeat-penalty", ""))
+                     else Model_Runner.Sampling.Configuration'(others => <>).Repeat_Penalty),
                   Draft       => Option ("--draft-model", ""),
                   --  Three a round from the next block unless named, as run
                   --  drafts from it; 0 turns drafting off, as run's does.

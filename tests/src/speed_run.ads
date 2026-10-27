@@ -1,3 +1,4 @@
+with Model_Runner.Sampling;
 with Model_Runner.Generation;
 --  The published speed figures, taken again.
 --
@@ -134,7 +135,8 @@ package Speed_Run is
    --    selects. The device figures were taken by hand before this existed,
    --    which is the same gap the reference-backend ratio had and the same
    --    answer: a figure that is a command can be taken again.
-   --  @param Penalty The repetition penalty, as --repeat-penalty selects.
+   --  @param Penalty The repetition penalty, as --repeat-penalty selects;
+   --    unnamed, the command's own default.
    --    Named because the default one changes what a long prompt produces:
    --    with it, this model answers the long prompt with its
    --    end-of-sequence token and generates nothing, which measures a
@@ -205,7 +207,8 @@ package Speed_Run is
         Model_Runner.Llama.Exact;
       Backend     : Model_Runner.Backend.Backend_Kind :=
         Model_Runner.Backend.Backend_CPU;
-      Penalty     : Model_Runner.Numerics.Real := 1.1;
+      Penalty     : Model_Runner.Numerics.Real :=
+        Model_Runner.Sampling.Configuration'(others => <>).Repeat_Penalty;
       Draft       : String := "";
       Draft_Tokens : Natural := 4;
       Draft_Tokens_Set : Boolean := False;

@@ -1890,15 +1890,15 @@ package body Model_Runner.CLI.Repo is
                      declare
                         function Is_Named (Name : String) return Boolean is (Name = Named);
                      begin
-                     for One of Uses_In (Directory, Found, Is_Named'Access) loop
-                        if One.Kind = Rp.References then
-                           for Unit of Units_In (To_String (One.From)) loop
-                              if not Result.Contains (Unit) then
-                                 Result.Append (Unit);
-                              end if;
-                           end loop;
-                        end if;
-                     end loop;
+                        for One of Uses_In (Directory, Found, Is_Named'Access) loop
+                           if One.Kind = Rp.References then
+                              for Unit of Units_In (To_String (One.From)) loop
+                                 if not Result.Contains (Unit) then
+                                    Result.Append (Unit);
+                                 end if;
+                              end loop;
+                           end if;
+                        end loop;
                      end;
                   else
                      declare

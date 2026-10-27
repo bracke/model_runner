@@ -1460,25 +1460,25 @@ package body Model_Runner.Framework.Context is
                     (if Named_Symbols.Is_Empty then Repository.Relation_Lists.Empty_Vector
                      else Repository.Uses_Of (Item, Graph, Named'Access));
                begin
-               for Name of Named_Symbols loop
-                  for Link of Used loop
-                     declare
-                        Where : constant String := To_String (Link.Where);
-                        Colon : constant Natural := Ada.Strings.Fixed.Index (Where, ":", Ada.Strings.Backward);
-                     begin
-                        exit when Uses_Offered = Uses_Most;
-                        if To_String (Link.To) = Name
-                          and then Colon > Where'First and then Colon < Where'Last
-                          and then (for all C of Where (Colon + 1 .. Where'Last) => C in '0' .. '9')
-                          and then Where'Last - Colon <= 7
-                        then
-                           Offer_Use (Where (Where'First .. Colon - 1),
-                                      Positive'Value (Where (Colon + 1 .. Where'Last)),
-                                      "where " & Name & " is used", Normal);
-                        end if;
-                     end;
+                  for Name of Named_Symbols loop
+                     for Link of Used loop
+                        declare
+                           Where : constant String := To_String (Link.Where);
+                           Colon : constant Natural := Ada.Strings.Fixed.Index (Where, ":", Ada.Strings.Backward);
+                        begin
+                           exit when Uses_Offered = Uses_Most;
+                           if To_String (Link.To) = Name
+                             and then Colon > Where'First and then Colon < Where'Last
+                             and then (for all C of Where (Colon + 1 .. Where'Last) => C in '0' .. '9')
+                             and then Where'Last - Colon <= 7
+                           then
+                              Offer_Use (Where (Where'First .. Colon - 1),
+                                         Positive'Value (Where (Colon + 1 .. Where'Last)),
+                                         "where " & Name & " is used", Normal);
+                           end if;
+                        end;
+                     end loop;
                   end loop;
-               end loop;
                end;
             end;
 
