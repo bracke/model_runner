@@ -1,4 +1,5 @@
 #version 450
+#extension GL_EXT_control_flow_attributes : require
 
 //  The slices of a split attention put together.
 //
@@ -28,6 +29,21 @@ layout(push_constant, std430) uniform Shape {
     uint slices;
 } shape;
 
+//  A chunk of slices' largest scores, their sums and their weights
+//  against the largest of all, read by a lane a slice. Read in turn by a lane -- three
+//  loops over the slices, each read waited out before the next was made --
+//  a round's check of four positions in twelve slices merged in about as
+//  long as it attended a tile. The adding is still a slice at a time, in
+//  the order they lie in.
+const uint CHUNK = 64u;
+shared float tops[CHUNK];
+shared float sums[CHUNK];
+shared float worth[CHUNK];
+
+//  Components a lane carries a pass: eight, five hundred and twelve a
+//  workgroup, every one of a slice's read before any is added.
+const uint CARRIED = 8u;
+
 void main() {
     uint head = gl_WorkGroupID.x;
     uint slot = gl_WorkGroupID.y;
@@ -39,37 +55,71 @@ void main() {
 
     uint stride = shape.value_size + 2u;
     uint records = shape.positions * shape.heads * shape.value_size;
+    uint first   = records + (slot * shape.heads + head) * stride;
+    uint apart   = shape.positions * shape.heads * stride;
 
     float largest = -1.0 / 0.0;
 
-    for (uint s = 0u; s < shape.slices; ++s) {
-        uint at = records + ((s * shape.positions + slot) * shape.heads + head)
-                            * stride;
-        largest = max (largest, y[at + shape.value_size]);
-    }
+    for (uint s0 = 0u; s0 < shape.slices; s0 += CHUNK) {
+        uint many = min (CHUNK, shape.slices - s0);
 
-    float total = 0.0;
+        barrier();
+        if (lane < many) {
+            tops[lane] = y[first + (s0 + lane) * apart + shape.value_size];
+        }
+        barrier();
 
-    for (uint s = 0u; s < shape.slices; ++s) {
-        uint at = records + ((s * shape.positions + slot) * shape.heads + head)
-                            * stride;
-        total += y[at + shape.value_size + 1u]
-                 * exp (y[at + shape.value_size] - largest);
+        for (uint s = 0u; s < many; ++s) {
+            largest = max (largest, tops[s]);
+        }
     }
 
     uint out_at = slot * shape.heads * shape.value_size
                   + head * shape.value_size;
 
-    for (uint c = lane; c < shape.value_size; c += 64u) {
-        float blend = 0.0;
+    for (uint c0 = 0u; c0 < shape.value_size; c0 += 64u * CARRIED) {
+        float total = 0.0;
+        float blend[CARRIED];
 
-        for (uint s = 0u; s < shape.slices; ++s) {
-            uint at = records
-                      + ((s * shape.positions + slot) * shape.heads + head)
-                        * stride;
-            blend += y[at + c] * exp (y[at + shape.value_size] - largest);
+        [[unroll]] for (uint k = 0u; k < CARRIED; k++) {
+            blend[k] = 0.0;
         }
 
-        y[out_at + c] = blend / total;
+        for (uint s0 = 0u; s0 < shape.slices; s0 += CHUNK) {
+            uint many = min (CHUNK, shape.slices - s0);
+
+            barrier();
+            if (lane < many) {
+                uint at = first + (s0 + lane) * apart;
+
+                sums[lane]  = y[at + shape.value_size + 1u];
+                worth[lane] = exp (y[at + shape.value_size] - largest);
+            }
+            barrier();
+
+            for (uint s = 0u; s < many; ++s) {
+                uint  at = first + (s0 + s) * apart;
+                float w  = worth[s];
+                float got[CARRIED];
+
+                total += sums[s] * w;
+
+                [[unroll]] for (uint k = 0u; k < CARRIED; k++) {
+                    uint c = c0 + k * 64u + lane;
+                    got[k] = c < shape.value_size ? y[at + c] : 0.0;
+                }
+                [[unroll]] for (uint k = 0u; k < CARRIED; k++) {
+                    blend[k] += got[k] * w;
+                }
+            }
+        }
+
+        [[unroll]] for (uint k = 0u; k < CARRIED; k++) {
+            uint c = c0 + k * 64u + lane;
+
+            if (c < shape.value_size) {
+                y[out_at + c] = blend[k] / total;
+            }
+        }
     }
 }
