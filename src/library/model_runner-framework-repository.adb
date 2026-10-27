@@ -229,10 +229,11 @@ package body Model_Runner.Framework.Repository is
    procedure Share_Names (Found : in out Graph) is
       Held : Shared_Names.Map;
 
-      --  The last relation's file and finder: the next is mostly from the
-      --  same, taken without asking Held -- asked for all three, a graph
-      --  of 2.5 million relations took two seconds.
-      Last_From, Last_Origin : Unbounded_String;
+      --  The last relation's file, finder and name: the next is mostly
+      --  from the same, and a file's uses of one name come together, so
+      --  each taken without asking Held -- asked for all three, a graph of
+      --  2.5 million relations took two seconds.
+      Last_From, Last_To, Last_Origin : Unbounded_String;
 
       procedure Share (Name : in out Unbounded_String) is
       begin
@@ -254,7 +255,7 @@ package body Model_Runner.Framework.Repository is
             Link : Relation renames Found.Relations.Reference (Index);
          begin
             Share_As_Last (Link.From, Last_From);
-            Share (Link.To);
+            Share_As_Last (Link.To, Last_To);
             Share_As_Last (Link.Origin, Last_Origin);
          end;
       end loop;
@@ -1370,6 +1371,9 @@ package body Model_Runner.Framework.Repository is
    is
       Tokens : constant Token_Vectors.Vector := Tokens_Of (Text);
       Unit   : constant String := Unit_Of (Tokens);
+      --  Made once and shared by every relation the file is found to have.
+      Path_Name : constant Unbounded_String := To_Unbounded_String (Path);
+      Unit_Name : constant Unbounded_String := To_Unbounded_String (Unit);
       Seen   : Name_Lists.Vector;
       Visible : Name_Sets.Set;
       Places : Word_Places.Map;
@@ -1463,7 +1467,7 @@ package body Model_Runner.Framework.Repository is
          for Index in 1 .. Natural (Withs.Length) loop
             Made.Append
               (Relation'(Kind   => References,
-                From   => To_Unbounded_String (Path),
+                From   => Path_Name,
                 To     => To_Unbounded_String (Withs (Index)),
                 Source => Explicit,
                 Sure   => Certain,
@@ -1564,7 +1568,7 @@ package body Model_Runner.Framework.Repository is
                      then
                         Made.Append
                           (Relation'(Kind  => References,
-                            From  => To_Unbounded_String (Path),
+                            From  => Path_Name,
                             To    => Item.Name,
                             Source => (if Spelled_Whole (At_Index, Owner) then Explicit else Heuristic),
                             Sure   => (if Spelled_Whole (At_Index, Owner) then Certain else Probable),
@@ -1585,7 +1589,7 @@ package body Model_Runner.Framework.Repository is
                         then
                            Made.Append
                              (Relation'(Kind  => Calls,
-                               From  => To_Unbounded_String (Unit),
+                               From  => Unit_Name,
                                To    => Item.Name,
                                Source => Heuristic,
                                Sure   => Probable,
@@ -3466,9 +3470,18 @@ package body Model_Runner.Framework.Repository is
                --  A reference goes in its bucket; what a file declares stays
                --  in the record (0), so that a graph without its references
                --  -- the record alone -- is one a refresh can work from.
+               --  A file's relations come together, so its bucket is
+               --  asked once a run of them: the path hashed for each of
+               --  2.5 million was half a second of /init.
                for Index in 1 .. Relations loop
                   if Is_Reference (Found.Relations (Index).Kind) then
-                     Into (Index) := Bucket_Of (Found.Relations (Index), Count);
+                     if Index > 1 and then Into (Index - 1) > 0
+                       and then Found.Relations (Index).Origin = Found.Relations (Index - 1).Origin
+                     then
+                        Into (Index) := Into (Index - 1);
+                     else
+                        Into (Index) := Bucket_Of (Found.Relations (Index), Count);
+                     end if;
                      Sizes (Into (Index)) := Sizes (Into (Index)) + 1;
                   else
                      Into (Index) := 0;
