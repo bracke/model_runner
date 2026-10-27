@@ -631,7 +631,7 @@ package body Model_Runner.Platform.Device.Products is
    --  slice staged its position's queries and left a record to merge.
    --  Positions a workgroup of a latent's batch compilation answers; see
    --  attention_latent.comp's POS.
-   Latent_Pair : constant := 2;
+   Latent_Pair : constant := 3;
 
    --  Workgroups below which a latent attends on its split compilation:
    --  the device's twelve units.

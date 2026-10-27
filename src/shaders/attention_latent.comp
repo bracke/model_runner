@@ -35,6 +35,7 @@
 //  Four subgroups of sixty-four, as the host has established a subgroup
 //  here is.
 layout(local_size_x = 256) in;
+const uint SUBS = 4u;
 
 layout(std430, binding = 0) readonly  buffer Cache { float kv[]; };
 layout(std430, binding = 1) readonly  buffer Query { float q[]; };
@@ -90,25 +91,29 @@ const uint BC   = 128u;
 #else
 const uint BC   = 64u;
 #endif
-const uint SUB_KEYS = BC / 4u;
+const uint SUB_KEYS = BC / SUBS;
 const uint SUB_TILES = SUB_KEYS / 16u;
 
-//  Positions a workgroup answers: a batch's two, each key and value read
-//  feeding both. One workgroup a position read the whole cache once a
+//  Positions a workgroup answers: a batch's three, each key and value read
+//  feeding all three. One workgroup a position read the whole cache once a
 //  position -- nine gigabytes a 2,048-position layer of DeepSeek-V2-Lite
 //  four thousand deep, and the reads, not the products, were its time.
+//  On the timeline a layer's attention four thousand deep: one position
+//  74 ms, two 56.6, three 52.1, four 68.7 (thirty-two blends a subgroup);
+//  four over eight subgroups spilled 221 registers past the 128 a
+//  workgroup that wide may have (89.5). The engine's Latent_Pair.
 #ifdef WIDE_TILE
-const uint POS = 2u;
+const uint POS = 3u;
 #else
 const uint POS = 1u;
 #endif
 //  The rows the softmax gives a subgroup.
-const uint SUB_ROWS = POS * ROWS / 4u;
+const uint SUB_ROWS = POS * ROWS / SUBS;
 
-//  A subgroup's quarter of the value columns, in tiles of sixteen, and how
+//  A subgroup's share of the value columns, in tiles of sixteen, and how
 //  many of them are read before they are multiplied: all eight spilled
 //  attention_matrix.comp's registers at a head of 256.
-const uint V_TILES = DV / 64u;
+const uint V_TILES = DV / 16u / SUBS;
 const uint V_AT_ONCE = 4u;
 
 //  A batch's compilation reads its queries where they lie rather than out
@@ -359,7 +364,7 @@ void main() {
                 [[unroll]] for (uint g = 0u; g < V_TILES; g += V_AT_ONCE) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> vm[V_AT_ONCE];
                     [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
-                        uint col = sub * (DV / 4u) + (g + t) * 16u;
+                        uint col = sub * (DV / SUBS) + (g + t) * 16u;
                         coopMatLoad (vm[t], kvh, values + min (col, dv - 16u), shape.kv_width,
                                      gl_CooperativeMatrixLayoutRowMajor);
                     }
@@ -381,7 +386,7 @@ void main() {
     [[unroll]] for (uint m = 0u; m < POS; m++) {
     uint p = p0 + m;
     [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
-        uint col0 = sub * (DV / 4u) + t * 16u;
+        uint col0 = sub * (DV / SUBS) + t * 16u;
         coopMatStore (pacc[m][t], ss, sub * 256u, 16u, gl_CooperativeMatrixLayoutRowMajor);
         //  A subgroup's own quarter of ss, read back by the same subgroup.
         subgroupBarrier ();
