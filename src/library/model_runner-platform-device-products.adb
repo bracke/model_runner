@@ -629,6 +629,10 @@ package body Model_Runner.Platform.Device.Products is
 
    --  A batch of positions is busy enough a slice each: sliced, every
    --  slice staged its position's queries and left a record to merge.
+   --  Positions a workgroup of a latent's batch compilation answers; see
+   --  attention_latent.comp's POS.
+   Latent_Pair : constant := 2;
+
    --  Workgroups below which a latent attends on its split compilation:
    --  the device's twelve units.
    Latent_Split_Below : constant := 12;
@@ -17170,7 +17174,9 @@ package body Model_Runner.Platform.Device.Products is
                                  / Natural'Max (1, This.Group_Size)),
                               C.unsigned (Slices),
                               C.unsigned
-                                (if Few_Line (Index) = Item.Latent_Attend
+                                (if Latent_Batch (Index)
+                                 then (Count + Latent_Pair - 1) / Latent_Pair
+                                 elsif Few_Line (Index) = Item.Latent_Attend
                                  then Count else 1));
                         elsif Attends_By_Matrix
                              (Item, Seated, This.Head_Size, This.Value_Size)

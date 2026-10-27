@@ -93,6 +93,18 @@ const uint BC   = 64u;
 const uint SUB_KEYS = BC / 4u;
 const uint SUB_TILES = SUB_KEYS / 16u;
 
+//  Positions a workgroup answers: a batch's two, each key and value read
+//  feeding both. One workgroup a position read the whole cache once a
+//  position -- nine gigabytes a 2,048-position layer of DeepSeek-V2-Lite
+//  four thousand deep, and the reads, not the products, were its time.
+#ifdef WIDE_TILE
+const uint POS = 2u;
+#else
+const uint POS = 1u;
+#endif
+//  The rows the softmax gives a subgroup.
+const uint SUB_ROWS = POS * ROWS / 4u;
+
 //  A subgroup's quarter of the value columns, in tiles of sixteen, and how
 //  many of them are read before they are multiplied: all eight spilled
 //  attention_matrix.comp's registers at a head of 256.
@@ -105,7 +117,7 @@ const uint V_AT_ONCE = 4u;
 #ifndef WIDE_TILE
 shared float16_t qs[ROWS * DK];
 #endif
-shared float ss[ROWS * BC];
+shared float ss[POS * ROWS * BC];
 #ifdef SPLIT_DEPTH
 //  A short cache's compilation scores the tile a quarter of the key a
 //  subgroup: each subgroup's every key against nine steps of it, the four
@@ -117,8 +129,8 @@ shared float ss[ROWS * BC];
 const uint DEPTH_STEPS = DK / 16u / 4u;
 shared float parts[4u * ROWS * BC];
 #endif
-shared float16_t ps[ROWS * BC];
-shared float rowscale[ROWS];
+shared float16_t ps[POS * ROWS * BC];
+shared float rowscale[POS * ROWS];
 shared uint rowmap[256];
 
 void main() {
@@ -130,7 +142,8 @@ void main() {
     uint group  = gl_WorkGroupID.x;
     uint slices = gl_NumWorkGroups.y;
     uint slice  = gl_WorkGroupID.y;
-    uint p      = gl_WorkGroupID.z;
+    uint p0     = gl_WorkGroupID.z * POS;
+    uint p_end  = min (p0 + POS, shape.positions) - 1u;
 
     uint dk = shape.head_size;
     uint dv = shape.value_size;
@@ -146,18 +159,25 @@ void main() {
         uint r = at / DK;
         uint c = at % DK;
         qs[at] = r < rows && c < dk
-                 ? float16_t (q[(p * shape.heads + head0 + r) * dk + c])
+                 ? float16_t (q[(p0 * shape.heads + head0 + r) * dk + c])
                  : float16_t (0.0);
     }
 #else
-    uint q_at = (p * shape.heads + head0) * dk;
+    //  Each position's queries; a position past the batch reads the
+    //  last one's, and leaves no record.
+    uint q_at[POS];
+    [[unroll]] for (uint m = 0u; m < POS; m++) {
+        q_at[m] = (min (p0 + m, p_end) * shape.heads + head0) * dk;
+    }
 #endif
 
     //  This position's window of the cache and this workgroup's slice of
     //  it, whole tiles, so the slices meet without sharing a position.
     //  The flag is the low bit of its word; the copy's room, which this
     //  does not use, is above it.
-    uint last_p  = shape.last + ((shape.causal & 1u) != 0u ? p : 0u);
+    //  To the last position's last key; each row stops at its own.
+    bool causal = (shape.causal & 1u) != 0u;
+    uint last_p  = shape.last + (causal ? p_end : 0u);
     uint first_p = shape.first;
     uint from_tile = shape.page_shift != 0u ? (first_p & ~15u) : first_p;
     uint span  = last_p + 1u - from_tile;
@@ -189,16 +209,18 @@ void main() {
     }
 
     //  A subgroup's four rows' largest score and sum so far.
-    float top[4];
-    float total[4];
-    [[unroll]] for (uint i = 0u; i < 4u; i++) {
+    float top[SUB_ROWS];
+    float total[SUB_ROWS];
+    [[unroll]] for (uint i = 0u; i < SUB_ROWS; i++) {
         top[i] = -1.0 / 0.0;
         total[i] = 0.0;
     }
 
-    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> pacc[V_TILES];
-    [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
-        pacc[t] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> pacc[POS][V_TILES];
+    [[unroll]] for (uint m = 0u; m < POS; m++) {
+        [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
+            pacc[m][t] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+        }
     }
 
     for (uint base = walk_from; base <= walk_to; base += BC) {
@@ -236,33 +258,40 @@ void main() {
         }
 #else
         {
-            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc[SUB_TILES];
+            coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> sacc[POS][SUB_TILES];
             uint keys[SUB_TILES];
             [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
-                sacc[n] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+                [[unroll]] for (uint m = 0u; m < POS; m++) {
+                    sacc[m][n] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator> (0.0);
+                }
                 keys[n] = place_of (base + sub * SUB_KEYS + n * 16u, shape.k_base, shape.kv_width)
                           + k_at;
             }
             [[unroll]] for (uint t = 0u; t < DK / 16u; t++) {
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm[POS];
 #ifdef WIDE_TILE
-                coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
-                coopMatLoad (qf, q, q_at + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
-                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm =
-                  coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
+                [[unroll]] for (uint m = 0u; m < POS; m++) {
+                    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
+                    coopMatLoad (qf, q, q_at[m] + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
+                    qm[m] = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
+                }
 #else
-                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
-                coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                coopMatLoad (qm[0], qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
 #endif
                 [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
                     coopMatLoad (km, kvh, keys[n] + min (t * 16u, dk - 16u), shape.kv_width,
                                  gl_CooperativeMatrixLayoutColumnMajor);
-                    sacc[n] = coopMatMulAdd (qm, km, sacc[n]);
+                    [[unroll]] for (uint m = 0u; m < POS; m++) {
+                        sacc[m][n] = coopMatMulAdd (qm[m], km, sacc[m][n]);
+                    }
                 }
             }
             [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
-                coopMatStore (sacc[n], ss, sub * SUB_KEYS + n * 16u, BC,
-                              gl_CooperativeMatrixLayoutRowMajor);
+                [[unroll]] for (uint m = 0u; m < POS; m++) {
+                    coopMatStore (sacc[m][n], ss, m * ROWS * BC + sub * SUB_KEYS + n * 16u, BC,
+                                  gl_CooperativeMatrixLayoutRowMajor);
+                }
             }
         }
 #endif
@@ -270,13 +299,16 @@ void main() {
 
         //  The softmax, four rows a subgroup and a column a lane -- two in
         //  a tile of 128.
-        [[unroll]] for (uint i = 0u; i < 4u; i++) {
-            uint r = sub * 4u + i;
+        [[unroll]] for (uint i = 0u; i < SUB_ROWS; i++) {
+            uint r = sub * SUB_ROWS + i;
+            //  This row's own last key: its position's.
+            uint row_last = min (walk_to,
+                                 shape.last + (causal ? min (p0 + r / ROWS, p_end) : 0u));
             float score[BC / 64u];
             float best = -1.0 / 0.0;
             [[unroll]] for (uint c = 0u; c < BC / 64u; c++) {
                 uint pos = base + c * 64u + lane;
-                score[c] = pos >= first_p && pos <= walk_to
+                score[c] = pos >= first_p && pos <= row_last
                            ? ss[r * BC + c * 64u + lane] * shape.scale
                            : -1.0 / 0.0;
                 best = max (best, score[c]);
@@ -300,19 +332,24 @@ void main() {
 
         //  This subgroup's quarter of the values, rescaled and weighed.
         {
-            float scale_of[8];
-            for (uint e = 0u; e < 8u; ++e) {
-                scale_of[e] = rowscale[mine_rows[e]];
-            }
-            [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
-                for (int e = 0; e < pacc[t].length (); ++e) {
-                    pacc[t][e] *= scale_of[e];
+            [[unroll]] for (uint m = 0u; m < POS; m++) {
+                float scale_of[8];
+                for (uint e = 0u; e < 8u; ++e) {
+                    scale_of[e] = rowscale[m * ROWS + mine_rows[e]];
+                }
+                [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
+                    for (int e = 0; e < pacc[m][t].length (); ++e) {
+                        pacc[m][t][e] *= scale_of[e];
+                    }
                 }
             }
 
             [[unroll]] for (uint n0 = 0u; n0 < BC; n0 += 16u) {
-                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> pm;
-                coopMatLoad (pm, ps, n0, BC, gl_CooperativeMatrixLayoutRowMajor);
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> pm[POS];
+                [[unroll]] for (uint m = 0u; m < POS; m++) {
+                    coopMatLoad (pm[m], ps, m * ROWS * BC + n0, BC,
+                                 gl_CooperativeMatrixLayoutRowMajor);
+                }
                 uint values = place_of (base + n0, shape.v_base, shape.v_width) + v_at;
 
                 [[unroll]] for (uint g = 0u; g < V_TILES; g += V_AT_ONCE) {
@@ -323,7 +360,9 @@ void main() {
                                      gl_CooperativeMatrixLayoutRowMajor);
                     }
                     [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
-                        pacc[g + t] = coopMatMulAdd (pm, vm[t], pacc[g + t]);
+                        [[unroll]] for (uint m = 0u; m < POS; m++) {
+                            pacc[m][g + t] = coopMatMulAdd (pm[m], vm[t], pacc[m][g + t]);
+                        }
                     }
                 }
             }
@@ -335,16 +374,18 @@ void main() {
     barrier ();
     uint stride = dv + 2u;
     uint records = shape.positions * shape.heads * dv;
+    [[unroll]] for (uint m = 0u; m < POS; m++) {
+    uint p = p0 + m;
     [[unroll]] for (uint t = 0u; t < V_TILES; t++) {
         uint col0 = sub * (DV / 4u) + t * 16u;
-        coopMatStore (pacc[t], ss, sub * 256u, 16u, gl_CooperativeMatrixLayoutRowMajor);
+        coopMatStore (pacc[m][t], ss, sub * 256u, 16u, gl_CooperativeMatrixLayoutRowMajor);
         //  A subgroup's own quarter of ss, read back by the same subgroup.
         subgroupBarrier ();
         memoryBarrierShared ();
         for (uint at = lane; at < 256u; at += 64u) {
             uint r = at / 16u;
             uint c = col0 + at % 16u;
-            if (r < rows && c < dv) {
+            if (r < rows && c < dv && p <= p_end) {
                 uint record = records
                   + ((slice * shape.positions + p) * shape.heads + head0 + r) * stride;
                 y[record + c] = ss[sub * 256u + at];
@@ -353,9 +394,11 @@ void main() {
         subgroupBarrier ();
         memoryBarrierShared ();
     }
-    [[unroll]] for (uint i = 0u; i < 4u; i++) {
-        uint r = sub * 4u + i;
-        if (lane == 0u && r < rows) {
+    }
+    [[unroll]] for (uint i = 0u; i < SUB_ROWS; i++) {
+        uint r = (sub * SUB_ROWS + i) % ROWS;
+        uint p = p0 + (sub * SUB_ROWS + i) / ROWS;
+        if (lane == 0u && r < rows && p <= p_end) {
             uint record = records
               + ((slice * shape.positions + p) * shape.heads + head0 + r) * stride;
             y[record + dv]      = top[i];
