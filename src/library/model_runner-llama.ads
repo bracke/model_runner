@@ -273,8 +273,9 @@ package Model_Runner.Llama is
    is (Item = Deepseek2);
 
    --  Whether a latent-attention model is read absorbed (see
-   --  Configuration.Latent_Attention). Off until every backend attends a
-   --  head that wide; set by the tests that check the absorbed reading.
+   --  Configuration.Latent_Attention) on the processor as well: the device
+   --  always reads it so (see Prepare). Set by the tests that check the
+   --  absorbed reading.
    Absorb_Latent : Boolean := False;
 
    --  Whether an architecture normalizes after adding a sublayer to the

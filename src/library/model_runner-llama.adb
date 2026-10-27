@@ -1,4 +1,3 @@
-with Ada.Environment_Variables;
 with System.Atomic_Operations.Integer_Arithmetic;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
@@ -602,7 +601,8 @@ package body Model_Runner.Llama is
      (Source   : Containers.Container;
       Bounds   : Model_Runner.Limits.Model_Limits;
       Settings : out Configuration;
-      Status   : out E.Error_Info)
+      Status   : out E.Error_Info;
+      Absorbed : Boolean := Absorb_Latent)
    is separate;
 
    ------------------

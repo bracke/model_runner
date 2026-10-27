@@ -3,7 +3,8 @@ procedure Read_Configuration
   (Source   : Containers.Container;
    Bounds   : Model_Runner.Limits.Model_Limits;
    Settings : out Configuration;
-   Status   : out E.Error_Info)
+   Status   : out E.Error_Info;
+   Absorbed : Boolean := Absorb_Latent)
 is
    Number : Long_Long_Integer;
    Value  : N.Wide_Real;
@@ -1738,12 +1739,7 @@ begin
       --  Absorbed: the heads' own widths kept aside, and the attention
       --  read as one key-value head of the latent and its rotated slice,
       --  the rotated slice first, as every head of this engine is laid out.
-      --  Or asked for from outside while the device's kernels are made:
-      --  MODEL_RUNNER_ABSORB_LATENT=1 reads a real file absorbed.
-      if Absorb_Latent
-        or else (Ada.Environment_Variables.Exists ("MODEL_RUNNER_ABSORB_LATENT")
-                 and then Ada.Environment_Variables.Value ("MODEL_RUNNER_ABSORB_LATENT") = "1")
-      then
+      if Absorbed then
          Settings.Latent_Attention := True;
          Settings.MLA_Key := Settings.Head_Size;
          Settings.MLA_Value := Settings.Value_Size;

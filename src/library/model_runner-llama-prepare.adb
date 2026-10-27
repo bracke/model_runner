@@ -261,7 +261,18 @@ begin
    end if;
 
    P.Publish (Observer, P.Load_Progress (P.Selecting_Architecture));
-   Read_Configuration (Source, Bounds, Item.Settings, Status);
+   --  A latent read absorbed on the device: generation reads 2.2 KB a
+   --  position where it read 10, and is past the heads read one at a
+   --  time from about 500 positions on (DeepSeek-Coder-V2-Lite at 4,175:
+   --  29.3 against 19.5 tokens a second); a prompt is the slower for it
+   --  (424 against 581), its attention three and a half times the work a
+   --  key. The processor keeps the heads, unless the tests ask.
+   Read_Configuration
+     (Source, Bounds, Item.Settings, Status,
+      Absorbed =>
+        Absorb_Latent
+        or else Model_Runner.Backend."="
+                  (Item.Able.Kind, Model_Runner.Backend.Backend_Device));
    if E.Is_Ok (Status) then
       Item.Settings.Trained_Context := Item.Settings.Context_Length;
       Apply_Stretch (Item.Settings, Stretch, Status);
