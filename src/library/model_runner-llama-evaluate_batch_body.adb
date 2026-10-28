@@ -124,7 +124,11 @@ is
    --  otherwise.
    Expand_Least      : constant := 16;
    Expand_Deep_Least : constant := 384;
-   Expand_Most       : constant := 8_192;
+   --  Its room is 5,120 halves a position -- 335 MB at the most -- and a
+   --  room the device will not give falls back to the latent. At 8,192,
+   --  DeepSeek-Coder-V2-Lite's prompt of 16,705 read 234 tokens a second
+   --  against llama.cpp's 278; laid out, 322.
+   Expand_Most       : constant := 32_768;
 
    function Expand_Room return Element_Count
    is (if Settings.Latent_Attention
