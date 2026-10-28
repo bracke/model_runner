@@ -3414,6 +3414,21 @@ package body Model_Runner.Backend.Device is
            and then Packed.K_Bits = 0
            and then Heads > 0
            and then Products.Readies_Heads (Engine);
+         --  Whether an absorbed latent's values are its keys' own rows:
+         --  the key the turned slice then the latent, the value the
+         --  latent, and the values placed where the keys' latent lies,
+         --  a key's width apart. The key's place writes them then, and
+         --  the value's would write them again.
+         Values_In_Keys : constant Boolean :=
+           T.Is_Present (MLA_Absorb)
+           and then Packed.K_Bits = 0
+           and then Value_Size <= Head_Size
+           and then At_Value
+                    = At_Key
+                      + Model_Runner.Numerics.Element_Count
+                          (Head_Size - Value_Size)
+           and then V_Width = KV_Width;
+
          Expanded_Value : constant Natural :=
            (if Expanded
             then Natural (MLA_Up.Rows) / Heads
@@ -4377,15 +4392,21 @@ package body Model_Runner.Backend.Device is
                      Step_K := Products.Length (Steps);
                      Step_Room (Model_Runner.Numerics.Element_Count (Head_Size));
 
-                     --  And its value, the latent.
-                     Products.Add_Pick
-                       (Steps, Rank, Rank, 0, 1, Added,
-                        From_Step => Step_Lat_Norm, Kept => Mirror);
-                     if not Added then
-                        return;
+                     --  And its value, the latent: placed with the key
+                     --  where the values are the keys' own rows, and
+                     --  picked only for the host that wants it back.
+                     if Values_In_Keys and then not Mirror then
+                        Step_V := Step_Lat_Norm;
+                     else
+                        Products.Add_Pick
+                          (Steps, Rank, Rank, 0, 1, Added,
+                           From_Step => Step_Lat_Norm, Kept => Mirror);
+                        if not Added then
+                           return;
+                        end if;
+                        Step_V := Products.Length (Steps);
+                        Step_Room (Model_Runner.Numerics.Element_Count (Rank));
                      end if;
-                     Step_V := Products.Length (Steps);
-                     Step_Room (Model_Runner.Numerics.Element_Count (Rank));
                      At_Keys := Wanted;
                      At_Values := Wanted;
                      goto After_Projections;
@@ -5002,16 +5023,19 @@ package body Model_Runner.Backend.Device is
          end if;
          Step_Room (Key.Rows);
 
-         Products.Add_Place
-           (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
-            From_Step => Step_V,
-            Packed => Pack_Values,
-            Pages_At => Pages_At, Page_Shift => Page_Shift,
-            First_Position => First_Position);
-         if not Added then
-            return;
+         --  The values, where they are not the keys' rows already.
+         if not Values_In_Keys then
+            Products.Add_Place
+              (Steps, Natural (Value.Rows), V_Width, At_Value, Added,
+               From_Step => Step_V,
+               Packed => Pack_Values,
+               Pages_At => Pages_At, Page_Shift => Page_Shift,
+               First_Position => First_Position);
+            if not Added then
+               return;
+            end if;
+            Step_Room (Value.Rows);
          end if;
-         Step_Room (Value.Rows);
 
          <<Attend>>
 
@@ -5097,8 +5121,22 @@ package body Model_Runner.Backend.Device is
                  Natural (MLA_Up.Rows) / Natural'Max (1, Heads);
                V_Head  : constant Natural := Each_Up - Natural'Min (Each_Up, Plain);
                Up_P    : Products.Weight_Packing;
+
+               --  Each head's value rows alone, as slices of their own
+               --  width -- head H's the slice past its plain rows -- where
+               --  the plain rows are a whole number of them: the plain
+               --  rows' answers were thrown away, and they were half of
+               --  what the gather read.
+               By_Value : constant Boolean :=
+                 Plain mod Natural'Max (1, V_Head) = 0
+                 and then Each_Up mod Natural'Max (1, V_Head) = 0;
+               Each    : constant Natural :=
+                 (if By_Value then V_Head else Each_Up);
                Members : constant Products.Member_List :=
-                 [for I in 1 .. Products.Max_Gather => I - 1];
+                 [for I in 1 .. Products.Max_Gather =>
+                    (if By_Value
+                     then ((I - 1) * Each_Up + Plain) / Natural'Max (1, V_Head)
+                     else I - 1)];
                Step_Exp : Natural;
             begin
                if V_Head = 0 then
@@ -5110,7 +5148,7 @@ package body Model_Runner.Backend.Device is
                end if;
                Products.Add_Gathered_Product
                  (Steps, MLA_Up.Base, MLA_Up.Span, MLA_Up.Offset, Up_P,
-                  Natural (MLA_Up.Rows), Each_Up, Value_Size, Members, Heads,
+                  Natural (MLA_Up.Rows), Each, Value_Size, Members, Heads,
                   Added,
                   Key => At_Offset (MLA_Up.Base, MLA_Up.Offset), Kept => False,
                   Chained => True, From_Step => Step_Attend, Apart => Value_Size);
@@ -5118,18 +5156,27 @@ package body Model_Runner.Backend.Device is
                   return;
                end if;
                Step_Exp := Products.Length (Steps);
-               Step_Room (MLA_Up.Rows);
+               Step_Room (Model_Runner.Numerics.Element_Count (Heads * Each));
+
                --  The value rows of each head's answer, which the gather
-               --  leaves a member at a time, laid out a position at a time.
-               Products.Add_Assemble
-                 (Steps, Heads, Step_Exp, Step_Exp,
-                  [V_Head, Plain, Positions * Each_Up, Each_Up, 0, 0, 0, 0],
-                  Added, Kept => False);
-               if not Added then
-                  return;
+               --  leaves a member at a time, laid out a position at a time
+               --  -- which for one position, of the value rows alone, is
+               --  how they lie already.
+               if By_Value and then Positions = 1 then
+                  Step_Attend := Step_Exp;
+               else
+                  Products.Add_Assemble
+                    (Steps, Heads, Step_Exp, Step_Exp,
+                     [V_Head, Each - V_Head, Positions * Each, Each,
+                      0, 0, 0, 0],
+                     Added, Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Attend := Products.Length (Steps);
+                  Step_Room
+                    (Model_Runner.Numerics.Element_Count (Heads * V_Head));
                end if;
-               Step_Attend := Products.Length (Steps);
-               Step_Room (Model_Runner.Numerics.Element_Count (Heads * V_Head));
             end;
          end if;
 
