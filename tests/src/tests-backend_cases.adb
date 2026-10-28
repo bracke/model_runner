@@ -4207,12 +4207,14 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Fold_Says_What_The_Rows_Say;
 
-   --  An absorbed latent's prompt at the front of its session, laid out a
+   --  An absorbed latent's prompt, laid out a
    --  head at a time into the room it is given and attended there
    --  (Whole_Layer's MLA_Expand_At), answers as the same layer attending
    --  the latent does, and leaves the cache the very latent rows -- turned
    --  slice and normalized latent -- that one leaves, which every later
-   --  token reads absorbed. One position, a few and a batch.
+   --  token reads absorbed. One position, a few and a batch, at the front
+   --  of the session and after forty positions it cached, which
+   --  Expand_Latent lays out again first.
    procedure An_Expanded_Latent_Prompt_Says_What_The_Absorbed_One_Says
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4229,12 +4231,13 @@ package body Tests.Backend_Cases is
       Width    : constant := 64;
       Feed     : constant := 32;
       Most_Pos : constant := 32;
-      Context  : constant := 64;
+      Most_Before : constant := 40;
+      Context  : constant := Most_Before + Most_Pos;
       Pairs    : constant := Rotary / 2;
 
       Expand_At : constant N.Element_Count := Context * Key_W;
       Room      : constant N.Element_Count :=
-        Expand_At + Most_Pos * Heads * (Q_Width + V_Head);
+        Expand_At + (Most_Before + Most_Pos) * Heads * (Q_Width + V_Head);
 
       Epsilon : constant N.Real := 1.0e-5;
 
@@ -4275,11 +4278,71 @@ package body Tests.Backend_Cases is
       Keys   : T.Real_Array_Access;
       Values : T.Real_Array_Access;
 
-      --  The layer over Positions from an empty cache, absorbed and
-      --  expanded, held against each other.
-      procedure Compare (Positions : N.Element_Count) is
-         Acts   : N.Real_Array (0 .. Positions * Width - 1);
-         Angles : N.Wide_Real_Array (0 .. Positions * Pairs * 2 - 1);
+      --  The layer over Positions after Before positions it cached, absorbed
+      --  and expanded, held against each other. The Before are the same
+      --  layer's, absorbed both times; expanded, Expand_Latent lays them
+      --  out first.
+      procedure Compare (Positions : N.Element_Count; Before : N.Element_Count := 0) is
+         Acts : N.Real_Array (0 .. Positions * Width - 1);
+
+         --  The angles of Count positions from From.
+         function Turns (From, Count : N.Element_Count) return N.Wide_Real_Array is
+            Angles : N.Wide_Real_Array (0 .. Count * Pairs * 2 - 1);
+         begin
+            for Slot in 0 .. Count - 1 loop
+               declare
+                  Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
+                  Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
+               begin
+                  Model_Runner.Kernels.Rotary_Table
+                    (Rotary, Natural (From + Slot), 10000.0,
+                     Cosines => Cosines, Sines => Sines);
+                  for Pair in N.Element_Count range 0 .. Pairs - 1 loop
+                     Angles (Slot * Pairs * 2 + Pair * 2) := Cosines (Pair);
+                     Angles (Slot * Pairs * 2 + Pair * 2 + 1) := Sines (Pair);
+                  end loop;
+               end;
+            end loop;
+            return Angles;
+         end Turns;
+
+         --  One layer over Count positions from From, its answer in Into.
+         procedure Run_Layer
+           (Input     : N.Real_Array;
+            From      : N.Element_Count;
+            Count     : N.Element_Count;
+            Into      : T.Real_Array_Access;
+            At_Expand : N.Element_Count)
+         is
+         begin
+            Model_Runner.Backend.Device.Whole_Layer
+              (Input, Gain, Feed_Gain, Epsilon,
+               Views (1),
+               (Views (2) with delta Rows => Key_W),
+               (Views (2) with delta Rows => Rank),
+               Turns (From, Count),
+               Key_W, Rotary, False,
+               From * Key_W, From * Key_W + Rotary,
+               Heads, Rank, Heads,
+               0, Natural (From), 0, Rotary,
+               Key_W, Key_W, 0.07, 0.0,
+               Views (5), Views (6), Views (7), Views (8), 0,
+               Keys, Values, Into, Ok,
+               Positions   => Natural (Count),
+               Mirror      => False,
+               MLA_Latent  => (Views (2) with delta Rows => Rank),
+               MLA_Rope    =>
+                 (Views (2) with delta
+                    Rows => Rotary,
+                    Offset => Model_Runner.Bytes.Byte_Count (Rank * Width) * 4),
+               MLA_Norm    => Latent_Gain,
+               MLA_Up      => Views (3),
+               MLA_Absorb  => Views (4),
+               MLA_Expand_At => At_Expand);
+            Assert (Ok, "the latent layer was refused at" & Count'Image
+                        & " positions after" & From'Image
+                        & (if At_Expand > 0 then ", expanded" else ""));
+         end Run_Layer;
 
          --  The layer absorbed or expanded: its answer, and what the cache
          --  holds after it.
@@ -4293,32 +4356,28 @@ package body Tests.Backend_Cases is
             Assert (Ok, "the cache would not be cleared");
             T.Allocate (Positions * Width, Into);
 
-            Model_Runner.Backend.Device.Whole_Layer
-              (Acts, Gain, Feed_Gain, Epsilon,
-               Views (1),
-               (Views (2) with delta Rows => Key_W),
-               (Views (2) with delta Rows => Rank),
-               Angles,
-               Key_W, Rotary, False,
-               0, Rotary,
-               Heads, Rank, Heads,
-               0, 0, 0, Rotary,
-               Key_W, Key_W, 0.07, 0.0,
-               Views (5), Views (6), Views (7), Views (8), 0,
-               Keys, Values, Into, Ok,
-               Positions   => Natural (Positions),
-               Mirror      => False,
-               MLA_Latent  => (Views (2) with delta Rows => Rank),
-               MLA_Rope    =>
-                 (Views (2) with delta
-                    Rows => Rotary,
-                    Offset => Model_Runner.Bytes.Byte_Count (Rank * Width) * 4),
-               MLA_Norm    => Latent_Gain,
-               MLA_Up      => Views (3),
-               MLA_Absorb  => Views (4),
-               MLA_Expand_At => (if Expand then Expand_At else 0));
-            Assert (Ok, "the latent layer was refused at" & Positions'Image
-                        & " positions" & (if Expand then ", expanded" else ""));
+            if Before > 0 then
+               declare
+                  Ahead : constant N.Real_Array (0 .. Before * Width - 1) :=
+                    [for I in 0 .. Before * Width - 1 =>
+                       N.Real ((I * 5) mod 13) / 13.0 - 0.45];
+                  Ahead_Into : T.Real_Array_Access;
+               begin
+                  T.Allocate (Before * Width, Ahead_Into);
+                  Run_Layer (Ahead, 0, Before, Ahead_Into, 0);
+                  T.Free (Ahead_Into);
+               end;
+               if Expand then
+                  Model_Runner.Backend.Device.Expand_Latent
+                    (Views (3), Heads, Q_Width, Rotary, Rank, Key_W, 0,
+                     Natural (Before), Natural (Positions), Expand_At,
+                     Origin => 0, Ok => Ok);
+                  Assert (Ok, "the cached positions were not laid out");
+               end if;
+            end if;
+
+            Run_Layer (Acts, Before, Positions, Into,
+                       (if Expand then Expand_At else 0));
 
             Model_Runner.Backend.Device.Get_Cache (0, Copy, Ok);
             Assert (Ok, "the cache would not be read");
@@ -4332,20 +4391,6 @@ package body Tests.Backend_Cases is
       begin
          for Index in Acts'Range loop
             Acts (Index) := N.Real (Index mod 11) / 11.0 - 0.4;
-         end loop;
-         for Slot in 0 .. Positions - 1 loop
-            declare
-               Cosines : N.Wide_Real_Array (0 .. Pairs - 1);
-               Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
-            begin
-               Model_Runner.Kernels.Rotary_Table
-                 (Rotary, Natural (Slot), 10000.0,
-                  Cosines => Cosines, Sines => Sines);
-               for Pair in N.Element_Count range 0 .. Pairs - 1 loop
-                  Angles (Slot * Pairs * 2 + Pair * 2) := Cosines (Pair);
-                  Angles (Slot * Pairs * 2 + Pair * 2 + 1) := Sines (Pair);
-               end loop;
-            end;
          end loop;
 
          Layer (False, Absorbed, Absorbed_Copy.all);
@@ -4361,14 +4406,14 @@ package body Tests.Backend_Cases is
          Assert (Most > 0.01, "the answers are all near nought, which tells nothing");
          Assert (Worst <= 1.0e-2,
                  "the expanded latent prompt of" & Positions'Image
-                 & " positions answers" & N.Real'Image (Worst)
-                 & " away from the absorbed one");
+                 & " positions after" & Before'Image & " answers"
+                 & N.Real'Image (Worst) & " away from the absorbed one");
 
-         for Index in 0 .. Positions * Key_W - 1 loop
+         for Index in 0 .. (Before + Positions) * Key_W - 1 loop
             Assert (Absorbed_Copy.all (Index) = Expanded_Copy.all (Index),
                     "the expanded latent prompt of" & Positions'Image
-                    & " positions left another cached latent at"
-                    & Index'Image);
+                    & " positions after" & Before'Image
+                    & " left another cached latent at" & Index'Image);
          end loop;
          for Index in Expand_At .. Room - 1 loop
             Laid_Out := Laid_Out or else Expanded_Copy.all (Index) /= 0.0;
@@ -4441,14 +4486,17 @@ package body Tests.Backend_Cases is
             Length => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length));
       end loop;
 
-      T.Allocate (Most_Pos * Key_W, Keys);
-      T.Allocate (Most_Pos * Rank, Values);
+      T.Allocate (Most_Before * Key_W, Keys);
+      T.Allocate (Most_Before * Rank, Values);
       Model_Runner.Backend.Device.Reserve_Cache (Room, Room, Ok);
       Assert (Ok, "the device would not reserve the test's cache");
 
       Compare (1);
       Compare (3);
       Compare (Most_Pos);
+      --  Deeper in: what the session cached laid out again first.
+      Compare (Most_Pos, Before => Most_Before);
+      Compare (3, Before => Most_Before);
 
       Release;
       Model_Runner.Backend.Device.Close;

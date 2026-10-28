@@ -2126,6 +2126,39 @@ package Model_Runner.Platform.Device.Products is
       Page_Shift     : Natural := 0;
       First_Position : Natural := 0);
 
+   --  Name a read of the device's cache for a sequence to perform: a row
+   --  a position, Width elements of it, into the step's own room -- what
+   --  Add_Place wrote, read back, out of the half-precision copy where
+   --  the device keeps one. It reads nothing a step made, so it may open
+   --  a sequence; Count positions from First_Position, or from At_First
+   --  in blocks.
+   --
+   --  @param Steps Sequence to add to.
+   --  @param Width Elements a row of the step holds.
+   --  @param Stride How far apart two positions are in the cache.
+   --  @param At_First Where the first row is, in elements; a cache in
+   --    pages, the layer's offset inside a page.
+   --  @param Added False when the sequence is full or the shape does not
+   --    hold together.
+   --  @param Pages_At As Add_Place takes it.
+   --  @param Page_Shift As Add_Place takes it.
+   --  @param First_Position As Add_Place takes it.
+   procedure Add_Fetch
+     (Steps          : in out Sequence;
+      Width          : Natural;
+      Stride         : Natural;
+      At_First       : Model_Runner.Numerics.Element_Count;
+      Added          : out Boolean;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0);
+
+   --  Whether the engine has the kernel Add_Fetch's step runs on.
+   --
+   --  @param Item The engine.
+   --  @return True where it has.
+   function Fetches_Cache (Item : Engine) return Boolean;
+
    --  Name a root-mean-square normalization for a sequence to perform.
    --
    --  It is here for the submission it saves rather than for itself: a
@@ -3799,6 +3832,9 @@ private
       Turner     : System.Address := System.Null_Address;
       Placer     : System.Address := System.Null_Address;
 
+      --  place.comp compiled with FETCH: cached rows read back.
+      Fetcher    : System.Address := System.Null_Address;
+
       --  A mixture's routing and its weighted sum, the two steps that let
       --  a mixture layer be one submission: without them the host chose
       --  the experts between two and summed them after a third.
@@ -4068,6 +4104,7 @@ private
       Norm_Round_Line : System.Address := System.Null_Address;
       Turn_Line   : System.Address := System.Null_Address;
       Place_Line  : System.Address := System.Null_Address;
+      Fetch_Line  : System.Address := System.Null_Address;
       Route_Line  : System.Address := System.Null_Address;
       Mix_Line    : System.Address := System.Null_Address;
       Bias_Line   : System.Address := System.Null_Address;
@@ -4592,6 +4629,10 @@ private
       --  Transposed): each member's answer Columns wide, its slice's Each
       --  rows weighted by its own vector of Each.
       Transposed : Boolean := False;
+
+      --  A placing step the other way about (Add_Fetch): the cache's rows
+      --  read into the step's own room.
+      Fetches : Boolean := False;
 
       --  Which routing step a gathered product takes its members from,
       --  or zero for the Members above.

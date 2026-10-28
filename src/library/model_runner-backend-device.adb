@@ -3229,6 +3229,149 @@ package body Model_Runner.Backend.Device is
          Into.all (Into.all'First .. Into.all'First + Shared_Width - 1), Ok);
    end Finish_Shared;
 
+   -------------------
+   -- Expand_Latent --
+   -------------------
+
+   procedure Expand_Latent
+     (Up         : Model_Runner.Tensors.View;
+      Heads      : Natural;
+      Head_Width : Natural;
+      Rotary     : Natural;
+      Rank       : Natural;
+      KV_Width   : Natural;
+      At_Key     : Model_Runner.Numerics.Element_Count;
+      Upto       : Natural;
+      Positions  : Natural;
+      Expand_At  : Model_Runner.Numerics.Element_Count;
+      Origin     : Interfaces.Unsigned_64;
+      Ok         : out Boolean;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0)
+   is
+      --  Positions a sequence lays out: the up projection's answer for
+      --  them is the widest room it holds, sixteen megabytes.
+      Chunk : constant := 1_024;
+
+      E_Nope  : constant Natural := Head_Width - Natural'Min (Head_Width, Rotary);
+      Each_Up : constant Natural := Natural (Up.Rows) / Natural'Max (1, Heads);
+      E_Value : constant Natural := Each_Up - Natural'Min (Each_Up, E_Nope);
+      E_Keys  : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Heads * Head_Width);
+      E_Vals  : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Heads * E_Value);
+      V_At    : constant Model_Runner.Numerics.Element_Count :=
+        Expand_At
+        + Model_Runner.Numerics.Element_Count (Upto + Positions) * E_Keys;
+
+      None    : constant Model_Runner.Numerics.Real_Array (0 .. 0) := [0.0];
+      Up_P    : Products.Weight_Packing;
+      Known   : Boolean;
+      From    : Natural := 0;
+   begin
+      Ok := False;
+
+      if not Ready_Now
+        or else not Products.Fetches_Cache (Engine)
+        or else Heads = 0 or else Upto = 0
+        or else Rotary = 0 or else E_Nope = 0 or else E_Value = 0
+        or else Natural (Up.Columns) /= Rank
+        or else KV_Width < Rotary + Rank
+      then
+         return;
+      end if;
+      Packing_Of (Up.Format, Up_P, Known);
+      if not Known then
+         return;
+      end if;
+
+      while From < Upto loop
+         declare
+            Count  : constant Natural := Natural'Min (Chunk, Upto - From);
+            At_Row : constant Model_Runner.Numerics.Element_Count :=
+              Model_Runner.Numerics.Element_Count (From);
+
+            --  Where the chunk's first row is: in pages its position names
+            --  it, in blocks it is counted from the layer's first.
+            Row_At : constant Model_Runner.Numerics.Element_Count :=
+              (if Page_Shift = 0
+               then At_Key + At_Row * Model_Runner.Numerics.Element_Count (KV_Width)
+               else At_Key);
+            Steps  : Products.Sequence;
+            Added, Ran, Cancelled : Boolean;
+            Target : Model_Runner.Numerics.Real_Array (1 .. 0);
+         begin
+            Products.Open_Sequence (Steps);
+
+            --  The rows' rotated slices, turned already, and latents.
+            Products.Add_Fetch
+              (Steps, Rotary, KV_Width, Row_At, Added,
+               Pages_At => Pages_At, Page_Shift => Page_Shift,
+               First_Position => From);
+            if not Added then
+               return;
+            end if;
+            Products.Add_Fetch
+              (Steps, Rank, KV_Width,
+               Row_At + Model_Runner.Numerics.Element_Count (Rotary), Added,
+               Pages_At => Pages_At, Page_Shift => Page_Shift,
+               First_Position => From);
+            if not Added then
+               return;
+            end if;
+
+            Products.Add_Chained_Product
+              (Steps, Up.Base, Up.Span, Up.Offset, Up_P,
+               Natural (Up.Rows), Natural (Up.Columns), Added,
+               Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+               From_Step => 2);
+            if not Added then
+               return;
+            end if;
+
+            --  Each head's key, the shared slice then its plain part, and
+            --  its value, the rest of its rows.
+            Products.Add_Assemble
+              (Steps, Heads, 1, 3,
+               [Rotary, 0, 0, Rotary,
+                E_Nope, 0, E_Nope + E_Value, Natural (Up.Rows)],
+               Added, Kept => False);
+            if not Added then
+               return;
+            end if;
+            Products.Add_Pick
+              (Steps, Natural (E_Vals), E_Value, 1, 2, Added,
+               From_Step => 3, Kept => False);
+            if not Added then
+               return;
+            end if;
+
+            Products.Add_Place
+              (Steps, Natural (E_Keys), Natural (E_Keys),
+               Expand_At + At_Row * E_Keys, Added, From_Step => 4);
+            if not Added then
+               return;
+            end if;
+            Products.Add_Place
+              (Steps, Natural (E_Vals), Natural (E_Vals),
+               V_At + At_Row * E_Vals, Added, From_Step => 5);
+            if not Added then
+               return;
+            end if;
+
+            Products.Run
+              (Engine, Steps, None, Count, Target, Ran, Cancelled,
+               Leave_Kept => True, Origin => Origin);
+            if not Ran or else Cancelled then
+               return;
+            end if;
+         end;
+         From := From + Chunk;
+      end loop;
+
+      Ok := True;
+   end Expand_Latent;
+
    -----------------
    -- Whole_Layer --
    -----------------
@@ -3397,9 +3540,11 @@ package body Model_Runner.Backend.Device is
          Q_Turned_Early : Boolean := False;
 
          --  Whether an absorbed latent's batch attends the heads laid out
-         --  rather than the latent: a batch at the front of its session,
-         --  causal, where the place for them was given (MLA_Expand_At) and
-         --  the step that readies the heads is here. Each head's value
+         --  rather than the latent: a causal batch over the whole of its
+         --  session, where the place for them was given (MLA_Expand_At) --
+         --  past the session's front, with what it cached already laid out
+         --  there (Expand_Latent) -- and the step that readies the heads
+         --  is here. Each head's value
          --  width, which the blend is, then: the up projection's rows a
          --  head past the keys' plain part.
          Expanded : constant Boolean :=
@@ -3410,7 +3555,6 @@ package body Model_Runner.Backend.Device is
            and then Causal
            and then Window = 0
            and then First = 0
-           and then Last = 0
            and then Packed.K_Bits = 0
            and then Heads > 0
            and then Products.Readies_Heads (Engine);
@@ -4027,11 +4171,11 @@ package body Model_Runner.Backend.Device is
             begin
                Both.Rows := MLA_Latent.Rows + MLA_Rope.Rows;
 
-               --  Expanded: the batch is all its session holds, so the heads
-               --  it attends are its own -- laid out through the up
-               --  projection as they were before there was absorbing, into
-               --  the room the caller gave, and attended there at a fifth
-               --  of the work a key that the latent's are. The latent and
+               --  Expanded: the heads the batch attends laid out through the
+               --  up projection as they were before there was absorbing --
+               --  its own after the session's, which Expand_Latent laid
+               --  out -- into the room the caller gave, and attended there
+               --  at a fifth of the work a key that the latent's are. The latent and
                --  its turned slice still go to the cache, where every later
                --  position reads them absorbed. Coder-V2-Lite's prompt of
                --  567: 500 tokens a second absorbed.
@@ -4044,10 +4188,16 @@ package body Model_Runner.Backend.Device is
                      E_Keys  : constant Natural := Heads * E_Head;
                      E_Vals  : constant Natural := Heads * E_Value;
                      Rank    : constant Natural := Lat_Rows;
+                     --  The room's keys, every position the batch attends
+                     --  -- those Expand_Latent laid out before it, then
+                     --  its own -- and its values after them.
+                     Span_Laid : constant Model_Runner.Numerics.Element_Count :=
+                       Model_Runner.Numerics.Element_Count (Last + Positions);
                      V_At    : constant Model_Runner.Numerics.Element_Count :=
                        MLA_Expand_At
-                       + Model_Runner.Numerics.Element_Count (Positions)
-                         * Model_Runner.Numerics.Element_Count (E_Keys);
+                       + Span_Laid * Model_Runner.Numerics.Element_Count (E_Keys);
+                     Own_At  : constant Model_Runner.Numerics.Element_Count :=
+                       Model_Runner.Numerics.Element_Count (Last);
                      At_Turn : constant System.Address :=
                        Turns (Turns'First)'Address;
                      Span : constant Model_Runner.Bytes.Byte_Count :=
@@ -4206,9 +4356,14 @@ package body Model_Runner.Backend.Device is
                      Products.Add_Heads
                        (Steps, Step_K, Heads, E_Head, Rotary, Pairing,
                         At_Turn, Span, Epsilon, Added,
-                        Into_Cache => True, At_First => MLA_Expand_At,
+                        Into_Cache => True,
+                        At_First =>
+                          MLA_Expand_At
+                          + Own_At * Model_Runner.Numerics.Element_Count (E_Keys),
                         Stride => E_Keys, V_Step => Step_V,
-                        V_At_First => V_At, V_Stride => E_Vals,
+                        V_At_First =>
+                          V_At + Own_At * Model_Runner.Numerics.Element_Count (E_Vals),
+                        V_Stride => E_Vals,
                         Kept => False);
                      if not Added then
                         return;
@@ -4216,7 +4371,7 @@ package body Model_Runner.Backend.Device is
                      Step_Room (Model_Runner.Numerics.Element_Count (E_Keys));
 
                      Products.Add_Attention
-                       (Steps, Heads, E_Head, E_Value, 1, 0, 0,
+                       (Steps, Heads, E_Head, E_Value, 1, 0, Last,
                         MLA_Expand_At, V_At, E_Keys, E_Vals, Scale, Cap,
                         Added, Causal => True, Chained => True,
                         From_Step => Step_Q_Turned, Kept => False);

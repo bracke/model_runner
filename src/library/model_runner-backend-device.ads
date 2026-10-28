@@ -1782,6 +1782,49 @@ package Model_Runner.Backend.Device is
       Ok       : out Boolean;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  Lay out the heads of what an absorbed latent's session cached of a
+   --  layer already, for a batch that attends them expanded (Whole_Layer's
+   --  MLA_Expand_At, its Last the positions laid out here): each cached
+   --  row read back, its latent through the up projection, and each
+   --  head's key -- the shared rotated slice, turned when it was placed,
+   --  then the head's plain part -- and value placed in the room, a block
+   --  of its own, keys then values, as Whole_Layer lays out the batch's.
+   --
+   --  @param Up The latent's up projection, each head's keys' plain part
+   --    then its values.
+   --  @param Heads Query heads.
+   --  @param Head_Width A head's key: its rotated slice and plain part.
+   --  @param Rotary The rotated slice's width.
+   --  @param Rank The latent's width.
+   --  @param KV_Width How far apart two cached positions are.
+   --  @param At_Key Where a position's row begins: inside a page, or in
+   --    blocks the first position's.
+   --  @param Upto The positions cached, from the first.
+   --  @param Positions The batch's positions, laid out after them by the
+   --    batch itself: the room's keys are Upto + Positions long.
+   --  @param Expand_At Where the room begins.
+   --  @param Origin Bytes into the result buffer the sequences' rooms
+   --    begin at: past the activation a layer carried, which the layer
+   --    after this reads.
+   --  @param Ok True when every position was laid out.
+   --  @param Pages_At The layer's page table.
+   --  @param Page_Shift The page's width in positions, as a shift.
+   procedure Expand_Latent
+     (Up         : Model_Runner.Tensors.View;
+      Heads      : Natural;
+      Head_Width : Natural;
+      Rotary     : Natural;
+      Rank       : Natural;
+      KV_Width   : Natural;
+      At_Key     : Model_Runner.Numerics.Element_Count;
+      Upto       : Natural;
+      Positions  : Natural;
+      Expand_At  : Model_Runner.Numerics.Element_Count;
+      Origin     : Interfaces.Unsigned_64;
+      Ok         : out Boolean;
+      Pages_At   : Natural := 0;
+      Page_Shift : Natural := 0);
+
    --  A whole layer, in one submission.
    --
    --  `Attend_And_Feed` takes its second half and `Normalize_And_Project`
@@ -2016,13 +2059,14 @@ package Model_Runner.Backend.Device is
    --    where the attention is absorbed: present, the layer's cache is the
    --    latent and its rotated slice, every query head folded through its
    --    own and its blend taken back out through MLA_Up's value rows.
-   --  @param MLA_Expand_At With MLA_Absorb, a batch that is the whole of
-   --    what its session holds: where in the cache's numbering, as a block
-   --    of its own, the batch's keys and values may be laid out a head at
-   --    a time. The batch then attends those, through MLA_Up as the heads
-   --    were before there was absorbing -- a fifth of the work a key -- and
-   --    still places the latent where every later token reads it. The
-   --    room holds the batch's keys, then its values. Zero for none.
+   --  @param MLA_Expand_At With MLA_Absorb, a batch over the whole of its
+   --    session: where in the cache's numbering, as a block of its own, the
+   --    keys and values it attends may be laid out a head at a time. The
+   --    batch then attends those, through MLA_Up as the heads were before
+   --    there was absorbing -- a fifth of the work a key -- and still
+   --    places the latent where every later token reads it. The room holds
+   --    Last + Positions positions' keys, then their values; the first
+   --    Last of each Expand_Latent laid out. Zero for none.
    --  @param Stream_Feed Whether the dense feed-forward's gate, up and down
    --    are uploaded for this batch alone rather than kept: a split dense
    --    model's layer whose feed-forward the processor holds, run whole on

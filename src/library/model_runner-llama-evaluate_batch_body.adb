@@ -115,25 +115,37 @@ is
 
    --  The room an absorbed latent's batch lays its heads out in, where it
    --  attends them rather than the latent (Whole_Layer's MLA_Expand_At):
-   --  a batch at the front of a paged session, long enough to be a
-   --  prompt, each position's keys -- the queries' rows -- and values --
-   --  the up projection's past each head's plain part. Nought otherwise.
-   Expand_Least : constant := 16;
+   --  a paged session's batch long enough to be a prompt, every position
+   --  it attends -- each position's keys, the queries' rows, and values,
+   --  the up projection's past each head's plain part. At the session's
+   --  front from sixteen positions; deeper in, where the batch is long
+   --  enough to pay for laying out what the session cached again
+   --  (Expand_Latent), and that no longer than Expand_Most. Nought
+   --  otherwise.
+   Expand_Least      : constant := 16;
+   Expand_Deep_Least : constant := 384;
+   Expand_Most       : constant := 8_192;
 
    function Expand_Room return Element_Count
    is (if Settings.Latent_Attention
           and then Item.Paged
-          and then Reserved = 0
-          and then Count >= Expand_Least
+          and then Count >= (if Reserved = 0 then Expand_Least
+                             else Expand_Deep_Least)
+          and then Reserved + Count <= Expand_Most
           and then Source.Layers /= null
           and then Source.Layers.all'Length > 0
           and then T.Is_Present
                      (Source.Layers.all (Source.Layers.all'First).KV_B)
-       then Count
+       then (Reserved + Count)
             * (Element_Count
                  (Source.Layers.all (Source.Layers.all'First).KV_B.Rows)
                + Heads * Element_Count (Settings.Rotary))
        else 0);
+
+   --  Where this layer's batch attends its heads laid out, as Whole_Layer
+   --  is told it: the room, where the session's cached positions were
+   --  laid out there for the layer too, or nought.
+   Expand_Here : Element_Count := 0;
 
    --  Where the last phase boundary was, for a caller that asked for a
    --  budget. Read once at each boundary and moved there; see Charge.
@@ -1656,6 +1668,34 @@ begin
                   then
                      Workers_CPU.Rouse (Item.Team.all);
                   end if;
+                  --  Deeper in its session, an expanded batch's layer has
+                  --  what the session cached laid out first, past the
+                  --  activation the layer before carried.
+                  Expand_Here :=
+                    (if Expand_Room > 0
+                       and then Pages_Expand_Room >= Expand_Room
+                       and then T.Is_Present (Current.KV_B_Absorb)
+                     then Pages_Expand_At else 0);
+                  if Expand_Here > 0 and then Reserved > 0 then
+                     declare
+                        Laid : Boolean;
+                     begin
+                        Model_Runner.Backend.Device.Expand_Latent
+                          (Current.KV_B, Natural (Heads), Settings.MLA_Key,
+                           Settings.Rotary, Settings.KV_Lora_Rank,
+                           Natural (KV_Width), 0, Natural (Reserved),
+                           Natural (Count), Expand_Here,
+                           Origin =>
+                             (Interfaces.Unsigned_64 (Count * Width) * 4
+                              / 2 ** 20 + 2) * 2 ** 20,
+                           Ok => Laid,
+                           Pages_At => Natural (Paged_Table_At),
+                           Page_Shift => Page_Shift_Bits);
+                        if not Laid then
+                           Expand_Here := 0;
+                        end if;
+                     end;
+                  end if;
                   Model_Runner.Backend.Device.Whole_Layer
                     (Acts.all (0 .. Count * Width - 1),
                      Device_Norm (Current.Attention_Norm,
@@ -1860,10 +1900,7 @@ begin
                      MLA_Absorb    =>
                        (if Settings.Latent_Attention then Current.KV_B_Absorb
                         else T.Empty_View),
-                     MLA_Expand_At =>
-                       (if Expand_Room > 0
-                          and then Pages_Expand_Room >= Expand_Room
-                        then Pages_Expand_At else 0));
+                     MLA_Expand_At => Expand_Here);
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.
                   if Model_Runner.Backend.Device.Carry_Lost then

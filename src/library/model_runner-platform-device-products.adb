@@ -3859,6 +3859,21 @@ package body Model_Runner.Platform.Device.Products is
                Item.Placer := Made;
             end if;
          end;
+
+         --  And the cache read back.
+         declare
+            Fetched : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Place_Fetch;
+         begin
+            Request.Size := Interfaces.C.size_t (Fetched'Length * 4);
+            Request.Code := Fetched'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Fetcher := Made;
+            end if;
+         end;
       end;
 
       --  The third kernel's module.
@@ -5079,6 +5094,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Place_Line := Made;
+            end if;
+         end if;
+
+         if Item.Fetcher /= Null_Handle then
+            Request.Stage.Module := Item.Fetcher;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Fetch_Line := Made;
             end if;
          end if;
 
@@ -6371,6 +6396,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Heads_Line, "vkDestroyPipeline");
       Give_Back (Item.Turn_Line, "vkDestroyPipeline");
       Give_Back (Item.Place_Line, "vkDestroyPipeline");
+      Give_Back (Item.Fetch_Line, "vkDestroyPipeline");
       Give_Back (Item.Normer, "vkDestroyShaderModule");
       Give_Back (Item.Round_Normer, "vkDestroyShaderModule");
       Give_Back (Item.Router, "vkDestroyShaderModule");
@@ -6391,6 +6417,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Header, "vkDestroyShaderModule");
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
+      Give_Back (Item.Fetcher, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader, "vkDestroyShaderModule");
@@ -12345,6 +12372,8 @@ package body Model_Runner.Platform.Device.Products is
               & (if This.Joins then " +join" else "");
          elsif This.Rotates then
             return "rotate";
+         elsif This.Places and then This.Fetches then
+            return "fetch";
          elsif This.Places then
             return "place";
          elsif This.Readies then
@@ -13920,6 +13949,46 @@ package body Model_Runner.Platform.Device.Products is
       Added := True;
    end Add_Place;
 
+   ---------------
+   -- Add_Fetch --
+   ---------------
+
+   procedure Add_Fetch
+     (Steps          : in out Sequence;
+      Width          : Natural;
+      Stride         : Natural;
+      At_First       : Model_Runner.Numerics.Element_Count;
+      Added          : out Boolean;
+      Pages_At       : Natural := 0;
+      Page_Shift     : Natural := 0;
+      First_Position : Natural := 0)
+   is
+   begin
+      if Steps.Held = Sequence_Limit
+        or else Width = 0
+        or else Stride < Width
+      then
+         Added := False;
+         return;
+      end if;
+
+      Steps.Held := Steps.Held + 1;
+      Steps.Items (Steps.Held) :=
+        (Base => System.Null_Address, Span => 0, At_Byte => 0,
+         Packing => Weight_Packing'First,
+         Rows => Width, Columns => 0, Key => System.Null_Address,
+         Chained => True, Reads => 0,
+         Kept => False, Places => True, Fetches => True, Stride => Stride,
+         At_First => At_First,
+         Pages_At => Pages_At, Page_Shift => Page_Shift,
+         First_Position => First_Position,
+         others => <>);
+      Added := True;
+   end Add_Fetch;
+
+   function Fetches_Cache (Item : Engine) return Boolean
+   is (Item.Fetch_Line /= Null_Handle);
+
    ------------------
    -- Add_Rotation --
    ------------------
@@ -15045,7 +15114,9 @@ package body Model_Runner.Platform.Device.Products is
                           and then not (Item.Copy_Only
                                         and then Item.Copy_Buffer
                                                  /= Null_Handle))
-                 or else (This.Reads = 0 and then not This.Unpacks)
+                 or else (This.Reads = 0 and then not This.Unpacks
+                          and then not This.Fetches)
+                 or else (This.Fetches and then Item.Fetch_Line = Null_Handle)
                  or else This.Reads > Steps.Held
                  --  And the kernel that packs, for a packed row, or the
                  --  one that unpacks, for a batch's copy of them -- and
@@ -16005,10 +16076,16 @@ package body Model_Runner.Platform.Device.Products is
 
             if Steps.Items (Index).Places then
                --  What it writes, and the cache it writes into -- which is
-               --  bound where every other step binds its own room out.
+               --  bound where every other step binds its own room out. A
+               --  fetch's room is its own, as every other step's is.
                Told (1) := Cache_Descriptor (Item);
                Told (2) := Source_Of (Index, Steps.Items (Index).Reads);
-               Told (3) := Cache_Descriptor (Item);
+               Told (3) :=
+                 (if Steps.Items (Index).Fetches
+                  then (Buffer => Item.Result_Buffer,
+                        Offset => Places (Index).At_Byte,
+                        Extent => Places (Index).Bytes)
+                  else Cache_Descriptor (Item));
                Told (4) := Half_Descriptor (Item);
                Told (5) := Told (3);
 
@@ -17108,7 +17185,7 @@ package body Model_Runner.Platform.Device.Products is
                      Fenced := Index - 1;
                   end if;
 
-                  if This.Places
+                  if (This.Places and then not This.Fetches)
                     or else (This.Readies and then This.Into_Cache)
                   then
                      Cached := Index;
@@ -17543,7 +17620,9 @@ package body Model_Runner.Platform.Device.Products is
 
                if This.Places then
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Item.Place_Line);
+                    (Item.Buffer, Bind_Point_Compute,
+                     (if This.Fetches then Item.Fetch_Line
+                      else Item.Place_Line));
 
                   declare
                      Shape : aliased Shape_Constants :=

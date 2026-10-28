@@ -173,6 +173,7 @@ compile norm                         norm.comp             vulkan1.1
 compile norm_rounds                  norm.comp             vulkan1.1 ROUNDS
 compile rotate                       rotate.comp           vulkan1.0
 compile place                        place.comp            vulkan1.0
+compile place_fetch                  place.comp            vulkan1.0 FETCH
 compile route                        route.comp            vulkan1.1
 compile mix                          mix.comp              vulkan1.0
 compile heads                        heads.comp            vulkan1.1

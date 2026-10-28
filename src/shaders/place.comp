@@ -15,6 +15,12 @@
 //  it no longer does is stand between two halves of a layer.
 //
 //  A workgroup a position, its lanes over the row.
+//
+//  Compiled with FETCH, the other way about: rows of the cache read into a
+//  step's own room, a position a row, where they were placed -- in blocks
+//  or in pages, out of the half-precision copy where the device keeps one.
+//  An absorbed latent's prompt deep into its session lays the heads of
+//  what it already cached out again from these.
 
 const uint LANES = 256u;
 
@@ -31,14 +37,22 @@ layout(local_size_x = LANES) in;
 //  declarations disagree about.
 layout(std430, binding = 0) readonly  buffer Kept   { float kept[]; };
 layout(std430, binding = 1) readonly  buffer Source { float x[]; };
+#ifdef FETCH
+layout(std430, binding = 2) writeonly buffer Room   { float y[]; };
+#else
 layout(std430, binding = 2) writeonly buffer Cache  { float kv[]; };
+#endif
 
 //  The cache's half-precision copy, which the matrix attention kernel
 //  reads: a buffer of its own rather than the back of the cache, so that
 //  neither it nor the cache proper is past what one storage buffer may
 //  hold. The cache is kept twice, once as it has always been kept and
 //  once in half precision beside it.
+#ifdef FETCH
+layout(std430, binding = 5) readonly buffer Halves { float16_t kvh[]; };
+#else
 layout(std430, binding = 5) writeonly buffer Halves { float16_t kvh[]; };
+#endif
 
 layout(push_constant) uniform Shape {
     //  Elements a position holds.
@@ -112,6 +126,13 @@ void main() {
                + (pos & ((1u << shape.page_shift) - 1u)) * shape.stride;
     }
 
+#ifdef FETCH
+    for (uint c = lane; c < shape.width; c += LANES) {
+        y[from + c] = shape.halves != 0u
+                      ? float (kvh[shape.half_base + into + c])
+                      : kept[into + c];
+    }
+#else
     for (uint c = lane; c < shape.width; c += LANES) {
         float value = x[from + c];
 
@@ -127,4 +148,5 @@ void main() {
             kvh[shape.half_base + into + c] = float16_t (value);
         }
     }
+#endif
 }
