@@ -3,7 +3,8 @@ procedure Take_Pages
   (Item         : Session_Access;
    Upto         : Element_Count;
    Ok           : out Boolean;
-   Write_Tables : Boolean := True)
+   Write_Tables : Boolean := True;
+   Expand       : Element_Count := 0)
 is
    use type Model_Runner.Backend.Backend_Kind;
 
@@ -108,6 +109,7 @@ begin
      and then Upto <= Element_Count (Item.Paged_Upto)
      and then Tables_Of = Item
      and then Tables_Front = Pages_Taken + Pages_Taken_Second
+     and then Expand <= Pages_Expand_Room
    then
       Ok := True;
       return;
@@ -308,18 +310,32 @@ begin
             return;
          end if;
 
-         Model_Runner.Backend.Device.Reserve_Cache
-           (Pages_Taken + Sink_Footprint (Item.Owner.Settings),
-            Copy_Upto => Pages_Taken, Ok => Ok,
-            Allow_Copy_Only =>
-              Sink_Footprint (Item.Owner.Settings) = 0
-              and then Item.Held in Exact | Halved,
-            Front => Page_Front);
-         if not Ok then
-            Give_Up;
-            return;
-         end if;
-         Pages_Sinks_At := Pages_Taken;
+         --  The room a latent's batch lays its heads out in, past the
+         --  pages and read as halves, where it was asked for; refused,
+         --  the batch attends the latent and the pages are reserved
+         --  without it.
+         declare
+            Room : Element_Count := Expand;
+         begin
+            loop
+               Model_Runner.Backend.Device.Reserve_Cache
+                 (Pages_Taken + Room + Sink_Footprint (Item.Owner.Settings),
+                  Copy_Upto => Pages_Taken + Room, Ok => Ok,
+                  Allow_Copy_Only =>
+                    Sink_Footprint (Item.Owner.Settings) = 0
+                    and then Item.Held in Exact | Halved,
+                  Front => Page_Front);
+               exit when Ok or else Room = 0;
+               Room := 0;
+            end loop;
+            if not Ok then
+               Give_Up;
+               return;
+            end if;
+            Pages_Expand_At := (if Room > 0 then Pages_Taken else 0);
+            Pages_Expand_Room := Room;
+            Pages_Sinks_At := Pages_Taken + Room;
+         end;
          Pages_Sink_Room := Sink_Footprint (Item.Owner.Settings);
 
          if Pages_Taken_Second > 0 then
@@ -395,6 +411,8 @@ begin
          end if;
          Pages_Sinks_At :=
            Pages_Taken + Widest + Element_Count (Page_Table_Pad);
+         Pages_Expand_At := 0;
+         Pages_Expand_Room := 0;
          Pages_Sink_Room := Sink_Footprint (Item.Owner.Settings);
       end;
    end if;

@@ -113,6 +113,28 @@ is
 
    Scale     : constant Real := Score_Scale (Settings);
 
+   --  The room an absorbed latent's batch lays its heads out in, where it
+   --  attends them rather than the latent (Whole_Layer's MLA_Expand_At):
+   --  a batch at the front of a paged session, long enough to be a
+   --  prompt, each position's keys -- the queries' rows -- and values --
+   --  the up projection's past each head's plain part. Nought otherwise.
+   Expand_Least : constant := 16;
+
+   function Expand_Room return Element_Count
+   is (if Settings.Latent_Attention
+          and then Item.Paged
+          and then Reserved = 0
+          and then Count >= Expand_Least
+          and then Source.Layers /= null
+          and then Source.Layers.all'Length > 0
+          and then T.Is_Present
+                     (Source.Layers.all (Source.Layers.all'First).KV_B)
+       then Count
+            * (Element_Count
+                 (Source.Layers.all (Source.Layers.all'First).KV_B.Rows)
+               + Heads * Element_Count (Settings.Rotary))
+       else 0);
+
    --  Where the last phase boundary was, for a caller that asked for a
    --  budget. Read once at each boundary and moved there; see Charge.
    Mark : Ada.Real_Time.Time := Ada.Real_Time.Clock;
@@ -1561,7 +1583,7 @@ begin
                   --  the member here is only the round's first.
                   Take_Pages
                     (Item'Unchecked_Access, Reserved + Count - 1, Resident,
-                     Write_Tables => True);
+                     Write_Tables => True, Expand => Expand_Room);
 
                   --  A batch reads its own page table, which Take_Pages
                   --  wrote for every layer.
@@ -1837,7 +1859,11 @@ begin
                         else T.Empty_View),
                      MLA_Absorb    =>
                        (if Settings.Latent_Attention then Current.KV_B_Absorb
-                        else T.Empty_View));
+                        else T.Empty_View),
+                     MLA_Expand_At =>
+                       (if Expand_Room > 0
+                          and then Pages_Expand_Room >= Expand_Room
+                        then Pages_Expand_At else 0));
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.
                   if Model_Runner.Backend.Device.Carry_Lost then

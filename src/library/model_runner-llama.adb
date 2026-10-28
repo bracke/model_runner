@@ -3694,6 +3694,14 @@ package body Model_Runner.Llama is
    Pages_Sinks_At   : Element_Count := 0;
    Pages_Sink_Room  : Element_Count := 0;
 
+   --  And where the room a latent's batch lays its heads out in lies, past
+   --  the pages and before the sinks, and how many elements of it: what
+   --  the last Take_Pages that wrote tables was asked for (its Expand),
+   --  or nought where it was asked for none or the device would not hold
+   --  it. See Whole_Layer's MLA_Expand_At.
+   Pages_Expand_At   : Element_Count := 0;
+   Pages_Expand_Room : Element_Count := 0;
+
    --  The front of the cache's numbering, before the first page, that a
    --  paged session's tables are kept in: a word a page a layer and the
    --  padding, which the pool's slots and a pad a layer bound. Tables past
@@ -5769,6 +5777,8 @@ package body Model_Runner.Llama is
       Pages_Taken_Second := 0;
       Pages_Sinks_At := 0;
       Pages_Sink_Room := 0;
+      Pages_Expand_At := 0;
+      Pages_Expand_Room := 0;
       for Slot in Page_Owner'Range loop
          if Page_Owner (Slot) /= null then
             if Slot < Page_Cap then
@@ -5827,7 +5837,8 @@ package body Model_Runner.Llama is
      (Item         : Session_Access;
       Upto         : Element_Count;
       Ok           : out Boolean;
-      Write_Tables : Boolean := True)
+      Write_Tables : Boolean := True;
+      Expand       : Element_Count := 0)
    is separate;
 
    -------------------

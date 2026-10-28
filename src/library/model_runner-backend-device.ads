@@ -2016,6 +2016,13 @@ package Model_Runner.Backend.Device is
    --    where the attention is absorbed: present, the layer's cache is the
    --    latent and its rotated slice, every query head folded through its
    --    own and its blend taken back out through MLA_Up's value rows.
+   --  @param MLA_Expand_At With MLA_Absorb, a batch that is the whole of
+   --    what its session holds: where in the cache's numbering, as a block
+   --    of its own, the batch's keys and values may be laid out a head at
+   --    a time. The batch then attends those, through MLA_Up as the heads
+   --    were before there was absorbing -- a fifth of the work a key -- and
+   --    still places the latent where every later token reads it. The
+   --    room holds the batch's keys, then its values. Zero for none.
    --  @param Stream_Feed Whether the dense feed-forward's gate, up and down
    --    are uploaded for this batch alone rather than kept: a split dense
    --    model's layer whose feed-forward the processor holds, run whole on
@@ -2132,7 +2139,8 @@ package Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Stream_Feed    : Boolean := False;
       MLA_Absorb     : Model_Runner.Tensors.View :=
-        Model_Runner.Tensors.Empty_View);
+        Model_Runner.Tensors.Empty_View;
+      MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0);
 
    --  Whether the last Whole_Layer refused a layer it was carried into and
    --  could not bring that layer's input home from the device. A caller
