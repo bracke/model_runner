@@ -157,14 +157,22 @@ void main() {
     uint k_at = group * dk;
 
     //  The queries, in half precision, nought past the head and past the
-    //  heads the latent has.
+    //  heads the latent has -- or, where the latent is as wide as a tile's
+    //  key and its heads fill the tile's rows, read where they lie as the
+    //  scores want them: thirty-six loads a lane and a barrier before the
+    //  first key, at a cache short enough to be a workgroup or two, were
+    //  a token's wait for nothing.
 #ifndef WIDE_TILE
-    for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
-        uint r = at / DK;
-        uint c = at % DK;
-        qs[at] = r < rows && c < dk
-                 ? float16_t (q[(p0 * shape.heads + head0 + r) * dk + c])
-                 : float16_t (0.0);
+    bool direct = rows == ROWS && dk == DK;
+    uint q_direct = (p0 * shape.heads + head0) * dk;
+    if (!direct) {
+        for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
+            uint r = at / DK;
+            uint c = at % DK;
+            qs[at] = r < rows && c < dk
+                     ? float16_t (q[(p0 * shape.heads + head0 + r) * dk + c])
+                     : float16_t (0.0);
+        }
     }
 #else
     //  Each position's queries; a position past the batch reads the
@@ -242,7 +250,13 @@ void main() {
             [[unroll]] for (uint d = 0u; d < DEPTH_STEPS; d++) {
                 uint t = sub * DEPTH_STEPS + d;
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
-                coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                if (direct) {
+                    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
+                    coopMatLoad (qf, q, q_direct + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
+                    qm = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
+                } else {
+                    coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                }
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
                     coopMatLoad (km, kvh, keys[n] + min (t * 16u, dk - 16u), shape.kv_width,
@@ -280,7 +294,13 @@ void main() {
                     qm[m] = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
                 }
 #else
-                coopMatLoad (qm[0], qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                if (direct) {
+                    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
+                    coopMatLoad (qf, q, q_direct + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
+                    qm[0] = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
+                } else {
+                    coopMatLoad (qm[0], qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                }
 #endif
                 [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
