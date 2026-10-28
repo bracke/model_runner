@@ -779,32 +779,58 @@ void main() {
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
-                //  The half's values read VALUES_AT_ONCE at a time, a
-                //  sixteen past the head at the head's last, before any of
-                //  them is multiplied: read
-                //  where they were used, each waited out the one before --
-                //  twenty-eight microseconds a tile of the same check.
-                [[unroll]] for (uint g = 0u; g < DM / 32u; g += VALUES_AT_ONCE) {
-                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
-                            gl_MatrixUseB> vm[VALUES_AT_ONCE];
+                //  A few at once, the half's values read VALUES_AT_ONCE at a
+                //  time, a sixteen past the head at the head's last, before
+                //  any of them is multiplied: read where they were used,
+                //  each waited out the one before -- twenty-eight
+                //  microseconds a tile of the few-position check 8,188
+                //  deep. Not a batch's: read four at once, qwen3-8b's
+                //  prompt of 16,214 read in 126 s where it read 82 a tile
+                //  at a time.
+                if (FEW != 0u) {
+                    [[unroll]] for (uint g = 0u; g < DM / 32u; g += VALUES_AT_ONCE) {
+                        coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseB> vm[VALUES_AT_ONCE];
 
-                    [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
-                        uint tg = half_of * (DM / 32u) + g + t;
+                        [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
+                            uint tg = half_of * (DM / 32u) + g + t;
 
-                        coopMatLoad (vm[t], vh,
-                                     place_of (base + n0, shape.v_base,
-                                               shape.v_width)
-                                     + v_at + min (tg * 16u, dv - 16u),
-                                     shape.v_width,
-                                     gl_CooperativeMatrixLayoutRowMajor);
+                            coopMatLoad (vm[t], vh,
+                                         place_of (base + n0, shape.v_base,
+                                                   shape.v_width)
+                                         + v_at + min (tg * 16u, dv - 16u),
+                                         shape.v_width,
+                                         gl_CooperativeMatrixLayoutRowMajor);
+                        }
+
+                        [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
+                            if ((half_of * (DM / 32u) + g + t) * 16u < dv) {
+                                [[unroll]] for (uint m = 0u; m < 2u; m++) {
+                                    pacc[m * (DM / 32u) + g + t] =
+                                        coopMatMulAdd (pm[m], vm[t],
+                                                       pacc[m * (DM / 32u) + g + t]);
+                                }
+                            }
+                        }
                     }
+                } else {
+                    [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
+                        uint tg = half_of * (DM / 32u) + t;
+                        if (tg * 16u < dv) {
+                            coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                                    gl_MatrixUseB> vm;
 
-                    [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
-                        if ((half_of * (DM / 32u) + g + t) * 16u < dv) {
+                            coopMatLoad (vm, vh,
+                                         place_of (base + n0, shape.v_base,
+                                                   shape.v_width)
+                                         + v_at + tg * 16u,
+                                         shape.v_width,
+                                         gl_CooperativeMatrixLayoutRowMajor);
+
                             [[unroll]] for (uint m = 0u; m < 2u; m++) {
-                                pacc[m * (DM / 32u) + g + t] =
-                                    coopMatMulAdd (pm[m], vm[t],
-                                                   pacc[m * (DM / 32u) + g + t]);
+                                pacc[m * (DM / 32u) + t] =
+                                    coopMatMulAdd (pm[m], vm,
+                                                   pacc[m * (DM / 32u) + t]);
                             }
                         }
                     }
