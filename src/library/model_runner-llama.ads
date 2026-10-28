@@ -752,18 +752,23 @@ package Model_Runner.Llama is
    --  Whether a layer of a hybrid architecture is a linear one. The
    --  full attention layers are every Linear_Every-th, counting from one,
    --  as the file counts them; an architecture with no interval has none.
+   --  A block past the stack attends in full whatever its index would
+   --  say: counted as linear, a hybrid's block was dealt no pages, and
+   --  its table was the next layer's.
    --
    --  @param Settings The model's configuration.
    --  @param Layer Layer index, counting from nought.
    --  @return True where the layer keeps a state rather than a cache.
    function Linear (Settings : Configuration; Layer : Natural) return Boolean
-   is (Pure_SSM (Settings.Kind)
+   is (Layer < Settings.Layers
+       and then
+       (Pure_SSM (Settings.Kind)
        or else Is_RWKV (Settings.Kind)
        or else (Is_Jamba (Settings.Kind)
                 and then Layer < Max_Block_Count
                 and then Settings.Mamba_Layer (Layer))
        or else (Settings.Linear_Every > 0
-                and then (Layer + 1) mod Settings.Linear_Every /= 0));
+                and then (Layer + 1) mod Settings.Linear_Every /= 0)));
 
    --  Widths the linear layers' projections have: the queries and keys
    --  together, the values, and the three at once, which is what the
@@ -2390,6 +2395,14 @@ package Model_Runner.Llama is
    --  @return True where Mark_Checkpoint last copied there.
    function Checkpoint_On_Device (Item : Session) return Boolean;
 
+   --  Whether the block past the stack has drafted on the device, its
+   --  rows in its own pages there, since the session last put them out
+   --  of step.
+   --
+   --  @param Item Session to ask.
+   --  @return True where the device holds rows of the block.
+   function Drafts_On_Device (Item : Session) return Boolean;
+
    --  The furthest along of the positions at or before Position this
    --  session can be rewound to: Position itself for a session that keeps
    --  every position, within the ring or at the checkpoint for a hybrid's,
@@ -3450,6 +3463,14 @@ private
       --  where the stack's cache is exact and holds them itself.
       Next_Keys   : Model_Runner.Tensors.Real_Array_Access := null;
       Next_Values : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  How many of those positions the block's pages on the device hold
+      --  as the host's arrays do, from the first: where Draft_Next attends
+      --  on the device it puts the rest there first. Lowered by whatever
+      --  writes the host's rows and not the device's (Feed_Next, a draft
+      --  on the processor) and nought wherever the pages are dealt again
+      --  or the positions move.
+      Next_Device_Upto : Natural := 0;
 
       --  And the third storage: one byte an element, with one scale for
       --  every row. The bytes hold a signed value biased by 128, so that a

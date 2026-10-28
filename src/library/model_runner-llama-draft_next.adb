@@ -115,6 +115,184 @@ begin
       --  full attention layers do: twice the queries' rows.
       Gated   : constant Boolean :=
         Natural (Current.Query.Rows) = 2 * Natural (Heads * Head_Size);
+
+      --  The first position the block attends.
+      Earliest_Cell : constant Element_Count :=
+        (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0);
+
+      --  Whether the block went whole on the device, as Whole_Layer runs
+      --  a layer of the stack: a paged session the device holds, the
+      --  block's own rows, and a block whose feed-forward the device
+      --  takes whole -- the dense one, or a mixture of stacks routed as
+      --  the stack's are. False where any of it is refused, and the
+      --  processor's way below runs instead.
+      function On_Device return Boolean;
+
+      function On_Device return Boolean is
+         use type Model_Runner.Backend.Backend_Kind;
+
+         Shape_Fits : constant Boolean :=
+           Own
+           and then Item.Paged
+           and then Item.Seen = null
+           and then not Item.On_Host
+           and then Item.Owner /= null
+           and then Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device
+           and then Item.Held in Exact | Halved
+           and then not Item.Values_In_Keys
+           and then not Is_MLA (Settings.Kind)
+           and then Element_Count (Settings.Rotary) <= Head_Size
+           and then not Current.Host_Feed
+           and then Current.Attention_Norm /= null
+           and then Current.Feed_Norm /= null
+           and then (if Settings.Experts > 0
+                     then Source.Stacked
+                          and then Current.Experts /= null
+                          and then T.Is_Present (Current.Router)
+                          and then T.Is_Present (Current.Gate_Stack)
+                          and then T.Is_Present (Current.Up_Stack)
+                          and then T.Is_Present (Current.Down_Stack)
+                          and then Current.Expert_Gate_Bias = null
+                          and then Current.Expert_Up_Bias = null
+                          and then Current.Up_Bias = null
+                          and then Current.Down_Bias = null
+                          and then Current.Select_Bias = null
+                          and then not Settings.Sigmoid_Gate
+                          and then not Grouped (Settings)
+                          and then Settings.Experts_Used
+                                   <= Model_Runner.Backend.Device.Max_Members
+                     else T.Is_Present (Current.Up));
+         Resident : Boolean;
+         Pairs    : constant Element_Count := Element_Count (Settings.Rotary) / 2;
+         Angles   : N.Wide_Real_Array (0 .. Pairs * 2 - 1);
+         Cosines  : N.Wide_Real_Array (0 .. Pairs - 1);
+         Sines    : N.Wide_Real_Array (0 .. Pairs - 1);
+         Before   : constant N.Real_Array := Item.Activation.all;
+         Fused    : Boolean;
+         Layer_Page_First : Element_Count;
+         P        : constant Element_Count := Element_Count (Page_Positions);
+      begin
+         if not Shape_Fits then
+            return False;
+         end if;
+
+         Take_Pages (Item'Unchecked_Access, Cell, Resident);
+         if not Resident then
+            return False;
+         end if;
+         Layer_Page_First := Item.Page_First.all (Layer_Index);
+
+         --  The rows the device lacks, from the first the block reads.
+         for Row in Element_Count'Max
+                      (Element_Count (Item.Next_Device_Upto), Earliest_Cell)
+                    .. Cell - 1
+         loop
+            declare
+               Page_Base : constant Element_Count :=
+                 Item.Pages.all (Natural (Layer_Page_First + Row / P));
+               Put_Keys, Put_Values : Boolean;
+            begin
+               Model_Runner.Backend.Device.Put_Cache
+                 (Page_Base + (Row mod P) * KV_Width,
+                  Keys.all (Row * KV_Width .. Row * KV_Width + KV_Width - 1),
+                  Put_Keys);
+               Model_Runner.Backend.Device.Put_Cache
+                 (Page_Base + P * KV_Width + (Row mod P) * V_Width,
+                  Values.all (Row * V_Width .. Row * V_Width + V_Width - 1),
+                  Put_Values);
+               if not (Put_Keys and then Put_Values) then
+                  Item.Next_Device_Upto := Natural (Row);
+                  return False;
+               end if;
+            end;
+         end loop;
+         Item.Next_Device_Upto := Natural'Max (Item.Next_Device_Upto, Position);
+
+         if Settings.Rotary > 0 then
+            K.Rotary_Table
+              (Element_Count (Settings.Rotary), Position,
+               Turn_Base (Settings, Layer_Index),
+               Turn_Scaling (Settings, Layer_Index),
+               Turns (Source, Item),
+               Cosines => Cosines, Sines => Sines,
+               Sections => Settings.Sections,
+               Place => K.Everywhere (Rope_Next (Item, Position)));
+            for Pair in 0 .. Pairs - 1 loop
+               Angles (Pair * 2) := Cosines (Pair);
+               Angles (Pair * 2 + 1) := Sines (Pair);
+            end loop;
+         end if;
+
+         Model_Runner.Backend.Device.Whole_Layer
+           (Item.Activation.all,
+            Device_Norm (Current.Attention_Norm, Current.Attention_Norm_Pair),
+            Device_Norm (Current.Feed_Norm, Current.Feed_Norm_Pair),
+            Settings.Epsilon,
+            Current.Query, Current.Key, Current.Value,
+            Angles, Natural (Head_Size), Settings.Rotary,
+            K."=" (Settings.Pairing, K.Split),
+            0, Page_Value_Base (Item),
+            Natural (Heads), Natural (Value_Size), Settings.Group_Size,
+            Natural (Earliest_Cell), Natural (Cell),
+            0, Page_Value_Base (Item),
+            Natural (KV_Width), Natural (V_Width),
+            Scale, Settings.Attention_Cap,
+            Current.Attention_Out,
+            Current.Gate, Current.Up, Current.Down,
+            Gate_Unit (Source),
+            Item.Key_Row, Item.Value_Row, Item.Activation, Fused,
+            Mirror => True,
+            Max_Bias => Settings.Max_Bias,
+            Cancel => Item.Stopping,
+            Pages_At => Natural (Item.Page_Table_At.all (Layer_Index)),
+            Page_Shift => Page_Shift_Bits,
+            First_Position => Position,
+            Query_Norm => Current.Query_Norm,
+            Key_Norm   => Current.Key_Norm,
+            Router     =>
+              (if Settings.Experts > 0 then Current.Router else T.Empty_View),
+            Router_Bias => Current.Router_Bias,
+            Gate_Stack  => Current.Gate_Stack,
+            Up_Stack    => Current.Up_Stack,
+            Down_Stack  => Current.Down_Stack,
+            Feed        => Settings.Expert_Feed,
+            Used        => Settings.Experts_Used,
+            Experts     => Settings.Experts,
+            Alpha => Settings.Gate_Alpha,
+            Limit => Settings.Gate_Limit,
+            Query_Bias  => Current.Query_Bias,
+            Key_Bias    => Current.Key_Bias,
+            Value_Bias  => Current.Value_Bias,
+            KV_Bias     => Current.KV_Bias,
+            Out_Bias    => Current.Out_Bias,
+            Post_Attention_Norm =>
+              Device_Norm (Current.Post_Attention_Norm,
+                           Current.Post_Attention_Norm_Pair),
+            Post_Feed_Norm      =>
+              Device_Norm (Current.Post_Feed_Norm,
+                           Current.Post_Feed_Norm_Pair),
+            Shifted => Norms_Shifted (Current),
+            After   => Normalizes_After (Settings.Kind),
+            Head_Gates    => Gated,
+            Shared_Gate   => Current.Shared_Gate,
+            Shared_Up     => Current.Shared_Up,
+            Shared_Down   => Current.Shared_Down,
+            Shared_Router => Current.Shared_Router);
+
+         if not Fused then
+            Item.Activation.all := Before;
+            return False;
+         end if;
+
+         --  The row it placed, for the host's own copy of the block's
+         --  cache.
+         Keys.all (Slot .. Slot + KV_Width - 1) :=
+           Item.Key_Row.all (0 .. KV_Width - 1);
+         Values.all (V_Slot .. V_Slot + V_Width - 1) :=
+           Item.Value_Row.all (0 .. V_Width - 1);
+         Item.Next_Device_Upto := Natural'Max (Item.Next_Device_Upto, Position + 1);
+         return True;
+      end On_Device;
    begin
       --  The block's input: the next token's embedding and the state,
       --  each normalized by its own gain, side by side, projected.
@@ -143,6 +321,20 @@ begin
       if E.Is_Error (Status) then
          return;
       end if;
+
+      --  The whole block as one submission where the device holds the
+      --  session's pages and the block's shape: its keys and values put
+      --  into its own pages there, the rows the host wrote since put
+      --  there first, and the attention, the mixture and the joins all
+      --  the device's. Each piece a submission of its own, waited for,
+      --  and the attention on the processor, a proposal of Qwen3.6
+      --  took 5.2 ms of wall where its device work is 1.9.
+      if On_Device then
+         goto Answered;
+      end if;
+
+      --  A draft on the processor writes its row on the host alone.
+      Item.Next_Device_Upto := Natural'Min (Item.Next_Device_Upto, Position);
 
       --  The attention half: normalized, projected, the gates taken
       --  out, the heads normalized and turned, the keys and values
@@ -209,8 +401,7 @@ begin
          Share.Base := Base;
          Share.V_Base := V_Base;
          Share.V_Stride := V_Stride;
-         Share.First :=
-           (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0);
+         Share.First := Earliest_Cell;
          Share.Cell := Cell;
          Workers_CPU.Dispatch_Shares
            (Item.Team, Heads, Share'Unchecked_Access, Shared,
@@ -266,6 +457,8 @@ begin
          end if;
          K.Add (Item.Activation.all, Item.Normalized.all);
       end if;
+
+      <<Answered>>
 
       --  Its answer: normalized ahead of the shared head, kept for
       --  the next draft, and read by the head.

@@ -1610,6 +1610,135 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Hybrid_Drafts_From_Its_Next_Block;
 
+   --  A hybrid's block past the stack drafts on the device as one layer
+   --  run whole, its rows in pages of its own there -- the ones fed on the
+   --  host put there first -- and proposes what it proposes on the
+   --  processor: fed a prompt's positions, then two drafts chained. A
+   --  hybrid's block was counted a linear layer and dealt no pages.
+   procedure A_Hybrid_Block_Drafts_On_The_Device_As_On_The_Host
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package T renames Model_Runner.Tensors;
+      Room   : constant := 64;
+      Prompt : constant Vocab.Token_Array (1 .. 6) := [4, 7, 2, 9, 5, 3];
+
+      type Drafts is array (1 .. 2) of Logit_Vector;
+
+      --  The two drafts on one backend, and whether the device held the
+      --  block's rows.
+      procedure Draft
+        (Backend : Model_Runner.Backend.Backend_Kind;
+         Made    : out Drafts;
+         Held_On : out Boolean;
+         Able    : out Boolean)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Made := [others => [others => 0.0]];
+         Held_On := False;
+         Tiny_Model.Build
+           (Image, Kind => Tiny_Model.Qwen35, Room => Room, Draft_Block => True);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Status : E.Error_Info;
+         begin
+            Start (Under, Backend, Able);
+            if not Able then
+               B.Free (Image);
+               return;
+            end if;
+
+            declare
+               Settings : constant L.Configuration := L.Config (Under.Ready);
+               Width    : constant N.Element_Count :=
+                 N.Element_Count (Settings.Embedding);
+               States   : T.Real_Array_Access;
+               Last     : Logit_Vector;
+               Handed, Again : N.Real_Array (0 .. Width - 1);
+               Fed      : constant Natural := Prompt'Length - 2;
+            begin
+               T.Allocate (Width * Prompt'Length, States);
+               --  As run opens one: halves, in pages, where the block
+               --  keeps its rows apart.
+               L.Open (Live, Under.Ready, Context => Room, Status => Status,
+                       Cache => L.Halved, Paged => True);
+               Assert (E.Is_Ok (Status), "the session did not open");
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Prompt, Last, States => States,
+                  Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the prompt failed on "
+                       & Model_Runner.Backend.Backend_Kind'Image (Backend) & ": "
+                       & E.Error_Code'Image (Status.Code));
+
+               L.Feed_Next
+                 (Live, Under.Ready,
+                  Prompt (Prompt'First + 1 .. Prompt'First + Fed),
+                  States.all (States.all'First
+                              .. States.all'First
+                                 + N.Element_Count (Fed) * Width - 1),
+                  0, Status);
+               Assert (E.Is_Ok (Status), "the block would not be fed");
+
+               L.Draft_Next
+                 (Live, Under.Ready, Prompt (Prompt'Last),
+                  States.all (States.all'First + N.Element_Count (Fed) * Width
+                              .. States.all'First
+                                 + N.Element_Count (Fed + 1) * Width - 1),
+                  Fed, Made (1), Handed, Status);
+               Assert (E.Is_Ok (Status), "the first draft failed");
+               L.Draft_Next
+                 (Live, Under.Ready, 6, Handed, Fed + 1, Made (2), Again,
+                  Status);
+               Assert (E.Is_Ok (Status), "the chained draft failed");
+               Held_On := L.Drafts_On_Device (Live);
+               L.Close (Live);
+               T.Free (States);
+            end;
+         end;
+         B.Free (Image);
+      end Draft;
+
+      On_Host, On_Device : Drafts;
+      Host_Held, Device_Held, Able, Awake : Boolean;
+   begin
+      Draft (Model_Runner.Backend.Backend_CPU, On_Host, Host_Held, Able);
+      Assert (Able, "the fixture did not prepare on the processor");
+      Assert (not Host_Held, "the processor's session says the device drafted");
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Device_Notes.Skip ("for a hybrid's block to draft on the device");
+         return;
+      end if;
+      Draft (Model_Runner.Backend.Backend_Device, On_Device, Device_Held, Able);
+      if not Able then
+         Device_Notes.Skip ("for a hybrid's block to draft on the device");
+         return;
+      end if;
+      Assert (Device_Held, "the block did not draft on the device");
+
+      for Which in Drafts'Range loop
+         declare
+            Worst, Most : N.Real := 0.0;
+         begin
+            for Index in On_Host (Which)'Range loop
+               Most := N.Real'Max (Most, abs On_Host (Which) (Index));
+               Worst := N.Real'Max
+                 (Worst,
+                  abs (On_Host (Which) (Index) - On_Device (Which) (Index))
+                  / (1.0 + abs On_Host (Which) (Index)));
+            end loop;
+            Assert (Most > 0.01, "the drafts tell nothing");
+            Assert (Worst <= 2.0E-2,
+                    "draft" & Which'Image & " on the device is"
+                    & N.Real'Image (Worst) & " away from the processor's");
+         end;
+      end loop;
+   end A_Hybrid_Block_Drafts_On_The_Device_As_On_The_Host;
+
    --  A block past the stack drafts on any architecture that carries one,
    --  not only on the hybrids it shipped with: Mellum was released
    --  without the block it was trained with, and one trained for it is a
@@ -20918,6 +21047,10 @@ package body Tests.Inference_Cases is
         (T, A_Block_Past_Any_Stack_Drafts'Access,
          "a block past the stack drafts on any architecture that carries "
          & "one, fed in a batch as a position at a time");
+      Register_Routine
+        (T, A_Hybrid_Block_Drafts_On_The_Device_As_On_The_Host'Access,
+         "a hybrid's block past the stack drafts on the device, a layer "
+         & "whole, as on the processor");
       Register_Routine
         (T, Paired_Stacks_Are_Held_Once'Access,
          "a mixture's gate and up stacks a short way apart go to the device "

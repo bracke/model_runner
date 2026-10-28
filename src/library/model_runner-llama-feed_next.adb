@@ -18,6 +18,10 @@ is
    V_Width  : constant Element_Count := KV_Heads * Value_Size;
    Layer_Index : constant Natural := Settings.Layers;
 begin
+   --  The rows this writes are the host's; the device's copy of them is
+   --  put right by the next draft that reads it.
+   Item.Next_Device_Upto := Natural'Min (Item.Next_Device_Upto, First);
+
    Status := E.Success;
 
    if Count = 0 then

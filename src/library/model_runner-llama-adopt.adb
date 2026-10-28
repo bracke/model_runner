@@ -230,6 +230,10 @@ is
 
    Held : Element_Count := 0;
 begin
+   --  The block's rows move or are replaced; the device's copy of them
+   --  is put right again by the next draft that reads it.
+   Item.Next_Device_Upto := 0;
+
    --  What the host is about to be given is the copy of record,
    --  so whatever the device was owed for is no longer owed: the
    --  positions it wrote are the ones being replaced.

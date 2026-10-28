@@ -18,6 +18,10 @@ is
 
    Moved : Natural;
 begin
+   --  The block's rows move or are replaced; the device's copy of them
+   --  is put right again by the next draft that reads it.
+   Item.Next_Device_Upto := 0;
+
    --  What the device wrote and the host was owed, which this
    --  reads: the copy is brought up to date where it is used
    --  rather than at the end of every call.

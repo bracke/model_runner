@@ -5767,6 +5767,7 @@ package body Model_Runner.Llama is
       Item.Page_Count.all := [others => 0];
       Item.Paged_In := False;
       Item.Paged_Upto := 0;
+      Item.Next_Device_Upto := 0;
 
       --  Taken again, the pages are written whole from the host's copy.
       Item.Device_Behind := Natural'Last;
@@ -9393,6 +9394,7 @@ package body Model_Runner.Llama is
    procedure Reset (Item : in out Session) is
    begin
       Item.Skipped_Count := 0;
+      Item.Next_Device_Upto := 0;
 
       --  A context dropped is a context nothing will read, so the
       --  device owes the host nothing for it, nor the host the device.
@@ -11565,6 +11567,9 @@ package body Model_Runner.Llama is
 
    function Checkpoint_On_Device (Item : Session) return Boolean
    is (Item.Check_At > 0 and then Item.Check_On_Device);
+
+   function Drafts_On_Device (Item : Session) return Boolean
+   is (Item.Next_Device_Upto > 0);
 
    ------------------
    -- Rewind_Point --

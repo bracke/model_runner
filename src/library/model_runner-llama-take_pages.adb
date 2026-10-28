@@ -425,6 +425,10 @@ begin
       declare
          Written : Boolean := True;
       begin
+         --  The block past the stack keeps its rows on the host alone;
+         --  what is written here for its layer is not them.
+         Item.Next_Device_Upto := 0;
+
          --  Every layer that holds pages, which is every non-linear one
          --  including the blocks past the stack -- Page_Count runs to
          --  Layers + Next_Layers - 1, and pages are dealt for all of
@@ -458,6 +462,9 @@ begin
       declare
          Written : Boolean := True;
       begin
+         Item.Next_Device_Upto :=
+           Natural'Min (Item.Next_Device_Upto, Item.Device_Behind);
+
          for Layer in Item.Page_Count.all'Range loop
             if not Linear (Item.Owner.Settings, Layer) then
                Write_Pages_Layer
