@@ -5640,33 +5640,117 @@ package body Model_Runner.Backend.Device is
             --  position, scaled by the logistic of its router's one score
             --  a position, and joined to the sum.
             if Shared then
-               Products.Add_Chained_Product
-                 (Steps, Shared_Gate.Base, Shared_Gate.Span, Shared_Gate.Offset,
-                  Shared_Gate_P, Natural (Shared_Gate.Rows),
-                  Natural (Shared_Gate.Columns), Added,
-                  Key => At_Offset (Shared_Gate.Base, Shared_Gate.Offset),
-                  Kept => False, From_Step => Step_Norm_Feed);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Shared_Gate.Rows);
+               --  Its gate and up as one step where the file keeps them a
+               --  short way apart and the engine has the kernel for this
+               --  batch, as a dense feed-forward's are -- one region
+               --  uploaded, which the plain products read too where the
+               --  batch is not the pair's. DeepSeek keeps the up right
+               --  after the gate.
+               declare
+                  use type Products.Weight_Packing;
 
-               Products.Add_Chained_Product
-                 (Steps, Shared_Up.Base, Shared_Up.Span, Shared_Up.Offset,
-                  Shared_Up_P, Natural (Shared_Up.Rows),
-                  Natural (Shared_Up.Columns), Added,
-                  Key => At_Offset (Shared_Up.Base, Shared_Up.Offset),
-                  Kept => False, From_Step => Step_Norm_Feed);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Shared_Up.Rows);
+                  G : T.View renames Shared_Gate;
+                  U : T.View renames Shared_Up;
 
-               Products.Add_Combination (Steps, 0, Added, Kept => False);
-               if not Added then
-                  return;
-               end if;
-               Step_Room (Shared_Gate.Rows);
+                  Q8 : constant Boolean := Shared_Gate_P = Products.Packed_Q8_0;
+
+                  Gate_Bytes : constant Model_Runner.Bytes.Byte_Count :=
+                    (if Q8
+                     then Model_Runner.Bytes.Byte_Count (G.Columns / 32) * 34
+                     else Model_Runner.Bytes.Byte_Count (G.Columns / 256) * 144)
+                    * Model_Runner.Bytes.Byte_Count (G.Rows);
+
+                  Paired : constant Boolean :=
+                    Shared_Gate_P in Products.Packed_Q4_K | Products.Packed_Q8_0
+                    and then Shared_Up_P = Shared_Gate_P
+                    and then G.Base = U.Base
+                    and then G.Span = U.Span
+                    and then G.Rows = U.Rows
+                    and then G.Columns = U.Columns
+                    and then G.Columns mod (if Q8 then 32 else 256) = 0
+                    and then U.Offset >= G.Offset + Gate_Bytes
+                    and then U.Offset - G.Offset - Gate_Bytes <= 2**20
+                    and then G.Offset >= Gate_Bytes;
+
+                  Pair_At : constant Model_Runner.Bytes.Byte_Count :=
+                    (if Paired then U.Offset - G.Offset else 0);
+
+                  Region : constant Natural :=
+                    (if Paired
+                     then Products.Pair_Rows
+                            (Pair_At, Natural (G.Rows), Natural (G.Columns),
+                             Shared_Gate_P)
+                     else 0);
+
+                  Pad : constant Natural :=
+                    (if Paired
+                     then Products.Pair_Pad
+                            (Pair_At, Natural (G.Rows), Natural (G.Columns),
+                             Shared_Gate_P)
+                     else 0);
+
+                  Start : constant Model_Runner.Bytes.Byte_Count :=
+                    G.Offset - Model_Runner.Bytes.Byte_Count (Pad);
+
+                  Pair_Key : constant System.Address :=
+                    At_Offset (G.Base, G.Offset);
+               begin
+                  if Paired
+                    and then Products.Pairs_Gate
+                               (Engine, Shared_Gate_P, Natural (Slots),
+                                Natural (G.Columns))
+                  then
+                     Products.Add_Gated_Pair
+                       (Steps, G.Base, G.Span, Start, Pair_At,
+                        Shared_Gate_P, Natural (G.Rows), Natural (G.Columns),
+                        Added, Key => Pair_Key, Kept => False,
+                        From_Step => Step_Norm_Feed, Unit => 0);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (G.Rows);
+                  else
+                     Products.Add_Chained_Product
+                       (Steps, G.Base, G.Span,
+                        (if Paired then Start else G.Offset), Shared_Gate_P,
+                        Natural (G.Rows), Natural (G.Columns), Added,
+                        Key =>
+                          (if Paired then Pair_Key
+                           else At_Offset (G.Base, G.Offset)),
+                        Kept => False, From_Step => Step_Norm_Feed,
+                        Region_Rows => Region, Region_At => Pad);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (G.Rows);
+
+                     if Paired then
+                        Products.Add_Chained_Product
+                          (Steps, G.Base, G.Span, Start, Shared_Up_P,
+                           Natural (U.Rows), Natural (U.Columns), Added,
+                           Key => Pair_Key, Kept => False,
+                           From_Step => Step_Norm_Feed,
+                           Region_Rows => Region,
+                           Region_At => Pad + Natural (Pair_At));
+                     else
+                        Products.Add_Chained_Product
+                          (Steps, U.Base, U.Span, U.Offset, Shared_Up_P,
+                           Natural (U.Rows), Natural (U.Columns), Added,
+                           Key => At_Offset (U.Base, U.Offset),
+                           Kept => False, From_Step => Step_Norm_Feed);
+                     end if;
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (U.Rows);
+
+                     Products.Add_Combination (Steps, 0, Added, Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (G.Rows);
+                  end if;
+               end;
 
                Products.Add_Chained_Product
                  (Steps, Shared_Down.Base, Shared_Down.Span, Shared_Down.Offset,
