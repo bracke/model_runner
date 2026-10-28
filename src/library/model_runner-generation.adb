@@ -805,6 +805,50 @@ package body Model_Runner.Generation is
       --  context keeps them all and is back at the most in a few rounds.
       Lookup_Length     : Natural := 1;
 
+      --  What a mixture's check of two positions costs against a plain
+      --  step, timed as the run goes, which sets the share a lookup has to
+      --  keep (Lookup_Bar): a proposal checked alone pays where it is kept
+      --  more often than the check costs past a step. Two positions read
+      --  two tokens' experts -- DeepSeek-Coder-V2-Lite's 1.65 steps, so 65
+      --  per cent; gpt-oss's less, which a lookup keeping 59 per cent on an
+      --  edit paid for. Lookup_Keeps stands in until enough of both are
+      --  timed. Checked counts the positions the last round checked.
+      Checked           : Natural := 0;
+      Step_Ns           : Model_Runner.Clocks.Nanoseconds := 0;
+      Step_Rounds       : Natural := 0;
+      Pair_Ns           : Model_Runner.Clocks.Nanoseconds := 0;
+      Pair_Rounds       : Natural := 0;
+      Cost_Untimed      : Natural := 4;
+      Cost_Least_Steps  : constant := 8;
+      Cost_Least_Pairs  : constant := 4;
+
+      --  The share in per cent: the pair's cost past a step, at least
+      --  Bar_Least and at most Bar_Most.
+      Bar_Least : constant := 25;
+      Bar_Most  : constant := 85;
+
+      function Lookup_Bar return Natural is
+         use type Model_Runner.Clocks.Nanoseconds;
+      begin
+         if Step_Rounds < Cost_Least_Steps
+           or else Pair_Rounds < Cost_Least_Pairs
+           or else Step_Ns = 0
+         then
+            return Lookup_Keeps;
+         end if;
+         declare
+            Ratio : constant Long_Float :=
+              (Long_Float (Pair_Ns) / Long_Float (Pair_Rounds))
+              / (Long_Float (Step_Ns) / Long_Float (Step_Rounds));
+         begin
+            return Natural'Max
+              (Bar_Least,
+               Natural'Min
+                 (Bar_Most,
+                  Natural (Long_Float'Max (0.0, (Ratio - 1.0) * 100.0))));
+         end;
+      end Lookup_Bar;
+
       --  The first rounds of a reply are not timed: they bear what the
       --  first use of the kernels and the tables costs, and Qwen3.6's
       --  first sixteen drafted tokens took 1.02 s against 0.61 for the
@@ -2323,7 +2367,7 @@ package body Model_Runner.Generation is
                         Low : constant Boolean :=
                           Thrifty
                           and then Outcome.Accepted * 100
-                                   < Lookup_Keeps * Outcome.Drafted;
+                                   < Lookup_Bar * Outcome.Drafted;
                      begin
                         Lookup.Propose
                           (Said.all (1 .. Said_Count),
@@ -2517,6 +2561,7 @@ package body Model_Runner.Generation is
             --  position before it is the proposal.
             Verified.all (1) := Proposed.all (1);
             Verified_Count := 1;
+            Checked := Count;
 
             --  AND THE PENALTY'S HISTORY MOVES WITH THE VERIFICATION, which
             --  it did not. A repetition penalty is computed from the tokens
@@ -2859,7 +2904,7 @@ package body Model_Runner.Generation is
                   else 1);
                if Accepted > 1 then
                   Lookup_Rest_Next := Lookup_Rest_Least;
-               elsif Outcome.Accepted * 100 < Lookup_Keeps * Outcome.Drafted then
+               elsif Outcome.Accepted * 100 < Lookup_Bar * Outcome.Drafted then
                   Lookup_Rest := Lookup_Rest_Next;
                   Lookup_Rest_Next :=
                     Natural'Min (2 * Lookup_Rest_Next, Lookup_Rest_Most);
@@ -3035,6 +3080,20 @@ package body Model_Runner.Generation is
 
                            Took := Model_Runner.Clocks.Elapsed
                              (Began, Model_Runner.Clocks.Read (Time));
+
+                           --  A mixture's lookup times its steps and its
+                           --  checks of two, past the first rounds.
+                           if Thrifty then
+                              if Cost_Untimed > 0 then
+                                 Cost_Untimed := Cost_Untimed - 1;
+                              elsif Checked = 1 then
+                                 Step_Ns := Step_Ns + Took;
+                                 Step_Rounds := Step_Rounds + 1;
+                              elsif Checked = 2 then
+                                 Pair_Ns := Pair_Ns + Took;
+                                 Pair_Rounds := Pair_Rounds + 1;
+                              end if;
+                           end if;
                            if Sampled_Draft and then Watched then
                               Outcome.Seed_Repeats := False;
                            end if;
