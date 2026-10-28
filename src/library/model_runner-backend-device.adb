@@ -1771,6 +1771,33 @@ package body Model_Runner.Backend.Device is
       Products.Fetch_Carried (Engine, Into, Ok);
    end Fetch_Carried;
 
+   ---------------------
+   -- Project_Carried --
+   ---------------------
+
+   procedure Project_Carried
+     (Weight : Model_Runner.Tensors.View;
+      Vector : Model_Runner.Tensors.Real_Array;
+      Ok     : out Boolean)
+   is
+      Steps  : Products.Sequence;
+      Added  : Boolean;
+      Status : E.Error_Info;
+   begin
+      Ok := False;
+      if not Ready_Now then
+         return;
+      end if;
+      Products.Open_Sequence (Steps);
+      Add_View_Product_At (Steps, Weight, 0, Added);
+      if not Added then
+         return;
+      end if;
+      Run_Steps (Steps, Vector, 1, System.Null_Address, Status,
+                 Carry_Out => True);
+      Ok := E.Is_Ok (Status);
+   end Project_Carried;
+
    -----------------
    -- Runs_Linear --
    -----------------

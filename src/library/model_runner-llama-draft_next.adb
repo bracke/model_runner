@@ -116,6 +116,10 @@ begin
       Gated   : constant Boolean :=
         Natural (Current.Query.Rows) = 2 * Natural (Heads * Head_Size);
 
+      --  Whether the block's answer is the one on the device, where the
+      --  head reads it, rather than in Item.Activation.
+      Carried : Boolean := False;
+
       --  The first position the block attends.
       Earliest_Cell : constant Element_Count :=
         (if Cell >= Next_Reach then Cell - Next_Reach + 1 else 0);
@@ -167,8 +171,8 @@ begin
          Angles   : N.Wide_Real_Array (0 .. Pairs * 2 - 1);
          Cosines  : N.Wide_Real_Array (0 .. Pairs - 1);
          Sines    : N.Wide_Real_Array (0 .. Pairs - 1);
-         Before   : constant N.Real_Array := Item.Activation.all;
          Fused    : Boolean;
+         Projected : Boolean;
          Layer_Page_First : Element_Count;
          P        : constant Element_Count := Element_Count (Page_Positions);
       begin
@@ -223,6 +227,16 @@ begin
             end loop;
          end if;
 
+         --  The block's input projected where the block reads it, and the
+         --  block's answer left there for the head: one wait a proposal,
+         --  the block's, for the row it mirrors, where each of the three
+         --  was waited for and its answer brought home.
+         Model_Runner.Backend.Device.Project_Carried
+           (Current.Next_Proj, Item.Next_Input.all, Projected);
+         if not Projected then
+            return False;
+         end if;
+
          Model_Runner.Backend.Device.Whole_Layer
            (Item.Activation.all,
             Device_Norm (Current.Attention_Norm, Current.Attention_Norm_Pair),
@@ -242,6 +256,8 @@ begin
             Gate_Unit (Source),
             Item.Key_Row, Item.Value_Row, Item.Activation, Fused,
             Mirror => True,
+            Carry_In => True,
+            Carry_Out => True,
             Max_Bias => Settings.Max_Bias,
             Cancel => Item.Stopping,
             Pages_At => Natural (Item.Page_Table_At.all (Layer_Index)),
@@ -280,9 +296,9 @@ begin
             Shared_Router => Current.Shared_Router);
 
          if not Fused then
-            Item.Activation.all := Before;
             return False;
          end if;
+         Carried := True;
 
          --  The row it placed, for the host's own copy of the block's
          --  cache.
@@ -316,12 +332,6 @@ begin
         (State, Current.Next_HNorm.all, Settings.Epsilon,
          Item.Next_Input.all (Width .. 2 * Width - 1));
 
-      Product (Item, Current.Next_Proj, Item.Next_Input, Item.Activation,
-               Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
       --  The whole block as one submission where the device holds the
       --  session's pages and the block's shape: its keys and values put
       --  into its own pages there, the rows the host wrote since put
@@ -335,6 +345,12 @@ begin
 
       --  A draft on the processor writes its row on the host alone.
       Item.Next_Device_Upto := Natural'Min (Item.Next_Device_Upto, Position);
+
+      Product (Item, Current.Next_Proj, Item.Next_Input, Item.Activation,
+               Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
 
       --  The attention half: normalized, projected, the gates taken
       --  out, the heads normalized and turned, the keys and values
@@ -460,35 +476,22 @@ begin
 
       <<Answered>>
 
-      --  Its answer: normalized ahead of the shared head, kept for
-      --  the next draft, and read by the head.
-      K.RMS_Norm
-        (Item.Activation.all, Current.Next_Head_Norm.all,
-         Settings.Epsilon, Item.Normalized.all);
-      Next_State := Item.Normalized.all;
-
-      --  The head only where a distribution was asked for: a position
-      --  run through again to put the cache right wants the cache and
-      --  the state, and the head is most of what the block costs.
-      if Logits'Length = 0 then
-         return;
-      end if;
-
-      --  Over the first rows of the head only: a proposal is a token a
-      --  draft thinks likely, and a vocabulary's first tokens are its
-      --  commonest -- a byte-pair vocabulary is numbered in the order
-      --  its merges were learned. The check is against the model's own
-      --  distribution over every token, so what the draft cannot
-      --  propose costs a refusal and never a wrong answer. On Qwen3.5-4B
-      --  the head is 675 MB of the block's 800; its first 65,536 rows
-      --  read 23.1 -> 25.3 tokens a second greedy against the whole, with
-      --  86 of 129 proposals kept against 88 of 123, and 17.5 -> 20.1
-      --  sampled. Fewer rows lose proposals faster than they save bytes:
-      --  32,768 read 23.1 and 8,192 20.5.
       declare
+         --  Over the first rows of the head only: a proposal is a token a
+         --  draft thinks likely, and a vocabulary's first tokens are its
+         --  commonest -- a byte-pair vocabulary is numbered in the order
+         --  its merges were learned. The check is against the model's own
+         --  distribution over every token, so what the draft cannot
+         --  propose costs a refusal and never a wrong answer. On Qwen3.5-4B
+         --  the head is 675 MB of the block's 800; its first 65,536 rows
+         --  read 23.1 -> 25.3 tokens a second greedy against the whole,
+         --  with 86 of 129 proposals kept against 88 of 123, and 17.5 ->
+         --  20.1 sampled. Fewer rows lose proposals faster than they save
+         --  bytes: 32,768 read 23.1 and 8,192 20.5.
          Rows : constant Element_Count :=
            Element_Count'Min (Source.Output.Rows, Draft_Vocabulary);
          Head : T.View := Source.Output;
+         Headed : Boolean := False;
       begin
          Head.Rows := Rows;
          Head.Length :=
@@ -501,9 +504,48 @@ begin
             Head := Source.Draft_Head;
          end if;
 
-         Product (Item, Head, Item.Normalized, Item.Logit_Row, Status);
-         if E.Is_Error (Status) then
+         --  The head straight off the block's answer where the device
+         --  holds it, normalized there; the answer then brought home for
+         --  the next draft's state.
+         if Carried then
+            if Logits'Length > 0 then
+               Model_Runner.Backend.Device.Normalize_And_Project
+                 ([Head], Item.Activation, Current.Next_Head_Norm.all,
+                  Settings.Epsilon, [Item.Logit_Row], Headed,
+                  Cancel => Item.Stopping, Carry_In => True);
+            end if;
+
+            declare
+               Back : Boolean;
+            begin
+               Model_Runner.Backend.Device.Fetch_Carried
+                 (Item.Activation.all, Back);
+               if not Back then
+                  Status := E.Make (E.Backend_Device_Refused);
+                  return;
+               end if;
+            end;
+         end if;
+
+         --  Its answer: normalized ahead of the shared head, kept for
+         --  the next draft, and read by the head.
+         K.RMS_Norm
+           (Item.Activation.all, Current.Next_Head_Norm.all,
+            Settings.Epsilon, Item.Normalized.all);
+         Next_State := Item.Normalized.all;
+
+         --  The head only where a distribution was asked for: a position
+         --  run through again to put the cache right wants the cache and
+         --  the state, and the head is most of what the block costs.
+         if Logits'Length = 0 then
             return;
+         end if;
+
+         if not Headed then
+            Product (Item, Head, Item.Normalized, Item.Logit_Row, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
          end if;
 
          --  What the draft cannot say, it gives no chance at all.

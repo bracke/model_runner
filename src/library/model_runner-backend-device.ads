@@ -963,6 +963,18 @@ package Model_Runner.Backend.Device is
      (Into : out Model_Runner.Tensors.Real_Array;
       Ok   : out Boolean);
 
+   --  One position's product left on the device as the activation the next
+   --  sequence carries in (Whole_Layer's Carry_In), and not waited for: a
+   --  block's input projected where the block reads it.
+   --
+   --  @param Weight The matrix.
+   --  @param Vector The position's input, Weight's columns.
+   --  @param Ok True when it was handed over.
+   procedure Project_Carried
+     (Weight : Model_Runner.Tensors.View;
+      Vector : Model_Runner.Tensors.Real_Array;
+      Ok     : out Boolean);
+
    --  Whether the device has the kernels a hybrid's linear layer takes
    --  whole: the convolution and the rule.
    --
