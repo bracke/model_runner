@@ -114,7 +114,12 @@ package Model_Runner.Platform.Device.Products is
    --  it; bundled, once. The four-at-a-time compilation, told the width
    --  through the same constant as the bundle of eight.
    Whole_Least : constant := 5;
-   Whole_Most  : constant := 7;
+   Whole_Most  : constant := 8;
+
+   --  And the span from which a group of Whole_Least .. Whole_Most heads is
+   --  one bundle whatever divides it: a cache deep enough that reading it
+   --  once for the group outweighs the workgroups two bundles are.
+   Whole_Span  : constant := 4_096;
 
    type Whole_Lines is
      array (Whole_Least .. Whole_Most) of System.Address;

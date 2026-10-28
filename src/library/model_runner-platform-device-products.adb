@@ -851,6 +851,10 @@ package body Model_Runner.Platform.Device.Products is
      (Item : Engine; Group_Size : Natural; Span : Natural) return Natural
    is (if Span < Bundle_Least
        then 0
+       elsif Span >= Whole_Span
+         and then Group_Size in Whole_Lines'Range
+         and then Item.Whole_Halved_Line (Group_Size) /= Null_Handle
+       then Group_Size
        elsif Item.Bundle_Line /= Null_Handle
          and then Group_Size mod Head_Bundle = 0
        then Head_Bundle
@@ -1086,8 +1090,16 @@ package body Model_Runner.Platform.Device.Products is
 
    --  The most slices the heads may cut a cache of Span positions into
    --  between them.
+   --  Twice that from a stretch on: gpt-oss-20b's sixty-four heads cut a
+   --  cache 16,213 deep into eight slices, 128 workgroups of four heads
+   --  reading 512 KB each, and its attention a layer read 798 us; sixteen
+   --  read 673, thirty-two 683.
    function Merged_Slices (Heads, Span : Natural) return Natural
-   is (Natural'Max (1, Merged_Rows * Natural'Max (1, Span / Merged_Stretch) / Natural'Max (1, Heads)));
+   is (Natural'Max
+         (1,
+          Merged_Rows
+          * (if Span >= Merged_Stretch then 2 * (Span / Merged_Stretch) else 1)
+          / Natural'Max (1, Heads)));
 
    --  Whether a round's cache is cut into slices, which the two kernels
    --  answer differently because their workgroups cost differently.
