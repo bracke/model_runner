@@ -795,6 +795,16 @@ package body Model_Runner.Generation is
       Lookup_Keeps      : constant := 50;
       Lookup_Low_Key    : constant := 4;
 
+      --  And how many a mixture's lookup proposes at once: one at first,
+      --  doubled each round that kept all it proposed, and one again after
+      --  a round that kept less. A check of five positions reads five
+      --  tokens' experts -- DeepSeek-Coder-V2-Lite's 3.3 times a token's
+      --  layers, of two 1.65 -- and on prose a lookup's first proposal is
+      --  kept and the rest seldom: proposing four from the start, it ran
+      --  at 34.9 tokens a second against 35.6 plain. A reply copying its
+      --  context keeps them all and is back at the most in a few rounds.
+      Lookup_Length     : Natural := 1;
+
       --  The first rounds of a reply are not timed: they bear what the
       --  first use of the kernels and the tables costs, and Qwen3.6's
       --  first sixteen drafted tokens took 1.02 s against 0.61 for the
@@ -2317,7 +2327,11 @@ package body Model_Runner.Generation is
                      begin
                         Lookup.Propose
                           (Said.all (1 .. Said_Count),
-                           Proposed.all (2 .. (if Low then 2 else Largest_Draft + 1)),
+                           Proposed.all
+                             (2 .. (if Low then 2
+                                    elsif Thrifty
+                                    then 1 + Natural'Min (Lookup_Length, Largest_Draft)
+                                    else Largest_Draft + 1)),
                            Given,
                            Key => (if Low then Lookup_Low_Key else Lookup.Default_Key));
                      end;
@@ -2839,6 +2853,10 @@ package body Model_Runner.Generation is
             end loop;
 
             if Thrifty and then Count > 1 then
+               Lookup_Length :=
+                 (if Accepted >= Count
+                  then Natural'Min (2 * Lookup_Length, Largest_Draft)
+                  else 1);
                if Accepted > 1 then
                   Lookup_Rest_Next := Lookup_Rest_Least;
                elsif Outcome.Accepted * 100 < Lookup_Keeps * Outcome.Drafted then
