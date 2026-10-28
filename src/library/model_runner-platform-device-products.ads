@@ -128,6 +128,19 @@ package Model_Runner.Platform.Device.Products is
    type Whole_Lines is
      array (Whole_Least .. Whole_Most) of System.Address;
 
+   --  A token's attention by attention_token.comp: its groups and its two
+   --  head widths, 64 and 128.
+   Token_Group_Most : constant := 8;
+   --  The most positions attention_token.comp answers at once: a token, or
+   --  a check round's few, a workgroup each.
+   Token_Positions_Most : constant := 8;
+   --  Heads 64, 128, 192 and 256 wide; the two wider only for groups
+   --  whose rows times sixty-fours stay within eight, which is what a
+   --  lane's registers hold.
+   Token_Width_Most : constant := 4;
+   type Token_Widths is array (1 .. Token_Width_Most) of System.Address;
+   type Token_Line_Array is array (1 .. Token_Group_Most) of Token_Widths;
+
    --  And the fewest cached positions the exact bundle is bound over: a
    --  short cache is a few workgroups doing little each, and a head a
    --  workgroup is more workgroups.
@@ -3799,6 +3812,10 @@ private
       --  that group's slice once for each head that wants it.
       Bundled_Attend : System.Address := System.Null_Address;
 
+      --  attention_token.comp: a token's group of heads, a lane its own
+      --  positions, as llama.cpp's flash attention reads them.
+      Token_Attend : System.Address := System.Null_Address;
+
       --  And GROUPED over the cache proper, for a generated token. A
       --  token's workgroup was a head, and a head reads its group's keys
       --  and values whole: with eight heads to a group the cache crossed
@@ -3904,6 +3921,10 @@ private
       --  has: a group neither four nor eight divides read its keys and
       --  values once a head out of the copy.
       Whole_Halved_Line : Whole_Lines := [others => System.Null_Address];
+
+      --  And its pipelines, a group of one to eight heads at a head of 64
+      --  or 128.
+      Token_Lines : Token_Line_Array := [others => [others => System.Null_Address]];
       Halves : Boolean := False;
 
       --  And whether a batch is kept off the matrix instruction, as

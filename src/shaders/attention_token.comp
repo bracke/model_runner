@@ -1,0 +1,360 @@
+#version 450
+
+//  A generated token's attention over the cache's half-precision copy, a
+//  group of query heads a workgroup -- or a part of one, where a whole
+//  group of wide heads would not fit a lane's registers -- as llama.cpp's scalar flash attention
+//  reads it: each lane owns a few cached positions for the whole of its
+//  slice -- every BC-th of them, BC / 16 at a time -- and a few of each
+//  head's components (D_SPLIT lanes share a position), keeps its own
+//  running largest score and sum for every head of the group, and weighs
+//  its positions' values into its own sums in registers. Nothing is shared
+//  and nobody waits until the slice is walked; the lanes' answers are put
+//  together once at the end.
+//
+//  attention.comp's bundles reduced every tile of sixty-four positions
+//  across the workgroup -- its largest score and its sum, barriers each --
+//  and put every weight through shared memory for the values: gpt-oss-20b's
+//  attention 16,213 deep read its cache at 29 GB/s, 1.15 ms a full layer.
+//
+//  The push block, the bindings and what is left behind are attention.
+//  comp's: a slice's unnormalized blend, its largest score and its sum, a
+//  record for merge.comp, where the cache is cut into slices, and the blend
+//  itself where it is not; a sink joins the first slice's sum. A token or
+//  a check round's few positions, one a workgroup down the second axis, a
+//  head of HS components for keys and values alike, causal or windowed, a
+//  bound on the scores, slopes.
+
+#extension GL_KHR_shader_subgroup_basic   : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 128) in;
+
+//  The heads a workgroup takes, which are the rows -- a group, or a part
+//  of one that divides it -- and a head's width.
+layout(constant_id = 1) const uint ROWS = 8u;
+layout(constant_id = 2) const uint HS = 64u;
+
+//  Lanes a position's components are split over, positions a step of the
+//  walk, and what follows.
+const uint LANES = 128u;
+const uint D_SPLIT = 8u;
+const uint BC = 32u;
+const uint COLS_PER_ITER = LANES / D_SPLIT;
+const uint COLS = BC / COLS_PER_ITER;
+const uint HS4 = HS / 4u;
+const uint MINE4 = HS4 / D_SPLIT;
+
+layout(std430, binding = 0) readonly  buffer Cache  { float kv[]; };
+layout(std430, binding = 1) readonly  buffer Query4 { vec4 q4[]; };
+layout(std430, binding = 2) writeonly buffer Blend  { float y[]; };
+layout(std430, binding = 5) readonly  buffer Copy4  { f16vec4 kvh4[]; };
+
+layout(push_constant, std430) uniform Shape {
+    uint heads;
+    uint head_size;
+    uint value_size;
+    uint group_size;
+    uint first;
+    uint last;
+    uint k_base;
+    uint v_base;
+    uint kv_width;
+    uint v_width;
+    float scale;
+    float cap;
+    uint positions;
+    uint window;
+    uint causal;
+    float max_bias;
+    uint table_at;
+    uint sinks_at;
+    uint pages_at;
+    uint page_shift;
+} shape;
+
+uint place_of (uint pos, uint offset, uint width) {
+    if (shape.page_shift == 0u) {
+        return shape.pages_at + offset + pos * width;
+    }
+    return floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)])
+           + offset + (pos & ((1u << shape.page_shift) - 1u)) * width;
+}
+
+//  The group's queries, scaled, a row a head.
+shared vec4 qsh[ROWS * HS4];
+
+//  Where the subgroups' answers meet at the end: two of sixty-four lanes,
+//  or four of thirty-two.
+const uint SUBS = 4u;
+shared float m_sh[SUBS * ROWS];
+shared float l_sh[SUBS * ROWS];
+shared vec4  o_sh[SUBS * ROWS * HS4];
+
+//  A score that is no score, finite so that nothing subtracts one infinity
+//  from another.
+const float NONE = -3.0e38;
+
+void main() {
+    uint tid    = gl_LocalInvocationID.x;
+    uint d_tid  = tid % D_SPLIT;
+    uint col    = tid / D_SPLIT;
+    uint sub    = tid / gl_SubgroupSize;
+
+    uint head0  = gl_WorkGroupID.x * ROWS;
+    uint group  = head0 / shape.group_size;
+    uint slices = gl_NumWorkGroups.z;
+    uint slice  = gl_WorkGroupID.z;
+
+    //  The query position, down the second axis: a check round's few, each
+    //  looking one further back than the one before where attention is
+    //  causal, and its window sliding with it.
+    uint p = gl_WorkGroupID.y;
+
+    uint last  = shape.last + ((shape.causal & 1u) != 0u ? p : 0u);
+    uint first = shape.first;
+    if (shape.window > 0u) {
+        first = last + 1u > shape.window ? last + 1u - shape.window : 0u;
+    }
+
+    uint span     = last - first + 1u;
+    uint per      = ((span + slices - 1u) / slices + BC - 1u) / BC * BC;
+    uint my_first = first + slice * per;
+    uint my_last  = min (last, my_first + per - 1u);
+    bool empty    = my_first > last;
+
+    for (uint at = tid; at < ROWS * HS4; at += LANES) {
+        uint r = at / HS4;
+        uint d = at % HS4;
+        qsh[at] = q4[(((p * shape.heads + head0 + r) * shape.head_size) >> 2u) + d]
+                  * shape.scale;
+    }
+    barrier ();
+
+    vec4 o[ROWS][MINE4];
+    float m[ROWS];
+    float l[ROWS];
+    [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+        [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+            o[r][d] = vec4 (0.0);
+        }
+        m[r] = NONE;
+        l[r] = 0.0;
+    }
+
+    //  Each head's rung of attention.comp's slope ladder, where scores fall
+    //  off with distance: the heads below the largest power of two not
+    //  above the head count on one ladder, the rest on another.
+    float slope[ROWS];
+    [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+        slope[r] = 0.0;
+    }
+    if (shape.max_bias > 0.0) {
+        uint rungs = 1u;
+        while (rungs * 2u <= shape.heads) {
+            rungs *= 2u;
+        }
+        float m0 = exp2 (-(shape.max_bias / float (rungs)));
+        float m1 = exp2 (-(shape.max_bias / 2.0 / float (rungs)));
+        [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+            uint which = head0 + r;
+            slope[r] = which < rungs
+                       ? pow (m0, float (which + 1u))
+                       : pow (m1, float (2u * (which - rungs) + 1u));
+        }
+    }
+
+    //  The position the distances are from: this one's last where
+    //  attention is causal, its own place in the batch where it is not.
+    uint asking = (shape.causal & 1u) != 0u
+                  ? last
+                  : shape.last - (shape.positions - 1u) + p;
+
+    uint k_head = group * shape.head_size;
+    uint v_head = group * shape.value_size;
+
+    for (uint base = my_first; !empty && base <= my_last; base += BC) {
+        float s[ROWS][COLS];
+        bool  real[COLS];
+
+        [[unroll]] for (uint c = 0u; c < COLS; c++) {
+            uint pos = base + c * COLS_PER_ITER + col;
+            real[c] = pos <= my_last;
+            uint k_at = (place_of (min (pos, my_last), shape.k_base, shape.kv_width)
+                         + k_head) >> 2u;
+
+            vec4 k[MINE4];
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                k[d] = vec4 (kvh4[k_at + d * D_SPLIT + d_tid]);
+            }
+            [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+                float acc = 0.0;
+                [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                    acc += dot (qsh[r * HS4 + d * D_SPLIT + d_tid], k[d]);
+                }
+                s[r][c] = acc;
+            }
+        }
+
+        //  A position's components summed across the lanes that share it.
+        [[unroll]] for (uint c = 0u; c < COLS; c++) {
+            [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+                [[unroll]] for (uint x = D_SPLIT / 2u; x > 0u; x >>= 1u) {
+                    s[r][c] += subgroupShuffleXor (s[r][c], x);
+                }
+                //  The fall-off with distance, after the scale and before
+                //  the bound.
+                if (slope[r] > 0.0) {
+                    uint pos = base + c * COLS_PER_ITER + col;
+                    s[r][c] -= slope[r] * float (abs (int (pos) - int (asking)));
+                }
+                if (shape.cap > 0.0) {
+                    s[r][c] = shape.cap * tanh (s[r][c] / shape.cap);
+                }
+                if (!real[c]) {
+                    s[r][c] = NONE;
+                }
+            }
+        }
+
+        [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+            float top = m[r];
+            [[unroll]] for (uint c = 0u; c < COLS; c++) {
+                top = max (top, s[r][c]);
+            }
+            float carry = exp (m[r] - top);
+            m[r] = top;
+            l[r] *= carry;
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                o[r][d] *= carry;
+            }
+        }
+
+        [[unroll]] for (uint c = 0u; c < COLS; c++) {
+            if (!real[c]) {
+                continue;
+            }
+            uint pos = base + c * COLS_PER_ITER + col;
+            uint v_at = (place_of (pos, shape.v_base, shape.v_width) + v_head) >> 2u;
+
+            vec4 v[MINE4];
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                v[d] = vec4 (kvh4[v_at + d * D_SPLIT + d_tid]);
+            }
+            [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+                float p = exp (s[r][c] - m[r]);
+                l[r] += p;
+                [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                    o[r][d] += p * v[d];
+                }
+            }
+        }
+    }
+
+    //  The lanes' answers put together: the largest score across them, each
+    //  lane's sums carried to it, then added up -- in the subgroup, then
+    //  across the subgroups.
+    [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+        float top = m[r];
+        [[unroll]] for (uint x = D_SPLIT; x < gl_SubgroupSize; x <<= 1u) {
+            top = max (top, subgroupShuffleXor (top, x));
+        }
+        if (gl_SubgroupInvocationID == 0u) {
+            m_sh[sub * ROWS + r] = top;
+        }
+    }
+    barrier ();
+
+    [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+        float top = m_sh[r];
+        for (uint g = 1u; g < gl_NumSubgroups; g++) {
+            top = max (top, m_sh[g * ROWS + r]);
+        }
+        float carry = exp (m[r] - top);
+        m[r] = top;
+        l[r] *= carry;
+        [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+            o[r][d] *= carry;
+        }
+
+        [[unroll]] for (uint x = D_SPLIT; x < gl_SubgroupSize; x <<= 1u) {
+            l[r] += subgroupShuffleXor (l[r], x);
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                o[r][d] += subgroupShuffleXor (o[r][d], x);
+            }
+        }
+        if (gl_SubgroupInvocationID < D_SPLIT) {
+            if (d_tid == 0u) {
+                l_sh[sub * ROWS + r] = l[r];
+            }
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                o_sh[(sub * ROWS + r) * HS4 + d * D_SPLIT + d_tid] = o[r][d];
+            }
+        }
+    }
+    barrier ();
+
+    if (tid >= D_SPLIT) {
+        return;
+    }
+
+    uint stride = shape.value_size + 2u;
+    uint records = shape.positions * shape.heads * shape.value_size;
+
+    [[unroll]] for (uint r = 0u; r < ROWS; r++) {
+        float top = m[r];
+        float sum = 0.0;
+        vec4 mine[MINE4];
+        [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+            mine[d] = vec4 (0.0);
+        }
+        for (uint g = 0u; g < gl_NumSubgroups; g++) {
+            sum += l_sh[g * ROWS + r];
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                mine[d] += o_sh[(g * ROWS + r) * HS4 + d * D_SPLIT + d_tid];
+            }
+        }
+        float scale_o = 1.0;
+
+        //  The sink, a score that joins the sum and weighs no value, in the
+        //  first slice's alone.
+        if (shape.sinks_at != 0u && slice == 0u) {
+            float sink = kv[shape.sinks_at + head0 + r];
+            float raised = max (top, sink);
+            scale_o = exp (top - raised);
+            sum = sum * scale_o + exp (sink - raised);
+            top = raised;
+        }
+
+        uint head = head0 + r;
+        if (slices > 1u) {
+            uint at = records
+                      + ((slice * shape.positions + p) * shape.heads + head) * stride;
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                uint c = (d * D_SPLIT + d_tid) * 4u;
+                vec4 blend = mine[d] * scale_o;
+                y[at + c]      = blend.x;
+                y[at + c + 1u] = blend.y;
+                y[at + c + 2u] = blend.z;
+                y[at + c + 3u] = blend.w;
+            }
+            if (d_tid == 0u) {
+                y[at + shape.value_size]      = top;
+                y[at + shape.value_size + 1u] = sum;
+            }
+        } else {
+            uint at = (p * shape.heads + head) * shape.value_size;
+            float inverse = sum > 0.0 ? 1.0 / sum : 0.0;
+            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
+                uint c = (d * D_SPLIT + d_tid) * 4u;
+                vec4 blend = mine[d] * scale_o * inverse;
+                y[at + c]      = blend.x;
+                y[at + c + 1u] = blend.y;
+                y[at + c + 2u] = blend.z;
+                y[at + c + 3u] = blend.w;
+            }
+        }
+    }
+}

@@ -10881,6 +10881,272 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Halved_Attention_Says_Nearly_What_The_Exact_Says;
 
+   ----------------------------------------------------
+   -- A_Token_Attends_Out_Of_The_Copy_As_A_Host_Does --
+   ----------------------------------------------------
+
+   --  A generated token out of the half-precision copy, the way
+   --  attention_token.comp reads it -- each lane its own positions and
+   --  running sums, put together once at the end -- against the host in
+   --  double precision. Heads of 64, 128, 192 and 256, groups of one to
+   --  eight (the wider heads' a part of a group a workgroup), forty positions (one slice, a step
+   --  of the walk left part-empty) and seven hundred (sliced and merged);
+   --  with a bound on the scores, a window and a sink in turn; and a
+   --  check round's two to eight positions, each a position further back;
+   --  and scores falling off with distance down a slope ladder. The cache
+   --  holds sixteenths, which the copy keeps to the bit, so the two are
+   --  held to binary32's rounding.
+   procedure A_Token_Attends_Out_Of_The_Copy_As_A_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Groups  : constant := 2;
+      Longest : constant := 700;
+      Widest  : constant := 256;
+
+      --  Room for a check round's eight past the longest.
+      Room : constant N.Element_Count :=
+        N.Element_Count (Longest + 8) * Groups * Widest;
+      Sinks : constant N.Element_Count := Room * 2;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found  : Boolean;
+      Ready  : Boolean;
+      Ok     : Boolean;
+
+      Cache : N.Real_Array (0 .. Sinks + 16 - 1);
+
+      type Positive_List is array (Positive range <>) of Positive;
+
+      procedure Compare
+        (Head_Size : Positive;
+         Group     : Positive;
+         Positions : Positive;
+         Cap       : N.Real;
+         Window    : Natural;
+         Sunk      : Boolean;
+         Count     : Positive := 1;
+         Bias      : N.Real := 0.0)
+      is
+         Heads   : constant Natural := Group * Groups;
+         KV_Span : constant N.Element_Count :=
+           N.Element_Count (Groups * Head_Size);
+         Span    : constant N.Element_Count :=
+           N.Element_Count (Heads * Head_Size);
+         Scale   : constant N.Real := 0.125;
+
+         Query  : N.Real_Array (0 .. Span * N.Element_Count (Count) - 1);
+         Answer : N.Real_Array (Query'Range) := [others => 0.0];
+         Worst  : Long_Float := 0.0;
+         Steps  : Products.Sequence;
+         Added, Halted : Boolean;
+      begin
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25
+              + N.Real (Index mod 11) / 50.0;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size,
+            Value_Size => Head_Size, Group_Size => Group,
+            First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Room,
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => Scale, Cap => Cap, Added => Added, Window => Window,
+            Max_Bias => Bias,
+            Sinks_At => (if Sunk then Natural (Sinks) else 0));
+         Assert (Added, "a sequence would not take the attention step");
+
+         Products.Run (Engine, Steps, Query, Count, Answer, Ok, Halted);
+         Assert (Ok, "a token of" & Head_Size'Image & " components in"
+                 & " groups of" & Group'Image & " was refused");
+
+         --  The p-th position looks p further back, its window with it.
+         for P in 0 .. Count - 1 loop
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  Last     : constant Natural := Positions - 1 + P;
+                  First    : constant Natural :=
+                    (if Window > 0 then Last + 1 - Window else 0);
+                  Row      : constant Natural := P * Heads + Head;
+                  Rungs    : Positive := 1;
+                  Slope    : Long_Float := 0.0;
+                  Of_Group : constant N.Element_Count :=
+                    N.Element_Count (Head / Group * Head_Size);
+                  Scores   : array (First .. Last) of Long_Float;
+                  Top      : Long_Float := Long_Float'First;
+                  Sum      : Long_Float := 0.0;
+               begin
+                  --  The slope ladder: heads below the largest power of
+                  --  two not above the count on one, the rest on another.
+                  if Bias > 0.0 then
+                     while Rungs * 2 <= Heads loop
+                        Rungs := Rungs * 2;
+                     end loop;
+                     declare
+                        function "**" (Left, Right : Long_Float)
+                          return Long_Float
+                          renames Ada.Numerics.Long_Elementary_Functions."**";
+                        Down : constant Long_Float :=
+                          Long_Float (Bias) / Long_Float (Rungs);
+                     begin
+                        Slope :=
+                          (if Head < Rungs
+                           then 2.0 ** (-Down * Long_Float (Head + 1))
+                           else 2.0 ** (-Down / 2.0
+                                        * Long_Float (2 * (Head - Rungs) + 1)));
+                     end;
+                  end if;
+
+                  for Pos in Scores'Range loop
+                     Scores (Pos) := 0.0;
+                     for C in 0 .. Head_Size - 1 loop
+                        Scores (Pos) := Scores (Pos)
+                          + Long_Float
+                              (Query (N.Element_Count (Row * Head_Size + C)))
+                          * Long_Float
+                              (Cache (N.Element_Count (Pos) * KV_Span
+                                      + Of_Group + N.Element_Count (C)));
+                     end loop;
+                     Scores (Pos) := Scores (Pos) * Long_Float (Scale)
+                       - Slope * Long_Float (Last - Pos);
+                     if Cap > 0.0 then
+                        Scores (Pos) := Long_Float (Cap)
+                          * Ada.Numerics.Long_Elementary_Functions.Tanh
+                              (Scores (Pos) / Long_Float (Cap));
+                     end if;
+                     Top := Long_Float'Max (Top, Scores (Pos));
+                  end loop;
+
+                  if Sunk then
+                     Top := Long_Float'Max
+                       (Top, Long_Float (Cache (Sinks + N.Element_Count (Head))));
+                     Sum := Ada.Numerics.Long_Elementary_Functions.Exp
+                       (Long_Float (Cache (Sinks + N.Element_Count (Head)))
+                        - Top);
+                  end if;
+
+                  for Pos in Scores'Range loop
+                     Scores (Pos) :=
+                       Ada.Numerics.Long_Elementary_Functions.Exp
+                         (Scores (Pos) - Top);
+                     Sum := Sum + Scores (Pos);
+                  end loop;
+
+                  for C in 0 .. Head_Size - 1 loop
+                     declare
+                        Want : Long_Float := 0.0;
+                     begin
+                        for Pos in Scores'Range loop
+                           Want := Want + Scores (Pos) / Sum
+                             * Long_Float
+                                 (Cache (Room + N.Element_Count (Pos) * KV_Span
+                                         + Of_Group + N.Element_Count (C)));
+                        end loop;
+
+                        Worst := Long_Float'Max
+                          (Worst,
+                           abs (Want
+                                - Long_Float
+                                    (Answer (N.Element_Count
+                                               (Row * Head_Size + C)))));
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+
+         Assert (Worst <= 2.0e-5,
+                 "a token of" & Head_Size'Image & " components in groups of"
+                 & Group'Image & " over" & Positions'Image & " positions"
+                 & " (cap" & Cap'Image & ", window" & Window'Image
+                 & ", sink " & Sunk'Image & ", positions" & Count'Image
+                 & ", bias" & Bias'Image
+                 & ") attends"
+                 & Long_Float'Image (Worst) & " away from the host");
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Device_Notes.Skip
+           ("for a token attends out of the copy as a host does");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready then
+         Device_Notes.Skip
+           ("for a token attends out of the copy as a host does");
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Prefer_Halves (Engine, True);
+
+      if not Products.Prefers_Halves (Engine) then
+         --  No half-precision kernel on this device: nothing to compare.
+         Products.Close (Engine);
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Cache'Range loop
+         Cache (Index) := N.Real (Index mod 13) / 16.0 - 0.375
+           + N.Real (Index mod 5) / 16.0;
+      end loop;
+
+      Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+      Assert (Ok, "the device would not reserve the test's cache");
+      Products.Put_Cache (Engine, 0, Cache, Ok);
+      Assert (Ok, "the cache would not be written");
+
+      for Head_Size of Positive_List'(64, 128, 192, 256) loop
+         declare
+            --  The widest group, which wider heads take a part at a time.
+            Most : constant Positive := 8;
+         begin
+            for Group in 1 .. Most loop
+               for Positions of Positive_List'(40, Longest) loop
+                  Compare (Head_Size, Group, Positions, 0.0, 0, False);
+               end loop;
+            end loop;
+            Compare (Head_Size, Most, Longest, 3.0, 0, False);
+            Compare (Head_Size, Most, Longest, 0.0, 300, False);
+            Compare (Head_Size, Most, Longest, 0.0, 0, True);
+            Compare (Head_Size, 1, 40, 0.0, 0, True);
+            for Count in 2 .. 8 loop
+               Compare (Head_Size, Most, Longest, 0.0, 0, False, Count);
+            end loop;
+            Compare (Head_Size, Most, 40, 3.0, 0, True, 4);
+            Compare (Head_Size, Most, Longest, 0.0, 300, False, 5);
+            Compare (Head_Size, Most, Longest, 0.0, 0, False, 1, 8.0);
+            Compare (Head_Size, Most, 40, 0.0, 0, False, 3, 8.0);
+         end;
+      end loop;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Token_Attends_Out_Of_The_Copy_As_A_Host_Does;
+
    -------------------------------------------------------
    -- A_Packed_Attention_Says_What_The_Exact_Cache_Says --
    -------------------------------------------------------
@@ -14011,6 +14277,13 @@ package body Tests.Backend_Cases is
          "a token attending out of the half-precision copy says nearly "
          & "what the cache proper says, in bundles of four and of eight, "
          & "and a batch with the copy preferred still answers every head");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, A_Token_Attends_Out_Of_The_Copy_As_A_Host_Does'Access,
+         "a token out of the half-precision copy, every lane its own "
+         & "positions and sums, says what the host says: heads of 64 to "
+         & "256, groups of one to eight, one slice and many, a bound, a "
+         & "window and a sink, a check round's two to eight positions "
+         & "and slopes");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Packed_Attention_Says_What_The_Exact_Cache_Says'Access,
          "the packed attention kernel over a cache of bytes with a scale a "

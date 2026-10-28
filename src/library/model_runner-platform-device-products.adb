@@ -832,6 +832,26 @@ package body Model_Runner.Platform.Device.Products is
        and then not (Item.Tile_Line /= Null_Handle
                      and then Positions >= Query_Block));
 
+   --  How many of a group's heads attention_token.comp's workgroup takes:
+   --  the whole group for heads up to 128 wide, and for wider ones the
+   --  largest part of it that divides it and keeps the rows times the
+   --  sixty-fours within eight, which is what a lane's registers hold --
+   --  Qwen3.6's groups of eight 256-wide heads as four workgroups of two,
+   --  each reading the group's keys and values.
+   function Token_Rows (Group_Size, Head_Size : Natural) return Natural is
+      Width : constant Natural := Head_Size / 64;
+   begin
+      if Width <= 2 then
+         return Group_Size;
+      end if;
+      for Rows in reverse 1 .. Natural'Min (Group_Size, 8 / Width) loop
+         if Group_Size mod Rows = 0 then
+            return Rows;
+         end if;
+      end loop;
+      return 0;
+   end Token_Rows;
+
    --  How wide a bundle a token attending out of the copy takes: four,
    --  a whole group of five to seven, or nought for the plain
    --  half-precision kernel, a head a workgroup. Nought too over a short cache, as the exact bundle
@@ -4075,6 +4095,22 @@ package body Model_Runner.Platform.Device.Products is
                   end;
                end if;
 
+               --  And a token's flash attention over the copy.
+               declare
+                  Token : aliased constant
+                    Model_Runner.Shaders.Word_Array :=
+                      Model_Runner.Shaders.Attend.Attention_Token;
+               begin
+                  Request.Size := Interfaces.C.size_t (Token'Length * 4);
+                  Request.Code := Token'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Token_Attend := Made;
+                  end if;
+               end;
+
                --  And a sixth, GROUPED over the cache proper, beside the
                --  subgroup one it falls back to.
                declare
@@ -5242,6 +5278,43 @@ package body Model_Runner.Platform.Device.Products is
                Item.Bundle_Line := Made;
             end if;
 
+            --  And a token's flash attention at every group of up to eight
+            --  heads and every head width a lane's registers hold.
+            if Item.Token_Attend /= Null_Handle then
+               declare
+                  type Two_Entries is array (1 .. 2) of Specialization_Entry
+                    with Convention => C;
+                  type Two_Values is array (1 .. 2) of C.unsigned
+                    with Convention => C;
+                  Which : aliased constant Two_Entries :=
+                    [(Which => 1, At_Was => 0, Span => 4),
+                     (Which => 2, At_Was => 4, Span => 4)];
+                  Value : aliased Two_Values := [1, 64];
+                  Told  : aliased Specialization_Info;
+               begin
+                  Told.Count := 2;
+                  Told.Entries := Which'Address;
+                  Told.Span := 8;
+                  Told.Values := Value'Address;
+                  Request.Stage.Module := Item.Token_Attend;
+                  Request.Stage.Specialized := Told'Address;
+                  for Rows in 1 .. Token_Group_Most loop
+                     for Width in 1 .. Token_Width_Most loop
+                        Value := [C.unsigned (Rows), C.unsigned (64 * Width)];
+                        if (Width <= 2 or else Rows * Width <= 8)
+                          and then Create (Item.Logical, Null_Handle, 1,
+                                           Request'Address, Null_Handle,
+                                           Made'Access) = 0
+                        then
+                           Item.Token_Lines (Rows) (Width) := Made;
+                        end if;
+                     end loop;
+                  end loop;
+                  Request.Stage.Specialized := Null_Handle;
+                  Request.Stage.Module := Item.Bundled_Attend;
+               end;
+            end if;
+
             --  And the same words at the width of each whole group four
             --  does not divide, for a token attending out of the copy.
             declare
@@ -6302,6 +6375,12 @@ package body Model_Runner.Platform.Device.Products is
       for Line of Item.Whole_Bundle_Line loop
          Give_Back (Line, "vkDestroyPipeline");
       end loop;
+      for Lines of Item.Token_Lines loop
+         for Line of Lines loop
+            Give_Back (Line, "vkDestroyPipeline");
+         end loop;
+      end loop;
+      Give_Back (Item.Token_Attend, "vkDestroyShaderModule");
       for Line of Item.Whole_Halved_Line loop
          Give_Back (Line, "vkDestroyPipeline");
       end loop;
@@ -14521,6 +14600,37 @@ package body Model_Runner.Platform.Device.Products is
                   Steps.Items (Which).Value_Size)
           else Null_Handle);
 
+      --  attention_token.comp's pipeline for an attending step, or none: a
+      --  generated token or a check round's few out of the half-precision
+      --  copy, its group of up to eight heads as one workgroup's rows,
+      --  heads a multiple of 64 up to 256 for keys and values alike (the
+      --  wider for small groups), slopes or none, every base and width on
+      --  a word of four.
+      function Token_Line (Which : Positive) return Address
+      is (if Steps.Items (Which).Attends
+            and then Count in 1 .. Token_Positions_Most
+            and then Steps.Items (Which).Packed.K_Bits = 0
+            and then Few_Line (Which) = Null_Handle
+            and then Steps.Items (Which).Head_Size = Steps.Items (Which).Value_Size
+            and then Steps.Items (Which).Head_Size in 64 | 128 | 192 | 256
+            and then Steps.Items (Which).Group_Size in 1 .. Token_Group_Most
+            and then Steps.Items (Which).Heads
+                       mod Steps.Items (Which).Group_Size = 0
+            and then Token_By_Halves
+                       (Item, 1, Steps.Items (Which).Head_Size,
+                        Steps.Items (Which).Value_Size)
+            and then Fours_Fit
+                       (Steps.Items (Which).Head_Size,
+                        Steps.Items (Which).Value_Size,
+                        Steps.Items (Which).K_Base, Steps.Items (Which).V_Base,
+                        Steps.Items (Which).KV_Width,
+                        Steps.Items (Which).V_Width)
+          then Item.Token_Lines
+                 (Token_Rows (Steps.Items (Which).Group_Size,
+                              Steps.Items (Which).Head_Size))
+                 (Steps.Items (Which).Head_Size / 64)
+          else Null_Handle);
+
       function Latent_Batch (Which : Positive) return Boolean
       is (Count >= Latent_Rows
           and then Item.Latent_Batch_Attend /= Null_Handle
@@ -17336,6 +17446,8 @@ package body Model_Runner.Platform.Device.Products is
                      (if Latent_Batch (Index) then Item.Latent_Batch_Attend
                       elsif Few_Line (Index) /= Null_Handle and then Barrier /= null
                       then Few_Line (Index)
+                      elsif Token_Line (Index) /= Null_Handle
+                      then Token_Line (Index)
                       else
                      Attend_Kernel (Item, Count, This.Head_Size,
                                     This.Value_Size, This.Group_Size,
@@ -17473,7 +17585,17 @@ package body Model_Runner.Platform.Device.Products is
                         --  attention_matrix.comp. A few at once take a
                         --  group of heads along the first and a slice of
                         --  the cache along the second.
-                        if Few then
+                        if Token_Line (Index) /= Null_Handle then
+                           --  A token's flash attention: a group of heads a
+                           --  workgroup, or a part of one, a position down
+                           --  the second axis and its slices down the third.
+                           Dispatch
+                             (Item.Buffer,
+                              C.unsigned
+                                (This.Heads
+                                 / Token_Rows (This.Group_Size, This.Head_Size)),
+                              C.unsigned (Count), C.unsigned (Slices));
+                        elsif Few then
                            --  A latent's few workgroups on the compilation
                            --  that splits the key between the subgroups:
                            --  fewer than the device has units, whose reads
