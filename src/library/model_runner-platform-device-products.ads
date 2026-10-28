@@ -121,6 +121,10 @@ package Model_Runner.Platform.Device.Products is
    --  once for the group outweighs the workgroups two bundles are.
    Whole_Span  : constant := 4_096;
 
+   --  Only for heads this wide or narrower: a bundle of eight of Qwen3.6's
+   --  heads of 256 read its cache 4,093 deep 0.8 per cent slower.
+   Whole_Head_Most : constant := 128;
+
    type Whole_Lines is
      array (Whole_Least .. Whole_Most) of System.Address;
 

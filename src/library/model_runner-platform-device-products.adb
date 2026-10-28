@@ -848,10 +848,12 @@ package body Model_Runner.Platform.Device.Products is
    --  197 against 227 at 2,163. A head a workgroup was slower again at
    --  depth, 139.5 and 257.
    function Halved_Bundle
-     (Item : Engine; Group_Size : Natural; Span : Natural) return Natural
+     (Item : Engine; Group_Size : Natural; Span : Natural;
+      Head_Size : Natural) return Natural
    is (if Span < Bundle_Least
        then 0
        elsif Span >= Whole_Span
+         and then Head_Size <= Whole_Head_Most
          and then Group_Size in Whole_Lines'Range
          and then Item.Whole_Halved_Line (Group_Size) /= Null_Handle
        then Group_Size
@@ -965,7 +967,7 @@ package body Model_Runner.Platform.Device.Products is
        --  A token out of the copy, in the widest bundle its group takes.
        elsif not Rounding
          and then Token_By_Halves (Item, Positions, Head_Size, Value_Size)
-       then (case Halved_Bundle (Item, Group_Size, Span) is
+       then (case Halved_Bundle (Item, Group_Size, Span, Head_Size) is
                when Head_Bundle => Item.Bundle_Line,
                when Whole_Lines'Range =>
                  Item.Whole_Halved_Line (Group_Size),
@@ -1023,10 +1025,10 @@ package body Model_Runner.Platform.Device.Products is
        then C.unsigned ((Heads + Head_Bundle - 1) / Head_Bundle)
        elsif not Rounding
          and then Token_By_Halves (Item, Positions, Head_Size, Value_Size)
-       then (if Halved_Bundle (Item, Group_Size, Span) > 0
+       then (if Halved_Bundle (Item, Group_Size, Span, Head_Size) > 0
              then C.unsigned
-                    ((Heads + Halved_Bundle (Item, Group_Size, Span) - 1)
-                     / Halved_Bundle (Item, Group_Size, Span))
+                    ((Heads + Halved_Bundle (Item, Group_Size, Span, Head_Size) - 1)
+                     / Halved_Bundle (Item, Group_Size, Span, Head_Size))
              else C.unsigned (Heads))
        elsif not Rounding
          and then Bundles_Exact
