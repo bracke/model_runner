@@ -4054,6 +4054,159 @@ package body Tests.Backend_Cases is
       Model_Runner.Backend.Device.Close;
    end Whole_Layer_Says_What_Two_Halves_Say;
 
+   --  A gather read down its columns (Add_Gathered_Product's Transposed):
+   --  each member's answer the sum of its slice's rows, each weighted by an
+   --  element of the member's own vector -- what an absorbed latent's
+   --  queries are folded by. Held against the host's decode of the same
+   --  rows for each format the fold takes, members out of order, a slice
+   --  whose rows the kernel's bands do not divide, each member's vector the
+   --  front of a wider stretch, and positions in one run of four and past
+   --  it.
+   procedure A_Fold_Says_What_The_Rows_Say
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Each    : constant := 42;
+      Wide    : constant := 512;
+      Slices  : constant := 5;
+      Members : constant := 4;
+      Chosen  : constant Products.Member_List :=
+        [4, 0, 2, 1, others => 0];
+      Stack   : constant N.Element_Count := Slices * Each;
+
+      --  Each member's stretch of a position: its vector at the front --
+      --  as a query head's plain part is -- and six more after it.
+      Stretch : constant := Each + 6;
+      Reads   : constant N.Element_Count := Members * Stretch;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready : Boolean;
+
+      --  The identity, which hands the vectors to the fold as a step's
+      --  answer, as the fold reads its queries' plain parts.
+      Identity : constant N.Real_Array (0 .. Reads * Reads - 1) :=
+        [for I in 0 .. Reads * Reads - 1 =>
+           (if I / Reads = I mod Reads then 1.0 else 0.0)];
+
+      procedure Check
+        (Format  : G.Tensor_Type;
+         Packing : Products.Weight_Packing;
+         Bytes   : B.Byte_Array;
+         Name    : String)
+      is
+         Storage : B.Byte_Array_Access;
+         Weights : T.View;
+         Status  : E.Error_Info;
+      begin
+         B.Allocate (Bytes'Length, Storage);
+         Storage.all := Bytes;
+         T.Make (Format, Stack, Wide, Storage, 0, Weights, Status);
+         Assert (E.Is_Ok (Status), "the " & Name & " stack would not be read");
+
+         for Count in N.Element_Count range 1 .. 6 loop
+            if Products.Folds_Down (Engine, Packing, Each, Wide, Natural (Count)) then
+               declare
+                  Input : constant N.Real_Array (0 .. Count * Reads - 1) :=
+                    [for I in 0 .. Count * Reads - 1 =>
+                       N.Real ((I * 7) mod 13) / 13.0 - 0.45];
+                  Steps  : Products.Sequence;
+                  Added, Ok, Halted : Boolean;
+                  Answer : N.Real_Array
+                    (0 .. Count * (Reads + Members * Wide) - 1);
+                  Row    : N.Real_Array (0 .. Wide - 1);
+                  Worst, Most : N.Real := 0.0;
+               begin
+                  Products.Open_Sequence (Steps);
+                  Products.Add_Product
+                    (Steps, Identity (Identity'First)'Address,
+                     B.Byte_Count (Identity'Length) * 4, 0, Products.Values_F32,
+                     Natural (Reads), Natural (Reads), Added,
+                     Key => Identity'Address, Kept => False);
+                  Assert (Added, "the identity was refused");
+                  Products.Add_Gathered_Product
+                    (Steps, Storage.all (Storage.all'First)'Address,
+                     Storage.all'Length, 0, Packing, Natural (Stack), Each,
+                     Wide, Chosen, Members, Added,
+                     Key => Storage.all'Address, Chained => True,
+                     From_Step => 1, Apart => Stretch, Transposed => True);
+                  Assert (Added, "the " & Name & " fold was refused");
+                  Products.Run (Engine, Steps, Input, Positive (Count), Answer, Ok, Halted);
+                  Assert (Ok, "the " & Name & " fold would not run");
+
+                  for M in 0 .. Members - 1 loop
+                     for P in 0 .. Count - 1 loop
+                        declare
+                           Sums : N.Real_Array (0 .. Wide - 1) := [others => 0.0];
+                        begin
+                           for R in 0 .. N.Element_Count (Each) - 1 loop
+                              T.Dequantize_Row
+                                (Weights,
+                                 N.Element_Count (Chosen (M + 1) * Each) + R,
+                                 Row, Status);
+                              for C in Sums'Range loop
+                                 Sums (C) := Sums (C)
+                                   + Row (C) * Input (P * Reads + N.Element_Count (M * Stretch) + R);
+                              end loop;
+                           end loop;
+                           for C in Sums'Range loop
+                              declare
+                                 Got : constant N.Real :=
+                                   Answer (Count * Reads
+                                           + (N.Element_Count (M) * Count + P) * Wide + C);
+                              begin
+                                 Most := N.Real'Max (Most, abs Sums (C));
+                                 Worst := N.Real'Max
+                                   (Worst, abs (Got - Sums (C)) / (1.0 + abs Sums (C)));
+                              end;
+                           end loop;
+                        end;
+                     end loop;
+                  end loop;
+                  Assert (Most > 0.01, "the " & Name & " fold tells nothing");
+                  Assert (Worst <= 1.0e-4,
+                          "the " & Name & " fold over" & Count'Image & " positions answers"
+                          & N.Real'Image (Worst) & " away from the rows");
+               end;
+            end if;
+         end loop;
+         B.Free (Storage);
+      end Check;
+
+      Values : constant N.Real_Array :=
+        Fixtures.Sequence (Stack * Wide, 5150, 1.0);
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+      end if;
+      if not Ready
+        or else not Products.Folds_Down (Engine, Products.Packed_Q4_K, Each, Wide, 1)
+      then
+         Device_Notes.Skip ("for a fold to say what the rows say");
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Check (G.Type_Q4_K, Products.Packed_Q4_K, Fixtures.Encode_Q4_K (Values), "Q4_K");
+      Check (G.Type_Q6_K, Products.Packed_Q6_K, Fixtures.Encode_Q6_K (Values), "Q6_K");
+      Check (G.Type_Q8_0, Products.Packed_Q8_0, Fixtures.Encode_Q8_0 (Values), "Q8_0");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Fold_Says_What_The_Rows_Say;
+
    --  An absorbed latent's prompt at the front of its session, laid out a
    --  head at a time into the room it is given and attended there
    --  (Whole_Layer's MLA_Expand_At), answers as the same layer attending
@@ -14011,6 +14164,10 @@ package body Tests.Backend_Cases is
         (T, Whole_Layer_Says_What_Two_Halves_Say'Access,
          "a layer named as one sequence says what the same layer named as "
          & "two halves says");
+      Register_Routine
+        (T, A_Fold_Says_What_The_Rows_Say'Access,
+         "a gather read down its columns says what its rows say, Q4_K, "
+         & "Q6_K and Q8_0");
       Register_Routine
         (T, An_Expanded_Latent_Prompt_Says_What_The_Absorbed_One_Says'Access,
          "an absorbed latent's prompt laid out a head at a time says what "

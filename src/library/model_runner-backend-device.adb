@@ -4241,6 +4241,10 @@ package body Model_Runner.Backend.Device is
                      Plain   : constant Natural := Q_Width - Rotary;
                      Rank    : constant Natural := Lat_Rows;
                      Abs_P   : Products.Weight_Packing;
+                     Up_P    : Products.Weight_Packing;
+                     Each_Up : constant Natural :=
+                       Natural (MLA_Up.Rows) / Natural'Max (1, Heads);
+                     Up_Folds : Boolean := False;
                      Step_Nope, Step_Abs : Natural;
                      Members : constant Products.Member_List :=
                        [for I in 1 .. Products.Max_Gather => I - 1];
@@ -4263,6 +4267,14 @@ package body Model_Runner.Backend.Device is
                      if not Known then
                         return;
                      end if;
+                     Packing_Of (MLA_Up.Format, Up_P, Known);
+                     Up_Folds :=
+                       Known
+                       and then Plain > 0
+                       and then Each_Up mod Plain = 0
+                       and then Natural (MLA_Up.Columns) = Rank
+                       and then Products.Folds_Down
+                                  (Engine, Up_P, Plain, Rank, Positions);
 
                      --  In rounds of steps that read nothing the round makes,
                      --  so that each round waits on the one before once:
@@ -4289,17 +4301,23 @@ package body Model_Runner.Backend.Device is
                         Step_Ropes : Natural;
                      begin
                         --  The heads' plain parts, end to end, as the gather
-                        --  reads each member's own stretch.
-                        Products.Add_Assemble
-                          (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
-                           [Plain, 0, Q_Width, Natural (Query.Rows), 0, 0, 0, 0], Added,
-                           Kept => False);
-                        if not Added then
-                           return;
+                        --  reads each member's own stretch -- which the fold
+                        --  reads where the projection left them, the front
+                        --  of each head.
+                        if Up_Folds then
+                           Step_Nope := Step_Q_Raw;
+                        else
+                           Products.Add_Assemble
+                             (Steps, Heads, Step_Q_Raw, Step_Q_Raw,
+                              [Plain, 0, Q_Width, Natural (Query.Rows), 0, 0, 0, 0],
+                              Added, Kept => False);
+                           if not Added then
+                              return;
+                           end if;
+                           Step_Nope := Products.Length (Steps);
+                           Step_Room
+                             (Model_Runner.Numerics.Element_Count (Heads * Plain));
                         end if;
-                        Step_Nope := Products.Length (Steps);
-                        Step_Room
-                          (Model_Runner.Numerics.Element_Count (Heads * Plain));
 
                         --  The heads' rotated slices alone.
                         Products.Add_Assemble
@@ -4325,12 +4343,32 @@ package body Model_Runner.Backend.Device is
                         Step_Lat := Products.Length (Steps);
                         Step_Room (MLA_Latent.Rows);
 
-                        Products.Add_Gathered_Product
-                          (Steps, MLA_Absorb.Base, MLA_Absorb.Span, MLA_Absorb.Offset,
-                           Abs_P, Heads * Rank, Rank, Plain, Members, Heads, Added,
-                           Key => At_Offset (MLA_Absorb.Base, MLA_Absorb.Offset),
-                           Kept => False, Chained => True, From_Step => Step_Nope,
-                           Apart => Plain);
+                        --  A few positions fold through the up projection's
+                        --  key rows as the file keeps them, read down their
+                        --  columns: a quarter of the bytes the turned halves
+                        --  are, and the up projection is on the device for
+                        --  the taking out already. A batch folds through the
+                        --  halves, on the tile.
+                        if Up_Folds then
+                           Products.Add_Gathered_Product
+                             (Steps, MLA_Up.Base, MLA_Up.Span, MLA_Up.Offset,
+                              Up_P, Natural (MLA_Up.Rows), Plain, Rank,
+                              [for I in 1 .. Products.Max_Gather =>
+                                 (I - 1) * (Each_Up / Plain)],
+                              Heads, Added,
+                              Key => At_Offset (MLA_Up.Base, MLA_Up.Offset),
+                              Kept => False, Chained => True,
+                              From_Step => Step_Nope, Apart => Q_Width,
+                              Transposed => True);
+                        else
+                           Products.Add_Gathered_Product
+                             (Steps, MLA_Absorb.Base, MLA_Absorb.Span,
+                              MLA_Absorb.Offset, Abs_P, Heads * Rank, Rank,
+                              Plain, Members, Heads, Added,
+                              Key => At_Offset (MLA_Absorb.Base, MLA_Absorb.Offset),
+                              Kept => False, Chained => True,
+                              From_Step => Step_Nope, Apart => Plain);
+                        end if;
                         if not Added then
                            return;
                         end if;

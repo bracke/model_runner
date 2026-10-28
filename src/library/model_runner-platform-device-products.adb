@@ -3799,6 +3799,21 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end;
 
+         --  And the gather read down its columns.
+         declare
+            Folded : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Fold;
+         begin
+            Request.Size := Interfaces.C.size_t (Folded'Length * 4);
+            Request.Code := Folded'Address;
+
+            if Create (Item.Logical, Request'Address, Null_Handle,
+                       Made'Access) = 0
+            then
+               Item.Folder := Made;
+            end if;
+         end;
+
          --  And the binary32 tile.
          declare
             Tiled32 : aliased constant Model_Runner.Shaders.Word_Array :=
@@ -4884,6 +4899,16 @@ package body Model_Runner.Platform.Device.Products is
                        Null_Handle, Made'Access) = 0
             then
                Item.Thin_Line := Made;
+            end if;
+         end if;
+
+         if Item.Folder /= Null_Handle then
+            Request.Stage.Module := Item.Folder;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Fold_Line := Made;
             end if;
          end if;
 
@@ -6243,6 +6268,7 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.Merge_Line, "vkDestroyPipeline");
       Give_Back (Item.Thin_Line, "vkDestroyPipeline");
+      Give_Back (Item.Fold_Line, "vkDestroyPipeline");
       Give_Back (Item.F32_Tile_Line, "vkDestroyPipeline");
       Give_Back (Item.Invert_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Line, "vkDestroyPipeline");
@@ -6280,6 +6306,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Exact_Paired_Attend, "vkDestroyShaderModule");
       Give_Back (Item.Merger, "vkDestroyShaderModule");
       Give_Back (Item.Thinner, "vkDestroyShaderModule");
+      Give_Back (Item.Folder, "vkDestroyShaderModule");
       Give_Back (Item.F32_Tiler, "vkDestroyShaderModule");
       Give_Back (Item.Inverter, "vkDestroyShaderModule");
       Give_Back (Item.Narrow, "vkDestroyShaderModule");
@@ -12355,6 +12382,9 @@ package body Model_Runner.Platform.Device.Products is
          elsif This.Glu and then This.Gathers > 0 then
             return "gated gather " & Shape (This.Each, This.Columns) & " "
               & Packing_Name (This.Packing);
+         elsif This.Gathers > 0 and then This.Transposed then
+            return "fold " & Shape (This.Each, This.Columns) & " "
+              & Packing_Name (This.Packing);
          elsif This.Gathers > 0 then
             return "gather " & Shape (This.Each, This.Columns) & " "
               & Packing_Name (This.Packing)
@@ -12801,15 +12831,21 @@ package body Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Apart     : Natural := 0;
       Routed    : Natural := 0;
-      Region_At : Natural := 0)
+      Region_At : Natural := 0;
+      Transposed : Boolean := False)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
 
+      --  How wide a member's vector is: a row's width, or read down the
+      --  columns a slice's rows.
+      Reads_Wide : constant Natural := (if Transposed then Each else Columns);
+
       --  What a chained gather reads: each member its own stretch of the
-      --  source, or all of them the whole of it.
+      --  source, or all of them the whole of it. Read down the columns, a
+      --  member's stretch may be wider than its vector, which is its front.
       Wanted : constant Natural :=
-        (if Apart > 0 then Columns * Count else Columns);
+        (if Apart > 0 then Apart * Count else Reads_Wide);
    begin
       Added := False;
 
@@ -12818,7 +12854,10 @@ package body Model_Runner.Platform.Device.Products is
         or else Count > Max_Gather
         or else Each = 0
         or else Stack < Each
-        or else (Apart > 0 and then Apart /= Columns)
+        or else (Apart > 0
+                 and then (if Transposed then Apart < Each
+                           else Apart /= Reads_Wide))
+        or else (Transposed and then (Routed /= 0 or else Region_At /= 0))
         or else (Region_At /= 0
                  and then (Packing not in Packed_Q4_K | Packed_MXFP4
                            or else Model_Runner.Bytes.Byte_Count (Region_At)
@@ -12860,17 +12899,39 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
-         Rows => Each * Count, Columns => Columns, Key => Key,
+         Rows => (if Transposed then Columns else Each) * Count,
+         Columns => Columns, Key => Key,
          Chained => Chained,
          Reads => (if Chained and then From_Step /= 0 then From_Step else 0),
          Kept => Kept,
          Blends => False, Unit => 0, Attends => False,
          Gathers => Count, Members => Members, Stack => Stack,
          Each => Each, Apart => Apart, Routed => Routed,
-         Region_At => Region_At,
+         Region_At => Region_At, Transposed => Transposed,
          others => <>);
       Added := True;
    end Add_Gathered_Product;
+
+   ----------------
+   -- Folds_Down --
+   ----------------
+
+   --  Positions fold.comp answers a workgroup; see its POS.
+   Fold_Positions : constant := 4;
+
+   function Folds_Down
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Each    : Natural;
+      Columns : Natural;
+      Count   : Natural) return Boolean
+   is (Item.Fold_Line /= Null_Handle
+       and then Each > 0
+       and then Count in 1 .. 2 * Fold_Positions
+       and then (case Packing is
+                   when Packed_Q4_K | Packed_Q6_K => Columns mod 256 = 0,
+                   when Packed_Q8_0 => Columns mod 32 = 0,
+                   when others => False));
 
    ---------------
    -- Add_Route --
@@ -14384,6 +14445,7 @@ package body Model_Runner.Platform.Device.Products is
 
       function Tiled (Which : Positive) return Boolean
       is (Is_Product (Which)
+          and then not Steps.Items (Which).Transposed
           and then not Steps.Items (Which).Glu
           and then Steps.Items (Which).Gathers <= 1
           and then not Steps.Items (Which).Listed
@@ -14403,6 +14465,7 @@ package body Model_Runner.Platform.Device.Products is
       --  row kernel took at a twentieth of the tile's rate.
       function Member_Tiled (Which : Positive) return Boolean
       is (Is_Product (Which)
+          and then not Steps.Items (Which).Transposed
           and then Steps.Items (Which).Gathers > 1
           and then not Steps.Items (Which).Glu
           and then not Steps.Items (Which).Listed
@@ -15366,7 +15429,10 @@ package body Model_Runner.Platform.Device.Products is
               --  or -- a gather laid apart -- one stretch of them a
               --  member, which is what Add_Gathered_Product checked.
               or else (This.Chained
-                       and then This.Columns
+                       and then (if This.Transposed
+                                 then (if This.Apart > 0 then This.Apart
+                                       else This.Each)
+                                 else This.Columns)
                                   * (if This.Apart > 0 then This.Gathers
                                      elsif This.Listed and then This.By_Slot
                                      then This.Rows / This.Each
@@ -18464,6 +18530,46 @@ package body Model_Runner.Platform.Device.Products is
                   Bind_Pipeline
                     (Item.Buffer, Bind_Point_Compute,
                      Row_Line (Item, Count));
+                  goto Next_Dispatch;
+               end if;
+
+               --  A gather read down its columns: a run of 64 columns of a
+               --  member a workgroup, its positions in fours.
+               if This.Transposed then
+                  declare
+                     Shape : aliased Shape_Constants :=
+                       (Rows    => C.unsigned (This.Each),
+                        Columns => C.unsigned (This.Columns),
+                        Count   => C.unsigned (Count),
+                        First   => 0,
+                        Packing =>
+                          C.unsigned (Weight_Packing'Pos (This.Packing)),
+                        Base    => C.unsigned (Places (Index).Base),
+                        Joins   => 0,
+                        Table   => 0,
+                        Members => [others => 0],
+                        Stride  => C.unsigned (Slice_Bytes (Index)),
+                        Apart   => C.unsigned (This.Apart),
+                        Routed  => 0);
+                  begin
+                     for Member in 1 .. This.Gathers loop
+                        Shape.Members (Member - 1) :=
+                          C.unsigned (This.Members (Member));
+                     end loop;
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute, Item.Fold_Line);
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                           Product_Bytes, Shape'Address);
+                     Dispatch
+                       (Item.Buffer,
+                        C.unsigned ((This.Columns + 63) / 64),
+                        C.unsigned
+                          ((Count + Fold_Positions - 1) / Fold_Positions),
+                        C.unsigned (This.Gathers));
+                     Bind_Pipeline
+                       (Item.Buffer, Bind_Point_Compute,
+                        Row_Line (Item, Count));
+                  end;
                   goto Next_Dispatch;
                end if;
 

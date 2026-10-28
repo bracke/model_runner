@@ -1,0 +1,255 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_control_flow_attributes : enable
+
+//  A gathered product read down its columns rather than along its rows:
+//  each member's answer is its slice's rows weighted by its own vector and
+//  summed,
+//
+//  y[m][v][col] = sum over row of w[slice m][row][col] * x[v][m][row]
+//
+//  which is the slice turned on its side and multiplied as a product is.
+//  An absorbed latent folds each query head's plain part through that
+//  head's key rows of the up projection this way: the rows are the head's
+//  plain width, the columns the latent's. Read along the rows, the fold
+//  wanted the slices turned over and kept as halves beside the file's own
+//  -- two megabytes a layer where the file's rows are a little over half
+//  of one -- and a token read them at the small product's rate.
+//
+//  A workgroup takes a run of RUN columns of one member for up to POS
+//  positions: each lane four columns of it and every BANDS-th row of the
+//  slice, every position at once; the bands' sums are added in shared
+//  memory. Four columns a lane is four consecutive quants of one
+//  sub-block, read as one word. A run of 256 columns a workgroup, each
+//  lane a quarter of the rows, was thirty-two workgroups a fold and each
+//  lane thirty-two loads one after another: 41 us for what reading the
+//  bytes takes a quarter of.
+//
+//  The bindings and the push block are the row product's, as
+//  row_product.comp describes them: rows are the slice's (what is summed
+//  over), columns its width (what is answered), members, stride and apart
+//  the gather's; a member's vector begins apart into a position's, a
+//  position's apart times the members after the one before -- apart may
+//  be wider than the rows, a member's vector the front of its stretch, as
+//  each query head's plain part is the front of the head.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly  buffer Weights { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors { float x[]; };
+layout(std430, binding = 2) writeonly buffer Result  { float y[]; };
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+    uint joins;
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
+} shape;
+
+const uint FMT_Q8_0 = 7u;
+const uint FMT_Q4_K = 11u;
+const uint FMT_Q6_K = 13u;
+
+//  Positions a workgroup answers; the dispatch's second axis is the
+//  batch in runs of this many.
+const uint POS = 4u;
+
+//  Lanes across a run of columns, the run, and the bands of the rows;
+//  and the rows a band takes in one unrolled stretch.
+const uint ACROSS = 16u;
+const uint RUN = ACROSS * 4u;
+const uint BANDS = 256u / ACROSS;
+const uint UNROLL = 8u;
+
+shared vec4 partial[BANDS - 1u][POS][ACROSS];
+
+uint byte_at(uint at) {
+    return (w[at >> 2u] >> ((at & 3u) * 8u)) & 255u;
+}
+
+//  Four bytes from a run that need not begin on a word.
+uint word_from(uint at) {
+    uint shift = (at & 3u) * 8u;
+    uint first = w[at >> 2u];
+    return shift == 0u ? first
+                       : (first >> shift) | (w[(at >> 2u) + 1u] << (32u - shift));
+}
+
+float half_at(uint at) {
+    return unpackHalf2x16(byte_at(at) | (byte_at(at + 1u) << 8u)).x;
+}
+
+int signed_at(uint at) {
+    int value = int(byte_at(at));
+    return value > 127 ? value - 256 : value;
+}
+
+uint row_bytes() {
+    if (shape.format == FMT_Q4_K) {
+        return (shape.columns / 256u) * 144u;
+    } else if (shape.format == FMT_Q6_K) {
+        return (shape.columns / 256u) * 210u;
+    }
+    return (shape.columns / 32u) * 34u;
+}
+
+//  Byte i of the twelve scale bytes, held as three words.
+uint scale_byte(uvec3 sc, uint i) {
+    uint word = i < 4u ? sc.x : (i < 8u ? sc.y : sc.z);
+    return (word >> ((i & 3u) * 8u)) & 255u;
+}
+
+//  A Q4_K sub-block's six-bit scale and minimum, as ggml's get_scale_min_k4.
+void scale_min(uvec3 sc, uint j, out float factor, out float lowest) {
+    if (j < 4u) {
+        factor = float(scale_byte(sc, j) & 63u);
+        lowest = float(scale_byte(sc, j + 4u) & 63u);
+    } else {
+        factor = float((scale_byte(sc, j + 4u) & 15u)
+                       | ((scale_byte(sc, j - 4u) >> 6u) << 4u));
+        lowest = float((scale_byte(sc, j + 4u) >> 4u)
+                       | ((scale_byte(sc, j) >> 6u) << 4u));
+    }
+}
+
+//  The four weights at columns col .. col + 3 of a Q4_K row at `at`: a
+//  hundred and forty-four bytes a block of 256, d and dmin, twelve scale
+//  bytes, then a hundred and twenty-eight of quants, a run of sixty-four
+//  columns a thirty-two bytes, its first half the low nibbles.
+vec4 q4_k_at(uint at, uint col) {
+    uint block = at + (col / 256u) * 144u;
+    uint e = col % 256u;
+    uint chunk = e / 64u;
+    uint l = e % 64u;
+    uint head = block >> 2u;
+    vec2 dm = unpackHalf2x16(w[head]);
+    float factor, lowest;
+    scale_min(uvec3(w[head + 1u], w[head + 2u], w[head + 3u]), e / 32u,
+              factor, lowest);
+    uint word = w[(block + 16u + chunk * 32u + (l % 32u)) >> 2u];
+    uint nibbles = l < 32u ? word & 0x0F0F0F0Fu : (word >> 4u) & 0x0F0F0F0Fu;
+    return dm.x * factor * vec4(unpack8(nibbles)) - dm.y * lowest;
+}
+
+//  Q6_K: two hundred and ten bytes, 128 of low nibbles, 64 of high bit
+//  pairs, sixteen signed scales and d -- ggml's dequantize_row_q6_K, a
+//  half of 128 columns in four quarters of thirty-two.
+vec4 q6_k_at(uint at, uint col) {
+    uint block = at + (col / 256u) * 210u;
+    uint e = col % 256u;
+    uint half_index = e / 128u;
+    uint r = e % 128u;
+    uint quarter = r / 32u;
+    uint l = r % 32u;
+    float d = half_at(block + 208u);
+    float scale = d * float(signed_at(block + 192u + 8u * half_index
+                                      + l / 16u + quarter * 2u));
+    uint low = word_from(block + 64u * half_index + l + (quarter & 1u) * 32u);
+    uint high = word_from(block + 128u + 32u * half_index + l);
+    uint q = ((low >> ((quarter >> 1u) * 4u)) & 0x0F0F0F0Fu)
+             | (((high >> (quarter * 2u)) & 0x03030303u) << 4u);
+    return scale * (vec4(unpack8(q)) - 32.0);
+}
+
+//  Q8_0: thirty-four bytes, the scale and thirty-two signed quants.
+vec4 q8_0_at(uint at, uint col) {
+    uint block = at + (col / 32u) * 34u;
+    float d = half_at(block);
+    return d * vec4(unpack8(int(word_from(block + 2u + col % 32u))));
+}
+
+vec4 sum[POS];
+uint at_pos[POS];
+
+//  Every BANDS-th row from the band's own, UNROLL of them a stretch, with
+//  no branch among them: a row past the slice's end reads its last and
+//  counts for nought, so each stretch's loads go out together. For the
+//  first PS positions: a token's one, or a run of POS.
+#define WALK(DECODE, PS) \
+    for (uint stretch = 0u; stretch < shape.rows; stretch += BANDS * UNROLL) { \
+        [[unroll]] for (uint i = 0u; i < UNROLL; ++i) { \
+            uint wanted = stretch + i * BANDS + band; \
+            uint row = min(wanted, shape.rows - 1u); \
+            float real = wanted < shape.rows ? 1.0 : 0.0; \
+            vec4 weights = DECODE(slice + row * wide, col) * real; \
+            [[unroll]] for (uint p = 0u; p < PS; ++p) { \
+                sum[p] += weights * x[at_pos[p] + row]; \
+            } \
+        } \
+    }
+
+void main() {
+    uint lane = gl_LocalInvocationID.x % ACROSS;
+    uint band = gl_LocalInvocationID.x / ACROSS;
+    uint col = gl_WorkGroupID.x * RUN + lane * 4u;
+    bool stores = col < shape.columns;
+    uint first = gl_WorkGroupID.y * POS;
+    uint member = gl_WorkGroupID.z;
+    uint members = gl_NumWorkGroups.z;
+
+    uint stride_x = shape.apart > 0u ? shape.apart * members : shape.rows;
+    uint along = member * shape.apart;
+    uint slice = shape.base + shape.members[member] * shape.stride;
+    uint wide = row_bytes();
+
+    //  The positions this workgroup answers: a position past the batch's
+    //  end reads the last one's vector and is not stored.
+    uint answered = min(POS, shape.count - first);
+
+    for (uint p = 0u; p < POS; ++p) {
+        at_pos[p] = min(first + p, shape.count - 1u) * stride_x + along;
+        sum[p] = vec4(0.0);
+    }
+
+    //  Lanes past the columns read the last run and store nothing.
+    col = min(col, shape.columns - 4u);
+
+    if (answered == 1u) {
+        if (shape.format == FMT_Q4_K) {
+            WALK(q4_k_at, 1u)
+        } else if (shape.format == FMT_Q6_K) {
+            WALK(q6_k_at, 1u)
+        } else {
+            WALK(q8_0_at, 1u)
+        }
+    } else if (shape.format == FMT_Q4_K) {
+        WALK(q4_k_at, POS)
+    } else if (shape.format == FMT_Q6_K) {
+        WALK(q6_k_at, POS)
+    } else {
+        WALK(q8_0_at, POS)
+    }
+
+    if (band > 0u) {
+        for (uint p = 0u; p < POS; ++p) {
+            partial[band - 1u][p][lane] = sum[p];
+        }
+    }
+    barrier();
+
+    if (band == 0u && stores) {
+        for (uint p = 0u; p < POS; ++p) {
+            uint position = first + p;
+            if (p < answered) {
+                vec4 total = sum[p];
+                for (uint b = 0u; b < BANDS - 1u; ++b) {
+                    total += partial[b][p][lane];
+                }
+                uint into = (member * shape.count + position) * shape.columns + col;
+                y[into] = total.x;
+                y[into + 1u] = total.y;
+                y[into + 2u] = total.z;
+                y[into + 3u] = total.w;
+            }
+        }
+    }
+}

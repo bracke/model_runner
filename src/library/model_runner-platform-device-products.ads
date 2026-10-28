@@ -909,6 +909,13 @@ package Model_Runner.Platform.Device.Products is
    --  @param Region_At Bytes past At_Byte the stack's own rows begin, where
    --    Stack counts a region it shares -- a gate and up stack uploaded
    --    once, as Add_Gathered_Pair uploads them -- or zero.
+   --  @param Transposed Each slice read down its columns rather than
+   --    along its rows: a member's answer is Columns wide, the sum of its
+   --    slice's Each rows each weighted by an element of its vector, which
+   --    is Each wide -- Apart, where set, is then at least Each, a member's
+   --    vector the front of its stretch. An absorbed
+   --    latent's queries folded through the up projection's key rows as
+   --    they lie in the file. Where Folds_Down says so.
    procedure Add_Gathered_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -927,7 +934,26 @@ package Model_Runner.Platform.Device.Products is
       From_Step : Natural := 0;
       Apart     : Natural := 0;
       Routed    : Natural := 0;
-      Region_At : Natural := 0);
+      Region_At : Natural := 0;
+      Transposed : Boolean := False);
+
+   --  Whether the engine takes a gather read down its columns -- see
+   --  Add_Gathered_Product's Transposed -- for a batch of Count, of slices
+   --  Each rows of Columns in this format: Q4_K, Q6_K and Q8_0, a few
+   --  positions.
+   --
+   --  @param Item The engine.
+   --  @param Packing The stack's format.
+   --  @param Each Rows a slice holds.
+   --  @param Columns Elements a row holds.
+   --  @param Count Positions in the batch.
+   --  @return True where the step can run.
+   function Folds_Down
+     (Item    : Engine;
+      Packing : Weight_Packing;
+      Each    : Natural;
+      Columns : Natural;
+      Count   : Natural) return Boolean;
 
    --  Whether the engine takes a feed-forward's gate and up projections
    --  as one step for a batch of Count, as Add_Gated_Pair names it: Q4_K
@@ -3812,6 +3838,9 @@ private
       Thinner    : System.Address := System.Null_Address;
       F32_Tiler  : System.Address := System.Null_Address;
 
+      --  fold.comp: a gathered product read down its columns.
+      Folder     : System.Address := System.Null_Address;
+
       Set_Layout : System.Address := System.Null_Address;
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
@@ -4057,6 +4086,7 @@ private
       Merge_Line  : System.Address := System.Null_Address;
       Invert_Line : System.Address := System.Null_Address;
       Thin_Line   : System.Address := System.Null_Address;
+      Fold_Line   : System.Address := System.Null_Address;
       F32_Tile_Line : System.Address := System.Null_Address;
       Heads_Line  : System.Address := System.Null_Address;
 
@@ -4557,6 +4587,11 @@ private
       Stack   : Natural := 0;
       Each    : Natural := 0;
       Apart   : Natural := 0;
+
+      --  A gather read down its columns (Add_Gathered_Product's
+      --  Transposed): each member's answer Columns wide, its slice's Each
+      --  rows weighted by its own vector of Each.
+      Transposed : Boolean := False;
 
       --  Which routing step a gathered product takes its members from,
       --  or zero for the Members above.
