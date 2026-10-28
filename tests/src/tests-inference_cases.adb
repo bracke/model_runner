@@ -1610,6 +1610,29 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Hybrid_Drafts_From_Its_Next_Block;
 
+   --  Drafting that keeps little is timed against plain steps from the
+   --  start of a context, not only deep into one, and so paused where
+   --  plain steps are the faster: Mellum drafting from a block of its own
+   --  kept 37 of 132 and ran at 29.8 tokens a second against 38.7 plain,
+   --  untimed. Drafting that keeps much is left untimed until deep in, its
+   --  rounds paying -- Qwen3.6's 101 of 123 -- and too few proposals yet
+   --  tell nothing.
+   procedure Drafting_That_Loses_Pauses
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Gen renames Model_Runner.Generation;
+   begin
+      Assert (Gen.Drafting_Watched (600, 132, 37),
+              "drafting keeping 37 of 132 near a context's start is not timed");
+      Assert (not Gen.Drafting_Watched (600, 123, 101),
+              "drafting keeping 101 of 123 near a context's start is timed");
+      Assert (Gen.Drafting_Watched (5_000, 123, 101),
+              "drafting deep into a context is not timed");
+      Assert (not Gen.Drafting_Watched (600, 10, 0),
+              "ten proposals were taken for enough to judge drafting by");
+   end Drafting_That_Loses_Pauses;
+
    --  A hybrid's block past the stack drafts on the device as one layer
    --  run whole, its rows in pages of its own there -- the ones fed on the
    --  host put there first -- and proposes what it proposes on the
@@ -21047,6 +21070,10 @@ package body Tests.Inference_Cases is
         (T, A_Block_Past_Any_Stack_Drafts'Access,
          "a block past the stack drafts on any architecture that carries "
          & "one, fed in a batch as a position at a time");
+      Register_Routine
+        (T, Drafting_That_Loses_Pauses'Access,
+         "drafting that keeps little is timed from a context's start, and "
+         & "drafting that keeps much left untimed until deep in");
       Register_Routine
         (T, A_Hybrid_Block_Drafts_On_The_Device_As_On_The_Host'Access,
          "a hybrid's block past the stack drafts on the device, a layer "

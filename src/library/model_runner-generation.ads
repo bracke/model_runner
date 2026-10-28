@@ -432,6 +432,23 @@ package Model_Runner.Generation is
    --  @return The text, without its angle brackets or the word.
    function Seconds_Text (Seconds : Long_Float) return String;
 
+   --  Whether a run's drafting is timed against plain steps, and paused
+   --  where they are the faster: past Guard_From positions into the
+   --  context, where a round's attention reads the most and its proposals
+   --  are kept least, or before that once the run keeps less than half of
+   --  at least sixteen proposals. Drafting keeping more is left untimed,
+   --  its rounds well under the cost of the tokens they make: the plain
+   --  steps the timing takes would cost it.
+   --
+   --  @param Position The session's position.
+   --  @param Drafted Proposals the run made.
+   --  @param Accepted Proposals it kept.
+   --  @return True where the run's drafting is timed.
+   function Drafting_Watched
+     (Position : Natural;
+      Drafted  : Natural;
+      Accepted : Natural) return Boolean;
+
    type Picture_Set is record
       Marker      : Model_Runner.Tokenizer.Token_Id :=
         Model_Runner.Tokenizer.No_Token;

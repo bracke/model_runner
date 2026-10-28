@@ -40,6 +40,30 @@ package body Model_Runner.Generation is
    --  that looks for a non-finite logit takes it for a fault.
    Draft_Tail : constant N.Real := N."-" (1.0E30);
 
+   ----------------------
+   -- Drafting_Watched --
+   ----------------------
+
+   --  Where the timing begins: before it drafting has won wherever it was
+   --  measured -- a round's attention reads few positions there -- and
+   --  timing it would cost the plain steps it takes, a few in a hundred.
+   --  Or before it, where the run keeps less than Watch_Keeps per cent of
+   --  what it proposed, of at least Watch_Least proposals: Mellum drafting
+   --  from a block of its own kept 28 per cent and made 29.8 tokens a
+   --  second where it made 38.7 without, at the start of a context, and
+   --  nothing timed it.
+   Guard_From  : constant := 4_096;
+   Watch_Keeps : constant := 50;
+   Watch_Least : constant := 16;
+
+   function Drafting_Watched
+     (Position : Natural;
+      Drafted  : Natural;
+      Accepted : Natural) return Boolean
+   is (Position >= Guard_From
+       or else (Drafted >= Watch_Least
+                and then Accepted * 100 < Watch_Keeps * Drafted));
+
    ------------------
    -- Seconds_Text --
    ------------------
@@ -777,17 +801,18 @@ package body Model_Runner.Generation is
       --  next sixteen, which made plain steps look the faster.
       Untimed : Natural := 8;
 
-      --  Where the timing begins: before it drafting has won wherever it
-      --  was measured -- a round's attention reads few positions there --
-      --  and timing it would cost the plain steps it takes, a few in a
-      --  hundred.
-      Guard_From : constant := 4_096;
 
       --  A sampled run with a seed given is asked to come out the same
       --  again: drafted rounds draw from the seed's stream, and how many
       --  they draw must not hang on a clock. Such a run drafts throughout,
       --  untimed; a greedy one says the same tokens either way and is timed.
       Timed : constant Boolean := not (Sampled_Draft and then Item.Has_Seed);
+
+      --  Whether this run's drafting is timed against plain steps now.
+      function Watched return Boolean
+      is (Timed
+          and then Drafting_Watched
+                     (L.Position (Session), Outcome.Drafted, Outcome.Accepted));
 
       --  The share of proposals kept so far, in per cent, below which a
       --  rejected round shortens past the length asked for.
@@ -2992,12 +3017,10 @@ package body Model_Runner.Generation is
 
                            Took := Model_Runner.Clocks.Elapsed
                              (Began, Model_Runner.Clocks.Read (Time));
-                           if Sampled_Draft and then Timed
-                             and then L.Position (Session) >= Guard_From
-                           then
+                           if Sampled_Draft and then Watched then
                               Outcome.Seed_Repeats := False;
                            end if;
-                           if L.Position (Session) < Guard_From or else not Timed then
+                           if not Watched then
                               null;
                            elsif Untimed > 0 then
                               Untimed :=
@@ -3013,7 +3036,7 @@ package body Model_Runner.Generation is
                              Phase_Left - Natural'Min (Phase_Left, Verified_Count);
 
                            --  What comes next, once this stretch is spent.
-                           if L.Position (Session) < Guard_From or else not Timed then
+                           if not Watched then
                               null;
                            elsif Phase_Left = 0 then
                               if not Paused and then not Probing then
