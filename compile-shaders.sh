@@ -170,6 +170,7 @@ compile attention_latent             attention_latent.comp vulkan1.3
 compile attention_latent_batch       attention_latent.comp vulkan1.3 WIDE_TILE
 compile attention_latent_split       attention_latent.comp vulkan1.3 SPLIT_DEPTH
 compile attention_token              attention_token.comp  vulkan1.1
+compile attention_token_packed       attention_token.comp  vulkan1.1 PACKED
 compile norm                         norm.comp             vulkan1.1
 compile norm_rounds                  norm.comp             vulkan1.1 ROUNDS
 compile rotate                       rotate.comp           vulkan1.0

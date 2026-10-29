@@ -3815,6 +3815,7 @@ private
       --  attention_token.comp: a token's group of heads, a lane its own
       --  positions, as llama.cpp's flash attention reads them.
       Token_Attend : System.Address := System.Null_Address;
+      Packed_Token_Attend : System.Address := System.Null_Address;
 
       --  And GROUPED over the cache proper, for a generated token. A
       --  token's workgroup was a head, and a head reads its group's keys
@@ -3925,6 +3926,8 @@ private
       --  And its pipelines, a group of one to eight heads at a head of 64
       --  or 128.
       Token_Lines : Token_Line_Array := [others => [others => System.Null_Address]];
+      Packed_Token_Lines : Token_Line_Array :=
+        [others => [others => System.Null_Address]];
       Halves : Boolean := False;
 
       --  And whether a batch is kept off the matrix instruction, as

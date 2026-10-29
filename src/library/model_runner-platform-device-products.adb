@@ -4126,6 +4126,22 @@ package body Model_Runner.Platform.Device.Products is
                   end if;
                end;
 
+               --  And the same over a packed cache.
+               declare
+                  Token : aliased constant
+                    Model_Runner.Shaders.Word_Array :=
+                      Model_Runner.Shaders.Attend.Attention_Token_Packed;
+               begin
+                  Request.Size := Interfaces.C.size_t (Token'Length * 4);
+                  Request.Code := Token'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Packed_Token_Attend := Made;
+                  end if;
+               end;
+
                --  And a sixth, GROUPED over the cache proper, beside the
                --  subgroup one it falls back to.
                declare
@@ -5311,18 +5327,29 @@ package body Model_Runner.Platform.Device.Products is
                   Told.Entries := Which'Address;
                   Told.Span := 8;
                   Told.Values := Value'Address;
-                  Request.Stage.Module := Item.Token_Attend;
                   Request.Stage.Specialized := Told'Address;
-                  for Rows in 1 .. Token_Group_Most loop
-                     for Width in 1 .. Token_Width_Most loop
-                        Value := [C.unsigned (Rows), C.unsigned (64 * Width)];
-                        if (Width <= 2 or else Rows * Width <= 8)
-                          and then Create (Item.Logical, Null_Handle, 1,
-                                           Request'Address, Null_Handle,
-                                           Made'Access) = 0
-                        then
-                           Item.Token_Lines (Rows) (Width) := Made;
-                        end if;
+                  for Packed in Boolean loop
+                     Request.Stage.Module :=
+                       (if Packed then Item.Packed_Token_Attend
+                        else Item.Token_Attend);
+                     for Rows in 1 .. Token_Group_Most loop
+                        for Width in 1 .. Token_Width_Most loop
+                           Value :=
+                             [C.unsigned (Rows), C.unsigned (64 * Width)];
+                           if Request.Stage.Module /= Null_Handle
+                             and then (Width <= 2 or else Rows * Width <= 8)
+                             and then Create (Item.Logical, Null_Handle, 1,
+                                              Request'Address, Null_Handle,
+                                              Made'Access) = 0
+                           then
+                              if Packed then
+                                 Item.Packed_Token_Lines (Rows) (Width) :=
+                                   Made;
+                              else
+                                 Item.Token_Lines (Rows) (Width) := Made;
+                              end if;
+                           end if;
+                        end loop;
                      end loop;
                   end loop;
                   Request.Stage.Specialized := Null_Handle;
@@ -6395,7 +6422,13 @@ package body Model_Runner.Platform.Device.Products is
             Give_Back (Line, "vkDestroyPipeline");
          end loop;
       end loop;
+      for Lines of Item.Packed_Token_Lines loop
+         for Line of Lines loop
+            Give_Back (Line, "vkDestroyPipeline");
+         end loop;
+      end loop;
       Give_Back (Item.Token_Attend, "vkDestroyShaderModule");
+      Give_Back (Item.Packed_Token_Attend, "vkDestroyShaderModule");
       for Line of Item.Whole_Halved_Line loop
          Give_Back (Line, "vkDestroyPipeline");
       end loop;
@@ -14646,6 +14679,25 @@ package body Model_Runner.Platform.Device.Products is
                  (Steps.Items (Which).Head_Size / 64)
           else Null_Handle);
 
+      --  The same kernel's PACKED compilation for a step over a packed
+      --  block, or none: the token's shapes, and the subgroup kernels
+      --  bound -- a packed block's bases and widths are on words already.
+      function Packed_Token_Line (Which : Positive) return Address
+      is (if Steps.Items (Which).Attends
+            and then Count in 1 .. Token_Positions_Most
+            and then Steps.Items (Which).Packed.K_Bits /= 0
+            and then not Item.Plain_Packing
+            and then Steps.Items (Which).Head_Size = Steps.Items (Which).Value_Size
+            and then Steps.Items (Which).Head_Size in 64 | 128 | 192 | 256
+            and then Steps.Items (Which).Group_Size in 1 .. Token_Group_Most
+            and then Steps.Items (Which).Heads
+                       mod Steps.Items (Which).Group_Size = 0
+          then Item.Packed_Token_Lines
+                 (Token_Rows (Steps.Items (Which).Group_Size,
+                              Steps.Items (Which).Head_Size))
+                 (Steps.Items (Which).Head_Size / 64)
+          else Null_Handle);
+
       function Latent_Batch (Which : Positive) return Boolean
       is (Count >= Latent_Rows
           and then Item.Latent_Batch_Attend /= Null_Handle
@@ -17339,10 +17391,19 @@ package body Model_Runner.Platform.Device.Products is
                   --  a workgroup a head of a position, as the single call
                   --  dispatches it -- and no slices, no merge, no
                   --  half-precision copy, which are the exact kernels'.
+                  --  Or attention_token.comp's walk over the packed rows,
+                  --  a workgroup a group of heads and a position, where
+                  --  the step's shape is one it takes.
                   Bind_Pipeline
-                    (Item.Buffer, Bind_Point_Compute, Packed_Pipeline (Item));
+                    (Item.Buffer, Bind_Point_Compute,
+                     (if Packed_Token_Line (Index) /= Null_Handle
+                      then Packed_Token_Line (Index)
+                      else Packed_Pipeline (Item)));
 
                   declare
+                     Walked : constant Boolean :=
+                       Packed_Token_Line (Index) /= Null_Handle;
+
                      --  A round's rows share no keys, so a workgroup
                      --  takes one position's heads and no more.
                      Queries : constant Positive :=
@@ -17395,6 +17456,18 @@ package body Model_Runner.Platform.Device.Products is
                         Page_Shift     => C.unsigned (This.Page_Shift),
                         First_Position => C.unsigned (This.First_Position));
 
+                     --  The workgroups across the heads and down the
+                     --  positions: the walk's a group, or the part of one
+                     --  Token_Rows gives, at every position.
+                     Across : constant Positive :=
+                       (if Walked
+                        then This.Heads
+                             / Token_Rows (This.Group_Size, This.Head_Size)
+                        else (This.Heads + Bundle - 1) / Bundle);
+                     Down   : constant Positive :=
+                       (if Walked then Count
+                        else (Count + Queries - 1) / Queries);
+
                      --  No more than Merged_Slices gives the heads at this
                      --  depth, as the exact kernel's -- and so never past
                      --  the records Mine gave the step room for.
@@ -17402,9 +17475,7 @@ package body Model_Runner.Platform.Device.Products is
                        (if Barrier = null then 1
                         else Natural'Min
                                (Packed_Slices
-                                  (Item,
-                                   (This.Heads + Bundle - 1) / Bundle
-                                   * ((Count + Queries - 1) / Queries),
+                                  (Item, Across * Down,
                                    This.First, This.Last,
                                    Rounding => False),
                                 Merged_Slices
@@ -17412,10 +17483,8 @@ package body Model_Runner.Platform.Device.Products is
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Packed_Bytes, Shape'Address);
-                     Dispatch (Item.Buffer,
-                               C.unsigned ((This.Heads + Bundle - 1) / Bundle),
-                               C.unsigned ((Count + Queries - 1) / Queries),
-                               C.unsigned (Slices));
+                     Dispatch (Item.Buffer, C.unsigned (Across),
+                               C.unsigned (Down), C.unsigned (Slices));
 
                      --  The slices put together, as the exact kernel's
                      --  are: the records lie where merge.comp reads them.
