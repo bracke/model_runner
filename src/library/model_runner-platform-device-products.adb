@@ -573,6 +573,11 @@ package body Model_Runner.Platform.Device.Products is
    --  in 323-401 us where the token kernel took 410-518.
    Few_Token_Group : constant := 8;
 
+   --  And the cached positions it takes it from, shallower than a round's
+   --  Few_Span: at 4,000 positions gpt-oss generated 22.2 -> 23.0 tokens
+   --  a second (llama.cpp 22.9), Mellum 35.3 -> 36.2.
+   Few_Token_Span : constant := 2_048;
+
    --  How many slices a few positions at once cut the cache into: enough
    --  that the groups times the slices keep the part busy -- Few_Busy
    --  workgroups -- but none shorter than Slice_Least positions and no more
@@ -14595,7 +14600,8 @@ package body Model_Runner.Platform.Device.Products is
             and then Steps.Items (Which).Window = 0
             and then Model_Runner.Numerics."=" (Steps.Items (Which).Max_Bias, 0.0)
             and then Steps.Items (Which).Last
-                     >= Steps.Items (Which).First + Few_Span
+                     >= Steps.Items (Which).First
+                        + (if Count = 1 then Few_Token_Span else Few_Span)
             and then not Attends_By_Matrix
                            (Item, Count, Steps.Items (Which).Head_Size,
                             Steps.Items (Which).Value_Size)
