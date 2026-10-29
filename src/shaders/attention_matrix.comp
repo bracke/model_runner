@@ -212,6 +212,8 @@ const uint DM = 128u;
 #define IN_PLACE
 const uint DM = 80u;
 #else
+//  Not in place: with the softmax on the accumulators, gpt-oss-20b's
+//  prompt 16,213 long read 403 tokens a second in place against 404-406.
 const uint DM = 64u;
 #endif
 
@@ -274,7 +276,15 @@ shared float16_t qs[SUBS * BR * DM];
 
 //  The scores of a tile, and at the very end the answer on its way out of
 //  the cooperative matrices, sixteen components at a time.
-shared float ss[SUBS * BR * BC];
+//  In place, only the answer on its way out and the probe at the start:
+//  a matrix of sixteen a subgroup, where the scores of a tile were
+//  sixteen kilobytes a workgroup of four.
+#ifdef IN_PLACE
+const uint SS_ROOM = 256u;
+#else
+const uint SS_ROOM = BR * BC;
+#endif
+shared float ss[SUBS * SS_ROOM];
 
 //  Each row's rescale for the tile, and at the end its reciprocal total;
 //  and which row each element of an accumulator is, found once.
@@ -286,8 +296,8 @@ shared float16_t ps[SUBS * BR * BC];
 
 //  Not the keys: a tile of them staged once for a workgroup's subgroups,
 //  where each reads its own out of the cache, read qwen3-8b's prompt
-//  16,214 long at 160 tokens a second against 194 on four subgroups --
-//  and on eight it is past the 64 KB a workgroup may have.
+//  16,214 long at 160 tokens a second against 194 on four subgroups, and
+//  gpt-oss-20b's on eight subgroups of heads of 64 at 397 against 406.
 
 //  A few at once, the rows each subgroup answers: the positions times
 //  the group, dealt out evenly, so that where they do not fill the
@@ -359,7 +369,7 @@ void main() {
 #ifndef QREG
     uint QS0 = sub * BR * DM;
 #endif
-    uint SS0 = sub * BR * BC;
+    uint SS0 = sub * SS_ROOM;
     uint PS0 = sub * BR * BC;
     uint RS0 = sub * BR;
     //  One map for every subgroup: it is the order of the instruction's
