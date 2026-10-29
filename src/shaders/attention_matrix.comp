@@ -601,6 +601,24 @@ void main() {
             mine_rows[e] = e < many ? rowmap[RM0 + lane * many + e] : 0u;
         }
     }
+
+    //  The softmax works on the scores where the instruction leaves them:
+    //  an element's row is mine_rows' and its column the lane's place in
+    //  its sixteen, so a row's sixteen of a tile are a cluster of sixteen
+    //  lanes, and each lane keeps its rows' largest score and its part of
+    //  their sums. Stored and read back a row a lane pair, the scores
+    //  went through shared memory between the two products of every tile.
+    float rtop[BR / 16u][8];
+    float rtotal[BR / 16u][8];
+
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        for (uint e = 0u; e < 8u; ++e) {
+            uint asks = row_head (sub, head, m * 16u + mine_rows[e]);
+
+            rtop[m][e]   = sunk ? kvf[shape.sinks_at + asks] : -1.0 / 0.0;
+            rtotal[m][e] = sunk && (lane & 15u) == 0u ? 1.0 : 0.0;
+        }
+    }
 #else
     //  What this invocation carries out: one column of each of sixteen
     //  rows, in each chunk of thirty-two columns.
@@ -678,14 +696,87 @@ void main() {
                 }
             }
 
+#ifdef IN_PLACE
+            [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+                for (int e = 0; e < sacc[m][0].length(); ++e) {
+                    uint r    = m * 16u + mine_rows[e];
+                    uint slot = row_slot (sub, block, r);
+                    uint la   = shape.last + (causal != 0u ? slot : 0u);
+                    uint fi   = shape.first;
+
+                    if (shape.window > 0u) {
+                        fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
+                    }
+
+                    float best = -1.0 / 0.0;
+
+                    [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                        uint  step  = base + n * 16u + (lane & 15u);
+                        float score = -1.0 / 0.0;
+
+                        if (step >= fi && step <= la) {
+                            score = sacc[m][n][e] * shape.scale;
+
+                            if (slope > 0.0) {
+                                uint asking =
+                                  causal != 0u
+                                  ? la
+                                  : shape.last - (shape.positions - 1u) + slot;
+
+                                score -=
+                                  slope * float (abs (int (step) - int (asking)));
+                            }
+
+                            if (shape.cap > 0.0) {
+                                score = shape.cap * tanh (score / shape.cap);
+                            }
+                        }
+
+                        sacc[m][n][e] = score;
+                        best = max (best, score);
+                    }
+
+                    float raised = max (rtop[m][e], subgroupClusteredMax (best, 16u));
+                    bool  empty  = isinf (raised) && raised < 0.0;
+                    float carry  = empty ? 1.0 : exp (rtop[m][e] - raised);
+                    float run    = 0.0;
+
+                    [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                        float w = empty ? 0.0 : exp (sacc[m][n][e] - raised);
+
+                        sacc[m][n][e] = w;
+                        run += w;
+                    }
+
+                    rtotal[m][e] = rtotal[m][e] * carry + run;
+                    rtop[m][e]   = raised;
+
+                    if ((lane & 15u) == 0u) {
+                        rowscale[RS0 + r] = carry;
+                    }
+                }
+
+                [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                    coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                            gl_MatrixUseAccumulator> weights =
+                        coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
+                                gl_MatrixUseAccumulator> (sacc[m][n]);
+
+                    coopMatStore (weights, ps, PS0 + m * 16u * BC + n * 16u, BC,
+                                  gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+#else
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
                     coopMatStore (sacc[m][n], ss, SS0 + m * 16u * BC + n * 16u, BC,
                                   gl_CooperativeMatrixLayoutRowMajor);
                 }
             }
+#endif
         }
 
+#ifndef IN_PLACE
         //  The workgroup's barrier, though a subgroup's scores are its own
         //  rows: its own lanes' alone read qwen3-8b's and gpt-oss-20b's
         //  prompts 16,214 long as this does.
@@ -770,12 +861,8 @@ void main() {
             total[i] = total[i] * carry[i] + run;
             top[i]   = raised;
 
-#ifdef IN_PLACE
-            if (col == 0u) {
-                rowscale[RS0 + r] = carry[i];
-            }
-#endif
         }
+#endif
 
         barrier();
 
@@ -919,18 +1006,22 @@ void main() {
     }
 
     //  Each lane's share of a row's sum, added up once rather than a tile.
-    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
-        total[i] = subgroupClusteredAdd (total[i], 32u);
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        for (uint e = 0u; e < 8u; ++e) {
+            rtotal[m][e] = subgroupClusteredAdd (rtotal[m][e], 16u);
+        }
     }
 
     //  Each row by its total, and the rows the block invented by nothing.
     barrier();
-    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
-        uint r = (lane >> 5u) + 2u * i;
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        for (int e = 0; e < pacc[0].length(); ++e) {
+            uint r = m * 16u + mine_rows[e];
 
-        if (col == 0u) {
-            rowscale[RS0 + r] = row_real (sub, block, r)
-                          ? (FEW != 0u ? 1.0 : 1.0 / total[i]) : 0.0;
+            if ((lane & 15u) == 0u) {
+                rowscale[RS0 + r] = row_real (sub, block, r)
+                              ? (FEW != 0u ? 1.0 : 1.0 / rtotal[m][e]) : 0.0;
+            }
         }
     }
     barrier();
@@ -1115,6 +1206,19 @@ void main() {
     //  A few at once: each row's largest score and sum after its blend,
     //  for the merge to weigh the slices by.
     if (FEW != 0u) {
+#ifdef IN_PLACE
+        [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+            for (int e = 0; e < pacc[0].length(); ++e) {
+                uint r = m * 16u + mine_rows[e];
+
+                if ((lane & 15u) == 0u && row_real (sub, block, r)) {
+                    uint at = row_record (sub, r);
+                    y[at + shape.value_size]      = rtop[m][e];
+                    y[at + shape.value_size + 1u] = rtotal[m][e];
+                }
+            }
+        }
+#else
         [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
             uint r = (lane >> 5u) + 2u * i;
 
@@ -1124,5 +1228,6 @@ void main() {
                 y[at + shape.value_size + 1u] = total[i];
             }
         }
+#endif
     }
 }
