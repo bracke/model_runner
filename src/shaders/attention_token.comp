@@ -26,9 +26,12 @@
 //
 //  On PACKED, the same walk over a cache kept packed -- a byte an element
 //  with a scale a row, or a nibble an element with a scale a block of
-//  thirty-two -- with attention_packed.comp's push block and its reads:
-//  the four components a lane takes of a position are one word of bytes
-//  or half a word of nibbles, and never straddle a block's scale.
+//  thirty-two -- with attention_packed.comp's push block: a lane takes a
+//  position's components eight at once, two words of bytes or one of
+//  nibbles under one scale, where the half-precision walk takes four. Four
+//  at once read the packed cache as many times as the copy for half its
+//  bytes, and qwen3-8b 16,384 deep generated 7.98 tokens a second on q8
+//  against 9.54 on the copy; eight at once, 9.97, and 10.09 on q4.
 
 #extension GL_KHR_shader_subgroup_basic   : require
 #extension GL_KHR_shader_subgroup_shuffle : require
@@ -94,22 +97,15 @@ layout(push_constant, std430) uniform Shape {
 
 const uint BLOCK = 32u;
 
-//  Four elements of a packed row, e to e + 3, as attention_packed.comp
-//  reads them: the word they sit in, once, before their scale.
-vec4 four_of (uint bits, uint row_at, uint e) {
-    uint at = row_at + (bits == 8u ? e : e >> 1u);
-    uint w = kvw[at >> 2u] >> ((at & 3u) * 8u);
+//  A word's four bytes, and a word's low or high four nibbles.
+vec4 bytes_of (uint w) {
+    return vec4 (float (w & 0xFFu), float ((w >> 8u) & 0xFFu),
+                 float ((w >> 16u) & 0xFFu), float (w >> 24u)) - 128.0;
+}
 
-    if (bits == 8u) {
-        return vec4 (float (int (w & 0xFFu) - 128),
-                     float (int ((w >> 8u) & 0xFFu) - 128),
-                     float (int ((w >> 16u) & 0xFFu) - 128),
-                     float (int ((w >> 24u) & 0xFFu) - 128));
-    }
-    return vec4 (float (int (w & 0xFu) - 8),
-                 float (int ((w >> 4u) & 0xFu) - 8),
-                 float (int ((w >> 8u) & 0xFu) - 8),
-                 float (int ((w >> 12u) & 0xFu) - 8));
+vec4 nibbles_of (uint w) {
+    return vec4 (float (w & 0xFu), float ((w >> 4u) & 0xFu),
+                 float ((w >> 8u) & 0xFu), float ((w >> 12u) & 0xFu)) - 8.0;
 }
 
 //  A position's page in words -- nought for a cache in blocks, whose
@@ -124,16 +120,31 @@ uint page_at (uint pos) {
            ? pos : (pos & ((1u << shape.page_shift) - 1u));
 }
 
-//  The four components from e of a position's row, scaled: bytes or
-//  nibbles at bytes in from the page, their scales at scales.
-vec4 packed_four (uint bits, uint bytes, uint scales, uint blocks,
-                  uint width, uint pos, uint e) {
+//  The eight components from e of a position's row, scaled: bytes or
+//  nibbles at bytes in from the page, their scales at scales. A row is
+//  whole words and e is a multiple of eight, so the eight are two words or
+//  one, inside one block.
+void packed_eight (uint bits, uint bytes, uint scales, uint blocks,
+                   uint width, uint pos, uint e, out vec4 a, out vec4 b) {
     uint pb = page_base (pos);
     uint pp = page_at (pos);
     uint row = bits == 8u ? width : (width + 1u) / 2u;
     float sc = kv[scales + pb + pp * blocks + (bits == 8u ? 0u : e / BLOCK)];
-    return four_of (bits, bytes + pb * 4u + pp * row, e) * sc;
+    uint at = (bytes + pb * 4u + pp * row + (bits == 8u ? e : e >> 1u)) >> 2u;
+
+    if (bits == 8u) {
+        a = bytes_of (kvw[at]) * sc;
+        b = bytes_of (kvw[at + 1u]) * sc;
+    } else {
+        uint w = kvw[at];
+        a = nibbles_of (w) * sc;
+        b = nibbles_of (w >> 16u) * sc;
+    }
 }
+
+//  The d-th of a lane's quarters of a head, in fours: pairs of them
+//  together, the pairs D_SPLIT apart.
+#define AT4(d) (((((d) >> 1u) * D_SPLIT + d_tid) << 1u) + ((d) & 1u))
 #else
 layout(std430, binding = 5) readonly  buffer Copy4  { f16vec4 kvh4[]; };
 
@@ -167,6 +178,9 @@ uint place_of (uint pos, uint offset, uint width) {
     return floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)])
            + offset + (pos & ((1u << shape.page_shift) - 1u)) * width;
 }
+
+//  The d-th of a lane's quarters of a head, in fours, D_SPLIT apart.
+#define AT4(d) ((d) * D_SPLIT + d_tid)
 #endif
 
 //  The group's queries, scaled, a row a head.
@@ -271,24 +285,24 @@ void main() {
 
             vec4 k[MINE4];
 #ifdef PACKED
-            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                k[d] = packed_four (shape.k_bits, shape.k_bytes, shape.ks_at,
-                                    shape.k_blocks, shape.kv_width,
-                                    min (pos, my_last),
-                                    k_head + (d * D_SPLIT + d_tid) * 4u);
+            [[unroll]] for (uint d = 0u; d < MINE4; d += 2u) {
+                packed_eight (shape.k_bits, shape.k_bytes, shape.ks_at,
+                              shape.k_blocks, shape.kv_width,
+                              min (pos, my_last), k_head + AT4 (d) * 4u,
+                              k[d], k[d + 1u]);
             }
 #else
             uint k_at = (place_of (min (pos, my_last), shape.k_base, shape.kv_width)
                          + k_head) >> 2u;
 
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                k[d] = vec4 (kvh4[k_at + d * D_SPLIT + d_tid]);
+                k[d] = vec4 (kvh4[k_at + AT4 (d)]);
             }
 #endif
             [[unroll]] for (uint r = 0u; r < ROWS; r++) {
                 float acc = 0.0;
                 [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                    acc += dot (qsh[r * HS4 + d * D_SPLIT + d_tid], k[d]);
+                    acc += dot (qsh[r * HS4 + AT4 (d)], k[d]);
                 }
                 s[r][c] = acc;
             }
@@ -336,16 +350,16 @@ void main() {
 
             vec4 v[MINE4];
 #ifdef PACKED
-            [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                v[d] = packed_four (shape.v_bits, shape.v_bytes, shape.vs_at,
-                                    shape.v_blocks, shape.v_width, pos,
-                                    v_head + (d * D_SPLIT + d_tid) * 4u);
+            [[unroll]] for (uint d = 0u; d < MINE4; d += 2u) {
+                packed_eight (shape.v_bits, shape.v_bytes, shape.vs_at,
+                              shape.v_blocks, shape.v_width, pos,
+                              v_head + AT4 (d) * 4u, v[d], v[d + 1u]);
             }
 #else
             uint v_at = (place_of (pos, shape.v_base, shape.v_width) + v_head) >> 2u;
 
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                v[d] = vec4 (kvh4[v_at + d * D_SPLIT + d_tid]);
+                v[d] = vec4 (kvh4[v_at + AT4 (d)]);
             }
 #endif
             [[unroll]] for (uint r = 0u; r < ROWS; r++) {
@@ -395,7 +409,7 @@ void main() {
                 l_sh[sub * ROWS + r] = l[r];
             }
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                o_sh[(sub * ROWS + r) * HS4 + d * D_SPLIT + d_tid] = o[r][d];
+                o_sh[(sub * ROWS + r) * HS4 + AT4 (d)] = o[r][d];
             }
         }
     }
@@ -418,7 +432,7 @@ void main() {
         for (uint g = 0u; g < gl_NumSubgroups; g++) {
             sum += l_sh[g * ROWS + r];
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                mine[d] += o_sh[(g * ROWS + r) * HS4 + d * D_SPLIT + d_tid];
+                mine[d] += o_sh[(g * ROWS + r) * HS4 + AT4 (d)];
             }
         }
         float scale_o = 1.0;
@@ -438,7 +452,7 @@ void main() {
             uint at = records
                       + ((slice * shape.positions + p) * shape.heads + head) * stride;
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                uint c = (d * D_SPLIT + d_tid) * 4u;
+                uint c = AT4 (d) * 4u;
                 vec4 blend = mine[d] * scale_o;
                 y[at + c]      = blend.x;
                 y[at + c + 1u] = blend.y;
@@ -453,7 +467,7 @@ void main() {
             uint at = (p * shape.heads + head) * shape.value_size;
             float inverse = sum > 0.0 ? 1.0 / sum : 0.0;
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
-                uint c = (d * D_SPLIT + d_tid) * 4u;
+                uint c = AT4 (d) * 4u;
                 vec4 blend = mine[d] * scale_o * inverse;
                 y[at + c]      = blend.x;
                 y[at + c + 1u] = blend.y;

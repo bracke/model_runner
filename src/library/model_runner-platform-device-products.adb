@@ -592,7 +592,9 @@ package body Model_Runner.Platform.Device.Products is
    --  unit, twenty-four on this part at once, so forty-eight ran as two
    --  rounds and every workgroup's start and end were paid twice.
    --  Swift-1.5-Qwen3.8-27B's check of four positions 8,188 deep attended
-   --  a layer in 945-960 us at 48, 851 at 24, 1,136 at 32.
+   --  a layer in 945-960 us at 48, 851 at 24, 1,136 at 32. A token's one
+   --  subgroup a workgroup too: Qwen3.6-35B-A3B's two groups 30,549 deep
+   --  attended a layer in 1,630-1,680 us at 24, 2,640 at 12 and at 48.
    Few_Wide_Busy : constant := 24;
 
    function Few_Slices
