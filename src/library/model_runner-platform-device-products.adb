@@ -564,6 +564,15 @@ package body Model_Runner.Platform.Device.Products is
    --  tokens a second with it and 19.9 without.
    Few_Span : constant := 8_192;
 
+   --  The least group a generated token alone takes the few-position
+   --  pipeline for, its heads the rows of a tile of sixteen; a smaller
+   --  group stays on attention_token.comp. At 16,000 positions, one
+   --  token a time: Mellum's groups of eight 30.8 -> 32.5 tokens a
+   --  second, Qwen3.6's 20.0 -> 20.3; qwen3-8b's of four 9.58 -> 8.92,
+   --  Gemma 3's of two 21.7 -> 19.9. Mellum 32,000 deep attended a layer
+   --  in 323-401 us where the token kernel took 410-518.
+   Few_Token_Group : constant := 8;
+
    --  How many slices a few positions at once cut the cache into: enough
    --  that the groups times the slices keep the part busy -- Few_Busy
    --  workgroups -- but none shorter than Slice_Least positions and no more
@@ -643,11 +652,11 @@ package body Model_Runner.Platform.Device.Products is
               (1, Natural'Min (Few_Wide_Busy / Natural'Max (1, Positions),
                                (Span + 63) / 64)));
 
-   --  The few-position pipeline for a step of Positions, or none: two to
+   --  The few-position pipeline for a step of Positions, or none: one to
    --  eight positions whose heads in a group, times the positions, fill at
    --  most four subgroups of sixteen rows, out of the half-precision copy,
    --  causal, and with nothing the few-position mode leaves out -- a
-   --  sliding window, a slope, a sink. See FEW in attention_matrix.comp.
+   --  sliding window, a slope. See FEW in attention_matrix.comp.
    function Few_Kernel
      (Item       : Engine;
       Positions  : Natural;
@@ -673,7 +682,8 @@ package body Model_Runner.Platform.Device.Products is
          then 4
          else 0);
    begin
-      if Positions not in 2 .. Query_Block - 1
+      if Positions not in 1 .. Query_Block - 1
+        or else (Positions = 1 and then Group_Size < Few_Token_Group)
         or else Group_Size = 0
         or else Rows > 64
         or else Heads mod Group_Size /= 0
@@ -14583,7 +14593,6 @@ package body Model_Runner.Platform.Device.Products is
             and then Steps.Items (Which).Packed.K_Bits = 0
             and then Steps.Items (Which).Causal
             and then Steps.Items (Which).Window = 0
-            and then Steps.Items (Which).Sinks = 0
             and then Model_Runner.Numerics."=" (Steps.Items (Which).Max_Bias, 0.0)
             and then Steps.Items (Which).Last
                      >= Steps.Items (Which).First + Few_Span

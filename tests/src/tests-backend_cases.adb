@@ -10895,7 +10895,9 @@ package body Tests.Backend_Cases is
    --  check round's two to eight positions, each a position further back;
    --  and scores falling off with distance down a slope ladder. The cache
    --  holds sixteenths, which the copy keeps to the bit, so the two are
-   --  held to binary32's rounding.
+   --  held to binary32's rounding. And past the few-position span, where
+   --  a token takes attention_matrix.comp's few-position pipeline, plain
+   --  and with a sink: its weights are halves, so the bound is theirs.
    procedure A_Token_Attends_Out_Of_The_Copy_As_A_Host_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -10903,11 +10905,12 @@ package body Tests.Backend_Cases is
 
       Groups  : constant := 2;
       Longest : constant := 700;
+      Deep    : constant := 8_300;
       Widest  : constant := 256;
 
-      --  Room for a check round's eight past the longest.
+      --  Room for a check round's eight past the deepest.
       Room : constant N.Element_Count :=
-        N.Element_Count (Longest + 8) * Groups * Widest;
+        N.Element_Count (Deep + 8) * Groups * Widest;
       Sinks : constant N.Element_Count := Room * 2;
 
       Held   : Devices.Inventory;
@@ -10918,7 +10921,10 @@ package body Tests.Backend_Cases is
       Ready  : Boolean;
       Ok     : Boolean;
 
-      Cache : N.Real_Array (0 .. Sinks + 16 - 1);
+      type Values is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
+
+      Cache : Values;
 
       type Positive_List is array (Positive range <>) of Positive;
 
@@ -11062,7 +11068,7 @@ package body Tests.Backend_Cases is
             end loop;
          end loop;
 
-         Assert (Worst <= 2.0e-5,
+         Assert (Worst <= (if Positions > Longest then 4.0e-3 else 2.0e-5),
                  "a token of" & Head_Size'Image & " components in groups of"
                  & Group'Image & " over" & Positions'Image & " positions"
                  & " (cap" & Cap'Image & ", window" & Window'Image
@@ -11108,14 +11114,21 @@ package body Tests.Backend_Cases is
          return;
       end if;
 
+      Cache := new N.Real_Array (0 .. Sinks + 16 - 1);
       for Index in Cache'Range loop
          Cache (Index) := N.Real (Index mod 13) / 16.0 - 0.375
            + N.Real (Index mod 5) / 16.0;
       end loop;
 
+      --  Sinks that weigh as much as thousands of positions do, so that
+      --  one counted twice -- in two slices of a deep cache -- shows.
+      for Head in 0 .. 15 loop
+         Cache (Sinks + N.Element_Count (Head)) := 9.0 - N.Real (Head mod 4);
+      end loop;
+
       Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
       Assert (Ok, "the device would not reserve the test's cache");
-      Products.Put_Cache (Engine, 0, Cache, Ok);
+      Products.Put_Cache (Engine, 0, Cache.all, Ok);
       Assert (Ok, "the cache would not be written");
 
       for Head_Size of Positive_List'(64, 128, 192, 256) loop
@@ -11139,9 +11152,13 @@ package body Tests.Backend_Cases is
             Compare (Head_Size, Most, Longest, 0.0, 300, False, 5);
             Compare (Head_Size, Most, Longest, 0.0, 0, False, 1, 8.0);
             Compare (Head_Size, Most, 40, 0.0, 0, False, 3, 8.0);
+            Compare (Head_Size, Most, Deep, 0.0, 0, False);
+            Compare (Head_Size, Most, Deep, 0.0, 0, True);
+            Compare (Head_Size, Most, Deep, 0.0, 0, True, 4);
          end;
       end loop;
 
+      Free (Cache);
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);
@@ -12330,7 +12347,8 @@ package body Tests.Backend_Cases is
    --  the cache, its rows the positions times the group's heads, its
    --  answers records the merge puts together. Groups of six at four
    --  positions are twenty-four rows, two subgroups that pair; at seven,
-   --  forty-two rows, four. Each says what the queries one at a time say.
+   --  forty-two rows, four; a token alone, six. Each says what the queries
+   --  one at a time say.
    procedure A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -12452,6 +12470,10 @@ package body Tests.Backend_Cases is
       Compare (Head_Size => 256, Batch => 4);
       Compare (Head_Size => 256, Batch => 7);
       Compare (Head_Size => 128, Batch => 4);
+
+      --  And a generated token alone, its group's six heads six rows.
+      Compare (Head_Size => 128, Batch => 1);
+      Compare (Head_Size => 256, Batch => 1);
 
       Products.Close (Engine);
       Devices.Close (Opened);

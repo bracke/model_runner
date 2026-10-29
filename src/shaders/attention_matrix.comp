@@ -525,10 +525,16 @@ void main() {
 
     //  Empty -- or, where the head has a sink, with the sink as a first
     //  position carrying no value: the largest is the sink and the sum is
-    //  its weight against itself, one.
+    //  its weight against itself, one. A few at once have a head a row,
+    //  and only the first slice holds the sink, which the merge then
+    //  weighs in once.
+    bool sunk = shape.sinks_at != 0u && (FEW == 0u || gl_WorkGroupID.y == 0u);
+
     [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
-        top[i]   = shape.sinks_at != 0u ? kvf[shape.sinks_at + head] : -1.0 / 0.0;
-        total[i] = shape.sinks_at != 0u ? 1.0 : 0.0;
+        uint asks = row_head (sub, head, (lane >> 5u) + 2u * i);
+
+        top[i]   = sunk ? kvf[shape.sinks_at + asks] : -1.0 / 0.0;
+        total[i] = sunk ? 1.0 : 0.0;
         carry[i] = 1.0;
     }
 
