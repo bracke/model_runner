@@ -2838,18 +2838,34 @@ package body Model_Runner.Platform.Device.Products is
       --  overlap: Steelman-14B's first prompt, which uploads its 8 GiB,
       --  18.5-25.2 s one way, 9.8-10.8 four ways, 7.3-8.3 eight; Qwen3.5's
       --  first picture 0.231, 0.209, 0.189 s, and 0.20 sixteen ways.
+      --
+      --  One read from the file past the cache goes as many ways as it has
+      --  eighth-megabyte pieces, up to eight, from a quarter of a megabyte:
+      --  a drive answers reads in flight together, and one read at a time
+      --  of a matrix under a megabyte went through the mapping's faults at
+      --  a quarter of a gigabyte a second -- 0.49 s of Qwen3.6's first
+      --  prompt, in 197 matrices of 133 MB.
       declare
          Room : Model_Runner.Bytes.Byte_Array (Values'Range)
            with Import, Address => Where;
-         Ways : constant := 8;
+         Least_Piece : constant := 131_072;
+         Ways : constant Positive :=
+           (if Direct
+            then Positive'Max
+                   (1, Positive'Min
+                         (Copiers'Length,
+                          Natural (Values'Length / Least_Piece)))
+            else Copiers'Length);
          Failed : Boolean := False;
       begin
-         if Values'Length < 1_048_576 then
+         if Values'Length < (if Direct then 2 * Least_Piece else 1_048_576)
+         then
             Room := Values;
          else
             declare
                Step : constant Model_Runner.Bytes.Byte_Count :=
-                 (Values'Length + Ways - 1) / Ways;
+                 (Values'Length + Model_Runner.Bytes.Byte_Count (Ways) - 1)
+                 / Model_Runner.Bytes.Byte_Count (Ways);
             begin
                Copying.Seize;
                if Copiers (1) = null then
@@ -2858,7 +2874,7 @@ package body Model_Runner.Platform.Device.Products is
                   end loop;
                end if;
                Copy_Count.Expect (Ways);
-               for K in Copiers'Range loop
+               for K in 1 .. Ways loop
                   declare
                      Lo : constant Model_Runner.Bytes.Byte_Count :=
                        Values'First + Model_Runner.Bytes.Byte_Count (K - 1) * Step;

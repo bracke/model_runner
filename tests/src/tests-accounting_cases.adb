@@ -485,6 +485,7 @@ package body Tests.Accounting_Cases is
       Size : constant := 19 * 1024 * 1024 + 777;
       From : constant := 4099;
       Part : constant := 17 * 1024 * 1024 + 5;
+      Short_Part : constant := 100 * 1024 + 3;
 
       Content : B.Byte_Array_Access :=
         new B.Byte_Array'
@@ -538,6 +539,24 @@ package body Tests.Accounting_Cases is
          if Done then
             Assert (B."=" (Back.all, Content.all (From + 1 .. From + Part)),
                     "a run read past the cache is not what the file holds");
+         end if;
+
+         --  A run of a tenth of a megabyte is worth it too: a matrix's
+         --  eighth, or a matrix under a megabyte, read a fault at a time
+         --  took a quarter of a gigabyte a second.
+         Back.all := [others => 0];
+         Model_Runner.Platform.Pages.Read_Direct
+           (Map.Base (Region) + Storage_Offset (From),
+            Back.all (1)'Address, Short_Part, Done);
+         if Model_Runner.Platform.Host_Name = "linux" then
+            Assert (Done, "a run of a tenth of a megabyte was not read past the cache");
+         end if;
+         if Done then
+            Assert (B."=" (Back.all (1 .. Short_Part),
+                           Content.all (From + 1 .. From + Short_Part)),
+                    "a short run read past the cache is not what the file holds");
+            Assert (Natural (Back.all (Short_Part + 1)) = 0,
+                    "a short run read past the cache wrote past its end");
          end if;
          Map.Close (Region);
       end if;

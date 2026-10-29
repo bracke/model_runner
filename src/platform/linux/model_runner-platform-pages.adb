@@ -135,7 +135,11 @@ package body Model_Runner.Platform.Pages is
    O_Cloexec   : constant := 8#2000000#;
    Prot_Rw     : constant := 3;
    Map_Private_Anonymous : constant := 16#22#;
-   Direct_Least : constant := 1_048_576;
+   --  A run as short as a sixteenth of a megabyte is still read faster
+   --  past the cache than a fault at a time: Qwen3.6's first prompt copied
+   --  197 matrices under a megabyte, and the eighths of its 6.9 MB ones,
+   --  at a quarter of a gigabyte a second through the mapping's faults.
+   Direct_Least : constant := 65_536;
    Direct_Chunk : constant := 8_388_608;
 
    function C_Open
