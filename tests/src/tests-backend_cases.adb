@@ -11155,6 +11155,9 @@ package body Tests.Backend_Cases is
             Compare (Head_Size, Most, Deep, 0.0, 0, False);
             Compare (Head_Size, Most, Deep, 0.0, 0, True);
             Compare (Head_Size, Most, Deep, 0.0, 0, True, 4);
+            --  Two positions' sixteen rows, which a wide head walks on
+            --  two subgroups of the few-position kernel.
+            Compare (Head_Size, Most, Deep, 0.0, 0, False, 2);
          end;
       end loop;
 
@@ -12347,8 +12350,7 @@ package body Tests.Backend_Cases is
    --  the cache, its rows the positions times the group's heads, its
    --  answers records the merge puts together. Groups of six at four
    --  positions are twenty-four rows, two subgroups that pair; at seven,
-   --  forty-two rows, four; a token alone, six. Each says what the queries
-   --  one at a time say.
+   --  forty-two rows, four. Each says what the queries one at a time say.
    procedure A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -12471,9 +12473,10 @@ package body Tests.Backend_Cases is
       Compare (Head_Size => 256, Batch => 7);
       Compare (Head_Size => 128, Batch => 4);
 
-      --  And a generated token alone, its group's six heads six rows.
-      Compare (Head_Size => 128, Batch => 1);
-      Compare (Head_Size => 256, Batch => 1);
+      --  Not a generated token alone: one at a time is the same token's
+      --  walk, which would be measured against itself. The token's own
+      --  test holds it to the host, the few-position kernel's groups of
+      --  eight among it.
 
       Products.Close (Engine);
       Devices.Close (Opened);
