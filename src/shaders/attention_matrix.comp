@@ -534,7 +534,7 @@ void main() {
         uint asks = row_head (sub, head, (lane >> 5u) + 2u * i);
 
         top[i]   = sunk ? kvf[shape.sinks_at + asks] : -1.0 / 0.0;
-        total[i] = sunk ? 1.0 : 0.0;
+        total[i] = sunk && col == 0u ? 1.0 : 0.0;
         carry[i] = 1.0;
     }
 
@@ -742,7 +742,9 @@ void main() {
                 run += w;
             }
 
-            total[i] = total[i] * carry[i] + subgroupClusteredAdd (run, 32u);
+            //  This lane's part of the sum: the carry is the row's, the
+            //  same in every lane of it, and the parts are added at the end.
+            total[i] = total[i] * carry[i] + run;
             top[i]   = raised;
 
 #ifdef IN_PLACE
@@ -890,6 +892,11 @@ void main() {
                 }
             }
         }
+    }
+
+    //  Each lane's share of a row's sum, added up once rather than a tile.
+    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
+        total[i] = subgroupClusteredAdd (total[i], 32u);
     }
 
     //  Each row by its total, and the rows the block invented by nothing.
@@ -1045,6 +1052,11 @@ void main() {
                 }
             }
         }
+    }
+
+    //  Each lane's share of a row's sum, added up once rather than a tile.
+    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
+        total[i] = subgroupClusteredAdd (total[i], 32u);
     }
 
     //  And out, a row's components together, dropping the rows the block
