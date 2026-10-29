@@ -112,7 +112,9 @@ const uint SUB_ROWS = POS * ROWS / SUBS;
 
 //  A subgroup's share of the value columns, in tiles of sixteen, and how
 //  many of them are read before they are multiplied: all eight spilled
-//  attention_matrix.comp's registers at a head of 256.
+//  attention_matrix.comp's registers at a head of 256, and all eight on
+//  the split compilation read DeepSeek-Coder-V2-Lite's token 31,161 deep
+//  in 828 us a layer where four read it in 731.
 const uint V_TILES = DV / 16u / SUBS;
 const uint V_AT_ONCE = 4u;
 

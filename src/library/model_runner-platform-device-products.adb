@@ -649,6 +649,9 @@ package body Model_Runner.Platform.Device.Products is
    --  attention_latent.comp's POS.
    Latent_Pair : constant := 3;
 
+   --  At most Few_Wide_Busy a position: DeepSeek-Coder-V2-Lite's token
+   --  31,161 deep attended a layer in 731 us at twenty-four, 842 at
+   --  thirty-two.
    function Latent_Slices (Span : Natural; Positions : Natural := 1) return Natural
    is (if Positions >= Latent_Rows then 1
        else Natural'Max
@@ -673,7 +676,7 @@ package body Model_Runner.Platform.Device.Products is
       --  rows fit one: the pair split the values' tiles between them, and
       --  a lone subgroup waited on every read of a tile one after another
       --  with nothing beside it -- Qwen3.6-35B-A3B's token 30,549 deep
-      --  attended a layer in 1,630 us on one, 1,196 on two.
+      --  attended a layer in 1,630 us on one, 1,196 on two, 1,830 on four.
       Wider : constant Boolean :=
         Head_Size > Matrix_Wide_Head or else Value_Size > Matrix_Wide_Head;
       Many : constant Natural :=

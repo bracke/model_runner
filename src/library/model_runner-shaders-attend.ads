@@ -20858,7 +20858,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_matrix.comp when these
    --  words were made from it.
    Attention_Matrix_Digest : constant Interfaces.Unsigned_64 :=
-     16#3900F67794D5FDF4#;
+     16#2FB19443B36B989C#;
 
    --  The compiled words, as the device is given them.
    Attention_Matrix : constant Word_Array :=
@@ -22679,7 +22679,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_matrix.comp when these
    --  words were made from it.
    Attention_Matrix_Wide_Digest : constant Interfaces.Unsigned_64 :=
-     16#3900F67794D5FDF4#;
+     16#2FB19443B36B989C#;
 
    --  The compiled words, as the device is given them.
    Attention_Matrix_Wide : constant Word_Array :=
@@ -25065,7 +25065,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_matrix.comp when these
    --  words were made from it.
    Attention_Matrix_Mid_Digest : constant Interfaces.Unsigned_64 :=
-     16#3900F67794D5FDF4#;
+     16#2FB19443B36B989C#;
 
    --  The compiled words, as the device is given them.
    Attention_Matrix_Mid : constant Word_Array :=
@@ -27452,7 +27452,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_matrix.comp when these
    --  words were made from it.
    Attention_Matrix_Wider_Digest : constant Interfaces.Unsigned_64 :=
-     16#3900F67794D5FDF4#;
+     16#2FB19443B36B989C#;
 
    --  The compiled words, as the device is given them.
    Attention_Matrix_Wider : constant Word_Array :=
@@ -29804,7 +29804,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_latent.comp when these
    --  words were made from it.
    Attention_Latent_Digest : constant Interfaces.Unsigned_64 :=
-     16#6278BCEC1BF3F241#;
+     16#D3D9BF1FD876A977#;
 
    --  The compiled words, as the device is given them.
    Attention_Latent : constant Word_Array :=
@@ -30994,7 +30994,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_latent.comp when these
    --  words were made from it.
    Attention_Latent_Batch_Digest : constant Interfaces.Unsigned_64 :=
-     16#6278BCEC1BF3F241#;
+     16#D3D9BF1FD876A977#;
 
    --  The compiled words, as the device is given them.
    Attention_Latent_Batch : constant Word_Array :=
@@ -32147,7 +32147,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_latent.comp when these
    --  words were made from it.
    Attention_Latent_Split_Digest : constant Interfaces.Unsigned_64 :=
-     16#6278BCEC1BF3F241#;
+     16#D3D9BF1FD876A977#;
 
    --  The compiled words, as the device is given them.
    Attention_Latent_Split : constant Word_Array :=

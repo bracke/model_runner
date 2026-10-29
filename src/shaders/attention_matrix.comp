@@ -724,6 +724,10 @@ void main() {
                 best = max (best, score);
             }
 
+            //  In natural units: the scores in twos, the scale, slope,
+            //  bound and sink carrying the base's logarithm and the weights
+            //  one exp2 each, read qwen3-8b's prompt 8,192 long at 250-251
+            //  tokens a second against 258-259.
             float raised = max (top[i], subgroupClusteredMax (best, 32u));
             bool  empty  = isinf (raised) && raised < 0.0;
 
