@@ -119,18 +119,22 @@ const uint V_AT_ONCE = 4u;
 //  A batch's compilation reads its queries where they lie rather than out
 //  of shared memory, their 18 KB the half of what held a unit to four
 //  workgroups.
-#ifndef WIDE_TILE
+//  The split compilation reads them where they lie too: the host takes
+//  it only for a latent whose heads fill the tile's rows, and its partial
+//  scores' 16 KB with these 18 held a unit to one workgroup.
+#if !defined(WIDE_TILE) && !defined(SPLIT_DEPTH)
 shared float16_t qs[ROWS * DK];
 #endif
 shared float ss[POS * ROWS * BC];
 #ifdef SPLIT_DEPTH
-//  A short cache's compilation scores the tile a quarter of the key a
-//  subgroup: each subgroup's every key against nine steps of it, the four
-//  partial scores summed here. Scored a sixteen of the keys a subgroup over
-//  the whole key, each subgroup waited on thirty-six reads one after
-//  another, and a short cache is a workgroup or two -- nothing else to run
-//  meanwhile. A long one has workgroups enough to hide the reads, and the
-//  sum's barrier cost it.
+//  A token's compilation scores the tile a quarter of the key a subgroup:
+//  each subgroup's every key against nine steps of it, the four partial
+//  scores summed here. Scored a sixteen of the keys a subgroup over the
+//  whole key, each subgroup waited on thirty-six reads one after another,
+//  at any depth: a token's twenty-four workgroups had nothing else to run
+//  meanwhile. A tile of 128 keys, two loads a step, read 1,274 us a layer
+//  where sixty-four read 840, and touching the next tile's lines a tile
+//  ahead 1,266.
 const uint DEPTH_STEPS = DK / 16u / 4u;
 shared float parts[4u * ROWS * BC];
 #endif
@@ -163,8 +167,13 @@ void main() {
     //  first key, at a cache short enough to be a workgroup or two, were
     //  a token's wait for nothing.
 #ifndef WIDE_TILE
+#ifdef SPLIT_DEPTH
+    const bool direct = true;
+#else
     bool direct = rows == ROWS && dk == DK;
+#endif
     uint q_direct = (p0 * shape.heads + head0) * dk;
+#ifndef SPLIT_DEPTH
     if (!direct) {
         for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
             uint r = at / DK;
@@ -174,6 +183,7 @@ void main() {
                      : float16_t (0.0);
         }
     }
+#endif
 #else
     //  Each position's queries; a position past the batch reads the
     //  last one's, and leaves no record.
@@ -254,8 +264,6 @@ void main() {
                     coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
                     coopMatLoad (qf, q, q_direct + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
                     qm = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
-                } else {
-                    coopMatLoad (qm, qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
                 }
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;

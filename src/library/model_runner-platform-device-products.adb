@@ -649,10 +649,6 @@ package body Model_Runner.Platform.Device.Products is
    --  attention_latent.comp's POS.
    Latent_Pair : constant := 3;
 
-   --  Workgroups below which a latent attends on its split compilation:
-   --  the device's twelve units.
-   Latent_Split_Below : constant := 12;
-
    function Latent_Slices (Span : Natural; Positions : Natural := 1) return Natural
    is (if Positions >= Latent_Rows then 1
        else Natural'Max
@@ -17682,14 +17678,21 @@ package body Model_Runner.Platform.Device.Products is
                                  / Token_Rows (This.Group_Size, This.Head_Size)),
                               C.unsigned (Count), C.unsigned (Slices));
                         elsif Few then
-                           --  A latent's few workgroups on the compilation
-                           --  that splits the key between the subgroups:
-                           --  fewer than the device has units, whose reads
-                           --  nothing else would hide.
+                           --  A latent's token or few on the compilation that
+                           --  splits the key between the subgroups, for a
+                           --  latent whose heads fill the tile's rows: it
+                           --  reads their queries where they lie, staging
+                           --  none. It was taken below twelve workgroups,
+                           --  when it staged them too and its 41 KB held a
+                           --  unit to one workgroup; at 23 KB, two, it is the
+                           --  quicker at any depth. DeepSeek-Coder-V2-Lite's
+                           --  attention a layer 4,175 deep 158.7 -> 147.5
+                           --  us, 31,161 deep 840 -> 731.
                            if Few_Line (Index) = Item.Latent_Attend
                              and then not Latent_Batch (Index)
                              and then Item.Latent_Split_Attend /= Null_Handle
-                             and then Slices * Count < Latent_Split_Below
+                             and then This.Group_Size = Latent_Rows
+                             and then This.Head_Size = Latent_Head
                            then
                               Bind_Pipeline
                                 (Item.Buffer, Bind_Point_Compute,
