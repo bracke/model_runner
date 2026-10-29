@@ -595,6 +595,9 @@ package body Model_Runner.Platform.Device.Products is
    --  a layer in 945-960 us at 48, 851 at 24, 1,136 at 32. A token's one
    --  subgroup a workgroup too: Qwen3.6-35B-A3B's two groups 30,549 deep
    --  attended a layer in 1,630-1,680 us at 24, 2,640 at 12 and at 48.
+   --  With the scores' room a matrix a subgroup (22 KB a workgroup of two
+   --  where it was 28), 36 generated 16,377 deep at 20.2 tokens a second
+   --  against 21.0-21.8 at 24.
    Few_Wide_Busy : constant := 24;
 
    function Few_Slices
