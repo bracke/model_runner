@@ -323,6 +323,10 @@ package body Model_Runner.CLI.Options is
    -- Cache_Names --
    -----------------
 
+   --  The --kv-cache value that chooses between two of the storages, a
+   --  run's alone: what it weighs is the device's room for the run.
+   Fit_Name : constant String := "fit";
+
    function Cache_Names return String is
       Room : String (1 .. 64) := [others => ' '];
       Used : Natural := 0;
@@ -1638,6 +1642,13 @@ package body Model_Runner.CLI.Options is
                               Found := True;
                            end if;
                         end loop;
+
+                        if T.To_String (Asked) = Fit_Name
+                          and then Result.Kind = Command_Run
+                        then
+                           Result.Cache_Fit := True;
+                           Found := True;
+                        end if;
 
                         if not Found then
                            Fail (E.CLI_Invalid_Option_Value, Name,

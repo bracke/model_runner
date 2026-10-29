@@ -5559,6 +5559,13 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Invalid_Option_Value,
               "run m.gguf --prompt a --kv-cache q8 --kv-values f16");
 
+      --  fit weighs a run's room on the device, which inspect and embed
+      --  do not have.
+      Expect (E.CLI_Invalid_Option_Value,
+              "inspect m.gguf --kv-cache fit");
+      Expect (E.CLI_Invalid_Option_Value,
+              "embed m.gguf --prompt a --kv-cache fit");
+
       Expect (E.CLI_Invalid_Color_Mode, "run m.gguf --color=mauve");
       Expect (E.CLI_Unexpected_Operand, "run m.gguf extra");
       Expect (E.Sampling_Invalid_Configuration, "run m.gguf --top-p 2");
@@ -8062,6 +8069,16 @@ package body Tests.CLI_Cases is
               "--context-size did not reach the context size");
       Assert (Read ("--max-tokens", "9").Max_Tokens = 9,
               "--max-tokens did not reach the token bound");
+
+      --  --kv-cache fit asks the run to choose between the halved and the
+      --  byte storage, and leaves the halved one set until it does.
+      Assert (Read ("--kv-cache", "fit").Cache_Fit,
+              "--kv-cache fit did not reach the run");
+      Assert (Model_Runner.Llama."="
+                (Read ("--kv-cache", "fit").Cache, Model_Runner.Llama.Halved),
+              "--kv-cache fit set a storage before the run chose one");
+      Assert (not Read ("--kv-cache", "q8").Cache_Fit,
+              "--kv-cache q8 asked the run to choose");
       Assert (Read ("--batch-size", "7").Batch_Size = 7,
               "--batch-size did not reach the batch size");
       Assert (Read ("--threads", "3").Threads = 3,

@@ -1639,6 +1639,17 @@ measured over every architecture, shape and format it crosses and rounded up.
 It is offered for the case the halved cache does not fit rather than as a
 default: nothing chooses it unless asked.
 
+`run --kv-cache fit` asks for that choice to be made for you: the halved
+cache where the context fits on the device beside a dense model's
+matrices, the byte one where only that does, and the halved one with the
+model split as before where neither does. Without a named context the
+longer one the device holds is taken -- the byte cache where it keeps a
+longer context whole than the halved one would. Steelman-14B with
+`--context-size 32768` stays whole on the device this way where the halved
+cache sends 1.5 GiB of its weights to the processor: a 16,243-token prompt
+reads at 117 tokens a second against 115 and generates at 5.32 against
+4.60.
+
 `--kv-cache q4` stores it in four bits an element, two to a byte, with a
 scale for every thirty-two rather than for the row: sixteen levels are too
 few to spread over a row whose one outlying channel would set the step for

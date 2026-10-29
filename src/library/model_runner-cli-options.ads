@@ -630,6 +630,12 @@ package Model_Runner.CLI.Options is
       Cache      : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Halved;
 
+      --  --kv-cache fit: the halved cache where the context fits on the
+      --  device beside a dense model's matrices, and the byte cache where
+      --  only that does -- a longer context on the device rather than part
+      --  of the model on the processor. Lossy, so asked for, never taken.
+      Cache_Fit  : Boolean := False;
+
       --  How the values are stored where that differs from the keys: one
       --  of the packed storages beside a packed --kv-cache, since attention
       --  reads the values through a weighted sum that averages their

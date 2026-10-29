@@ -699,17 +699,26 @@ package body Model_Runner.CLI.Execute.Support is
             Shards.Close (From);
             raise;
       end Measure;
+      --  The device named, which --kv-cache fit still weighs the model
+      --  against: the backend stays as named.
+      Named_Device : constant Boolean :=
+        (Item.Backend_Set
+         and then Model_Runner.Backend."="
+                    (Item.Backend, Model_Runner.Backend.Backend_Device))
+        or else Item.Device_Memory_Set
+        or else Item.Device_Index_Set
+        or else Item.Device_Patience_Set;
    begin
-      if Item.Backend_Set then
+      if Item.Backend_Set and then not (Named_Device and then Item.Cache_Fit)
+      then
          return Result;
       end if;
 
-      if Item.Device_Memory_Set
-        or else Item.Device_Index_Set
-        or else Item.Device_Patience_Set
-      then
+      if Named_Device then
          Result.Backend := Model_Runner.Backend.Backend_Device;
-         return Result;
+         if not Item.Cache_Fit then
+            return Result;
+         end if;
       end if;
 
       Model_Runner.Backend.Device.Open
@@ -765,16 +774,56 @@ package body Model_Runner.CLI.Execute.Support is
          Room : Interfaces.Unsigned_64 := 0;
 
          Takes : Boolean := False;
+
+         --  The context the load would plan with this cache: the one named
+         --  where the matrices fit beside it, or the model's own halved
+         --  down to Planned_Device_Context while they do not, as Prepare
+         --  plans it -- nought where they fit beside none of it.
+         function Planned (Cache : L.Cache_Precision) return Natural is
+            Context : Natural :=
+              (if Item.Context_Size > 0 then Item.Context_Size
+               else Seen.Settings.Context_Length);
+
+            function Fits (Positions : Natural) return Boolean is
+               Counted : constant Interfaces.Unsigned_64 :=
+                 L.Device_Room (Seen.Settings, Positions, Cache,
+                                Session_Paging (On_Device));
+            begin
+               return Counted > Draft and then Asked <= Counted - Draft;
+            end Fits;
+         begin
+            if Item.Context_Size = 0 then
+               while Context > L.Planned_Device_Context
+                 and then not Fits (Context)
+               loop
+                  Context :=
+                    Natural'Max (L.Planned_Device_Context, Context / 2);
+               end loop;
+            end if;
+            return (if Fits (Context) then Context else 0);
+         end Planned;
       begin
          if Dense then
             On_Device.Backend := Model_Runner.Backend.Backend_Device;
+
+            --  Asked to fit: the byte cache where it holds a longer context
+            --  whole on the device than the halved one, the halved
+            --  otherwise -- and with nothing that fits, the halved cache
+            --  and the split as without.
+            if Item.Cache_Fit
+              and then Planned (L.Eighth) > Planned (L.Halved)
+            then
+               Result.Cache := L.Eighth;
+               Screen.Put_Message ("cli.note.cache_fit_bytes");
+            end if;
+
             Room :=
               L.Device_Room
                 (Seen.Settings,
                  (if Item.Context_Size > 0 then Item.Context_Size
                   else Natural'Min (Seen.Settings.Context_Length,
                                     L.Planned_Device_Context)),
-                 Item.Cache, Session_Paging (On_Device));
+                 Result.Cache, Session_Paging (On_Device));
             Room := (if Room > Draft then Room - Draft else 0);
             Takes :=
               Room > 0
@@ -793,7 +842,9 @@ package body Model_Runner.CLI.Execute.Support is
                                  and then Asked - Spared <= Room));
          end if;
 
-         if Takes then
+         if Named_Device then
+            null;
+         elsif Takes then
             Result.Backend := Model_Runner.Backend.Backend_Device;
          else
             Model_Runner.Backend.Device.Close;
