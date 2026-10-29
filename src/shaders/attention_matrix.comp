@@ -616,22 +616,18 @@ void main() {
                 }
             }
 
-#ifdef QREG
-            [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
-                uint d0 = t * 16u;
-                if (d0 >= dk) {
-                    break;
-                }
-#else
             //  Every sixteen of the staged width, unrolled, the keys read
             //  at the head's last sixteen past it -- against queries of
             //  nought there. A loop to the head's width waited out each
             //  read before it made the next: a round's check of four
             //  positions eight thousand deep spent fifteen microseconds a
-            //  tile on it.
+            //  tile on it. The queries held in registers stopped at the
+            //  head's width too, until qwen3-8b's prompt 16,214 long
+            //  attended its last batch in 58.7 ms that way, 56.8 this way.
+            //  All of a tile's keys read before the products spilled, and
+            //  the prompt read four times as long.
             [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
                 uint d0 = t * 16u;
-#endif
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
                     qm[BR / 16u];
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
