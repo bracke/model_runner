@@ -2717,6 +2717,8 @@ package body Model_Runner.Platform.Device.Products is
          Direct : Boolean);
    end Byte_Copier;
    type Byte_Copier_Access is access Byte_Copier;
+   --  Sixteen measured no better with the reads not waited for: Qwen3.6's
+   --  first batch 1.76 s against 1.84 over three pairs, its load slower.
    Copiers : array (1 .. 8) of Byte_Copier_Access;
 
    --  The copier a part goes to next, in turn, under Copying.
