@@ -861,7 +861,10 @@ package body Model_Runner.Platform.Device.Products is
    --  largest part of it that divides it and keeps the rows times the
    --  sixty-fours within eight, which is what a lane's registers hold --
    --  Qwen3.6's groups of eight 256-wide heads as four workgroups of two,
-   --  each reading the group's keys and values.
+   --  each reading the group's keys and values. The whole group on one,
+   --  its heads split over sixteen lanes a position, generated Qwen3.6
+   --  16,377 deep at 19.9 tokens a second where the few-position kernel's
+   --  pair generates 20.9-21.4.
    function Token_Rows (Group_Size, Head_Size : Natural) return Natural is
       Width : constant Natural := Head_Size / 64;
    begin

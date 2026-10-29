@@ -686,6 +686,9 @@ void main() {
             }
         }
 
+        //  The workgroup's barrier, though a subgroup's scores are its own
+        //  rows: its own lanes' alone read qwen3-8b's and gpt-oss-20b's
+        //  prompts 16,214 long as this does.
         barrier();
 
         //  The softmax. Every invocation takes one column of each of its
