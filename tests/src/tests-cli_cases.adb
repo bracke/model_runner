@@ -67,6 +67,7 @@ with Model_Runner.Output.Reasoning;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Backend.Device;
+with Device_Notes;
 with Model_Runner.GGUF;
 with Model_Runner.Tensors;
 with Model_Runner.Quantization;
@@ -13039,6 +13040,64 @@ package body Tests.CLI_Cases is
    -- The_Speed_Tool_Takes_Runs_Arithmetic --
    ---------------------------------------
 
+   --  `tests speed --device-memory 0` reads the weights where they lie, as
+   --  run's does: the tool took a nought as unnamed and measured the
+   --  engine's own share, so the README's "read where they lie" row was a
+   --  figure of the weights copied.
+   procedure The_Speed_Tool_Reads_Where_They_Lie_At_Nought
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package L renames Model_Runner.Llama;
+
+      Llama  : constant String := "obj/speed-share-llama.gguf";
+      Prompt : constant String := "obj/speed-share-prompt.txt";
+
+      Ran : Boolean := False;
+
+      function Shared (Named : Boolean) return Boolean is
+         Report : Speed_Run.Report;
+      begin
+         Speed_Run.Run
+           (Path         => Llama,
+            Prompt_Path  => Prompt,
+            Tokens       => 1,
+            Threads      => 1,
+            Batch        => 32,
+            Repack       => L.No_Repack,
+            Backend      => Model_Runner.Backend.Backend_Device,
+            Repeats      => 1,
+            Device_Bytes => 0,
+            Device_Named => Named,
+            Result       => Report);
+         Ran := Report.Ran;
+         return Model_Runner.Backend.Device.Shares_Host;
+      end Shared;
+   begin
+      Tiny_Model.Write (Llama, Room => 64);
+      declare
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Prompt);
+         Ada.Text_IO.Put_Line (Handle, "abab");
+         Ada.Text_IO.Close (Handle);
+      end;
+
+      declare
+         Named_Shares : constant Boolean := Shared (Named => True);
+      begin
+         --  No device to measure on: nothing to say.
+         if not Ran then
+            Device_Notes.Skip ("for the speed tool's weights where they lie");
+            return;
+         end if;
+         Assert (Named_Shares,
+                 "--device-memory 0 copied the weights to the device");
+      end;
+      Assert (not Shared (Named => False),
+              "an unnamed --device-memory read the weights where they lie");
+   end The_Speed_Tool_Reads_Where_They_Lie_At_Nought;
+
    --  `tests speed` tells the backends the arithmetic run would: the one
    --  named, or where none is, the one run takes for the model -- Gemma 2's
    --  mixed one. It told every model integers before it had read one, so
@@ -16259,6 +16318,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, The_Speed_Tool_Runs_What_It_Publishes'Access,
          "the speed tool runs the command it publishes figures for");
+      Register_Routine
+        (T, The_Speed_Tool_Reads_Where_They_Lie_At_Nought'Access,
+         "the speed tool reads the weights where they lie at --device-memory 0");
       Register_Routine
         (T, The_Speed_Tool_Takes_Runs_Arithmetic'Access,
          "the speed tool tells the backends the arithmetic run takes for "

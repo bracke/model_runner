@@ -160,6 +160,7 @@ package body Speed_Run is
       Timeline    : Boolean := False;
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
+      Device_Named : Boolean := False;
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
@@ -355,7 +356,9 @@ package body Speed_Run is
             declare
                Ready : Boolean;
             begin
-               Model_Runner.Backend.Device.Open (Ready, Device_Bytes);
+               Model_Runner.Backend.Device.Open
+                 (Ready, Device_Bytes,
+                  Share_Host => Device_Named and then Device_Bytes = 0);
                if not Ready then
                   Containers.Close (Container);
                   Shards.Close (Source);
@@ -376,7 +379,7 @@ package body Speed_Run is
            (Engine, Container, Source, Repack => Repack, Backend => Backend,
             Threads => Threads, Status => Status, Context => Context,
             Cache => Cache, Paged => Paged,
-            Fit_Required => Device_Bytes = 0,
+            Fit_Required => not Device_Named,
             Panel_Cache =>
               Model_Runner.CLI.Execute.Unasked_Panel_Cache (Path, No_Cache),
             Beside => Model_Runner.CLI.Execute.Draft_Room (Draft));
@@ -475,7 +478,7 @@ package body Speed_Run is
                Repack => Repack, Backend => Backend,
                Threads => Threads, Status => Status,
                Context => Context, Cache => Cache, Paged => Paged,
-               Fit_Required => Device_Bytes = 0,
+               Fit_Required => not Device_Named,
                Panel_Cache =>
                  Model_Runner.CLI.Execute.Unasked_Panel_Cache
                    (Draft_Path, No_Cache));

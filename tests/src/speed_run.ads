@@ -174,6 +174,9 @@ package Speed_Run is
    --    share. Named for the same model: its stacks are eleven gigabytes,
    --    the share is less, and whether they fit decides which path a
    --    mixture takes on the device.
+   --  @param Device_Named Whether --device-memory was named at all: named
+   --    as zero it reads the weights where they lie, as run's does, and
+   --    unnamed it is the engine's own share and the fit run asks for.
    --  @param Paged Whether the session keeps its context in pages, which
    --    the command does on a device and nowhere else unless told.
    --  @param Ignore_End Whether the run goes on past the end of the
@@ -219,6 +222,7 @@ package Speed_Run is
       Timeline    : Boolean := False;
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
+      Device_Named : Boolean := False;
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;

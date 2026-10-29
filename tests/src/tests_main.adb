@@ -3394,6 +3394,7 @@ begin
                   Timeline    => Timeline,
                   Context     => Whole ("--context-size"),
                   Device_Bytes => Bytes ("--device-memory"),
+                  Device_Named => Given ("--device-memory"),
 
                   --  Paged where the command pages: on a device, unless told
                   --  otherwise. The tool took --paged and dropped it, and opened
