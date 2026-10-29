@@ -669,8 +669,16 @@ package body Model_Runner.Platform.Device.Products is
       Value_Size : Natural) return Address
    is
       Rows : constant Natural := Positions * Natural'Max (1, Group_Size);
+      --  A head wider than Matrix_Wide_Head on two subgroups even where its
+      --  rows fit one: the pair split the values' tiles between them, and
+      --  a lone subgroup waited on every read of a tile one after another
+      --  with nothing beside it -- Qwen3.6-35B-A3B's token 30,549 deep
+      --  attended a layer in 1,630 us on one, 1,196 on two.
+      Wider : constant Boolean :=
+        Head_Size > Matrix_Wide_Head or else Value_Size > Matrix_Wide_Head;
       Many : constant Natural :=
-        (if Rows <= 16 then 1 elsif Rows <= 32 then 2 else 3);
+        (if Rows <= 16 and then not Wider then 1
+         elsif Rows <= 32 then 2 else 3);
       Width : constant Natural :=
         (if Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
          then 1
