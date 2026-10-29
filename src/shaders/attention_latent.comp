@@ -247,6 +247,19 @@ void main() {
         }
     }
 
+#ifdef SPLIT_DEPTH
+    //  This subgroup's quarter of the queries, held across the walk: read
+    //  out of the queries at every tile, each step of the scores waited on
+    //  a query's read as well as a key's. DeepSeek-Coder-V2-Lite 16,214
+    //  deep generated 25.4-25.6 tokens a second that way, 25.7-25.8 this.
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qheld[DEPTH_STEPS];
+    [[unroll]] for (uint d = 0u; d < DEPTH_STEPS; d++) {
+        coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
+        coopMatLoad (qf, q, q_direct + (sub * DEPTH_STEPS + d) * 16u, dk,
+                     gl_CooperativeMatrixLayoutRowMajor);
+        qheld[d] = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
+    }
+#endif
     for (uint base = walk_from; base <= walk_to; base += BC) {
         barrier ();
 
@@ -261,12 +274,7 @@ void main() {
             }
             [[unroll]] for (uint d = 0u; d < DEPTH_STEPS; d++) {
                 uint t = sub * DEPTH_STEPS + d;
-                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm;
-                if (direct) {
-                    coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
-                    coopMatLoad (qf, q, q_direct + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
-                    qm = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
-                }
+                coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qm = qheld[d];
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> km;
                     coopMatLoad (km, kvh, keys[n] + min (t * 16u, dk - 16u), shape.kv_width,
