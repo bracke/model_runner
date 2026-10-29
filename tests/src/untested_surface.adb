@@ -78,9 +78,14 @@ package body Untested_Surface is
    --  every other model the suite loads; the second model's fitting, which
    --  the split mixture's tests load, reads it.
    --
-   --  Not public. Entry_Point is declared in the private part of
-   --  Platform.Device, for its children; the check reads the whole of a
+   --  Not public. Entry_Point and Is_Live are declared in the private part
+   --  of Platform.Device, for its children; the check reads the whole of a
    --  specification and takes it for public.
+   --
+   --  Asked of the device too: Fetches_Cache says whether the engine made
+   --  the kernel Add_Fetch's step runs on, which a device may refuse; the
+   --  backend asks it before it lays an absorbed latent out expanded
+   --  (Expand_Latent), and that test runs whichever way it answers.
    --
    --  Private to the command line. Execute.Support and Execute.Acquisition
    --  decide how a run runs -- its backend, workers, arithmetic, paging,
@@ -188,7 +193,9 @@ package body Untested_Surface is
          | "Has_Sized_Subgroups"
          | "Has_Integer_Dot"
          | "Shares_Memory"
-         | "Room_Beside";
+         | "Room_Beside"
+         | "Is_Live"
+         | "Fetches_Cache";
    end Is_Untested;
 
    -----------

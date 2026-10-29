@@ -3625,6 +3625,16 @@ package body Tests.Framework_Cases is
                        = Rp.References_To (Found, "Parser.Next"),
               "the kept graph did not read back whole");
 
+      --  And the kept graph's uses of a name, asked of the store as the
+      --  repository commands ask them: Parser.Next's references are there.
+      declare
+         function Is_Next (Name : String) return Boolean
+         is (Name = "Parser.Next");
+      begin
+         Assert (not Rp.Uses_Of (Store, Kept, Is_Next'Access).Is_Empty,
+                 "the kept graph's uses of Parser.Next read back as none");
+      end;
+
       --  Past a record's size, its relations kept in buckets by the file
       --  that found them: read back whole; kept again unchanged, no bucket
       --  written; a file added, only the buckets its relations fall in; a

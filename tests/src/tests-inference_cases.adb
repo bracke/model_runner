@@ -15480,6 +15480,30 @@ package body Tests.Inference_Cases is
             Assert (L.Values_In_Keys
                       (L.Config (Under.Ready), L.Precision (Live)) = Absorbed,
                     "the values were not kept as the reading says");
+            --  And what the planning counts of it: no values of their own
+            --  where they are the keys' rows, the value head's width where
+            --  they are not; and the heads either side of the attention
+            --  as wide as the projections make them.
+            declare
+               Settings : constant L.Configuration := L.Config (Under.Ready);
+            begin
+               Assert (L.Stored_Values (Settings, L.Precision (Live))
+                       = (if Absorbed then 0
+                          else Settings.KV_Heads * Settings.Value_Size),
+                       "a position's values were counted"
+                       & Natural'Image
+                           (L.Stored_Values (Settings, L.Precision (Live)))
+                       & " elements");
+               Assert (L.Head_Query_Width (Settings)
+                       = (if Settings.Latent_Attention then Settings.MLA_Key
+                          else Settings.Head_Size)
+                       and then L.Head_Blend_Width (Settings)
+                                = (if Settings.Latent_Attention
+                                   then Settings.MLA_Value
+                                   else Settings.Value_Size),
+                       "a head's width either side of the attention is not"
+                       & " its projection's");
+            end;
             L.Evaluate_Batch (Live, Under.Ready, Prompt, Ignore, Status => Status);
             Assert (E.Is_Ok (Status), "the batch failed");
 

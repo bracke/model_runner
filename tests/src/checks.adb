@@ -572,7 +572,14 @@ package body Checks is
                Part : constant String :=
                  Contents (Ada.Directories.Containing_Directory (Relative) & "/" & To_String (Names (I)));
             begin
-               if Project_Tools.Text.Starts_With (Part, "separate (") then
+               --  A subunit may name its own context before it says whose
+               --  it is: run_with's "with" lines kept its Publish of
+               --  Prompt_Rendered out of the text, and the stage was said
+               --  to be published by nothing.
+               if Project_Tools.Text.Starts_With (Part, "separate (")
+                 or else Project_Tools.Text.Contains
+                           (Part, Character'Val (10) & "separate (")
+               then
                   Append (Whole, Part);
                end if;
             end;
@@ -6750,6 +6757,57 @@ package body Checks is
                   & "compiled; compile it and run 'tests shader' again with "
                   & "every shader named");
          end if;
+      end;
+
+      --  And the shaders added since this list was last walked, each
+      --  compilation of a source against the source: the cache's fetched
+      --  place, the latent's fold, the latent's three attentions and the
+      --  token's two.
+      declare
+         type Compiled is record
+            Source : access constant String;
+            Words  : Interfaces.Unsigned_64;
+         end record;
+
+         Place_Fetch : aliased constant String := "place.comp";
+         Fold        : aliased constant String := "fold.comp";
+         Latent      : aliased constant String := "attention_latent.comp";
+         Token       : aliased constant String := "attention_token.comp";
+
+         Every : constant array (Positive range <>) of Compiled :=
+           [(Place_Fetch'Access, Model_Runner.Shaders.Place_Fetch_Digest),
+            (Fold'Access, Model_Runner.Shaders.Fold_Digest),
+            (Latent'Access,
+             Model_Runner.Shaders.Attend.Attention_Latent_Digest),
+            (Latent'Access,
+             Model_Runner.Shaders.Attend.Attention_Latent_Batch_Digest),
+            (Latent'Access,
+             Model_Runner.Shaders.Attend.Attention_Latent_Split_Digest),
+            (Token'Access,
+             Model_Runner.Shaders.Attend.Attention_Token_Digest),
+            (Token'Access,
+             Model_Runner.Shaders.Attend.Attention_Token_Packed_Digest)];
+      begin
+         for Each of Every loop
+            declare
+               Found : Boolean;
+
+               Digest : constant Interfaces.Unsigned_64 :=
+                 Shader_Generation.Source_Digest
+                   (Root & "/src/shaders/" & Each.Source.all, Found);
+            begin
+               Result.Performed := Result.Performed + 1;
+
+               if not Found then
+                  Fail ("src/shaders/" & Each.Source.all & " is missing, "
+                        & "and the words compiled from it are committed");
+               elsif Digest /= Each.Words then
+                  Fail ("src/shaders/" & Each.Source.all & " has changed "
+                        & "since it was compiled; compile it and run "
+                        & "'tests shader' again with every shader named");
+               end if;
+            end;
+         end loop;
       end;
 
       --  And the small steps of an RWKV6 block.

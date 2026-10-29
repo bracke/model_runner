@@ -35,6 +35,9 @@ package Model_Runner.Draft_Policy is
    --  token than they keep.
    Large_Dense_Bytes : constant Float := 6.0 * 1024.0 ** 3;
 
+   --  @param Experts The model's experts, nought for a dense one.
+   --  @param Token_Bytes What a generated token reads of its weights.
+   --  @return True where the block's rounds adapt.
    function Next_Adapts (Experts : Natural; Token_Bytes : Float) return Boolean
    is (Experts > 0 or else Token_Bytes < Large_Dense_Bytes);
 

@@ -1038,6 +1038,8 @@ package body Model_Runner.Framework.Retrieval is
          end;
       end if;
    exception
+      --  The last guard finalization must have, as said above: nothing
+      --  here allocates or reads, and a raise out of it ends the program.
       when others =>
          null;
    end Finalize;
@@ -1299,6 +1301,10 @@ package body Model_Runner.Framework.Retrieval is
                                                                      + Natural'Min (Message'Length, 120) - 1)
                                            else "")));
                   exception
+                     --  A failure the index cannot note -- its record
+                     --  would not be made -- leaves the file unnoted, and
+                     --  the next pass reads it again; the claim is given
+                     --  back above whatever happens here.
                      when others =>
                         null;
                   end;

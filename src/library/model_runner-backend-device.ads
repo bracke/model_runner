@@ -876,6 +876,10 @@ package Model_Runner.Backend.Device is
    function Attends_Latent_Heads
      (Head_Size, Value_Size, Group_Size : Natural) return Boolean;
 
+   --  The widest value head the packed cache's kernel attends over on the
+   --  device, nought where no device is open.
+   --
+   --  @return Elements a value head may hold.
    function Attention_Head_Room return Natural;
 
    --  Attend over a cache kept packed on the device -- a byte an element

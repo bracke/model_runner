@@ -4893,6 +4893,8 @@ package body Model_Runner.Framework.Repository is
                begin
                   Stores.Close (Store);
                exception
+                  --  Closing a store whose read already failed: nothing
+                  --  is kept either way, and the next asker reads anew.
                   when others =>
                      null;
                end;
@@ -4930,6 +4932,9 @@ package body Model_Runner.Framework.Repository is
          end select;
       end if;
    exception
+      --  Warming is a head start, never a need: a store that will not open
+      --  or a warmer that will not take it leaves the first asker to read
+      --  the graph itself.
       when others =>
          null;
    end Warm_Up;

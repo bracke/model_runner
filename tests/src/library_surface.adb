@@ -236,7 +236,31 @@ package body Library_Surface is
       --  Whether a denoiser's panels came from the panel cache. The command
       --  runs the same either way; a caller timing an open, or a test,
       --  asks which it was.
-      new String'("Panels_Mapped")];
+      new String'("Panels_Mapped"),
+
+      --  A kept graph's record bound, so the suite can keep a small graph
+      --  in parts: a graph in parts is otherwise tens of megabytes.
+      new String'("Keep_Parts_At_Most"),
+
+      --  The search index's dictionary and its kept changes, counted for
+      --  the tests that a file gone lets its terms and changes go.
+      new String'("Indexed_Terms"),
+      new String'("Indexed_Changes"),
+
+      --  The index's waits and its reading order, set short or on for the
+      --  tests of a failed file's retry, a claim given up and a tree read
+      --  by path; every tree's files wait alike otherwise.
+      new String'("Retry_Indexing_After"),
+      new String'("Wait_For_Claims_At_Most"),
+      new String'("Read_By_Path"),
+
+      --  The files read since a pass began, which the retrieval benchmark
+      --  and the tests of a search's cost take the difference of.
+      new String'("Files_Read"),
+
+      --  Whether the drafting block's rows are on the device, for the test
+      --  that a rewind puts them out of step.
+      new String'("Drafts_On_Device")];
 
    ---------------
    -- Is_Listed --

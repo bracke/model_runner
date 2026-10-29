@@ -717,9 +717,14 @@ package Model_Runner.Llama is
    --  as the output projection reads it: Head_Size and Value_Size, but for
    --  absorbed latent attention, whose attention reads the latent and whose
    --  heads are MLA_Key and MLA_Value wide on either side of it.
+   --
+   --  @param Settings The model's configuration.
+   --  @return Elements a query head holds.
    function Head_Query_Width (Settings : Configuration) return Natural
    is (if Settings.Latent_Attention then Settings.MLA_Key else Settings.Head_Size);
 
+   --  @param Settings The model's configuration.
+   --  @return Elements a head's blend holds.
    function Head_Blend_Width (Settings : Configuration) return Natural
    is (if Settings.Latent_Attention then Settings.MLA_Value else Settings.Value_Size);
 
