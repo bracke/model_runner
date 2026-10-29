@@ -259,6 +259,9 @@ layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };
 //  memory is what bounds how many subgroups a workgroup has -- how many
 //  queries read each tile of keys and values. A head of 256 keeps it: its
 //  accumulators already fill the registers.
+//  Held for a head of 256 too, Gemma-3-4b's prompt 16,214 long read
+//  575-577 -> 581-582 tokens a second and Qwen3.6-35B-A3B generated
+//  21.4 -> 18.6 at the same depth.
 #ifndef WIDER_HEAD
 #define QREG
 #endif
@@ -277,6 +280,11 @@ shared uint rowmap[256];
 
 //  The weights, in what the instruction reads.
 shared float16_t ps[SUBS * BR * BC];
+
+//  Not the keys: a tile of them staged once for a workgroup's subgroups,
+//  where each reads its own out of the cache, read qwen3-8b's prompt
+//  16,214 long at 160 tokens a second against 194 on four subgroups --
+//  and on eight it is past the 64 KB a workgroup may have.
 
 //  A few at once, the rows each subgroup answers: the positions times
 //  the group, dealt out evenly, so that where they do not fill the
@@ -632,6 +640,9 @@ void main() {
             //  attended its last batch in 58.7 ms that way, 56.8 this way.
             //  All of a tile's keys read before the products spilled, and
             //  the prompt read four times as long.
+            //  Two steps of keys read before their products, on the staged
+            //  queries' compilation, read Qwen3.6-35B-A3B's token and
+            //  DeepSeek-Coder-V2-Lite's prompt 16,214 deep as one step does.
             [[unroll]] for (uint t = 0u; t < DM / 16u; t++) {
                 uint d0 = t * 16u;
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA>
