@@ -1192,7 +1192,7 @@ package body Model_Runner.Platform.Device.Products is
 
    --  Queries a deep workgroup answers for a head of this shape.
    function Deep_Queries (Head_Size, Value_Size : Natural) return Natural
-   is (if Head_Size <= Matrix_Wide_Head and then Value_Size <= Matrix_Wide_Head
+   is (if Head_Size <= Matrix_Mid_Head and then Value_Size <= Matrix_Mid_Head
        then Matrix_Deep_Queries_Held else Matrix_Deep_Queries);
 
    function Attend_Groups
@@ -5586,9 +5586,9 @@ package body Model_Runner.Platform.Device.Products is
             Request.Stage.Specialized := Told'Address;
 
             Deep (Item.Attend_Matrix, Item.Matrix_Deep_Attend);
-            Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep_Attend);
             Deep (Item.Attend_Matrix_Mid, Item.Matrix_Mid_Deep_Attend);
             Told.Values := Wider'Address;
+            Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep_Attend);
             Deep (Item.Attend_Matrix_Wider, Item.Matrix_Wider_Deep_Attend);
 
             Request.Stage.Specialized := Null_Handle;
