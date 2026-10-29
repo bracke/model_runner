@@ -564,6 +564,12 @@ void main() {
     uint pair0 = sub & ~1u;
     uint half_of = sub & 1u;
 
+    //  A half's tiles of the values: half of the value head's own width,
+    //  not of the compilation's. Halved at the compilation's 256, a value
+    //  head of 128 -- DeepSeek's expanded latent, its keys 192 wide -- was
+    //  all the first subgroup's and none of the second's.
+    uint pair_half = (shape.value_size + 31u) / 32u;
+
     uint mine_rows[8];
     {
         coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>
@@ -770,7 +776,7 @@ void main() {
 
             [[unroll]] for (uint m = 0u; m < 2u; m++) {
                 [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
-                    if ((half_of * (DM / 32u) + t) * 16u < dv) {
+                    if (t < pair_half && (half_of * pair_half + t) * 16u < dv) {
                         for (int e = 0; e < pacc[m * (DM / 32u) + t].length(); ++e) {
                             pacc[m * (DM / 32u) + t][e] *= scale_of[m][e];
                         }
@@ -801,7 +807,7 @@ void main() {
                                 gl_MatrixUseB> vm[VALUES_AT_ONCE];
 
                         [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
-                            uint tg = half_of * (DM / 32u) + g + t;
+                            uint tg = half_of * pair_half + g + t;
 
                             coopMatLoad (vm[t], vh,
                                          place_of (base + n0, shape.v_base,
@@ -812,7 +818,8 @@ void main() {
                         }
 
                         [[unroll]] for (uint t = 0u; t < VALUES_AT_ONCE; t++) {
-                            if ((half_of * (DM / 32u) + g + t) * 16u < dv) {
+                            if (g + t < pair_half
+                                && (half_of * pair_half + g + t) * 16u < dv) {
                                 [[unroll]] for (uint m = 0u; m < 2u; m++) {
                                     pacc[m * (DM / 32u) + g + t] =
                                         coopMatMulAdd (pm[m], vm[t],
@@ -823,8 +830,8 @@ void main() {
                     }
                 } else {
                     [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
-                        uint tg = half_of * (DM / 32u) + t;
-                        if (tg * 16u < dv) {
+                        uint tg = half_of * pair_half + t;
+                        if (t < pair_half && tg * 16u < dv) {
                             coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
                                     gl_MatrixUseB> vm;
 
@@ -930,10 +937,10 @@ void main() {
     //  head does not have.
     [[unroll]] for (uint m = 0u; m < OUT_M; m++) {
         [[unroll]] for (uint t = 0u; t < OUT_T; t++) {
-            uint tg = PAIRED ? half_of * OUT_T + t : t;
+            uint tg = PAIRED ? half_of * pair_half + t : t;
             //  Uniform across the workgroup, for the barriers: a pair's
             //  halves may differ in whether their components are real.
-            if (t * 16u < dv) {
+            if (PAIRED ? t < pair_half : t * 16u < dv) {
                 bool real = tg * 16u < dv;
 
                 if (real) {
