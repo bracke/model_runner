@@ -29,6 +29,10 @@ with Model_Runner.Numerics;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Device.Products;
+with Model_Runner.Platform.Mapping;
+with Ada.Directories;
+with Ada.Streams.Stream_IO;
+with System.Storage_Elements;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Shares;
 with Model_Runner.Tensors;
@@ -4206,6 +4210,161 @@ package body Tests.Backend_Cases is
       Devices.Close (Opened);
       Devices.Close (Held);
    end A_Fold_Says_What_The_Rows_Say;
+
+   --  Matrices kept from a file's mapping are read from the file past the
+   --  host's cache, and those reads are not waited for as each matrix is
+   --  asked: the work is handed to the device once they are in. Three of
+   --  two megabytes each, all asked before one submission, answer as
+   --  their rows say -- a submission that went before its reads were in
+   --  would have read the device's memory before the file reached it.
+   procedure Matrices_Read_Behind_Are_In_Before_The_Work
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Map renames Model_Runner.Platform.Mapping;
+      use type System.Address;
+      use System.Storage_Elements;
+
+      Path    : constant String := "obj/read-behind-test.bin";
+      Rows    : constant := 2048;
+      Columns : constant := 256;
+      Count   : constant := 2;
+      Each    : constant := Rows * Columns;
+      Lead    : constant := 4096 + 64;
+      Matrices : constant := 3;
+
+      --  Six megabytes: not the stack's.
+      type Values_Access is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (N.Real_Array, Values_Access);
+      Values : Values_Access :=
+        new N.Real_Array'
+          ([for I in 0 .. Matrices * Each - 1 =>
+              N.Real ((I * 7 + I / 977) mod 13) / 13.0 - 0.45]);
+      Input : constant N.Real_Array (0 .. Count * Columns - 1) :=
+        [for I in 0 .. Count * Columns - 1 =>
+           N.Real ((I * 5) mod 11) / 11.0 - 0.5];
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Available : Boolean;
+      Region : Map.Region;
+   begin
+      declare
+         use Ada.Streams.Stream_IO;
+         Output : File_Type;
+         Padding : constant Ada.Streams.Stream_Element_Array (1 .. Lead) :=
+           [others => 0];
+         Words : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Values'Length * 4))
+           with Import, Address => Values (Values'First)'Address;
+      begin
+         Create (Output, Out_File, Path);
+         Write (Output, Padding);
+         Write (Output, Words);
+         Close (Output);
+      end;
+
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         Ada.Directories.Delete_File (Path);
+         Free (Values);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if Ready then
+         Products.Open (Engine, Opened, Ready);
+      end if;
+      Map.Open (Region, Path, Available);
+      if not Ready or else not Available then
+         Device_Notes.Skip ("for matrices read from a file's mapping");
+         if Available then
+            Map.Close (Region);
+         end if;
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Held);
+         Ada.Directories.Delete_File (Path);
+         Free (Values);
+         return;
+      end if;
+
+      --  The same products once from the process's own memory first, so
+      --  that the kernels are made and the submission from the file
+      --  follows its last matrix as closely as it ever does.
+      declare
+         Steps  : Products.Sequence;
+         Added, Ok, Halted : Boolean;
+         Answer : N.Real_Array (0 .. Matrices * Count * Rows - 1);
+      begin
+         Products.Open_Sequence (Steps);
+         for M in 0 .. Matrices - 1 loop
+            Products.Add_Product
+              (Steps, Values (Values'First + N.Element_Count (M * Each))'Address,
+               B.Byte_Count (Each * 4), 0, Products.Values_F32, Rows, Columns,
+               Added, Kept => False);
+            Assert (Added, "a matrix from memory was refused");
+         end loop;
+         Products.Run (Engine, Steps, Input, Count, Answer, Ok, Halted);
+         Assert (Ok, "the matrices from memory would not run");
+      end;
+
+      --  And each read from the file slowed past the device's start.
+      Ada.Environment_Variables.Set ("MR_SLOW_COPY", "1");
+      declare
+         Steps  : Products.Sequence;
+         Added, Ok, Halted : Boolean;
+         Answer : N.Real_Array (0 .. Matrices * Count * Rows - 1);
+         Worst  : N.Real := 0.0;
+      begin
+         Products.Open_Sequence (Steps);
+         for M in 0 .. Matrices - 1 loop
+            declare
+               At_File : constant System.Address :=
+                 Map.Base (Region) + Storage_Offset (Lead + M * Each * 4);
+            begin
+               Products.Add_Product
+                 (Steps, At_File, B.Byte_Count (Each * 4), 0,
+                  Products.Values_F32, Rows, Columns, Added, Key => At_File);
+               Assert (Added, "a matrix from the mapping was refused");
+            end;
+         end loop;
+         Products.Run (Engine, Steps, Input, Count, Answer, Ok, Halted);
+         Ada.Environment_Variables.Clear ("MR_SLOW_COPY");
+         Assert (Ok, "the matrices from the mapping would not run");
+
+         for M in N.Element_Count range 0 .. Matrices - 1 loop
+            for P in N.Element_Count range 0 .. Count - 1 loop
+               for R in N.Element_Count range 0 .. Rows - 1 loop
+                  declare
+                     Sum : N.Real := 0.0;
+                  begin
+                     for C in N.Element_Count range 0 .. Columns - 1 loop
+                        Sum := Sum + Values (M * Each + R * Columns + C)
+                                     * Input (P * Columns + C);
+                     end loop;
+                     Worst := N.Real'Max
+                       (Worst, abs (Answer ((M * Count + P) * Rows + R) - Sum)
+                               / (1.0 + abs Sum));
+                  end;
+               end loop;
+            end loop;
+         end loop;
+         Assert (Worst <= 1.0e-4,
+                 "a matrix read from the file answers" & N.Real'Image (Worst)
+                 & " away from its rows");
+      end;
+
+      Products.Close (Engine);
+      Map.Close (Region);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+      Ada.Directories.Delete_File (Path);
+      Free (Values);
+   end Matrices_Read_Behind_Are_In_Before_The_Work;
 
    --  An absorbed latent's prompt, laid out a
    --  head at a time into the room it is given and attended there
@@ -14510,6 +14669,10 @@ package body Tests.Backend_Cases is
         (T, Whole_Layer_Says_What_Two_Halves_Say'Access,
          "a layer named as one sequence says what the same layer named as "
          & "two halves says");
+      Register_Routine
+        (T, Matrices_Read_Behind_Are_In_Before_The_Work'Access,
+         "matrices read from a file's mapping are in before the work that "
+         & "reads them");
       Register_Routine
         (T, A_Fold_Says_What_The_Rows_Say'Access,
          "a gather read down its columns says what its rows say, Q4_K, "

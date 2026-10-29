@@ -1,4 +1,5 @@
 with Model_Runner.Platform.Pages;
+with Model_Runner.Platform.Mapped_Ranges;
 with Ada.Environment_Variables;
 with Ada.Real_Time;
 with Ada.Unchecked_Conversion;
@@ -2559,6 +2560,9 @@ package body Model_Runner.Platform.Device.Products is
       end;
    end Take_Host_Memory;
 
+   --  Wait until every part of every copy into the device's memory is in.
+   procedure Settle_Copies;
+
    procedure Give_Back_Buffer
      (Item : in out Engine; Buffer : in out Address; Memory : in out Address)
    is
@@ -2566,6 +2570,9 @@ package body Model_Runner.Platform.Device.Products is
         To_Destroy (Point ("vkDestroyBuffer"));
       Free : constant Destroy_Call := To_Destroy (Point ("vkFreeMemory"));
    begin
+      --  Not from under a copy still on its way into it.
+      Settle_Copies;
+
       if Buffer /= Null_Handle and then Destroy /= null
         and then Item.Logical /= Null_Handle
       then
@@ -2687,6 +2694,8 @@ package body Model_Runner.Platform.Device.Products is
    is
       Unmap : constant Unmap_Call := To_Unmap (Point ("vkUnmapMemory"));
    begin
+      Settle_Copies;
+
       if Mapped /= Null_Handle
         and then Memory /= Null_Handle
         and then Unmap /= null
@@ -2710,6 +2719,9 @@ package body Model_Runner.Platform.Device.Products is
    type Byte_Copier_Access is access Byte_Copier;
    Copiers : array (1 .. 8) of Byte_Copier_Access;
 
+   --  The copier a part goes to next, in turn, under Copying.
+   Next_Copier : Positive := 1;
+
    --  One copy at a time through them, and its parts counted home.
    protected Copying is
       entry Seize;
@@ -2718,12 +2730,18 @@ package body Model_Runner.Platform.Device.Products is
       Held : Boolean := False;
    end Copying;
 
+   --  Parts are counted out and home across copies: a read from the file
+   --  is not waited for where it is asked (Write_Bytes), but before the
+   --  device is handed work (Hand_Over) and before any memory goes.
    protected Copy_Count is
       procedure Expect (Parts : Natural);
       --  A part done; Failed where it could not be copied.
       procedure One_Done (Failed : Boolean := False);
-      --  Every part done; Failed where any could not be.
+      --  Every part done; Failed where any since the last asking could
+      --  not be.
       entry Finished (Failed : out Boolean);
+      --  Every part done, the failures left for Finished to tell.
+      entry Quiet;
    private
       Left : Natural := 0;
       Bad  : Boolean := False;
@@ -2744,8 +2762,7 @@ package body Model_Runner.Platform.Device.Products is
    protected body Copy_Count is
       procedure Expect (Parts : Natural) is
       begin
-         Left := Parts;
-         Bad := False;
+         Left := Left + Parts;
       end Expect;
 
       procedure One_Done (Failed : Boolean := False) is
@@ -2759,8 +2776,19 @@ package body Model_Runner.Platform.Device.Products is
       entry Finished (Failed : out Boolean) when Left = 0 is
       begin
          Failed := Bad;
+         Bad := False;
       end Finished;
+
+      entry Quiet when Left = 0 is
+      begin
+         null;
+      end Quiet;
    end Copy_Count;
+
+   procedure Settle_Copies is
+   begin
+      Copy_Count.Quiet;
+   end Settle_Copies;
 
    task body Byte_Copier is
       To, Source : System.Address;
@@ -2790,6 +2818,16 @@ package body Model_Runner.Platform.Device.Products is
             declare
                Read : Boolean := False;
             begin
+               --  A read slowed past anything a device takes to start its
+               --  work, which is how the work is checked to wait for it:
+               --  a drive is otherwise quick enough to hide a submission
+               --  that went first.
+               if Past_Cache
+                 and then Ada.Environment_Variables.Exists ("MR_SLOW_COPY")
+               then
+                  delay 0.05;
+               end if;
+
                --  A file's mapping from the file itself, in large reads
                --  past the host's cache, where the host has them: three
                --  times what the mapping's faults read. See Read_Direct.
@@ -2849,6 +2887,17 @@ package body Model_Runner.Platform.Device.Products is
          Room : Model_Runner.Bytes.Byte_Array (Values'Range)
            with Import, Address => Where;
          Least_Piece : constant := 131_072;
+         --  A read from the file is not waited for here. The device is
+         --  handed nothing until it is done (Hand_Over), and meanwhile
+         --  the next matrix's reads go out beside it: one matrix at a time
+         --  kept fewer than three reads in flight, where the drive answers
+         --  eight together at nearly four times the speed. Only from a
+         --  file's mapping, which stands while the model is open; any
+         --  other source may be gone once this returns.
+         Behind : constant Boolean :=
+           Direct
+           and then Model_Runner.Platform.Mapped_Ranges.Holds
+                      (Values'Address, Values'Length);
          Ways : constant Positive :=
            (if Direct
             then Positive'Max
@@ -2881,12 +2930,15 @@ package body Model_Runner.Platform.Device.Products is
                      Hi : constant Model_Runner.Bytes.Byte_Count :=
                        Model_Runner.Bytes.Byte_Count'Min (Values'Last, Lo + Step - 1);
                   begin
-                     Copiers (K).Go
+                     Copiers (Next_Copier).Go
                        (Room (Lo)'Address, Values (Lo)'Address,
                         (if Hi >= Lo then Hi - Lo + 1 else 0), Direct);
+                     Next_Copier := Next_Copier mod Copiers'Length + 1;
                   end;
                end loop;
-               Copy_Count.Finished (Failed);
+               if not Behind then
+                  Copy_Count.Finished (Failed);
+               end if;
                Copying.Release;
             exception
                when others =>
@@ -6185,6 +6237,7 @@ package body Model_Runner.Platform.Device.Products is
       end Give_Back;
    begin
       Instance_Of := Item.Instance;
+      Settle_Copies;
 
       --  Nothing may be in flight: what follows destroys the fences a
       --  submission is still holding, and gives back the memory it is still
@@ -8295,8 +8348,16 @@ package body Model_Runner.Platform.Device.Products is
       Buffer_Handle : aliased Address := Item.Buffer;
       Fence_Handle  : aliased Address := Item.Fence;
       Request       : aliased Submit_Info;
+      Torn          : Boolean;
    begin
       Ok := False;
+
+      --  The matrices this work reads are in before it is handed over:
+      --  their reads from the file were not waited for as they were asked.
+      Copy_Count.Finished (Torn);
+      if Torn then
+         return;
+      end if;
 
       if Submit = null or else Reset = null then
          return;
