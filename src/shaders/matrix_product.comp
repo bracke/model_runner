@@ -1929,6 +1929,11 @@ void main() {
     //  the vectors to hide a load behind, read qwen3-8b's prompt of 1289
     //  at 293 tokens a second this way against 314 without, the sixteen
     //  more registers costing them waves.
+    //  The wider tile too: a prompt of 512 at 356.6 against 384.7. Its
+    //  decode is a fifth of a short prompt's time -- left out (the answer
+    //  then wrong) the prompt read 484 -- and the activations' reads a
+    //  tenth (429), but at 128 registers and 54 KB of shared memory it
+    //  runs four waves a unit, and a register more is a wave fewer.
 #ifdef LISTED
     bool q4k = shape.format == FMT_Q4_K;
 #else
