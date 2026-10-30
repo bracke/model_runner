@@ -755,7 +755,10 @@ package body Model_Runner.Generation is
       --  41.8 against 38.6 at 4,093 positions and 37.6 against 36.3 at
       --  16,377, but 41.4 against 47.8 and 32.1 against 36.9 on short
       --  prompts; adapting from four past 2,048 positions, 37.5 against
-      --  38.6 at 4,093 and 37.0 against 36.2 at 16,377.
+      --  38.6 at 4,093 and 37.0 against 36.2 at 16,377; stepping down one
+      --  at a time from past the length asked for, rather than back to
+      --  it, 37.9 against 38.8 at 4,093, 48.8 against 51.2 on a short
+      --  prompt, 36.4 against 38.6 on a story.
       Round_Draft : Natural :=
         Natural'Min (Item.Draft_Tokens, Largest_Draft);
 
