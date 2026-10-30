@@ -668,6 +668,30 @@ void main() {
             held[ch][i] = 0.0;
         }
     }
+
+    //  Each of this invocation's rows' first and last position, and the
+    //  range every row of the subgroup sees, as in place above: gpt-oss-20b's
+    //  prompt 16,213 long read 410.8 tokens a second against 416.4.
+    uint row_fi[BR / 2u];
+    uint row_la[BR / 2u];
+    uint all_fi = 0u;
+    uint all_la = ~0u;
+
+    [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
+        uint slot = row_slot (sub, block, (lane >> 5u) + 2u * i);
+        uint la   = shape.last + (causal != 0u ? slot : 0u);
+        uint fi   = shape.first;
+
+        if (shape.window > 0u) {
+            fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
+        }
+        row_fi[i] = fi;
+        row_la[i] = la;
+        all_fi = max (all_fi, fi);
+        all_la = min (all_la, la);
+    }
+    all_fi = subgroupMax (all_fi);
+    all_la = subgroupMin (all_la);
 #endif
 
     for (uint base = walk_from; base <= walk_to; base += BC) {
@@ -831,6 +855,9 @@ void main() {
         //  sixteen rows, and the thirty-two that share a row agree on its
         //  largest score and the sum of its weights through a reduction
         //  over their half of the subgroup.
+        bool inside = base >= all_fi && base + BC - 1u <= all_la
+                      && slope == 0.0 && shape.cap == 0.0;
+
         [[unroll]] for (uint i = 0u; i < BR / 2u; i++) {
             //  A few at once, the two rows past a subgroup's share are
             //  none of the batch's, and what they weigh is written out
@@ -842,13 +869,8 @@ void main() {
 
             uint r = (lane >> 5u) + 2u * i;
 
-            uint slot = row_slot (sub, block, r);
-            uint la   = shape.last + (causal != 0u ? slot : 0u);
-            uint fi   = shape.first;
-
-            if (shape.window > 0u) {
-                fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
-            }
+            uint la = row_la[i];
+            uint fi = row_fi[i];
 
             //  This invocation's columns of the row: one where a tile is
             //  as wide as the half of a subgroup that shares the row, and
@@ -856,6 +878,14 @@ void main() {
             float mine[BC / 32u];
             float best = -1.0 / 0.0;
 
+            if (inside) {
+                [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
+                    float score = ss[SS0 + r * BC + c * 32u + col] * shape.scale;
+
+                    mine[c] = score;
+                    best = max (best, score);
+                }
+            } else
             [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
                 uint  at    = c * 32u + col;
                 uint  step  = base + at;
@@ -868,7 +898,8 @@ void main() {
                         uint asking =
                           causal != 0u
                           ? la
-                          : shape.last - (shape.positions - 1u) + slot;
+                          : shape.last - (shape.positions - 1u)
+                            + row_slot (sub, block, r);
 
                         score -=
                           slope * float (abs (int (step) - int (asking)));
