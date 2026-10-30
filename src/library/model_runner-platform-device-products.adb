@@ -723,7 +723,8 @@ package body Model_Runner.Platform.Device.Products is
      (Item       : Engine;
       Positions  : Natural;
       Head_Size  : Natural;
-      Value_Size : Natural) return Address
+      Value_Size : Natural;
+      Causal     : Boolean := True) return Address
    is (if Item.Exact_Attention
          or else Positions
                  < (if Item.Copy_Only then Query_Block else Matrix_Queries)
@@ -738,6 +739,11 @@ package body Model_Runner.Platform.Device.Products is
        then Item.Matrix_Mid_Deep_Attend
        elsif Head_Size <= Matrix_Wide_Head
          and then Value_Size <= Matrix_Wide_Head
+         and then not Causal
+         and then Item.Matrix_Wide_Deep8_Attend /= Null_Handle
+       then Item.Matrix_Wide_Deep8_Attend
+       elsif Head_Size <= Matrix_Wide_Head
+         and then Value_Size <= Matrix_Wide_Head
        then Item.Matrix_Wide_Deep_Attend
        elsif Head_Size <= Matrix_Wider_Head
          and then Value_Size <= Matrix_Wider_Head
@@ -749,11 +755,12 @@ package body Model_Runner.Platform.Device.Products is
       Positions  : Natural;
       Head_Size  : Natural;
       Value_Size : Natural;
-      Span       : Natural := 0) return Address
+      Span       : Natural := 0;
+      Causal     : Boolean := True) return Address
    is (if Span >= Deep_Span
-         and then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
+         and then Deep_Kernel (Item, Positions, Head_Size, Value_Size, Causal)
                   /= Null_Handle
-       then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
+       then Deep_Kernel (Item, Positions, Head_Size, Value_Size, Causal)
        elsif Item.Exact_Attention
          --  A cache kept as its copy has no binary32 rows for the tiled
          --  kernel that takes eight to fifteen queries otherwise, so the
@@ -1007,10 +1014,12 @@ package body Model_Runner.Platform.Device.Products is
       V_Base     : Model_Runner.Numerics.Element_Count := 0;
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
-      Span       : Natural := Bundle_Least) return Address
+      Span       : Natural := Bundle_Least;
+      Causal     : Boolean := True) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
-       then Matrix_Kernel (Item, Positions, Head_Size, Value_Size, Span)
+       then Matrix_Kernel (Item, Positions, Head_Size, Value_Size, Span,
+                           Causal)
        elsif not Rounding
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
@@ -1197,9 +1206,18 @@ package body Model_Runner.Platform.Device.Products is
               (Slice_Limit,
                (Last - First + Slice_Least) / Slice_Least));
 
-   --  Queries a deep workgroup answers for a head of this shape.
-   function Deep_Queries (Head_Size, Value_Size : Natural) return Natural
-   is (if Head_Size <= Matrix_Mid_Head and then Value_Size <= Matrix_Mid_Head
+   --  Queries a deep workgroup answers for a head of this shape: the
+   --  eight-subgroup pipeline's where it is the one bound.
+   function Deep_Queries
+     (Item       : Engine;
+      Head_Size  : Natural;
+      Value_Size : Natural;
+      Causal     : Boolean := True) return Natural
+   is (if (Head_Size <= Matrix_Mid_Head and then Value_Size <= Matrix_Mid_Head)
+         or else (not Causal
+                  and then Head_Size <= Matrix_Wide_Head
+                  and then Value_Size <= Matrix_Wide_Head
+                  and then Item.Matrix_Wide_Deep8_Attend /= Null_Handle)
        then Matrix_Deep_Queries_Held else Matrix_Deep_Queries);
 
    function Attend_Groups
@@ -1208,15 +1226,17 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural;
       Rounding   : Boolean := False;
-      Span       : Natural := 0) return C.unsigned
+      Span       : Natural := 0;
+      Causal     : Boolean := True) return C.unsigned
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
          and then Span >= Deep_Span
-         and then Deep_Kernel (Item, Positions, Head_Size, Value_Size)
+         and then Deep_Kernel (Item, Positions, Head_Size, Value_Size, Causal)
                   /= Null_Handle
        then C.unsigned
-              ((Positions + Deep_Queries (Head_Size, Value_Size) - 1)
-               / Deep_Queries (Head_Size, Value_Size))
+              ((Positions
+                + Deep_Queries (Item, Head_Size, Value_Size, Causal) - 1)
+               / Deep_Queries (Item, Head_Size, Value_Size, Causal))
        elsif not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then C.unsigned ((Positions + Matrix_Queries - 1) / Matrix_Queries)
@@ -5674,6 +5694,12 @@ package body Model_Runner.Platform.Device.Products is
             Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep_Attend);
             Deep (Item.Attend_Matrix_Wider, Item.Matrix_Wider_Deep_Attend);
 
+            --  And heads of 128 at eight subgroups, held as the narrower
+            --  heads' are, for attention every position of which sees
+            --  every other.
+            Told.Values := Value'Address;
+            Deep (Item.Attend_Matrix_Wide, Item.Matrix_Wide_Deep8_Attend);
+
             Request.Stage.Specialized := Null_Handle;
          end;
 
@@ -6593,6 +6619,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Wide_Deep8_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Deep_Attend, "vkDestroyPipeline");
       for Width in Item.Few_Attend'Range (1) loop
@@ -17650,7 +17677,8 @@ package body Model_Runner.Platform.Device.Products is
                                     V_Base => This.V_Base,
                                     KV_Width => This.KV_Width,
                                     V_Width => This.V_Width,
-                                    Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0))));
+                                    Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0),
+                                    Causal => This.Causal)));
 
                   declare
                      Few : constant Boolean :=
@@ -17772,7 +17800,8 @@ package body Model_Runner.Platform.Device.Products is
                              Rounding => False,
                              Span => (if This.Last >= This.First
                                       then This.Last - This.First + 1
-                                      else 0));
+                                      else 0),
+                             Causal => This.Causal);
                      begin
                         --  The matrix kernel takes its blocks along the
                         --  first axis and its heads along the second; see

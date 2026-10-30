@@ -896,7 +896,9 @@ Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
 Radeon 780M a 1024 Turbo picture takes 2 min 14-21 s (steps of 15 s, the
 first 17-18 s with the weights' upload beside it, the decoder about 5.2 s;
-2 min 16 s on the morning of 2026-10-30 and 2 min 21 s that afternoon) and
+2 min 16 s on the morning of 2026-10-30 and 2 min 21 s that afternoon; steps
+of 13.7 s and 2 min 20 s that evening, once a picture's attention took eight
+subgroups a workgroup at heads of 128) and
 a 512 picture in forty steps 2 min 10-18 s
 (steps of 3.2 s)
 -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1

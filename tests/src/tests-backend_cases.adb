@@ -12484,6 +12484,89 @@ package body Tests.Backend_Cases is
             Products.Prefer_Exact_Attention (Engine, False);
          end;
       end Compare;
+
+      --  And past the deep span with every query seeing every position --
+      --  a picture's attention, which a head of 128 takes on the deep
+      --  kernel's eight-subgroup compilation -- against the queries one
+      --  at a time, each told the same last position.
+      procedure Compare_Both_Ways is
+         Head_Size : constant := 128;
+         --  More queries than a workgroup of either compilation answers,
+         --  so a count of workgroups for the other would leave some out.
+         Many      : constant := 160;
+         Positions : constant := 2_100;
+         Span    : constant N.Element_Count :=
+           N.Element_Count (Heads * Head_Size);
+         KV_Span : constant N.Element_Count :=
+           N.Element_Count (Groups * Head_Size);
+         Room    : constant N.Element_Count :=
+           N.Element_Count (Positions + Many) * KV_Span;
+         Last_All : constant Natural := Positions + Many - 2;
+
+         Cache   : T.Real_Array_Access := new N.Real_Array (0 .. Room * 2 - 1);
+         Query   : N.Real_Array (0 .. Span * Many - 1);
+         Alone   : N.Real_Array (0 .. Span * Many - 1) := [others => 0.0];
+         Manyed : N.Real_Array (0 .. Span * Many - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+      begin
+         for Index in Cache'Range loop
+            Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+         end loop;
+
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+         Assert (Ok, "the deep cache would not be reserved");
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         Assert (Ok, "the deep cache would not be written");
+
+         for Which in 0 .. Many - 1 loop
+            declare
+               One : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+            begin
+               Products.Attend_Resident
+                 (Engine, Query (Span * N.Element_Count (Which)
+                                 .. Span * N.Element_Count (Which + 1) - 1),
+                  Heads => Heads, Head_Size => Head_Size,
+                  Value_Size => Head_Size, Group_Size => Heads / Groups,
+                  First => 0, Last => Last_All,
+                  K_Base => 0, V_Base => Room,
+                  KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                  Scale => 0.0625, Cap => 0.0, Target => One, Ok => Ok);
+               Assert (Ok, "a deep query on its own was refused");
+               Alone (Span * N.Element_Count (Which)
+                      .. Span * N.Element_Count (Which + 1) - 1) := One;
+            end;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Last_All,
+            K_Base => 0, V_Base => Room,
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.0625, Cap => 0.0, Added => Added, Causal => False);
+         Assert (Added, "a sequence would not take the deep step");
+
+         Products.Run (Engine, Steps, Query, Many, Manyed, Ok, Halted);
+         Assert (Ok, "the deep batch was refused");
+
+         for Index in Manyed'Range loop
+            Worst := N.Real'Max (Worst, abs (Alone (Index) - Manyed (Index)));
+         end loop;
+         T.Free (Cache);
+
+         Assert (Worst <= Near,
+                 "a deep batch seeing every position answers"
+                 & N.Real'Image (Worst) & " away from the queries one at a "
+                 & "time");
+      end Compare_Both_Ways;
    begin
       Devices.Open (Held, Found);
 
@@ -12527,6 +12610,7 @@ package body Tests.Backend_Cases is
       --  And over a cache long enough for the heads to go in pairs, their
       --  values sixty-four lanes a position.
       Compare (Head_Size => 256, Positions => 300);
+      Compare_Both_Ways;
 
       Products.Close (Engine);
       Devices.Close (Opened);

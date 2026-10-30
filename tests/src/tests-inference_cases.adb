@@ -19541,8 +19541,9 @@ package body Tests.Inference_Cases is
                     & Long_Float'Image (Worst) & " at head width" & Width'Image);
 
             --  And at heads of 128 a picture's rows past the deep span,
-            --  which attend both ways on a workgroup of eight subgroups
-            --  rather than four (Matrix_Wide_Deep8_Attend).
+            --  which attend both ways, on the host, out of a copy of the
+            --  cache the batches before them went to the device whole
+            --  and still owed (Settle_Cache).
             if Width = 2 then
                Worst := 0.0;
                Run (Model_Runner.Backend.Backend_CPU, Host_Rows, Picture => True);

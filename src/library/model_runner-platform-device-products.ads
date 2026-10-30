@@ -4142,6 +4142,9 @@ private
       --  attending far.
       Matrix_Deep_Attend : System.Address := System.Null_Address;
       Matrix_Wide_Deep_Attend : System.Address := System.Null_Address;
+      --  And the same at eight subgroups, for attention every position of
+      --  which sees every other: a picture's (Products.Deep_Queries).
+      Matrix_Wide_Deep8_Attend : System.Address := System.Null_Address;
       Matrix_Mid_Deep_Attend : System.Address := System.Null_Address;
       Matrix_Wider_Deep_Attend : System.Address := System.Null_Address;
 
