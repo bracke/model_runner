@@ -7725,6 +7725,97 @@ package body Tests.Inference_Cases is
    --  The prompt repeats on purpose. A lookup over a context with nothing
    --  said twice proposes nothing, and a run that proposes nothing is the
    --  run without drafting compared against itself.
+   --  Tokens a device refuses whole after a prompt it read whole: the
+   --  host computes them out of its copy of the cache, which only the
+   --  device had written -- the host's attention read a cache without the
+   --  prompt in it, and LFM3's tokens said "Paris" for ever. And the
+   --  device takes the tokens after them whole again, from a cache the
+   --  host wrote those two into. The processor's answers throughout.
+   procedure Refused_Tokens_Read_The_Devices_Prompt
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room   : constant := 64;
+      Prompt : constant Vocab.Token_Array (1 .. 6) := [4, 7, 2, 9, 5, 3];
+      Next   : constant Vocab.Token_Array (1 .. 4) := [8, 1, 6, 2];
+      Awake  : Boolean;
+
+      type Answers is array (Next'Range) of Logit_Vector;
+
+      procedure Run
+        (Kind  : Tiny_Model.Fixture_Architecture;
+         On    : Model_Runner.Backend.Backend_Kind;
+         Into  : out Answers;
+         Ran   : out Boolean)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+         Tiny_Model.Build (Image, Kind => Kind, Room => Room);
+         declare
+            Held   : aliased constant B.Byte_Array := Image.all;
+            Under  : Harness (Held'Access);
+            Live   : L.Session;
+            Last   : Logit_Vector;
+            Status : E.Error_Info;
+         begin
+            Start (Under, On, Ran);
+            if Ran then
+               L.Open (Live, Under.Ready, Context => Room, Status => Status);
+               Assert (E.Is_Ok (Status), "the session did not open");
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Prompt, Last, Status => Status);
+               Assert (E.Is_Ok (Status), "the prompt failed");
+               for Index in Next'Range loop
+                  Model_Runner.Backend.Device.Set_Whole_Layers
+                    (Index > 2 or else Model_Runner.Backend."=" (On, Model_Runner.Backend.Backend_CPU));
+                  L.Evaluate
+                    (Live, Under.Ready, Next (Index), Into (Index),
+                     Status => Status);
+                  Model_Runner.Backend.Device.Set_Whole_Layers (True);
+                  Assert (E.Is_Ok (Status), "a token failed");
+               end loop;
+               L.Close (Live);
+            end if;
+         end;
+         B.Free (Image);
+      end Run;
+
+      Here, There : Answers;
+      Ran_Here, Ran_There : Boolean;
+
+      Kinds : constant array (1 .. 2) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Lfm3, Tiny_Model.Qwen35];
+   begin
+      Model_Runner.Backend.Device.Open (Awake);
+      if not Awake then
+         Device_Notes.Skip ("to refuse a token's layers on");
+         return;
+      end if;
+
+      for Kind of Kinds loop
+         Run (Kind, Model_Runner.Backend.Backend_CPU, Here, Ran_Here);
+         Run (Kind, Model_Runner.Backend.Backend_Device, There, Ran_There);
+         Assert (Ran_Here and then Ran_There, "a fixture did not prepare");
+         for Index in Next'Range loop
+            declare
+               Worst : Long_Float := 0.0;
+            begin
+               for C in Logit_Vector'Range loop
+                  Worst := Long_Float'Max
+                    (Worst, abs (Long_Float (Here (Index) (C))
+                                 - Long_Float (There (Index) (C))));
+               end loop;
+               Assert (Worst < 1.0E-3,
+                       Tiny_Model.Fixture_Architecture'Image (Kind)
+                       & " token" & Index'Image & " is" & Worst'Image
+                       & " from the processor's");
+            end;
+         end loop;
+      end loop;
+      Model_Runner.Backend.Device.Close;
+   end Refused_Tokens_Read_The_Devices_Prompt;
+
    procedure Lookup_Drafting_Produces_The_Same_Text
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -21875,6 +21966,10 @@ package body Tests.Inference_Cases is
         (T, A_Rotation_Stretches_When_A_Caller_Asks_It'Access,
          "a caller may stretch the rotation the file did not, and only a "
          & "model stretched for it reaches past its trained context");
+      Register_Routine
+        (T, Refused_Tokens_Read_The_Devices_Prompt'Access,
+         "tokens the device refuses after a prompt it read read that "
+         & "prompt, and the ones after them go whole again");
       Register_Routine
         (T, Architectures_Are_Told_Apart'Access,
          "what an architecture is and what a configuration asks are said as documented");

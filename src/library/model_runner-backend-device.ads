@@ -1841,6 +1841,13 @@ package Model_Runner.Backend.Device is
       Pages_At   : Natural := 0;
       Page_Shift : Natural := 0);
 
+   --  Refuse every whole layer, or take them again: a test reads a prompt
+   --  on the device and then tokens the host computes, as a layer the
+   --  device refuses leaves them, from a cache only the device wrote.
+   --
+   --  @param Allowed False to refuse every whole layer from now on.
+   procedure Set_Whole_Layers (Allowed : Boolean);
+
    --  A whole layer, in one submission.
    --
    --  `Attend_And_Feed` takes its second half and `Normalize_And_Project`

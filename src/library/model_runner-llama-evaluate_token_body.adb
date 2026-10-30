@@ -1659,6 +1659,18 @@ begin
                   --  worth of each. A generated token early in a
                   --  conversation is a few hundred thousand elements and
                   --  the pool is not woken for it.
+                  --  What the device wrote and the host's copy has not
+                  --  got, before the host reads it: a layer the device
+                  --  refused after a prompt it read whole read a cache
+                  --  without the prompt in it (LFM3's tokens said "Paris"
+                  --  for ever, the gate pair refused).
+                  if Item.Owed_Count > 0 then
+                     declare
+                        Settled : Boolean;
+                     begin
+                        Settle_Cache (Item, Settled);
+                     end;
+                  end if;
                   Workers_CPU.Dispatch_Shares
                     (Item.Team, Heads, Share'Unchecked_Access, Shared,
                      Cost => Heads * Reserved * Head_Size);

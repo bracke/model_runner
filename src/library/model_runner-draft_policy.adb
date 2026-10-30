@@ -129,8 +129,11 @@ package body Model_Runner.Draft_Policy is
       --  against 13.87 tokens a second and qwen3-8b 9.47 against 9.90
       --  (two each), Steelman-14B 5.21 against 5.15 (medians of three)
       --  -- and text that repeats doubles (LFM3 continuing the README,
-      --  12.8 -> 27.6). A mixture's check
-      --  there reads the union of its positions' experts, unmeasured.
+      --  12.8 -> 27.6). Not a mixture, whose check there reads the
+      --  union of its positions' experts: on a story Qwen3-Coder-30B Q2_K
+      --  read 28.3 against 29.2, DeepSeek-Coder-V2-Lite 25.9 against 25.7
+      --  and Mellum 27.8 against 28.4 with none of the proposals kept, and
+      --  continuing the README DeepSeek 19.7 against 19.2.
       if not Result.From_Context
         and then not Result.From_Next
         and then not Draft_Ready

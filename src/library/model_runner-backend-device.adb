@@ -3403,6 +3403,9 @@ package body Model_Runner.Backend.Device is
    -- Whole_Layer --
    -----------------
 
+   --  Whether a whole layer may go over at all; see Set_Whole_Layers.
+   Whole_Allowed : Boolean := True;
+
    procedure Whole_Layer
      (Residual       : T.Real_Array;
       Attention_Norm : T.Real_Array_Access;
@@ -3843,6 +3846,7 @@ package body Model_Runner.Backend.Device is
          Ok := False;
 
          if not Ready_Now
+           or else not Whole_Allowed
            or else Width = 0
            or else Into = null
            --  A linear layer's four projections, its taps and its numbers
@@ -6081,6 +6085,11 @@ package body Model_Runner.Backend.Device is
                  Gated
                  and then Unit in 0 | 1
                  and then Alpha = 0.0 and then Limit = 0.0
+                 --  Not binary16 or brain float: their pair on the
+                 --  sixteen-bit walk, built and measured, read LFM3's BF16
+                 --  gate and up in 908.7 us against 907.3 for the two
+                 --  products and the combination -- a dispatch saved of a
+                 --  read that is the whole cost.
                  and then Gate_P in Products.Packed_Q4_K
                                   | Products.Packed_Q8_0
                  and then Up_P = Gate_P
@@ -6386,6 +6395,15 @@ package body Model_Runner.Backend.Device is
          end if;
       end if;
    end Whole_Layer;
+
+   ----------------------
+   -- Set_Whole_Layers --
+   ----------------------
+
+   procedure Set_Whole_Layers (Allowed : Boolean) is
+   begin
+      Whole_Allowed := Allowed;
+   end Set_Whole_Layers;
 
    ----------------
    -- Carry_Lost --

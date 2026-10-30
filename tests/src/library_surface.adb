@@ -184,6 +184,11 @@ package body Library_Surface is
       --  lowers it so a fixture's reply crosses it.
       new String'("Set_Host_Depth_Most"),
 
+      --  Whether the device takes whole layers. The engine's own default
+      --  takes them; a test refuses them for a token after a prompt the
+      --  device read whole, which is the road a refused layer leaves.
+      new String'("Set_Whole_Layers"),
+
       --  What the index of the files' words has read, and holds: the
       --  engine never asks; a test asks so that an index brought up to
       --  date is told from one read again, and a deleted file let go.
