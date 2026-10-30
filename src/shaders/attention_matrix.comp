@@ -831,6 +831,11 @@ void main() {
                         coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
                                 gl_MatrixUseAccumulator> (sacc[m][n]);
 
+                    //  Not worth keeping in registers: left out (the answer
+                    //  then wrong), qwen3-8b's prompt 16,214 long read
+                    //  209.9 and 208.8 tokens a second against 210.2 and
+                    //  208.9. Paired, the partner's weights come through
+                    //  here in any case.
                     coopMatStore (weights, ps, PS0 + m * 16u * BC + n * 16u, BC,
                                   gl_CooperativeMatrixLayoutRowMajor);
                 }
