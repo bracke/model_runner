@@ -893,8 +893,9 @@ model_runner image --prompt "make the apple green" --ref-image apple.png --out g
 Where a device opens, the text encoder, the denoiser's products,
 attention and feed-forward, and the VAE's convolutions run there. On the
 Radeon 780M a 1024 Turbo picture takes 2 min 14-21 s (steps of 15 s, the
-first 17-18 s with the weights' upload beside it, the decoder about 5.2 s)
-and a 512 picture in forty steps 2 min 18 s (steps of 3.2 s)
+first 17-18 s with the weights' upload beside it, the decoder about 5.2 s;
+2 min 16 s on 2026-10-30) and a 512 picture in forty steps 2 min 10-18 s
+(steps of 3.2 s)
 -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1
 s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
 image).
@@ -2022,8 +2023,9 @@ All figures below are from the release build, on a Ryzen 7 7840U -- eight
 cores -- against TinyLlama-1.1B-Chat Q8_0, at the worker count the program
 chooses for itself and at the arithmetic it chooses for itself. From the
 six-token prompt in `tests/fixtures/speed-prompt-short.txt`, twelve tokens
-take **0.335 s** -- 0.032 s evaluating the prompt and 0.304 s generating --
-and **1.76 s** of processor time, the median of three runs (2026-10-16). Loading the model
+take **0.334 s** -- 0.032 s evaluating the prompt and 0.301 s generating --
+and **1.75 s** of processor time, the median of three runs (2026-10-30; 0.335 s
+and 1.76 s on 2026-10-16). Loading the model
 costs a further **0.092 s** of wall that this figure does not include, and it
 used to cost 0.6 s: the weights are the file's own pages now rather than a
 copy of them, so what loading does is open a mapping and what reading them
@@ -2031,7 +2033,7 @@ costs is paid as they are touched.
 
 The arithmetic is half of that. `--arith int8` is the default and rounds the
 vector a product multiplies to a byte an element; the same run at `--arith
-f32`, taken back to back in the same sitting, is **1.116 s** for 8.92 s of
+f32`, taken back to back in the same sitting, is **1.108 s** for 8.86 s of
 processor time. It read 2.0 s for a while, unnoticed: a processor run that
 named no layout took the panels, which are laid out for the integer kernels
 and which the floating-point path reads a byte at a time; a run at `--arith
@@ -2047,15 +2049,24 @@ a processor, which that entry said at the time; the machine is its own again
 and the whole section was taken again on it in one sitting, so the figures
 below can be read against each other. That they now sit below the quiet-host
 1.88 as well is the program rather than the machine, and it is the only part
-of this paragraph that is about the program at all. Every run prints the
-digest it always has.
+of this paragraph that is about the program at all. Every run prints a
+digest, and the twelve tokens' is `3bc8af6b53abae0d` since `tests speed`
+repeats with run's own penalty, 1.0, where it repeated at 1.1 and printed
+`5abff916f9d83ca6` -- which it still prints at `--repeat-penalty 1.1`, so
+the text moved with the option and not with the engine.
 
 The run is
 
 ```
-model_runner run MODEL --raw --prompt-file tests/fixtures/speed-prompt-short.txt \
+model_runner run MODEL --backend cpu --raw --prompt-file tests/fixtures/speed-prompt-short.txt \
   --seed 1 --temperature 0 --max-tokens 12 --show-stats
 ```
+
+`--backend cpu` is named because `run` no longer means the processor
+unasked: it takes the device where one opens and the model fits it, and
+these are the processor's figures. `tests speed` asks the same question
+`run` does, so its commands below name the processor wherever their
+figures are the processor's.
 
 `--show-stats` says which of the two a run got, because the difference is
 large enough to explain a figure on its own: **weights -- the file's own
@@ -2066,7 +2077,7 @@ against something over forty seconds before, and the resident set peaks at
 4.6 GB against an arena of 11.25 GB -- a mixture routes to eight experts of a
 hundred and twenty-eight, so most of that file is never read at all.
 
-and `tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-short.txt` takes the same measurement three times and
+and `tests speed --model MODEL --backend cpu --prompt-file tests/fixtures/speed-prompt-short.txt` takes the same measurement three times and
 reports the median, so the figure above is a command rather than a memory.
 It reports the processor time as well now, taken around the same region as
 the wall time so that the two answer about the same work. That used to be the
@@ -2113,12 +2124,13 @@ tokens, so it is not a twelve-token measurement at all. The figures above
 are `--raw`, which is why they are lower and why they can be taken again.
 
 The worker count is what that processor figure is about. Taken back to back
-in the same sitting, the same run at fifteen threads takes **0.350 s** of
-wall against **0.344 s** at seven, and 2.20 s of processor time against
-1.81 s.
+in the same sitting, the same run at fifteen threads takes **0.336 s** of
+wall against **0.332 s** at seven, and 2.04 s of processor time against
+1.75 s.
 
-That is under two per cent worse on the wall for twenty-two per cent more
-processor time (2026-10-06); the sitting before read under two per cent worse
+That is one per cent worse on the wall for seventeen per cent more processor
+time (2026-10-30); the sitting before (2026-10-06) read under two per cent
+worse for twenty-two per cent more, the one before that under two per cent worse
 for eighteen per cent more -- the narrowest this pair has read, and the
 processor time on both sides is smaller than it was,
 because a worker now looks for its next job before it blocks for it, which is
@@ -2392,12 +2404,13 @@ tests speed --model MODEL --backend reference --max-tokens 4 --prompt-file tests
 ```
 
 Four tokens from the short prompt, medians of three, taken back to back at a
-`cpu` spends 0.032 s evaluating the prompt and
-0.098 s generating; `reference` spends 5.796 s and 3.911 s. That is
-**seventy-four times** the work in total, a hundred and eighty times on
-the prompt and forty times on the generation (2026-10-16; it read
-sixty-nine, a hundred and forty-five and thirty-nine on 2026-10-06), and the
-two print the same digest.
+`cpu` spends 0.031 s evaluating the prompt and
+0.099 s generating; `reference` spends 5.835 s and 3.922 s. That is
+**seventy-four times** the work in total, a hundred and eighty-eight times on
+the prompt and forty times on the generation (2026-10-30; seventy-four, a
+hundred and eighty and forty on 2026-10-16, sixty-nine, a hundred and
+forty-five and thirty-nine on 2026-10-06), and the two print the same
+digest, `5f85f06494f88de4`.
 
 The ratio doubled when the default arithmetic changed, and it is worth being
 clear that only one side moved: `reference` computes what it always did.
@@ -2510,15 +2523,23 @@ tests speed --model MODEL --backend device --prompt-file tests/fixtures/speed-pr
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.335 s | **0.235 s** |
-| -- evaluating the prompt | 0.032 s | 0.022 s |
-| -- generating | 0.304 s | **0.213 s** |
-| -- processor time | 1.76 s | **0.06 s** |
-| 110-token prompt, one token | 0.192 s | **0.080 s** |
-| -- evaluating the prompt | 0.166 s | **0.060 s** |
-| -- processor time | 1.42 s | **0.02 s** |
+| 6-token prompt, 12 generated | 0.334 s | **0.223 s** |
+| -- evaluating the prompt | 0.032 s | 0.020 s |
+| -- generating | 0.301 s | **0.203 s** |
+| -- processor time | 1.75 s | **0.07 s** |
+| 110-token prompt, one token | 0.195 s | **0.078 s** |
+| -- evaluating the prompt | 0.170 s | **0.060 s** |
+| -- processor time | 1.45 s | **0.01 s** |
 
-Every cell was taken again on 2026-10-16. The processor's 110-token prompt
+Every cell was taken again on 2026-10-30, each within its spread of the
+2026-10-16 reading; the device's twelve tokens are 0.012 s quicker. The
+two columns print the same digest at `--arith f32`, and since `tests speed`
+repeats with run's own penalty of 1.0 they no longer do at the default:
+`7d3e2df2d776ba62` on the device, which computes the vector in binary32,
+and `3bc8af6b53abae0d` on the processor, whose byte-rounded vector (`###
+Quantized activations`) parts from it at one of the twelve tokens -- at 1.1
+both read `5abff916f9d83ca6`. The 110-token run prints `af63a04c86018698` on
+both. Every cell was taken again on 2026-10-16. The processor's 110-token prompt
 reads 0.166 s where it read 0.323 because a processor run takes the panels
 unasked now and that cell was the file's rows; every other cell reads within
 its spread. Every cell was taken again later on 2026-10-06, once a Q8_0 feed-forward's
@@ -2990,18 +3011,24 @@ what it was written expecting. The same model and prompt, three ways:
 
 | Where the weights are | Generation |
 | --- | --- |
-| copied to the device, all of them | 23.19 tokens/s |
-| a seventh copied, the rest uploaded again as wanted | 3.18 tokens/s |
-| read where they lie, none copied | 1.69 tokens/s |
+| copied to the device, all of them | 59.25 tokens/s |
+| a seventh copied, the rest uploaded again as wanted | 8.04 tokens/s |
+| read where they lie, none copied | 5.83 tokens/s |
+
+Taken again on 2026-10-30: TinyLlama-1.1B Q8_0, twelve tokens from the
+short prompt, `tests speed --backend device` unasked, with `--device-memory
+200M` and with `--device-memory 0` -- the last of which the tool read as
+unasked until that day, and reads as `run` does now. The table it replaces
+read 23.19, 3.18 and 1.69, taken long before and not said on what.
 
 So giving matrices back and uploading them again beats reading the host's
-memory by nearly two to one, and either costs four to nine times what having
+memory by nearly three to two, and either costs seven to ten times what having
 the weights there costs. Reading where they lie is worth asking for only when
 the machine cannot hold the model twice -- which for a seven-billion
 parameter model at eight bits is fourteen gigabytes against seven. The
-statistics say which of the three happened: 155 matrices on the device and
-none given back for the first row, 21 on the device and 1994 given back for
-the second, 154 read where they lie for the third.
+statistics say which of the three happened: 178 matrices on the device and
+none given back for the first row, 24 on the device and 2289 given back for
+the second, 132 read where they lie for the third.
 
 Under the model, one product at a time, `tests benchmark` measures where that
 leaves each format. It prints the machine's load at both ends of its run --
@@ -3052,21 +3079,28 @@ arrived with nothing timing them, and a format can be perfectly correct and
 four times slower than the one beside it with nothing to say so. A 512 by
 2048 matrix, resident, against the serial processor path -- the device's time
 as a fraction of it, so below one is faster there, taken in one run at a load
-of 1.08 rising to 1.28, most of the rise being the run itself:
+of 1.34 rising to 2.52, most of the rise being the run itself (2026-10-30):
 
 | Format | One vector | Eight | | Format | One vector | Eight |
 | --- | --- | --- | --- | --- | --- | --- |
-| Q2_K | 0.13 | 0.10 | | Q3_K | 0.20 | 0.11 |
-| IQ4_NL | 0.14 | 0.08 | | F16 | 0.34 | 0.12 |
-| Q5_1 | 0.17 | 0.08 | | Q8_0 | **0.23** | **0.08** |
-| Q5_0 | 0.17 | 0.08 | | Q4_K | 0.37 | 0.12 |
-| Q4_1 | 0.17 | 0.07 | | Q5_K | 0.30 | 0.15 |
-| IQ4_XS | 0.25 | 0.12 | | Q6_K | 0.49 | 0.12 |
-| | | | | Q4_0 | 0.26 | 0.08 |
-| | | | | BF16 | 0.60 | 0.14 |
-| | | | | F32 | 0.72 | 0.15 |
+| Q2_K | 0.15 | 0.08 | | Q3_K | 0.13 | 0.08 |
+| IQ4_NL | 0.09 | 0.07 | | F16 | 0.26 | 0.10 |
+| Q5_1 | 0.11 | 0.07 | | Q8_0 | **0.17** | **0.08** |
+| Q5_0 | 0.12 | 0.08 | | Q4_K | 0.16 | 0.08 |
+| Q4_1 | 0.12 | 0.08 | | Q5_K | 0.16 | 0.09 |
+| IQ4_XS | 0.12 | 0.08 | | Q6_K | 0.17 | 0.08 |
+| | | | | Q4_0 | 0.19 | 0.08 |
+| | | | | BF16 | 0.47 | 0.12 |
+| | | | | F32 | 0.60 | 0.34 |
 
-and q8_0 at thirty-two vectors a pass, which is 0.039.
+and q8_0 at thirty-two vectors a pass, which is 0.031. The reading before
+this one (load 1.08 to 1.28) had Q2_K 0.13 and 0.10, IQ4_NL 0.14 and 0.08,
+Q8_0 0.23 and 0.08, Q4_K 0.37 and 0.12, Q5_K 0.30 and 0.15, Q6_K 0.49 and
+0.12, F32 0.72 and 0.15 and thirty-two vectors 0.039: the k-quants' one-vector
+cells have halved or better since -- a ratio, so either side may have moved,
+and this run does not say which -- and only binary32's eight-vector cell
+has risen. The paragraphs below are
+about the reading before.
 
 **Every cell of the one-vector column fell** between this reading and the
 one before it -- Q2_K from 0.28, Q5_K from 0.59, Q8_0 from 0.36 -- and the
@@ -7649,10 +7683,23 @@ somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **609.1 t/s** | 39.9 t/s |
-| llama.cpp, processor | 366.8 t/s | 39.6 t/s |
-| model_runner, device | **1834.6 t/s** | **58.6 t/s** |
-| llama.cpp, device | 1622.1 t/s | 56.0 t/s |
+| model_runner, processor | **611.8 t/s** | 39.5 t/s |
+| llama.cpp, processor | 366.9 t/s | 39.8 t/s |
+| model_runner, device | **1765.8 t/s** | **57.7 t/s** |
+| llama.cpp, device | 1644.6 t/s | 55.6 t/s |
+
+Taken again on 2026-10-30, both sides in one sitting, each side's processor
+rows and then its device rows, with `--backend` named on this program's:
+`tests speed --prompt-file tests/fixtures/speed-prompt-110.txt --max-tokens
+64`, so its generated tokens are the 64 after the 110-token prompt, where
+llama-bench's `tg64` starts from an empty context. The processor's
+generated token reads 39.5 against 39.8 that way -- level at the same depth
+on every earlier sitting (`-d 110` below). The device's rows were taken
+after llama-bench's processor rows had raised the load to five; the device's
+1419-token prompt read 1877.9 there and 2033.8 and 2043.4 on a quiet
+machine the next morning, which is the figure in the second table. The 2026-10-16
+sitting read 609.1, 366.8, 1834.6 and 1622.1 on the prompt and 39.9, 39.6,
+58.6 and 56.0 generating.
 
 Taken again on 2026-10-16, both sides in one sitting, each side's processor
 rows and then its device rows alternated so that neither ran on the warmer
@@ -7704,10 +7751,14 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **432.4 t/s** | 39.9 t/s |
-| llama.cpp, processor | 286.2 t/s | 39.6 t/s |
-| model_runner, device | **2022.7 t/s** | **58.6 t/s** |
-| llama.cpp, device | 1757.4 t/s | 56.0 t/s |
+| model_runner, processor | **462.3 t/s** | 39.5 t/s |
+| llama.cpp, processor | 295.5 t/s | 39.8 t/s |
+| model_runner, device | **2038.6 t/s** | **57.7 t/s** |
+| llama.cpp, device | 1772.9 t/s | 55.6 t/s |
+
+(2026-10-30, as above; the device's prompt the mean of the two quiet
+readings, 2033.8 and 2043.4. 2026-10-16 read 432.4, 286.2, 2022.7 and
+1757.4.)
 
 The device's prompt row read 1779.8 until 2026-10-23, when the wider matrix
 tile -- the one a batch past 128 positions takes -- became ninety-six rows
@@ -7716,11 +7767,11 @@ against 0.770 for the tile before it alternated beside it in the same
 sitting. The rows of 110 tokens never reach that tile, and the processor's
 and llama.cpp's do not run it.
 
-**Where the two tables stand** (2026-10-23): this program's processor reads a
-prompt 1.66 times llama.cpp's rate at 110 tokens and 1.51 times at 1419, and
-generates level with it (39.9 against 39.6); its device reads a prompt 1.13
-times llama.cpp's device at 110 and 1.15 times at 1419, and generates 1.05
-times as fast (58.6 against 56.0). The paragraphs below are this section's
+**Where the two tables stand** (2026-10-30): this program's processor reads a
+prompt 1.67 times llama.cpp's rate at 110 tokens and 1.56 times at 1419, and
+generates level with it (39.5 after the prompt against 39.8 from empty); its
+device reads a prompt 1.07 times llama.cpp's device at 110 and 1.15 times at
+1419, and generates 1.04 times as fast (57.7 against 55.6). The paragraphs below are this section's
 record, sitting by sitting, each in the tense of its own day: where a figure
 in them differs from the tables, the tables are the reading that stands.
 
@@ -7946,20 +7997,23 @@ and closing that needed the same change made in a different place.
 The runs are
 
 ```
-tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt.txt \
-  --max-tokens 0 --repack rows
-tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-short.txt \
-  --max-tokens 64 --repack rows
+tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-110.txt \
+  --max-tokens 64 --backend cpu
+tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-110.txt \
+  --max-tokens 64 --backend device
 llama-bench -m MODEL -p 110 -n 64 -t 8 -r 3 --device none
 llama-bench -m MODEL -p 110 -n 64 -ngl 99 -r 3
 ```
 
-and the 1419-token table is the same four with the long prompt file and
-`-p 1419` in place of `-p 110`:
+(the processor's run takes the panels unasked, which is what `--repack rows`
+named when these commands said it), and the 1419-token table is the same
+four with the long prompt file and `-p 1419` in place of `-p 110`:
 
 ```
 tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-long.txt \
-  --max-tokens 0 --repack rows
+  --max-tokens 1 --backend cpu
+tests speed --model MODEL --prompt-file tests/fixtures/speed-prompt-long.txt \
+  --max-tokens 1 --backend device
 llama-bench -m MODEL -p 1419 -n 64 -t 8 -r 3 --device none
 llama-bench -m MODEL -p 1419 -n 64 -ngl 99 -r 3
 ```
@@ -10712,13 +10766,13 @@ eight rows' 210 each and not one more.
 quants**, and the same kernel with eight instructions more in the unpack: its
 block is the four-bit block with `qh` inserted, pairing element E with element
 E + 32 the same way, so the permutation is one procedure with a flag and the
-fifth bits are a run copied afterwards. A `Q5_K_M` file's short prompt reads
-0.352 s as stored and **0.219 and 0.217 with the
-flag -- 1.61 times** -- where panelling only its six-bit tensors had been
-worth 1.16; its long prompt goes 5.01 and 5.27 s to 3.96 and 3.94, **1.30**,
-and its ten generated tokens 0.211 and 0.212 s to 0.205 and 0.203. Digest
-`5abff916f9d83ca6` both ways. (Re-measured 2026-10-06; the first stored
-short-prompt reading, 1.064 s, was a cold file and is left out.)
+fifth bits are a run copied afterwards. A `Q5_K_M` file's 110-token prompt reads
+0.332 s as stored and **0.226 with the
+flag -- 1.47 times** -- where panelling only its six-bit tensors had been
+worth 1.16; its long prompt goes 5.32 s to 4.04, **1.32**,
+and its ten generated tokens 0.180 s to 0.171. (Re-measured 2026-10-30, one
+reading each way; 2026-10-06 read 1.61 on its short prompt, 1.30 on the long one
+and 0.211 to 0.205 s generating.)
 
 **And the six-bit format is half the reason this is worth anything.** With
 only Q4_K in panels the prompt was 1.37 times ahead and a profile put
@@ -10730,15 +10784,22 @@ format's is three, and the two bits go four groups to a byte so one load of
 them serves four groups at four shifts. Panelled, its share fell from 25.2 to
 8.7 per cent and the prompt went from 1.37 times ahead to 1.74.
 
-Alternated three rounds against three, one sitting (2026-10-06),
+Alternated three rounds against three, one sitting (2026-10-30),
 TinyLlama-1.1B-Chat Q4_K_M, seven workers, `--backend cpu`:
 
 | | as stored | `--repack rows` | |
 | --- | ---: | ---: | ---: |
-| prompt, 110 tokens | 0.326, 0.327, 0.326 s | **0.213, 0.211, 0.205** | **1.55** |
-| prompt, 1419 tokens | 4.859, 5.048, 5.108 s | **3.679, 3.855, 3.824** | **1.32** |
-| generating, 10 tokens | 0.151, 0.152, 0.150 s | **0.148, 0.147, 0.147** | **1.03** |
-| loading | 0.092 s | 0.250 s | |
+| prompt, 110 tokens | 0.308, 0.335, 0.321 s | **0.219, 0.224, 0.210** | **1.47** |
+| prompt, 1419 tokens | 5.362, 5.352, 5.423 s | **4.017, 4.046, 3.966** | **1.34** |
+| generating, 10 tokens | 0.155, 0.158, 0.156 s | **0.149, 0.150, 0.147** | **1.05** |
+| loading | 0.092 s | 0.094 s | |
+
+The panels load from the panel cache now (`### Panel cache`), so their
+column's loading reads the stored column's but for a first round that
+writes the file (0.356 s). The 2026-10-06 sitting read 0.326, 0.213 and 1.55
+on the short prompt, 4.859-5.108 against 3.679-3.855 and 1.32 on the long one,
+and 1.03 generating: the ratios hold, both columns' long prompts a few per
+cent slower in this sitting.
 
 The stored column's first short-prompt reading, 0.932 s, was a cold file and
 is replaced by the next round's. When this table was first taken (2026-09-08)
@@ -12570,18 +12631,24 @@ measurements and a figure that carries its own conditions can be compared
 with another:
 
 ```
-tests speed --model MODEL
-tests speed --model DRAFT
-tests speed --model MODEL --draft-model DRAFT --draft-tokens 4
+tests speed --model MODEL --backend cpu
+tests speed --model DRAFT --backend cpu
+tests speed --model MODEL --backend cpu --draft-model DRAFT --draft-tokens 4
 ```
 
 All three medians of three:
 
 | | Twelve tokens | |
 | --- | --- | --- |
-| TinyLlama-1.1B at eight bits | 0.335 s | 25 ms a token |
-| the same model at two bits | 0.157 s | 11 ms a token |
-| the first, drafted by the second | 0.594 s | 24 proposed, 9 accepted |
+| TinyLlama-1.1B at eight bits | 0.334 s | 25 ms a token |
+| the same model at two bits | 0.163 s | 11 ms a token |
+| the first, drafted by the second | 0.503 s | 20 proposed, 11 accepted |
+
+Taken again on 2026-10-30, on the processor, at run's penalty of 1.0: the
+drafted run read 0.594 s with 24 proposed and 9 accepted on 2026-10-16,
+when the tool repeated at 1.1 -- a penalty that pushes the model off the
+draft's choices. The paragraphs below work from the 2026-10-16 figures;
+at these the draft still loses, 1.5 to one.
 
 The two-bit file is a third of the size on disk and now costs well under half
 as much per token to run (2026-10-16, on the processor): its weights are read
@@ -18623,18 +18690,24 @@ the eight-bit file, ordered by what they cost:
 
 | format | perplexity | divergence, nats | worst position | top token agreed |
 | --- | ---: | ---: | ---: | ---: |
-| q8_0, the baseline | 35.5256 | **0.000000** | 0.0000 | 100.0 % |
-| q5_k_m | 35.6834 | 0.010226 | 0.1492 | 93.8 % |
-| q5_1 | 35.7907 | 0.013021 | 0.2483 | 91.8 % |
-| q5_0 | 35.8219 | 0.013543 | 0.1043 | 93.0 % |
-| iq4_nl | 36.5197 | 0.035287 | 0.7945 | 87.6 % |
-| iq4_xs | 36.4245 | 0.036373 | 0.7856 | 86.7 % |
-| q4_k_m | 36.6017 | 0.044413 | 0.4610 | 87.9 % |
-| q4_0 | 36.1500 | 0.051893 | 0.8296 | 87.0 % |
-| q4_1 | 37.7095 | 0.060082 | 1.1356 | 85.9 % |
-| q3_k | 37.0745 | 0.091220 | 0.9899 | 82.3 % |
-| mxfp4 | 38.3502 | 0.120443 | 1.8979 | 79.6 % |
-| q2_k | 45.0612 | 0.289359 | 3.4884 | 71.0 % |
+| q8_0, the baseline | 35.7359 | **0.000000** | 0.0000 | 100.0 % |
+| q5_k_m | 35.9161 | 0.010073 | 0.1533 | 93.8 % |
+| q5_1 | 35.9784 | 0.012824 | 0.2501 | 92.1 % |
+| q5_0 | 35.9822 | 0.013585 | 0.1056 | 93.0 % |
+| iq4_nl | 36.6713 | 0.035018 | 0.7771 | 87.8 % |
+| iq4_xs | 36.5857 | 0.036280 | 0.7624 | 86.3 % |
+| q4_k_m | 36.9012 | 0.044548 | 0.4549 | 87.1 % |
+| q4_0 | 36.4615 | 0.051912 | 0.8662 | 88.0 % |
+| q4_1 | 38.0590 | 0.060770 | 1.2216 | 85.3 % |
+| q3_k | 37.3268 | 0.091449 | 1.0290 | 82.4 % |
+| mxfp4 | 38.5271 | 0.120844 | 1.9829 | 79.4 % |
+| q2_k | 45.2039 | 0.290329 | 3.2899 | 71.0 % |
+
+Taken again on 2026-10-30, `--backend cpu`. Every perplexity reads about
+half a per cent above the reading before (q8_0's was 35.5256) -- the engine's
+arithmetic has moved under it since, and which change moved it was not
+separated -- and every divergence is within a few per cent of its earlier
+reading, the order the same.
 
 **The first row is the check.** The eight-bit file measured against itself
 reads a divergence of exactly zero and agrees with itself on every position,
