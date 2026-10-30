@@ -653,6 +653,11 @@ package body Model_Runner.Generation is
       Skip : Natural := 0;
 
       --  How much of a prompt's end a draft reads when it starts afresh.
+      --  Not more: qwen3-8b's prompt of 16,214 drafted by Qwen3-0.6B kept
+      --  58 of 136 proposals reading 1,024, 59 of 137 reading 4,096 and 56
+      --  of 133 reading the whole -- generating 12.6, 11.8 and 9.0 tokens
+      --  a second, the prompt 205 against 165 the whole read. At depth the
+      --  draft guesses worse for being the draft, not for missing text.
       Draft_Reads : constant := 1_024;
 
       --  Drafting. On only when there is a draft model and a session on it,
