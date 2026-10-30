@@ -711,7 +711,12 @@ package body Model_Runner.Generation is
 
       --  A draft model asked only where the text has nothing to offer:
       --  each round the context is searched first, and the draft proposes
-      --  when it finds nothing. See Draft_Lookup_First.
+      --  when it finds nothing. See Draft_Lookup_First. Not the block past
+      --  the stack: asking the text first before it, Qwen3.6-35B-A3B's
+      --  story read 35.5 tokens a second against 37.2 and an explanation
+      --  49.4 against 50.7 -- the block keeps nine in ten of what it
+      --  proposes, and a mixture's check over the text's misses reads
+      --  more experts than a token.
       Mixed : constant Boolean := By_Model and then Item.Draft_Lookup_First;
 
       --  Whether a round's length follows what the rounds before kept.
@@ -808,6 +813,9 @@ package body Model_Runner.Generation is
       --  that kept less than half, 31.7; this way 35.6.
       Text_Wait         : Natural := 0;
       Text_Again        : constant := 8;
+      --  Not doubled with each miss after a miss: gemma-3-4b's story read
+      --  29.24 against 29.29, the same proposals -- one or two rounds of
+      --  the text's in 192 tokens, which no wait reaches.
       Lookup_Rest_Next  : Natural := 32;
       Lookup_Rest_Least : constant := 32;
       Lookup_Rest_Most  : constant := 1_024;
