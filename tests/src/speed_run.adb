@@ -642,6 +642,7 @@ package body Speed_Run is
                   begin
                      Request.Draft_Tokens := Plan.Tokens;
                      Request.Draft_From_Context := Plan.From_Context;
+                     Request.Draft_Lookup_First := Plan.Lookup_First;
                      Request.Draft_From_Next := Plan.From_Next;
                      Request.Draft_Adapts := Draft_Adapts or else Plan.Adapts;
                      --  Readied for it as the command readies it.

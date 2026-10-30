@@ -709,6 +709,11 @@ package body Model_Runner.Generation is
       By_Context : constant Boolean :=
         Drafting and then not By_Model and then not By_Next;
 
+      --  A draft model asked only where the text has nothing to offer:
+      --  each round the context is searched first, and the draft proposes
+      --  when it finds nothing. See Draft_Lookup_First.
+      Mixed : constant Boolean := By_Model and then Item.Draft_Lookup_First;
+
       --  Whether a round's length follows what the rounds before kept.
       Adapting : constant Boolean :=
         Drafting and then Item.Draft_Adapts and then not By_Context;
@@ -789,6 +794,19 @@ package body Model_Runner.Generation is
       Thrifty           : constant Boolean :=
         By_Context and then Settings.Experts > 0;
       Lookup_Rest       : Natural := 0;
+
+      --  Mixed: the rounds until the text is asked first again. A round
+      --  of the text's that kept less than half of what it proposed waits
+      --  Text_Again rounds of the draft's; one that kept more is followed
+      --  by another. On a model that does not restate its question the
+      --  text guesses rarely and badly, and every round it guessed was one
+      --  the draft did not: gemma-3-4b's story 29.5 tokens a second
+      --  drafted, 28.4 asking the text first every round. Judged over the
+      --  whole run instead, qwen3-8b's thinking -- whose first rounds of
+      --  the text keep little and whose later ones keep all -- lost what
+      --  the text was worth to it (36.5 -> 26.8).
+      Text_Wait         : Natural := 0;
+      Text_Again        : constant := 8;
       Lookup_Rest_Next  : Natural := 32;
       Lookup_Rest_Least : constant := 32;
       Lookup_Rest_Most  : constant := 1_024;
@@ -1248,7 +1266,7 @@ package body Model_Runner.Generation is
          Proposed := new Vocab.Token_Array (1 .. Largest_Draft + 1);
          Verified := new Vocab.Token_Array (1 .. Largest_Draft + 1);
 
-         if By_Context then
+         if By_Context or else Mixed then
             Said := new Vocab.Token_Array (1 .. L.Capacity (Session) + 1);
          end if;
 
@@ -2127,6 +2145,10 @@ package body Model_Runner.Generation is
             Rejected : Boolean := False;
             Residual : Token_Id := Vocab.No_Token;
 
+            --  Whether this round's proposals came out of the text, which
+            --  has no distribution of its own: a point mass stands for q.
+            From_Context : Boolean := By_Context;
+
             --  Whether the grammar takes a token from a state: Grammar_Takes,
             --  from a state of the round's own rather than the run's.
             function Takes_At
@@ -2336,119 +2358,127 @@ package body Model_Runner.Generation is
                   Next_In.all := Next_Out.all;
                   exit when Below_Floor (Guess);
                end loop;
-            elsif By_Context then
-               --  What followed this phrase the last time it was said. One
-               --  search rather than a pass a proposal, over the tokens
-               --  this run has committed -- the target's own, so a proposal
-               --  is never checked against a context the target has not
-               --  read.
-               Recall_Said;
+            else
+               if By_Context
+                 or else (Mixed and then Text_Wait = 0)
+               then
+                  --  What followed this phrase the last time it was said. One
+                  --  search rather than a pass a proposal, over the tokens
+                  --  this run has committed -- the target's own, so a proposal
+                  --  is never checked against a context the target has not
+                  --  read.
+                  Recall_Said;
 
-               --  The token this round is already certain of, which the
-               --  session has not committed yet and which the proposal has
-               --  to follow: what is being asked is what comes after this
-               --  phrase ending in Guess, not what came after the phrase
-               --  before it.
-               if Said_Count < Said.all'Length then
-                  Said_Count := Said_Count + 1;
-                  Said.all (Said_Count) := Guess;
+                  --  The token this round is already certain of, which the
+                  --  session has not committed yet and which the proposal has
+                  --  to follow: what is being asked is what comes after this
+                  --  phrase ending in Guess, not what came after the phrase
+                  --  before it.
+                  if Said_Count < Said.all'Length then
+                     Said_Count := Said_Count + 1;
+                     Said.all (Said_Count) := Guess;
+                  end if;
+
+                  declare
+                     Given : Natural;
+                  begin
+                     if Lookup_Rest > 0 then
+                        Lookup_Rest := Lookup_Rest - 1;
+                     elsif not Paused then
+                        --  One at a time while little is kept, and only after a
+                        --  longer phrase: a round that keeps nothing then checks
+                        --  two positions, not five, and comes less often.
+                        declare
+                           Low : constant Boolean :=
+                             Thrifty
+                             and then Outcome.Accepted * 100
+                                      < Lookup_Bar * Outcome.Drafted;
+                        begin
+                           Lookup.Propose
+                             (Said.all (1 .. Said_Count),
+                              Proposed.all
+                                (2 .. (if Low then 2
+                                       elsif Thrifty
+                                       then 1 + Natural'Min (Lookup_Length, Largest_Draft)
+                                       else Largest_Draft + 1)),
+                              Given,
+                              Key => (if Low then Lookup_Low_Key else Lookup.Default_Key));
+                        end;
+                        Count := Count + Given;
+                     end if;
+                  end;
                end if;
 
-               declare
-                  Given : Natural;
-               begin
-                  if Lookup_Rest > 0 then
-                     Lookup_Rest := Lookup_Rest - 1;
-                  elsif not Paused then
-                     --  One at a time while little is kept, and only after a
-                     --  longer phrase: a round that keeps nothing then checks
-                     --  two positions, not five, and comes less often.
-                     declare
-                        Low : constant Boolean :=
-                          Thrifty
-                          and then Outcome.Accepted * 100
-                                   < Lookup_Bar * Outcome.Drafted;
-                     begin
-                        Lookup.Propose
-                          (Said.all (1 .. Said_Count),
-                           Proposed.all
-                             (2 .. (if Low then 2
-                                    elsif Thrifty
-                                    then 1 + Natural'Min (Lookup_Length, Largest_Draft)
-                                    else Largest_Draft + 1)),
-                           Given,
-                           Key => (if Low then Lookup_Low_Key else Lookup.Default_Key));
-                     end;
-                     Count := Count + Given;
-                  end if;
-               end;
-            else
-               --  And what the draft would say after it, and after that, and
-               --  so on. Each proposal costs the draft a pass; a draft as
-               --  large as the target would cost exactly what it saves.
-               --  A draft behind the text -- its context full -- proposes
-               --  nothing: what it would say follows another text.
-               for Step in 1 .. (if Paused or else L.Position (Draft_Session.all) + Skip < Before
-                                 then 0 else Round_Draft)
-               loop
-                  L.Evaluate
-                    (Draft_Session.all, Draft.all,
-                     For_Draft (Proposed.all (Count)),
-                     Aside.all (Aside.all'First
-                                .. Aside.all'First + Draft_Words - 1),
-                     Cancel, Local);
+               From_Context := By_Context or else Count > 1;
 
-                  --  A draft that has run out of room stops proposing rather
-                  --  than stopping the run: what it has proposed so far is
-                  --  still worth checking, and the target's own room is
-                  --  dealt with below.
-                  exit when E.Is_Error (Local)
-                    and then Local.Code = E.Generation_Context_Exhausted;
+               if By_Model and then Count = 1 then
+                  --  And what the draft would say after it, and after that, and
+                  --  so on. Each proposal costs the draft a pass; a draft as
+                  --  large as the target would cost exactly what it saves.
+                  --  A draft behind the text -- its context full -- proposes
+                  --  nothing: what it would say follows another text.
+                  for Step in 1 .. (if Paused or else L.Position (Draft_Session.all) + Skip < Before
+                                    then 0 else Round_Draft)
+                  loop
+                     L.Evaluate
+                       (Draft_Session.all, Draft.all,
+                        For_Draft (Proposed.all (Count)),
+                        Aside.all (Aside.all'First
+                                   .. Aside.all'First + Draft_Words - 1),
+                        Cancel, Local);
 
-                  if E.Is_Error (Local) then
-                     Conclude (Runtime_Error, Local);
-                     Failed := True;
-                     return;
-                  end if;
+                     --  A draft that has run out of room stops proposing rather
+                     --  than stopping the run: what it has proposed so far is
+                     --  still worth checking, and the target's own room is
+                     --  dealt with below.
+                     exit when E.Is_Error (Local)
+                       and then Local.Code = E.Generation_Context_Exhausted;
 
-                  --  Draft_Tail: the target's tokens past the draft's own
-                  --  have no chance under it, so it never proposes one and
-                  --  its distribution is nought there.
-                  Aside.all (Aside.all'First + Draft_Words .. Aside.all'Last)
-                    := [others => Draft_Tail];
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
+                        Failed := True;
+                        return;
+                     end if;
 
-                  S.Sample
-                    (Sampler, Aside.all, Guess, Local, Sharing,
-                     Probs => (if Sampled_Draft then Tgt_Dist else null));
-                  if E.Is_Error (Local) then
-                     Conclude (Runtime_Error, Local);
-                     Failed := True;
-                     return;
-                  end if;
+                     --  Draft_Tail: the target's tokens past the draft's own
+                     --  have no chance under it, so it never proposes one and
+                     --  its distribution is nought there.
+                     Aside.all (Aside.all'First + Draft_Words .. Aside.all'Last)
+                       := [others => Draft_Tail];
 
-                  --  Keep the draft's distribution q for this proposal, which
-                  --  the verify pass below reads to accept or reject it.
-                  if Sampled_Draft then
-                     declare
-                        Vocab : constant N.Element_Count :=
-                          N.Element_Count (Settings.Vocabulary);
-                        Base  : constant N.Element_Count :=
-                          N.Element_Count (Count - 1) * Vocab;
-                     begin
-                        Draft_Dist.all (Base .. Base + Vocab - 1) :=
-                          Tgt_Dist.all;
-                     end;
-                  end if;
+                     S.Sample
+                       (Sampler, Aside.all, Guess, Local, Sharing,
+                        Probs => (if Sampled_Draft then Tgt_Dist else null));
+                     if E.Is_Error (Local) then
+                        Conclude (Runtime_Error, Local);
+                        Failed := True;
+                        return;
+                     end if;
 
-                  Count := Count + 1;
-                  Proposed.all (Count) := Guess;
+                     --  Keep the draft's distribution q for this proposal, which
+                     --  the verify pass below reads to accept or reject it.
+                     if Sampled_Draft then
+                        declare
+                           Vocab : constant N.Element_Count :=
+                             N.Element_Count (Settings.Vocabulary);
+                           Base  : constant N.Element_Count :=
+                             N.Element_Count (Count - 1) * Vocab;
+                        begin
+                           Draft_Dist.all (Base .. Base + Vocab - 1) :=
+                             Tgt_Dist.all;
+                        end;
+                     end if;
 
-                  --  The draft's own probability of what it proposed: one
-                  --  over the sum of e to each logit less the chosen one's,
-                  --  the chosen one being the largest. Below the floor, the
-                  --  round is checked now rather than drafted further.
-                  exit when Below_Floor (Guess);
-               end loop;
+                     Count := Count + 1;
+                     Proposed.all (Count) := Guess;
+
+                     --  The draft's own probability of what it proposed: one
+                     --  over the sum of e to each logit less the chosen one's,
+                     --  the chosen one being the largest. Below the floor, the
+                     --  round is checked now rather than drafted further.
+                     exit when Below_Floor (Guess);
+                  end loop;
+               end if;
             end if;
 
             --  Under a grammar, no further than the first proposal the
@@ -2493,6 +2523,10 @@ package body Model_Runner.Generation is
             --  The first is the target's own; the rest are the draft's, and
             --  those are what the count below is about.
             Outcome.Drafted := Outcome.Drafted + Count - 1;
+            if Mixed and then From_Context then
+               Outcome.Drafted_From_Text :=
+                 Outcome.Drafted_From_Text + Count - 1;
+            end if;
 
             --  The target reads the lot in one pass, and says what it would
             --  have said at each position.
@@ -2689,14 +2723,14 @@ package body Model_Runner.Generation is
 
                      --  q: the draft's kept row, or a point mass where a
                      --  lookup proposed without a distribution of its own.
-                     if By_Context then
+                     if From_Context then
                         Point_Dist.all := [others => 0.0];
                         Point_Dist.all (Point_Dist.all'First + P_At) := 1.0;
                      end if;
 
                      P_X := Tgt_Dist.all (Tgt_Dist.all'First + P_At);
                      Q_X :=
-                       (if By_Context
+                       (if From_Context
                         then Point_Dist.all (Point_Dist.all'First + P_At)
                         else Draft_Dist.all
                                (Draft_Dist.all'First + Q_Base + P_At));
@@ -2711,7 +2745,7 @@ package body Model_Runner.Generation is
                      else
                         S.Sample_Residual
                           (Sampler, Tgt_Dist.all,
-                           (if By_Context then Point_Dist.all
+                           (if From_Context then Point_Dist.all
                             else Draft_Dist.all
                                    (Draft_Dist.all'First + Q_Base
                                     .. Draft_Dist.all'First + Q_Base
@@ -2743,6 +2777,15 @@ package body Model_Runner.Generation is
             --  last, so both have gone further than the text has. To the
             --  accepted proposals only: a residual token that replaced a
             --  rejected one is committed just below, by evaluating it.
+            if Mixed then
+               if From_Context then
+                  Text_Wait :=
+                    (if Accepted > 1 then 0 else Text_Again);
+               elsif Text_Wait > 0 then
+                  Text_Wait := Text_Wait - 1;
+               end if;
+            end if;
+
             L.Rewind (Session, Before + Accepted, Local);
             if E.Is_Error (Local) then
                Conclude (Runtime_Error, Local);
@@ -2778,6 +2821,8 @@ package body Model_Runner.Generation is
             --  Not a draft left behind the round -- one whose context is
             --  full stopped reading where it was: it has nothing of this
             --  round to catch up on.
+            --  Several at once in one pass where the round was the text's
+            --  and the draft read none of it.
             while By_Model
               and then L.Position (Draft_Session.all) + Skip >= Before
               and then L.Position (Draft_Session.all) + Skip
@@ -2787,12 +2832,22 @@ package body Model_Runner.Generation is
                   Step : constant Natural :=
                     L.Position (Draft_Session.all) + Skip - Before + 1;
                begin
-                  L.Evaluate
-                    (Draft_Session.all, Draft.all,
-                     For_Draft (Verified.all (Step)),
-                     Aside.all (Aside.all'First
-                                .. Aside.all'First + Draft_Words - 1),
-                     Cancel, Local);
+                  if Verified_Count > Step then
+                     L.Evaluate_Batch
+                       (Draft_Session.all, Draft.all,
+                        Draft_Tokens_Of
+                          (Verified.all (Step .. Verified_Count)),
+                        Aside.all (Aside.all'First
+                                   .. Aside.all'First + Draft_Words - 1),
+                        Cancel => Cancel, Status => Local);
+                  else
+                     L.Evaluate
+                       (Draft_Session.all, Draft.all,
+                        For_Draft (Verified.all (Step)),
+                        Aside.all (Aside.all'First
+                                   .. Aside.all'First + Draft_Words - 1),
+                        Cancel, Local);
+                  end if;
                   --  Out of room, as the proposals below are: behind is
                   --  where it stays, and the target checks what it says.
                   exit when E.Is_Error (Local)

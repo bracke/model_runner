@@ -1650,6 +1650,7 @@ begin
                Request.Draft_From_Next := Plan.From_Next;
                Request.Draft_Tokens := Plan.Tokens;
                Request.Draft_From_Context := Plan.From_Context;
+               Request.Draft_Lookup_First := Plan.Lookup_First;
                Request.Draft_Adapts := Plan.Adapts;
                Model_Runner.Draft_Policy.Prepare
                  (Prepared, Plan,

@@ -7837,6 +7837,116 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end Lookup_Drafting_Produces_The_Same_Text;
 
+   --  A draft model asking the text first: on a context that repeats the
+   --  text proposes, and where it does not the draft does -- the draft
+   --  caught up in one pass on what the text's rounds kept, or it would
+   --  fall behind and propose nothing after the first of them.
+   procedure Mixed_Drafting_Produces_The_Same_Text
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Room   : constant := 64;
+      Image  : B.Byte_Array_Access;
+      Prompt : constant String := "abababab";
+   begin
+      Tiny_Model.Build (Image, Room => Room);
+
+      declare
+         Held  : aliased constant B.Byte_Array := Image.all;
+         Under : aliased Harness (Held'Access);
+
+         procedure Turn
+           (Mixed     : Boolean;
+            Text      : out Model_Runner.Bytes.Byte_Array_Access;
+            Length    : out Natural;
+            Proposed  : out Natural;
+            From_Text : out Natural)
+         is
+            Live    : L.Session;
+            Second  : aliased L.Session;
+            Request : Gen.Request;
+            Stop    : Model_Runner.Stops.Set;
+            Outcome : Gen.Result;
+            Local   : E.Error_Info;
+         begin
+            L.Open (Live, Under.Ready, Context => Room, Status => Local);
+            Assert (E.Is_Ok (Local), "the session did not open");
+            if Mixed then
+               L.Open (Second, Under.Ready, Context => Room, Status => Local);
+               Assert (E.Is_Ok (Local), "the draft session did not open");
+            end if;
+
+            Model_Runner.Stops.Open (Stop);
+            Request.Max_Tokens := 24;
+            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            Request.Seed := 7;
+            Request.Has_Seed := True;
+            Request.Add_Beginning := True;
+            Request.Retain_Text := True;
+            Request.Draft_Tokens := (if Mixed then 3 else 0);
+            Request.Draft_Lookup_First := Mixed;
+
+            Gen.Generate
+              (Under.Ready, Live, Prompt, Request, Stop, null, null,
+               null, null, null, null,
+               Draft =>
+                 (if Mixed then Under.Ready'Unchecked_Access else null),
+               Draft_Session =>
+                 (if Mixed then Second'Unchecked_Access else null),
+               Outcome => Outcome);
+
+            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                    "the run failed: "
+                    & E.Error_Code'Image (Outcome.Error.Code));
+
+            Text := Outcome.Text;
+            Length := Outcome.Text_Length;
+            Proposed := Outcome.Drafted;
+            From_Text := Outcome.Drafted_From_Text;
+
+            Model_Runner.Stops.Close (Stop);
+            if Mixed then
+               L.Close (Second);
+            end if;
+            L.Close (Live);
+         end Turn;
+
+         Plain_Text, Mixed_Text : Model_Runner.Bytes.Byte_Array_Access;
+         Plain_Last, Mixed_Last : Natural;
+         Unused_A, Unused_B     : Natural;
+         Proposed, From_Text    : Natural;
+      begin
+         Start (Under);
+
+         Turn (False, Plain_Text, Plain_Last, Unused_A, Unused_B);
+         Turn (True, Mixed_Text, Mixed_Last, Proposed, From_Text);
+
+         Assert (Plain_Last > 0, "the plain run produced nothing");
+         Assert (Mixed_Last = Plain_Last
+                 and then B."="
+                            (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                             Mixed_Text.all (1 .. B.Byte_Index (Mixed_Last))),
+                 "a run asking the text first produced different text");
+         Assert (From_Text > 0,
+                 "a run asking the text first never took the text's, on a "
+                 & "context that repeats");
+         --  Kept up, the draft proposes most of the run (fifteen of twenty
+         --  here); left behind after the text's first round, three.
+         Assert (Proposed - From_Text > From_Text,
+                 "a run asking the text first proposed" & From_Text'Image
+                 & " from the text and" & Natural'Image (Proposed - From_Text)
+                 & " from the draft: the draft fell behind the text");
+
+         B.Free (Plain_Text);
+         B.Free (Mixed_Text);
+      end;
+
+      B.Free (Image);
+   end Mixed_Drafting_Produces_The_Same_Text;
+
    procedure Drafting_Produces_The_Same_Text
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -21476,6 +21586,10 @@ package body Tests.Inference_Cases is
         (T, Lookup_Drafting_Produces_The_Same_Text'Access,
          "a run drafting from its own context says what it says "
          & "without drafting");
+      Register_Routine
+        (T, Mixed_Drafting_Produces_The_Same_Text'Access,
+         "a run whose draft model asks the text first says what it says "
+         & "without drafting, the draft kept up with the text's rounds");
       Register_Routine
         (T, Drafting_Produces_The_Same_Text'Access,
          "a run with a draft model produces exactly the text of the same "

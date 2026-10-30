@@ -78,11 +78,13 @@ package Model_Runner.Draft_Policy is
       Request  : Asked) return Boolean;
 
    --  How a run drafts: from the block past the stack, out of its context,
-   --  or (neither) from the draft model loaded, if any; how many proposals
-   --  a round; whether that length follows what was kept.
+   --  or (neither) from the draft model loaded, if any; whether a draft
+   --  model is asked only where the context offers nothing; how many
+   --  proposals a round; whether that length follows what was kept.
    type Plan is record
       From_Next    : Boolean := False;
       From_Context : Boolean := False;
+      Lookup_First : Boolean := False;
       Adapts       : Boolean := False;
       Tokens       : Natural := 0;
    end record;

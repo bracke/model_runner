@@ -155,6 +155,12 @@ package Model_Runner.Generation is
       --  one, so the command refuses that pair rather than choosing for it.
       Draft_From_Context : Boolean := False;
 
+      --  With a draft model: search the text first each round, as
+      --  Draft_From_Context does, and ask the draft only where that finds
+      --  nothing. A thinking model restates what it was asked, and the
+      --  text then guesses better than a small model and for nothing.
+      Draft_Lookup_First : Boolean := False;
+
       --  Propose those tokens from the model's own block past its stack,
       --  where the file carries one: a model trained to draft the token
       --  after the next, run once a proposal from the stack's last state
@@ -314,6 +320,10 @@ package Model_Runner.Generation is
       --  and buys nothing, and the two are indistinguishable from the text.
       Drafted          : Natural := 0;
       Accepted         : Natural := 0;
+
+      --  Of Drafted, those the text proposed where a draft model asks it
+      --  first (Draft_Lookup_First).
+      Drafted_From_Text : Natural := 0;
 
       --  And by position in the round: how many rounds offered a k-th
       --  proposal, and how many kept it -- the first k proposals all

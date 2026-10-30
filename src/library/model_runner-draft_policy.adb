@@ -86,6 +86,13 @@ package body Model_Runner.Draft_Policy is
          then Request.Tokens else 0);
       Result.From_Context := Request.Lookup and then not Draft_Ready;
 
+      --  A draft model asks the text first, every round it last proposed
+      --  well (Generation.Draft_Lookup_First): a thinking model restates
+      --  its question, and qwen3-8b's story read 28.9 tokens a second
+      --  drafted by Qwen3-0.6B, 35.6 asking the text first; gemma-3-4b's
+      --  29.7 -> 29.2, Steelman-14B's level.
+      Result.Lookup_First := Draft_Ready;
+
       --  A draft model's rounds follow what the rounds before kept, and
       --  the block's but a large dense model's (see Next_Adapts), unless a
       --  length was named.
