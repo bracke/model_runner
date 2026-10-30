@@ -59,6 +59,7 @@
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_clustered : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
@@ -621,6 +622,34 @@ void main() {
     float rtop[BR / 16u][8];
     float rtotal[BR / 16u][8];
 
+    //  Each element's row's first and last position, which no tile
+    //  changes, and the range every row of this subgroup sees: a tile
+    //  inside it scores without a comparison an element. Worked out for
+    //  every element of every tile, qwen3-8b's prompt 16,214 long read
+    //  201.4 tokens a second against 208.9, Mellum's 560.6 against 578.8.
+    uint row_fi[BR / 16u][8];
+    uint row_la[BR / 16u][8];
+    uint all_fi = 0u;
+    uint all_la = ~0u;
+
+    [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
+        for (uint e = 0u; e < 8u; ++e) {
+            uint slot = row_slot (sub, block, m * 16u + mine_rows[e]);
+            uint la   = shape.last + (causal != 0u ? slot : 0u);
+            uint fi   = shape.first;
+
+            if (shape.window > 0u) {
+                fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
+            }
+            row_fi[m][e] = fi;
+            row_la[m][e] = la;
+            all_fi = max (all_fi, fi);
+            all_la = min (all_la, la);
+        }
+    }
+    all_fi = subgroupMax (all_fi);
+    all_la = subgroupMin (all_la);
+
     [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
         for (uint e = 0u; e < 8u; ++e) {
             uint asks = row_head (sub, head, m * 16u + mine_rows[e]);
@@ -707,19 +736,25 @@ void main() {
             }
 
 #ifdef IN_PLACE
+            bool inside = base >= all_fi && base + BC - 1u <= all_la
+                          && slope == 0.0 && shape.cap == 0.0;
+
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 for (int e = 0; e < sacc[m][0].length(); ++e) {
                     uint r    = m * 16u + mine_rows[e];
-                    uint slot = row_slot (sub, block, r);
-                    uint la   = shape.last + (causal != 0u ? slot : 0u);
-                    uint fi   = shape.first;
-
-                    if (shape.window > 0u) {
-                        fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
-                    }
+                    uint la   = row_la[m][e];
+                    uint fi   = row_fi[m][e];
 
                     float best = -1.0 / 0.0;
 
+                    if (inside) {
+                        [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
+                            float score = sacc[m][n][e] * shape.scale;
+
+                            sacc[m][n][e] = score;
+                            best = max (best, score);
+                        }
+                    } else
                     [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
                         uint  step  = base + n * 16u + (lane & 15u);
                         float score = -1.0 / 0.0;
@@ -731,7 +766,7 @@ void main() {
                                 uint asking =
                                   causal != 0u
                                   ? la
-                                  : shape.last - (shape.positions - 1u) + slot;
+                                  : shape.last - (shape.positions - 1u) + row_slot (sub, block, r);
 
                                 score -=
                                   slope * float (abs (int (step) - int (asking)));
@@ -888,6 +923,9 @@ void main() {
                 }
             }
 
+            //  Not skipped where every row's rescale is one, as it is deep in
+            //  a walk: qwen3-8b's prompt 16,214 long read 208.9 tokens a
+            //  second that way against 209.4 multiplying.
             [[unroll]] for (uint m = 0u; m < 2u; m++) {
                 [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
                     if (t < pair_half && (half_of * pair_half + t) * 16u < dv) {

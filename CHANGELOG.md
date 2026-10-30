@@ -169,6 +169,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Prompt attention scores a tile inside every row's range without a comparison.** The matrix attention kernel worked out each row's first and last position again for every element of every tile and compared each score against them, though no tile changes them and at depth nearly every tile lies inside every row's range. The bounds are worked out once and such a tile only scales its scores: qwen3-8b's prompt 16,214 long 201.4 to 208.9 tokens a second, Mellum's 560.6 to 578.8, gemma-3-4b's 586.9 to 593.1, the text the same. Skipping the accumulators' rescale where every row's is one measured nothing and is not kept.
+
 - **The published figures taken again, and their commands naming the processor.** Every group the release gate found stale -- the twelve tokens, the device and reference tables, drafting, the llama.cpp comparison, the panels, the perplexity table and the pictures -- was measured again in one sitting (`docs/measured-figures.txt`, 2026-10-29/30). `run` and `tests speed` take the device unasked now, so the README's processor commands name `--backend cpu`. The processor and the device no longer print the same twelve-token digest at run's penalty of 1.0 (they do at `--arith f32`, and at 1.1), and the README says so.
 
 - **`tests speed --device-memory 0` reads the weights where they lie**, as `run`'s does. The tool took a nought as unnamed and measured the weights copied; the README's "read where they lie" row is retaken (5.83 tokens a second against 8.04 given back and uploaded again, 59.25 all copied).
