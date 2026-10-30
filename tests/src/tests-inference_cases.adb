@@ -15169,11 +15169,10 @@ package body Tests.Inference_Cases is
                                    & E.Error_Code'Image (Status.Code));
                            --  But OLMo2, which normalizes its whole queries
                            --  and keys -- a step the sequence has none of --
-                           --  and goes over in pieces by design; and LFM3,
-                           --  whose gate a head and convolution are the
-                           --  host's.
+                           --  and goes over in pieces by design. LFM3's
+                           --  convolutions and gated heads go whole.
                            Assert
-                             ((if Kind in Tiny_Model.Olmo2 | Tiny_Model.Lfm3
+                             ((if Kind in Tiny_Model.Olmo2
                               then Model_Runner.Backend.Device.Layers_Whole
                                      = Whole_Was
                                    and then

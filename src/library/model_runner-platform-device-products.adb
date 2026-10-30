@@ -233,6 +233,7 @@ package body Model_Runner.Platform.Device.Products is
    --  where two read TinyLlama IQ4_NL at 96 and IQ4_XS at 104 tokens a
    --  second against 99 and 108 at four.
    IQ4_Wave_Rows  : constant := 4;
+   Half_Wave_Rows : constant := 2;
    Q2K_Wave_Rows  : constant := 4;
    Low_Wave_Lanes : constant := 64;
 
@@ -1340,7 +1341,10 @@ package body Model_Runner.Platform.Device.Products is
                   and then Item.Q3K_Wave_Line /= Null_Handle)
                  or else
                  (Packing in Legacy_Packing
-                  and then Item.Legacy_Wave_Lines (Packing) /= Null_Handle))));
+                  and then Item.Legacy_Wave_Lines (Packing) /= Null_Handle)
+                 or else
+                 (Packing in Half_Packing
+                  and then Item.Half_Wave_Lines (Packing) /= Null_Handle))));
 
    --  Invocations a workgroup of the bound row kernel has. The super-block
    --  kernel's workgroup is a single subgroup of thirty-two; the half-group
@@ -1352,7 +1356,7 @@ package body Model_Runner.Platform.Device.Products is
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
                           | Packed_MXFP4
                           | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
-                          | Legacy_Packing
+                          | Legacy_Packing | Half_Packing
              then Low_Wave_Lanes
              else Wave_Lanes)
        elsif Half_Grouped (Item, Packing, Count) then Half_Group
@@ -1368,7 +1372,7 @@ package body Model_Runner.Platform.Device.Products is
        then (if Packing in Low_Packing | Packed_Q8_0 | Packed_IQ4_NL
                           | Packed_MXFP4
                           | Packed_IQ4_XS | Packed_Q2_K | Packed_Q3_K
-                          | Legacy_Packing
+                          | Legacy_Packing | Half_Packing
              then Low_Wave_Lanes
              else Wave_Lanes)
        else Row_Lanes);
@@ -1391,7 +1395,8 @@ package body Model_Runner.Platform.Device.Products is
      (Packing : Weight_Packing;
       Count   : Natural := 1;
       Short   : Boolean := False) return Positive
-   is (if Packing = Packed_Q8_0 and then Count in Q8_Count
+   is (if Packing in Half_Packing then Half_Wave_Rows
+       elsif Packing = Packed_Q8_0 and then Count in Q8_Count
        then Q8_Multi_Rows
        --  And the few-vector walks compiled to land as many (MANY_ROWS in
        --  compile-shaders.sh): Q2_K's and Q3_K's check of four 18 per cent
@@ -1465,6 +1470,8 @@ package body Model_Runner.Platform.Device.Products is
        then Item.Q3K_Wave_Line
        elsif Packing in Legacy_Packing and then Waved (Item, Packing, Count)
        then Item.Legacy_Wave_Lines (Packing)
+       elsif Packing in Half_Packing and then Waved (Item, Packing, Count)
+       then Item.Half_Wave_Lines (Packing)
        elsif Packing in Low_Packing
        then (if Count in Row_Line_Array'Range
                and then Item.Low_Row_Lines (Count) /= Null_Handle
@@ -3655,6 +3662,10 @@ package body Model_Runner.Platform.Device.Products is
                     Item.Legacy_Wave_Shaders (Packed_Q5_0));
             Module (Model_Runner.Shaders.Low.Row_Product_Wave_Q5_1,
                     Item.Legacy_Wave_Shaders (Packed_Q5_1));
+            Module (Model_Runner.Shaders.Super.Row_Product_Half_F16,
+                    Item.Half_Wave_Shaders (Values_F16));
+            Module (Model_Runner.Shaders.Super.Row_Product_Half_Bf16,
+                    Item.Half_Wave_Shaders (Values_BF16));
          end;
       end if;
 
@@ -4958,6 +4969,13 @@ package body Model_Runner.Platform.Device.Products is
                   end if;
                end loop;
 
+               for Packing in Half_Packing loop
+                  if Item.Half_Wave_Shaders (Packing) /= Null_Handle then
+                     Request.Stage.Module := Item.Half_Wave_Shaders (Packing);
+                     Line (Low_Wave_Lanes, 1, Item.Half_Wave_Lines (Packing));
+                  end if;
+               end loop;
+
                --  And each of those over a few vectors at once, made from
                --  the same compilation at its second constant.
                declare
@@ -4997,6 +5015,9 @@ package body Model_Runner.Platform.Device.Products is
                   Many (Item.Q3K_Wave_Shader, Packed_Q3_K);
                   for Packing in Legacy_Packing loop
                      Many (Item.Legacy_Wave_Shaders (Packing), Packing);
+                  end loop;
+                  for Packing in Half_Packing loop
+                     Many (Item.Half_Wave_Shaders (Packing), Packing);
                   end loop;
                end;
 
@@ -6517,6 +6538,9 @@ package body Model_Runner.Platform.Device.Products is
       for Packing in Legacy_Packing loop
          Give_Back (Item.Legacy_Wave_Lines (Packing), "vkDestroyPipeline");
       end loop;
+      for Packing in Half_Packing loop
+         Give_Back (Item.Half_Wave_Lines (Packing), "vkDestroyPipeline");
+      end loop;
       Give_Back (Item.Low_Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Low_Wide_Line, "vkDestroyPipeline");
       for Count in Item.Low_Row_Lines'Range loop
@@ -6710,6 +6734,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Q3K_Wave_Shader, "vkDestroyShaderModule");
       for Packing in Legacy_Packing loop
          Give_Back (Item.Legacy_Wave_Shaders (Packing),
+                    "vkDestroyShaderModule");
+      end loop;
+      for Packing in Half_Packing loop
+         Give_Back (Item.Half_Wave_Shaders (Packing),
                     "vkDestroyShaderModule");
       end loop;
       Give_Back (Item.Low_Shader, "vkDestroyShaderModule");
@@ -13691,9 +13719,11 @@ package body Model_Runner.Platform.Device.Products is
         or else Base = System.Null_Address
         or else Shape.Mix = 0
         or else Shape.Head = 0
-        or else Shape.Mix mod Shape.Head /= 0
+        or else (Shape.Gated and then Shape.Mix mod 3 /= 0)
+        or else Conv_Width (Shape) mod Shape.Head /= 0
         or else Shape.Taps < 2
-        or else Shape.Unit_Blocks > Shape.Mix / Shape.Head
+        or else Shape.Unit_Blocks > Conv_Width (Shape) / Shape.Head
+        or else (Shape.Gated and then Shape.Unit_Blocks /= 0)
         or else Shape.Every = 0
         or else Source not in 1 .. Steps.Held
         or else Steps.Items (Source).Rows /= Shape.Mix
@@ -13705,7 +13735,7 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte,
          Packing => Weight_Packing'First,
-         Rows => Shape.Mix, Columns => Shape.Mix,
+         Rows => Conv_Width (Shape), Columns => Shape.Mix,
          Key => Key, Chained => True, Reads => Source, Kept => Kept,
          Convolves => True, Linear => Shape,
          Attends => False, Blends => False,
@@ -14041,10 +14071,13 @@ package body Model_Runner.Platform.Device.Products is
         or else (From_Step = 0) /= (Other_Step = 0)
         or else First not in 1 .. Steps.Held
         or else Second not in 1 .. Steps.Held
-        --  The seventh unit's second arm is one number a position, and
-        --  every other unit's is as wide as the first.
+        --  The seventh unit's second arm is one number a block of the
+        --  first -- a position, or LFM3's head -- and every other unit's
+        --  is as wide as the first.
         or else (if Unit = 7
-                 then Steps.Items (Second).Rows /= 1
+                 then Steps.Items (Second).Rows = 0
+                      or else Steps.Items (First).Rows
+                              mod Steps.Items (Second).Rows /= 0
                  elsif not Alone
                  then Steps.Items (First).Rows /= Steps.Items (Second).Rows
                  else False)
@@ -15759,7 +15792,7 @@ package body Model_Runner.Platform.Device.Products is
                   Held : constant Interfaces.Unsigned_64 :=
                     (if This.Convolves
                      then Interfaces.Unsigned_64 (This.Linear.Taps)
-                          * Interfaces.Unsigned_64 (This.Linear.Mix)
+                          * Interfaces.Unsigned_64 (Conv_Width (This.Linear))
                      else Interfaces.Unsigned_64
                             (2 * This.Linear.Value_Heads + This.Linear.Head));
                begin
@@ -15804,14 +15837,17 @@ package body Model_Runner.Platform.Device.Products is
                      then This.Reads
                      else Index - 2);
                begin
-                  --  The seventh unit's second arm is one number a
-                  --  position; every other unit's is as wide as the
+                  --  The seventh unit's second arm is one number a block
+                  --  of the first; every other unit's is as wide as the
                   --  first.
                   if This.Rows = 0
                     or else Arm not in 1 .. Index - 1
                     or else Other > Index - 1
-                    or else Steps.Items (Arm).Rows
-                            /= (if This.Unit = 7 then 1 else This.Rows)
+                    or else (if This.Unit = 7
+                             then Steps.Items (Arm).Rows = 0
+                                  or else This.Rows
+                                          mod Steps.Items (Arm).Rows /= 0
+                             else Steps.Items (Arm).Rows /= This.Rows)
                     or else (Other /= 0
                              and then Steps.Items (Other).Rows /= This.Rows)
                   then
@@ -16017,7 +16053,8 @@ package body Model_Runner.Platform.Device.Products is
                 elsif This.Biases then This.Stack * This.Each
                 elsif This.Rwkvs or else This.Wkvs or else This.Mambas
                 then Natural (This.Span / 4)
-                elsif This.Convolves then This.Linear.Taps * This.Linear.Mix
+                elsif This.Convolves
+                then This.Linear.Taps * Conv_Width (This.Linear)
                 elsif This.Rules
                 then 2 * This.Linear.Value_Heads + This.Linear.Head
                 elsif This.Routes then This.Columns
@@ -18506,11 +18543,12 @@ package body Model_Runner.Platform.Device.Products is
                            1 => C.unsigned (This.Linear.Every),
                            2 => C.unsigned (This.Linear.Runs),
                            3 => Bits (This.Linear.Epsilon),
+                           4 => Boolean'Pos (This.Linear.Gated),
                            others => 0],
                         others  => <>);
 
                      Blocks : constant Natural :=
-                       This.Linear.Mix / This.Linear.Head;
+                       Conv_Width (This.Linear) / This.Linear.Head;
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Product_Bytes, Shape'Address);
@@ -18864,9 +18902,15 @@ package body Model_Runner.Platform.Device.Products is
                           (if Arms then C.unsigned (Sits (Up_Step))
                            else 0),
 
-                        --  How wide a position is, for the unit that
-                        --  reads one number a position.
-                        Base    => C.unsigned (This.Rows),
+                        --  How wide a block is, for the unit that reads
+                        --  one number a block: a position's whole row, or
+                        --  a head where the second arm is one a head.
+                        Base    =>
+                          C.unsigned
+                            (if This.Unit = 7 and then Up_Step in 1 .. Steps.Held
+                               and then Steps.Items (Up_Step).Rows > 0
+                             then This.Rows / Steps.Items (Up_Step).Rows
+                             else This.Rows),
 
                         --  The clamped gate's slope and limit, by their
                         --  bits, in the two words after the base.

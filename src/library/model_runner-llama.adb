@@ -4577,6 +4577,25 @@ package body Model_Runner.Llama is
    is
       Settings : Configuration renames Item.Owner.Settings;
    begin
+      --  LFM3's gated convolution: B, C and x a row, blocks of a
+      --  hundred and twenty-eight channels -- or the whole width as one
+      --  where it is no multiple of that -- and no rule.
+      if Is_Lfm3 (Settings.Kind) then
+         return
+           (Mix         => 3 * Settings.Embedding,
+            Head        =>
+              (if Settings.Embedding mod 128 = 0 then 128
+               else Settings.Embedding),
+            Taps        => Settings.Conv_Kernel,
+            Region_At   => Natural (Conv_At (Settings, Index)),
+            Every       => Natural (Device_Slot_Span (Item)),
+            Record_At   => Linear_Record_At (Item, Index),
+            Runs        => Runs,
+            Epsilon     => Settings.Epsilon,
+            Gated       => True,
+            others      => <>);
+      end if;
+
       return
         (Mix         => Mix_Width (Settings),
          Head        => Settings.State_Size,
@@ -4595,7 +4614,8 @@ package body Model_Runner.Llama is
          Beta_Step   => 0,
          Scale       =>
            Real (1.0 / N.Sqrt (N.Wide_Real (Settings.State_Size))),
-         Epsilon     => Settings.Epsilon);
+         Epsilon     => Settings.Epsilon,
+         Gated       => False);
    end Linear_Shape_Of;
 
    --  Where a linear layer's state lies within a slot on the device:

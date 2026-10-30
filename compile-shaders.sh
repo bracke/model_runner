@@ -145,6 +145,8 @@ compile row_product_wave_q4_0        row_product_wave_low.comp vulkan1.1 NUM_ROW
 compile row_product_wave_q4_1        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q4_1 MANY_ROWS=8u MANY_ROWS_FEW=4u
 compile row_product_wave_q5_0        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q5_0 MANY_ROWS=8u MANY_ROWS_FEW=4u
 compile row_product_wave_q5_1        row_product_wave_low.comp vulkan1.1 NUM_ROWS=4u Q5_1 MANY_ROWS=8u MANY_ROWS_FEW=4u
+compile row_product_half_f16         row_product_half.comp vulkan1.1 NUM_ROWS=2u
+compile row_product_half_bf16        row_product_half.comp vulkan1.1 NUM_ROWS=2u BF16
 compile half_batch                   half_batch.comp       vulkan1.0
 compile matrix_product               matrix_product.comp   vulkan1.3
 compile matrix_extra                 matrix_product.comp   vulkan1.3 MORE_FORMATS

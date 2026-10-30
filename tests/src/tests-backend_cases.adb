@@ -1399,6 +1399,8 @@ package body Tests.Backend_Cases is
          Batch  : Positive;
          Tiled  : Boolean;
          Across : N.Element_Count := 256;
+         --  For the sixteen-bit formats alone, whose rows need no block.
+         Halves : Boolean := False;
       end record;
 
       --  And a third, one vector over an odd count of rows: a generated
@@ -1444,26 +1446,39 @@ package body Tests.Backend_Cases is
       --  the 128-vector one over several super-blocks a row, where a scale
       --  kept from one block to the next (Q6_K's are read once a block)
       --  would be used for the wrong one; a row of one block cannot tell.
-      Shapes : constant array (1 .. 19) of Shape :=
+      --
+      --  And rows of 588, 587 and 2050 for the two sixteen-bit formats
+      --  alone: their walk loads sixteen bytes a lane where a row is a
+      --  whole number of eights on sixteen bytes, and reads any other row
+      --  an element at a time -- a vision patch row of 588 is one.
+      Shapes : constant array (1 .. 23) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
          (Tall => 96, Batch => 40, Tiled => True, others => <>),
          (Tall => 64, Batch => 140, Tiled => True, others => <>),
-         (Tall => 5, Batch => 1, Tiled => False, Across => 8192),
-         (Tall => 7, Batch => 1, Tiled => False, Across => 4096),
+         (Tall => 5, Batch => 1, Tiled => False, Across => 8192, others => <>),
+         (Tall => 7, Batch => 1, Tiled => False, Across => 4096, others => <>),
          (Tall => 13, Batch => 3, Tiled => False, others => <>),
          (Tall => 13, Batch => 7, Tiled => False, others => <>),
-         (Tall => 13, Batch => 1, Tiled => False, Across => 512),
-         (Tall => 13, Batch => 3, Tiled => False, Across => 512),
-         (Tall => 13, Batch => 1, Tiled => False, Across => 1024),
-         (Tall => 13, Batch => 3, Tiled => False, Across => 1024),
-         (Tall => 13, Batch => 1, Tiled => False, Across => 768),
-         (Tall => 13, Batch => 3, Tiled => False, Across => 768),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 512, others => <>),
+         (Tall => 13, Batch => 3, Tiled => False, Across => 512, others => <>),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 1024, others => <>),
+         (Tall => 13, Batch => 3, Tiled => False, Across => 1024, others => <>),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 768, others => <>),
+         (Tall => 13, Batch => 3, Tiled => False, Across => 768, others => <>),
          (Tall => 64, Batch => 300, Tiled => True, others => <>),
          (Tall => 64, Batch => 270, Tiled => True, others => <>),
-         (Tall => 64, Batch => 20, Tiled => True, Across => 1024),
-         (Tall => 64, Batch => 40, Tiled => True, Across => 1024)];
+         (Tall => 64, Batch => 20, Tiled => True, Across => 1024, others => <>),
+         (Tall => 64, Batch => 40, Tiled => True, Across => 1024, others => <>),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 588,
+          Halves => True),
+         (Tall => 13, Batch => 3, Tiled => False, Across => 588,
+          Halves => True),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 587,
+          Halves => True),
+         (Tall => 13, Batch => 1, Tiled => False, Across => 2050,
+          Halves => True)];
 
       --  How far the device and the processor may differ.
       --
@@ -1583,6 +1598,9 @@ package body Tests.Backend_Cases is
             Wide  : constant N.Element_Count := Chosen.Across;
          begin
             for Which in Case_Kind loop
+               if Chosen.Halves and then Which not in Kind_F16 | Kind_BF16 then
+                  goto Next_Kind;
+               end if;
                declare
                   Name : constant String := G.Type_Name (Format_Of (Which));
 
@@ -1701,6 +1719,7 @@ package body Tests.Backend_Cases is
                   T.Free (Here);
                   B.Free (Storage);
                end;
+               <<Next_Kind>>
             end loop;
          end;
       end loop;
@@ -8474,8 +8493,18 @@ package body Tests.Backend_Cases is
                Record_At => 0,
                Table_At => Ring'Length, Runs => 1,
                Z_Step => 2, Alpha_Step => 3, Beta_Step => 4,
-               Scale => 0.5, Epsilon => Epsilon);
+               Scale => 0.5, Epsilon => Epsilon, Gated => False);
          begin
+            --  The rule's front convolves the whole mixed row; LFM3's
+            --  gated form a third of it.
+            Assert (Products.Conv_Width (Shape) = Natural (Mix)
+                    and then Products.Conv_Width
+                               ((Shape with delta Gated => True,
+                                                  Mix => 3 * Natural (Mix)))
+                             = Natural (Mix),
+                    "a convolution's width is not the row's, or a gated "
+                    & "one's third");
+
             Products.Add_Conv
               (Steps, Taps_W (Taps_W'First)'Address, Bytes_Of (Taps_W), 0,
                Shape, Added, From_Step => 1,

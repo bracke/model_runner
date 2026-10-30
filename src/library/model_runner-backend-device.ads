@@ -2000,6 +2000,9 @@ package Model_Runner.Backend.Device is
    --    out. The queries and the gates are picked apart on the device,
    --    and the value heads must be as wide as the query heads, since
    --    the gate is elementwise over the blend.
+   --  @param Head_Gate_Rows LFM3's gate a head: a row of the width a
+   --    query head, whose dot with the normalized input, through the
+   --    logistic, scales the head's blend before the projection out.
    --  @param Shared_Gate A hybrid mixture's shared expert, the gated
    --    block every position goes through beside its chosen experts:
    --    its gate matrix. Not present for a mixture without one, and
@@ -2164,6 +2167,7 @@ package Model_Runner.Backend.Device is
       Shifted        : Boolean := False;
       After          : Boolean := False;
       Head_Gates     : Boolean := False;
+      Head_Gate_Rows : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Gate    : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
       Shared_Up      : Model_Runner.Tensors.View :=

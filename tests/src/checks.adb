@@ -6626,6 +6626,29 @@ package body Checks is
          end if;
       end;
 
+      --  And the sixteen-bit formats' generating walk, compiled twice:
+      --  binary16, and brain float with BF16.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/row_product_half.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 2;
+
+         if not Found then
+            Fail ("src/shaders/row_product_half.comp is missing, and the "
+                  & "words compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Super.Row_Product_Half_F16_Digest
+           or else Digest
+                   /= Model_Runner.Shaders.Super.Row_Product_Half_Bf16_Digest
+         then
+            Fail ("src/shaders/row_product_half.comp has changed since it "
+                  & "was compiled; run compile-shaders.sh");
+         end if;
+      end;
+
       --  And the kernel that packs a step's rows into such a cache.
       declare
          Found : Boolean;

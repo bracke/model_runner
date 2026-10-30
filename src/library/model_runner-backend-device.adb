@@ -3479,6 +3479,7 @@ package body Model_Runner.Backend.Device is
       Shifted        : Boolean := False;
       After          : Boolean := False;
       Head_Gates     : Boolean := False;
+      Head_Gate_Rows : Model_Runner.Tensors.Real_Array_Access := null;
       Shared_Gate    : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
       Shared_Up      : Model_Runner.Tensors.View :=
@@ -3846,7 +3847,17 @@ package body Model_Runner.Backend.Device is
            or else Into = null
            --  A linear layer's four projections, its taps and its numbers
            --  hold together with the shape; attention's have the cache.
-           or else (if Linear_Layer
+           --  LFM3's gated convolution has the one projection in, taps a
+           --  channel's run and no rule.
+           or else (if Linear_Layer and then Linear.Gated
+                    then Linear_Mix.Columns /= Width
+                         or else Natural (Linear_Mix.Rows) /= Linear.Mix
+                         or else Conv = null
+                         or else Natural (Conv.all'Length)
+                                 /= Linear.Taps * Linear.Mix / 3
+                         or else Natural (Weight.Columns) /= Linear.Mix / 3
+                         or else Head_Gates or else After
+                    elsif Linear_Layer
                     then Linear_Mix.Columns /= Width
                          or else Linear_Z.Columns /= Width
                          or else Linear_Alpha.Columns /= Width
@@ -3951,7 +3962,12 @@ package body Model_Runner.Backend.Device is
             return;
          end if;
 
-         if Linear_Layer then
+         if Linear_Layer and then Linear.Gated then
+            Packing_Of (Linear_Mix.Format, Mix_P, Known);
+            if not Known then
+               return;
+            end if;
+         elsif Linear_Layer then
             Packing_Of (Linear_Mix.Format, Mix_P, Known);
             if not Known then
                return;
@@ -4120,6 +4136,23 @@ package body Model_Runner.Backend.Device is
                if not Added then
                   return;
                end if;
+
+               --  LFM3's: the convolution is the layer's answer.
+               if Shape.Gated then
+                  Products.Add_Conv
+                    (Steps, Conv.all (Conv.all'First)'Address,
+                     Model_Runner.Bytes.Byte_Count (Conv.all'Length) * 4, 0,
+                     Shape, Added, From_Step => Step_Mix,
+                     Key => Conv.all (Conv.all'First)'Address, Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Attend := Products.Length (Steps);
+                  --  A third of the mixed row: the answer is C's width.
+                  Step_Room (Linear_Mix.Rows / 3);
+                  goto Attended;
+               end if;
+
                Add_Row_Product (Linear_Z, Z_P, Shape.Z_Step, Added);
                if not Added then
                   return;
@@ -5325,6 +5358,43 @@ package body Model_Runner.Backend.Device is
             Step_Attend := Products.Length (Steps);
             Step_Room
               (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
+         end if;
+
+         --  LFM3's gate a head: the table's rows against the normalized
+         --  input, one number a head, and each head's blend scaled by its
+         --  logistic.
+         if Head_Gate_Rows /= null and then not Linear_Layer then
+            declare
+               At_Table : constant System.Address :=
+                 Head_Gate_Rows.all (Head_Gate_Rows.all'First)'Address;
+               Step_Gate_Rows : Natural;
+            begin
+               if Natural (Head_Gate_Rows.all'Length) /= Heads * Natural (Width)
+                 or else Value_Size * Heads /= Natural (Weight.Columns)
+               then
+                  return;
+               end if;
+               Products.Add_Chained_Product
+                 (Steps, At_Table,
+                  Model_Runner.Bytes.Byte_Count (Head_Gate_Rows.all'Length) * 4,
+                  0, Products.Values_F32, Heads, Natural (Width), Added,
+                  Key => At_Table, Kept => False, From_Step => Step_Norm_In);
+               if not Added then
+                  return;
+               end if;
+               Step_Gate_Rows := Products.Length (Steps);
+               Step_Room (Model_Runner.Numerics.Element_Count (Heads));
+
+               Products.Add_Combination
+                 (Steps, 7, Added, Kept => False,
+                  From_Step => Step_Attend, Other_Step => Step_Gate_Rows);
+               if not Added then
+                  return;
+               end if;
+               Step_Attend := Products.Length (Steps);
+               Step_Room
+                 (Model_Runner.Numerics.Element_Count (Heads * Value_Size));
+            end;
          end if;
 
          --  Absorbed, each head's blend taken back out of the latent: a

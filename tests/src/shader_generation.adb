@@ -327,11 +327,14 @@ package body Shader_Generation is
       end Is_Attend;
 
       --  And the k-quants' super-block row kernels to a fifth, once their
-      --  short-row walks left the parent too near that size to take another.
+      --  short-row walks left the parent too near that size to take another;
+      --  and the sixteen-bit formats' walks beside them, once the low-bit
+      --  child had no room for them.
       function Is_Super (Pair : Shader_Pair) return Boolean is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
-         return Ada.Strings.Fixed.Index (Name, "Row_Product_Super") = Name'First;
+         return Ada.Strings.Fixed.Index (Name, "Row_Product_Super") = Name'First
+           or else Ada.Strings.Fixed.Index (Name, "Row_Product_Half") = Name'First;
       end Is_Super;
 
       function In_Parent (Pair : Shader_Pair) return Boolean

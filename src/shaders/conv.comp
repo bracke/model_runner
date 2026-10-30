@@ -33,6 +33,13 @@
 //  A workgroup a position and a block, its lanes over the block: a block
 //  is a head's width, so a query or key head is one block and its length
 //  is one reduction.
+//
+//  LFM3's short convolution is the gated form, told by a word of the
+//  shape: the row is B, C and x, a third of it each; what is convolved
+//  and remembered is B times x, a channel a third of the row wide; the
+//  answer is C times the convolution, a third of the row, with no unit
+//  and no length; and the taps are a channel's run, the oldest first,
+//  as the file keeps them.
 
 const uint LANES = 128u;
 
@@ -84,7 +91,10 @@ layout(push_constant) uniform Shape {
     uint runs;
     uint epsilon;
 
-    uint unused[12];
+    //  One for LFM3's gated form.
+    uint gated;
+
+    uint unused[11];
 } shape;
 
 shared float partial[LANES];
@@ -92,6 +102,15 @@ shared float partial[LANES];
 //  x / (1 + exp(-x)), as the host's kernel computes it.
 float unit(float v) {
     return v / (1.0 + exp(-clamp(v, -60.0, 60.0)));
+}
+
+//  Channel c of row r as the convolution takes it, and of the memory.
+float input_of(uint r, uint c) {
+    if (shape.gated != 0u) {
+        uint third = shape.mix / 3u;
+        return x[r * shape.mix + c] * x[r * shape.mix + 2u * third + c];
+    }
+    return x[r * shape.mix + c];
 }
 
 void main() {
@@ -105,6 +124,9 @@ void main() {
 
     uint c0 = block * shape.head;
     uint remembered = shape.taps - 1u;
+
+    //  The channels convolved: the row, or a third of it gated.
+    uint width = shape.gated != 0u ? shape.mix / 3u : shape.mix;
 
     //  The run this row is in, and where it stands in it.
     uint base = 0u;
@@ -164,11 +186,11 @@ void main() {
                 int from = int(p) - int(remembered - 1u - k);
                 float held;
                 if (from >= 0) {
-                    held = x[(row0 + uint(from)) * shape.mix + c0 + c];
+                    held = input_of(row0 + uint(from), c0 + c);
                 } else {
-                    held = s[read_at + uint(int(remembered) + from) * shape.mix + c0 + c];
+                    held = s[read_at + uint(int(remembered) + from) * width + c0 + c];
                 }
-                s[write_at + k * shape.mix + c0 + c] = held;
+                s[write_at + k * width + c0 + c] = held;
             }
         }
     }
@@ -188,11 +210,18 @@ void main() {
             int from = int(p) - int(m);
             float held;
             if (from >= 0) {
-                held = x[(row0 + uint(from)) * shape.mix + c0 + c];
+                held = input_of(row0 + uint(from), c0 + c);
             } else {
-                held = s[read_at + uint(int(remembered) + from) * shape.mix + c0 + c];
+                held = s[read_at + uint(int(remembered) + from) * width + c0 + c];
             }
-            made += held * w[shape.base + (shape.taps - 1u - m) * shape.mix + c0 + c];
+            made += held * (shape.gated != 0u
+                ? w[shape.base + (c0 + c) * shape.taps + shape.taps - 1u - m]
+                : w[shape.base + (shape.taps - 1u - m) * shape.mix + c0 + c]);
+        }
+
+        if (shape.gated != 0u) {
+            y[t * width + c0 + c] = x[t * shape.mix + width + c0 + c] * made;
+            continue;
         }
 
         made = unit(made);

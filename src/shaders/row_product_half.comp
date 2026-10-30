@@ -1,0 +1,212 @@
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_EXT_control_flow_attributes : enable
+
+//  The generating row product for the two sixteen-bit formats, binary16
+//  and brain float, on a subgroup of sixty-four: BF16 names the second.
+//
+//  The generic row kernel read a weight of either two bytes at a time, a
+//  word load, a shift and a mask a byte, eight lanes a row: LFM3's BF16
+//  feed-forward went over at 44 GB/s and a square projection of 2,048 at
+//  31, where the device reads twice that. Here a lane takes eight weights
+//  as one sixteen-byte load, the subgroup's sixty-four lanes a run of a
+//  kilobyte of the row, and the activation's eight as two vec4s loaded
+//  once for every row the workgroup lands; the subgroup adds the
+//  partials.
+//
+//  Where a row is a whole number of eights and begins on sixteen bytes --
+//  every such matrix a model carries -- the loads are sixteen bytes; any
+//  other shape (a vision patch row of 588 is one) is read an element at a
+//  time, a branch the whole dispatch takes the same way.
+//
+//  A few vectors at once by the second constant, as the other walks
+//  take a drafted round's check: each lane's weights decoded once and
+//  dotted with every vector's activations.
+
+#ifndef NUM_ROWS
+#define NUM_ROWS 2u
+#endif
+
+layout(local_size_x = 64) in;
+
+layout(constant_id = 1) const uint VEC = 1u;
+
+layout(std430, binding = 0) readonly  buffer Weights  { uvec4 w4[]; };
+layout(std430, binding = 0) readonly  buffer Words    { uint  w[]; };
+layout(std430, binding = 1) readonly  buffer Vectors  { float x[]; };
+layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
+layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
+layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
+layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+
+const uint LISTED_BY_POSITION = 2u;
+
+layout(push_constant) uniform Shape {
+    uint rows;
+    uint columns;
+    uint count;
+    uint first;
+    uint format;
+    uint base;
+    uint joins;
+    uint table;
+    uint members[16];
+    uint stride;
+    uint apart;
+    uint routed;
+} shape;
+
+//  As row_product_wave_low.comp: a listed walk over the experts its batch
+//  uses, in passes by the runs' length.
+uint listed_member (bool listed, out bool none) {
+    uint z = gl_WorkGroupID.z;
+    none = false;
+    if (!listed) {
+        return z;
+    }
+    uint which = z;
+    if (shape.members[15] != 0u) {
+        uint at = shape.members[15] - 1u;
+        if (z >= route[at]) {
+            none = true;
+            return 0u;
+        }
+        which = route[at + 1u + z];
+    }
+    uint run = route[which];
+    if (run <= shape.members[14]
+        || (shape.members[13] != 0u && run > shape.members[13])) {
+        none = true;
+    }
+    return which;
+}
+
+uint position_stride() {
+    return shape.apart > 0u ? shape.columns * gl_NumWorkGroups.z : shape.columns;
+}
+
+//  Two weights of a word, the lower first.
+vec2 pair_of(uint word) {
+#ifdef BF16
+    return vec2(uintBitsToFloat(word << 16u),
+                uintBitsToFloat(word & 0xFFFF0000u));
+#else
+    return unpackHalf2x16(word);
+#endif
+}
+
+//  One weight at a byte, for the shapes the wide loads do not take.
+float one_at(uint at) {
+    uint half_bits = (w[at >> 2u] >> ((at & 2u) * 8u)) & 0xFFFFu;
+#ifdef BF16
+    return uintBitsToFloat(half_bits << 16u);
+#else
+    return unpackHalf2x16(half_bits).x;
+#endif
+}
+
+//  Eight weights against eight activations.
+float dot8(uvec4 q, vec4 a0, vec4 a1) {
+    vec2 p0 = pair_of(q.x);
+    vec2 p1 = pair_of(q.y);
+    vec2 p2 = pair_of(q.z);
+    vec2 p3 = pair_of(q.w);
+    return dot(a0, vec4(p0, p1)) + dot(a1, vec4(p2, p3));
+}
+
+void main() {
+    uint tid = gl_LocalInvocationID.x;
+
+    bool listed = shape.routed >= LISTED_BY_POSITION;
+    bool none;
+    uint member = listed_member (listed, none);
+    uint which = listed ? member
+               : shape.routed != 0u ? route[member] : shape.members[member];
+    uint experts = shape.members[0];
+    uint run_at = listed ? route[experts + member] : 0u;
+    uint run_count = listed ? (none ? 0u : route[member]) : shape.count - shape.first;
+    uint list_at = 2u * experts;
+
+    if (run_count == 0u) {
+        return;
+    }
+
+    //  A run longer than the walk's vectors is the matrix kernel's.
+    if (listed && run_count > VEC) {
+        return;
+    }
+
+    uint from_k[VEC];
+    bool real_k[VEC];
+    for (uint k = 0u; k < VEC; ++k) {
+        uint kk = min(k, run_count - 1u);
+        real_k[k] = k < run_count;
+        from_k[k] = listed
+              ? (shape.routed == LISTED_BY_POSITION
+                   ? route[list_at + run_at + kk] : run_at + kk)
+                * shape.columns
+              : (shape.first + kk) * position_stride() + member * shape.apart;
+    }
+
+    uint first_row = NUM_ROWS * gl_WorkGroupID.x;
+    uint start = shape.base + which * shape.stride;
+    bool wide = (shape.columns & 7u) == 0u && (start & 15u) == 0u;
+
+    //  In sixteen-byte units: where the slice begins, and a row's span.
+    uint origin = start >> 4u;
+    uint span = shape.columns >> 3u;
+
+    float temp[NUM_ROWS][VEC];
+    [[unroll]] for (uint r = 0u; r < NUM_ROWS; ++r) {
+        for (uint k = 0u; k < VEC; ++k) {
+            temp[r][k] = 0.0;
+        }
+    }
+
+    if (!wide) {
+        for (uint col = tid; col < shape.columns; col += 64u) {
+            [[unroll]] for (uint r = 0u; r < NUM_ROWS; ++r) {
+                uint row = min(first_row + r, shape.rows - 1u);
+                float q = one_at(start + (row * shape.columns + col) * 2u);
+                for (uint k = 0u; k < VEC; ++k) {
+                    temp[r][k] += q * x[from_k[k] + col];
+                }
+            }
+        }
+    }
+
+    for (uint i = tid; wide && i < span; i += 64u) {
+        uint col = i * 8u;
+
+        vec4 a0[VEC];
+        vec4 a1[VEC];
+        for (uint k = 0u; k < VEC; ++k) {
+            uint xb = (from_k[k] + col) >> 2u;
+            a0[k] = x4[xb];
+            a1[k] = x4[xb + 1u];
+        }
+
+        [[unroll]] for (uint r = 0u; r < NUM_ROWS; ++r) {
+            uint row = min(first_row + r, shape.rows - 1u);
+            uvec4 q = w4[origin + row * span + i];
+            for (uint k = 0u; k < VEC; ++k) {
+                temp[r][k] += dot8(q, a0[k], a1[k]);
+            }
+        }
+    }
+
+    [[unroll]] for (uint r = 0u; r < NUM_ROWS; ++r) {
+        uint row = first_row + r;
+        for (uint k = 0u; k < VEC; ++k) {
+            float whole = subgroupAdd(temp[r][k]);
+
+            if (tid == 0u && row < shape.rows && real_k[k]) {
+                uint out_at = listed
+                              ? (run_at + k) * shape.rows + row
+                              : member * shape.rows * shape.count
+                                + (shape.first + k) * shape.rows + row;
+                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+            }
+        }
+    }
+}

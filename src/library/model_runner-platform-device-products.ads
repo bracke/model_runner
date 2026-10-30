@@ -279,6 +279,10 @@ package Model_Runner.Platform.Device.Products is
    subtype Legacy_Packing is Weight_Packing range Packed_Q4_0 .. Packed_Q5_1;
    type Legacy_Address_Array is array (Legacy_Packing) of System.Address;
 
+   --  The two sixteen-bit formats, which generate on a walk of their own.
+   subtype Half_Packing is Weight_Packing range Values_F16 .. Values_BF16;
+   type Half_Address_Array is array (Half_Packing) of System.Address;
+
    --  A few-vector pipeline a format and a count; see Wave_Multi_Lines.
    type Wave_Multi_Table is array (Weight_Packing) of Many_Array;
 
@@ -1743,7 +1747,20 @@ package Model_Runner.Platform.Device.Products is
       --  mean square, which is the unit length's floor for the front.
       Scale      : Model_Runner.Numerics.Real := 0.0;
       Epsilon    : Model_Runner.Numerics.Real := 0.0;
+
+      --  LFM3's gated convolution: the row is B, C and x, B times x is
+      --  convolved and remembered, C times that is the answer, a third
+      --  of the row wide, and the taps are a channel's run (conv.comp).
+      Gated      : Boolean := False;
    end record;
+
+   --  The channels a convolution takes of a mixed row: the row, or a
+   --  third of it gated.
+   --
+   --  @param Shape The layer's geometry.
+   --  @return The channels convolved, which is the step's answer's width.
+   function Conv_Width (Shape : Linear_Shape) return Natural
+   is (if Shape.Gated then Shape.Mix / 3 else Shape.Mix);
 
    --  Name the front of a hybrid's linear layer: the causal convolution
    --  over each position and the ones remembered, the unit, and the
@@ -4115,6 +4132,14 @@ private
       Legacy_Wave_Shaders : Legacy_Address_Array :=
         [others => System.Null_Address];
       Legacy_Wave_Lines   : Legacy_Address_Array :=
+        [others => System.Null_Address];
+
+      --  And binary16 and brain float, a sixteen-byte load a lane
+      --  (row_product_half.comp): the generic kernel's two bytes at
+      --  a time read LFM3's BF16 feed-forward at 44 GB/s.
+      Half_Wave_Shaders : Half_Address_Array :=
+        [others => System.Null_Address];
+      Half_Wave_Lines   : Half_Address_Array :=
         [others => System.Null_Address];
 
       Wide_Line   : System.Address := System.Null_Address;

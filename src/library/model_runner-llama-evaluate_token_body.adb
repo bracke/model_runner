@@ -84,12 +84,14 @@ is
        and then Item.Conv_State /= null
        and then Model_Runner.Backend.Device.Runs_Linear
        and then T.Is_Present (L.Mix)
-       and then T.Is_Present (L.Z_Gate)
-       and then T.Is_Present (L.Alpha)
-       and then T.Is_Present (L.Beta)
+       --  LFM3's convolution has the one projection in and no rule.
+       and then (Is_Lfm3 (Settings.Kind)
+                 or else (T.Is_Present (L.Z_Gate)
+                          and then T.Is_Present (L.Alpha)
+                          and then T.Is_Present (L.Beta)
+                          and then L.Linear_Numbers /= null))
        and then T.Is_Present (L.Linear_Out)
        and then L.Conv /= null
-       and then L.Linear_Numbers /= null
        and then L.Attention_Norm /= null
        and then L.Feed_Norm /= null
        and then Norms_Agree (L)
@@ -115,8 +117,6 @@ is
        --  projections carry no bias, which the picking apart of the
        --  queries and the gates does not take.
        and then not Linear (Settings, Index)
-       --  LFM3's gate a head is the host's.
-       and then not Is_Lfm3 (Settings.Kind)
        and then (not Hybrid (Settings.Kind)
                  or else (Settings.Value_Size = Settings.Head_Size
                           and then L.Query_Bias = null))
@@ -705,7 +705,7 @@ begin
    Make_Room (Item, Settings, Reserved);
 
    --  The ring over, and the one run this position is.
-   if Hybrid (Settings.Kind)
+   if (Hybrid (Settings.Kind) or else Is_Lfm3 (Settings.Kind))
      and then Item.Delta_State /= null
      and then Model_Runner.Backend."="
                 (Item.Owner.Able.Kind,
@@ -1290,6 +1290,7 @@ begin
                      --  A hybrid's gate beside each head, and its
                      --  mixture's shared expert.
                      Head_Gates    => Hybrid (Settings.Kind),
+                     Head_Gate_Rows => Current.Head_Gate,
                      Shared_Gate   => Current.Shared_Gate,
                      Shared_Up     => Current.Shared_Up,
                      Shared_Down   => Current.Shared_Down,
