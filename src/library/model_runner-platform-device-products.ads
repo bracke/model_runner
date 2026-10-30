@@ -208,7 +208,8 @@ package Model_Runner.Platform.Device.Products is
    --  shared memory for twice the subgroups. Not a head of 128, which
    --  holds them too: qwen3-8b's prompt of 16,214 read 188 tokens a second
    --  on eight subgroups and 194 on four, where gpt-oss-20b's heads of 64
-   --  read 400-404 on eight and 352 on four.
+   --  read 400-404 on eight and 352 on four. Again with the pairs and the
+   --  inside tiles: 201.1 on eight against 208.8 on four.
    Matrix_Deep_Queries_Held : constant := 128;
    Deep_Span           : constant := 2_048;
 

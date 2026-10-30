@@ -805,6 +805,11 @@ void main() {
                         best = max (best, score);
                     }
 
+                    //  The softmax is little of the time: replaced by a
+                    //  clamp (the answer then wrong), qwen3-8b's prompt
+                    //  16,214 long read 212.9 tokens a second against
+                    //  210.0; without the scores' product 250.8, without
+                    //  the values' 280.2.
                     float raised = max (rtop[m][e], subgroupClusteredMax (best, 16u));
                     bool  empty  = isinf (raised) && raised < 0.0;
                     float carry  = empty ? 1.0 : exp (rtop[m][e] - raised);
@@ -1020,6 +1025,14 @@ void main() {
                     [[unroll]] for (uint t = 0u; t < DM / 32u; t++) {
                         uint tg = half_of * pair_half + t;
                         if (t < pair_half && tg * 16u < dv) {
+                            //  Row major, a lane's column of the operand
+                            //  sixteen reads two bytes apart; read as if
+                            //  column major (the answer then wrong),
+                            //  qwen3-8b's prompt 16,214 long read 215.4
+                            //  tokens a second against 209.4, all a
+                            //  transposed copy could give. The next
+                            //  sixteen's values read before this one's
+                            //  products: 204.3 against 208.9.
                             coopmat<float16_t, gl_ScopeSubgroup, 16, 16,
                                     gl_MatrixUseB> vm;
 
