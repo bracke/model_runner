@@ -17,6 +17,7 @@ with Recipes;
 with IQ_Reference;
 
 with Model_Runner.Backend;
+with Model_Runner.String_Tables;
 with Model_Runner.Backend.Device;
 with Model_Runner.Bytes;
 with Model_Runner.Byte_Sources.Files;
@@ -10346,9 +10347,71 @@ package body Tests.GGUF_Cases is
               "where both keys are there, the newer was not the one taken");
    end The_Old_Linear_Stretch_Key_Is_Read;
 
+   --  A vocabulary's flat table: a key inserted twice keeps its first
+   --  value and one included twice its last, keys that share a hash's
+   --  slot are told apart, and a table grown well past what it reserved
+   --  finds every key it holds and none it does not.
+   procedure A_String_Table_Finds_What_It_Holds
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tables is new Model_Runner.String_Tables (Natural);
+
+      Table    : Tables.Table;
+      Inserted : Boolean;
+      Found    : Boolean;
+      Value    : Natural;
+
+      function Key (Index : Natural) return String
+      is ("k" & Natural'Image (Index) & (1 .. Index mod 7 => 'x'));
+   begin
+      Table.Insert ("a b", 1, Inserted);
+      Assert (Inserted, "a fresh key was not inserted");
+      Table.Insert ("a b", 2, Inserted);
+      Assert (not Inserted, "a key inserted twice was inserted twice");
+      Table.Find ("a b", Found, Value);
+      Assert (Found and then Value = 1, "insert did not keep the first value");
+
+      Table.Include ("piece", 3);
+      Table.Include ("piece", 4);
+      Table.Find ("piece", Found, Value);
+      Assert (Found and then Value = 4, "include did not keep the last value");
+      Table.Find ("piec", Found, Value);
+      Assert (not Found, "a key's prefix was found");
+      Table.Find ("", Found, Value);
+      Assert (not Found, "the empty key was found");
+
+      Table.Reserve (4, 8);
+      for Index in 1 .. 50_000 loop
+         Table.Insert (Key (Index), Index, Inserted);
+         Assert (Inserted, "key" & Index'Image & " was not inserted");
+      end loop;
+      Assert (Table.Length = 50_002,
+              "the table holds" & Table.Length'Image & " keys");
+      for Index in 1 .. 50_000 loop
+         Table.Find (Key (Index), Found, Value);
+         Assert (Found and then Value = Index,
+                 "key" & Index'Image & " was lost as the table grew");
+      end loop;
+      Table.Find (Key (50_001), Found, Value);
+      Assert (not Found, "a key never inserted was found");
+
+      Table.Clear;
+      Assert (Table.Length = 0, "a cleared table holds keys");
+      Table.Find ("a b", Found, Value);
+      Assert (not Found, "a cleared table found a key");
+      Table.Include ("again", 5);
+      Table.Find ("again", Found, Value);
+      Assert (Found and then Value = 5, "a cleared table took nothing new");
+   end A_String_Table_Finds_What_It_Holds;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, A_String_Table_Finds_What_It_Holds'Access,
+         "a flat string table keeps the first of an insert and the last of "
+         & "an include, and finds every key it grew to hold");
       Register_Routine
         (T, The_Old_Linear_Stretch_Key_Is_Read'Access,
          "a linear stretch stated under the old key, rope.scale_linear, is "

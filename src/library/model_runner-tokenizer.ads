@@ -1,3 +1,4 @@
+private with Model_Runner.String_Tables;
 private with Ada.Containers.Indefinite_Hashed_Maps;
 private with Ada.Containers.Vectors;
 private with Ada.Finalization;
@@ -500,6 +501,11 @@ private
         Hash            => Ada.Strings.Hash,
         Equivalent_Keys => "=");
 
+   --  The pieces' and the merges' own tables: flat, where hashed maps of
+   --  indefinite keys took an allocation a key (String_Tables).
+   package Token_Tables is new Model_Runner.String_Tables (Token_Id);
+   package Merge_Tables is new Model_Runner.String_Tables (Natural);
+
    type Text_Pool is access String;
 
    --  A unigram file's normalization table, as it is written: a count of
@@ -528,7 +534,7 @@ private
       Pool          : Text_Pool := null;
       Pool_Used     : Natural := 0;
       Entries       : Token_Vectors.Vector;
-      Lookup        : Token_Maps.Map;
+      Lookup        : Token_Tables.Table;
       --  The control and hand-written pieces alone, by text: a marker is
       --  found here, so a later ordinary piece spelled the same -- which
       --  Lookup gives, last id winning -- does not hide it.
@@ -548,7 +554,7 @@ private
       Pair          : Pair_Rule;
       Byte_Tokens   : Byte_Token_Array := [others => No_Token];
       Byte_Fallback : Boolean := False;
-      Merges        : Merge_Maps.Map;
+      Merges        : Merge_Tables.Table;
       Cutting       : Cut_Rule := Rule_Default;
 
       --  Whether a piece the vocabulary holds whole is taken whole, before

@@ -326,13 +326,11 @@ package body Model_Runner.Tokenizer is
    ----------
 
    function Find (Item : Vocabulary; Text : String) return Token_Id is
-      Position : constant Token_Maps.Cursor := Item.Lookup.Find (Text);
+      Found : Boolean;
+      Value : Token_Id;
    begin
-      if Token_Maps.Has_Element (Position) then
-         return Token_Maps.Element (Position);
-      else
-         return No_Token;
-      end if;
+      Item.Lookup.Find (Text, Found, Value);
+      return (if Found then Value else No_Token);
    end Find;
 
    --  Score of a token, used to order candidate merges.
@@ -686,7 +684,7 @@ package body Model_Runner.Tokenizer is
 
       --  Room for every piece and every entry at once: grown as they came,
       --  the maps rehashed every piece read so far a dozen times over.
-      Item.Lookup.Reserve_Capacity (Ada.Containers.Count_Type (Count));
+      Item.Lookup.Reserve (Count, Item.Pool'Length);
       Item.Entries.Reserve_Capacity (Ada.Containers.Count_Type (Count));
 
       for Index in 1 .. Count loop
@@ -798,17 +796,10 @@ package body Model_Runner.Tokenizer is
                   else Buffer (1 .. Last));
             begin
                if Text /= "" then
-                  declare
-                     Where    : Token_Maps.Cursor;
-                     Inserted : Boolean;
                   begin
                      --  A repeated piece is its last id, as llama.cpp reads
                      --  one: the text a later entry repeats is that entry's.
-                     Item.Lookup.Insert
-                       (Text, Token_Id (Index - 1), Where, Inserted);
-                     if not Inserted then
-                        Token_Maps.Replace_Element (Item.Lookup, Where, Token_Id (Index - 1));
-                     end if;
+                     Item.Lookup.Include (Text, Token_Id (Index - 1));
                      if Entry_Value.Class
                           in Class_Control | Class_User_Defined | Class_Unknown
                      then
@@ -1385,8 +1376,7 @@ package body Model_Runner.Tokenizer is
                return;
             end if;
 
-            Item.Merges.Reserve_Capacity
-              (Ada.Containers.Count_Type (Merge_Count));
+            Item.Merges.Reserve (Merge_Count, 0);
 
             for Index in 1 .. Merge_Count loop
                declare
@@ -1406,11 +1396,9 @@ package body Model_Runner.Tokenizer is
                   --  joining the two pieces with a space rather than parsing
                   --  anything. A repeated pair keeps its first, lower rank.
                   declare
-                     Where    : Merge_Maps.Cursor;
                      Inserted : Boolean;
                   begin
-                     Item.Merges.Insert
-                       (Buffer (1 .. Last), Index, Where, Inserted);
+                     Item.Merges.Insert (Buffer (1 .. Last), Index, Inserted);
                   end;
                end;
             end loop;
@@ -2657,10 +2645,12 @@ package body Model_Runner.Tokenizer is
                   declare
                      Key : constant String :=
                        Mapped (Starts (Left) .. Ends (Left)) & " " & Mapped (Starts (Right) .. Ends (Right));
-                     Found : constant Merge_Maps.Cursor := Item.Merges.Find (Key);
+                     Found : Boolean;
+                     Rank  : Natural;
                   begin
-                     if Merge_Maps.Has_Element (Found) then
-                        Push ((Rank => Merge_Maps.Element (Found), Left => Left, Right => Right,
+                     Item.Merges.Find (Key, Found, Rank);
+                     if Found then
+                        Push ((Rank => Rank, Left => Left, Right => Right,
                                Size => Ends (Right) - Starts (Left) + 1));
                      end if;
                   end;
