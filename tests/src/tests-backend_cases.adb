@@ -9766,7 +9766,9 @@ package body Tests.Backend_Cases is
       --  listed gates and the listed downs with their padding, a position
       --  each.
       At_Listed : constant N.Element_Count :=
-        N.Element_Count (Count) * (Experts + 2 * Used + 32 * Experts + 3 * Used);
+        N.Element_Count (Count)
+        * N.Element_Count
+            (Experts + 2 * Used + Products.Invert_Rows (Experts, Used));
       At_Down   : constant N.Element_Count :=
         At_Listed + N.Element_Count (Count * Padded * Feed);
       Room      : constant N.Element_Count :=
@@ -9914,7 +9916,9 @@ package body Tests.Backend_Cases is
       Inputs : N.Real_Array (0 .. Count * Width - 1);
 
       At_Listed : constant N.Element_Count :=
-        N.Element_Count (Count) * (Experts + 2 * Used + 32 * Experts + 3 * Used);
+        N.Element_Count (Count)
+        * N.Element_Count
+            (Experts + 2 * Used + Products.Invert_Rows (Experts, Used));
       At_Down   : constant N.Element_Count :=
         At_Listed + N.Element_Count (Count * Padded * Feed);
       Room      : constant N.Element_Count :=
@@ -10131,7 +10135,7 @@ package body Tests.Backend_Cases is
          --  the combination, the down and its bias, then the mix.
          At_Mix : constant N.Element_Count :=
            N.Element_Count (Count)
-           * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+           * N.Element_Count (Experts + 2 * Used + Products.Invert_Rows (Experts, Used)
                               + 5 * Padded * Feed + 2 * Padded * Width);
          Batch : T.Real_Array_Access :=
            new N.Real_Array'(0 .. At_Mix + N.Element_Count (Count * Width) - 1 => 0.0);
@@ -10284,7 +10288,7 @@ package body Tests.Backend_Cases is
          Padded : constant Natural := Products.Run_Slots (Experts, Used, Count);
          Batch_Room : constant N.Element_Count :=
            N.Element_Count (Count)
-           * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+           * N.Element_Count (Experts + 2 * Used + Products.Invert_Rows (Experts, Used)
                               + 3 * Padded * Feed + Padded * Width + Width);
 
          Batch : N.Real_Array (0 .. Batch_Room - 1) := [others => 0.0];
@@ -10337,7 +10341,7 @@ package body Tests.Backend_Cases is
 
             At_Mix : constant N.Element_Count :=
               N.Element_Count (Count)
-              * N.Element_Count (Experts + 2 * Used + 32 * Experts + 3 * Used
+              * N.Element_Count (Experts + 2 * Used + Products.Invert_Rows (Experts, Used)
                                  + 3 * Padded * Feed + Padded * Width);
             One_Mix : constant N.Element_Count :=
               N.Element_Count (Experts + 2 * Used + 3 * Used * Feed
@@ -10512,9 +10516,12 @@ package body Tests.Backend_Cases is
 
       --  Forty positions, two of four experts each: runs of twenty, on
       --  the listed tile of thirty-two. A hundred: runs of fifty, past
-      --  Listed_Wide_Run, on the tile of sixty-four.
+      --  Listed_Wide_Run, on the tile of sixty-four. And one, which
+      --  chooses two experts of the four: walked over those two alone,
+      --  each workgroup finding its expert in the invert step's list.
       At_Count (40);
       At_Count (100);
+      At_Count (1);
 
       Products.Close (Engine);
       Devices.Close (Opened);

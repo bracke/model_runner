@@ -11,7 +11,8 @@
 //  begins, then the runs of positions, then the runs of shares in the
 //  same order, and then for each position and rank which slot of the runs
 //  it was given -- which is what the mix at the end reads to find a
-//  position's answers again. The runs of positions and of shares are
+//  position's answers again; and last how many experts have a run and
+//  which they are. The runs of positions and of shares are
 //  each given room for the entries and fifteen more an expert, which is
 //  the most the padding below can add; the engine sizes the buffer so.
 //
@@ -68,12 +69,23 @@ void main() {
     }
     barrier ();
 
+    //  And past the slots, how many experts have a run and which: a
+    //  short batch's walk is dispatched over those alone. Over all two
+    //  hundred and fifty-six of Qwen3.6-35B-A3B's, a check of five
+    //  launched seven workgroups in eight for experts nothing chose.
+    uint used_at = 2u * experts + 3u * entries + 30u * experts;
     if (lane == 0u) {
         uint at = 0u;
+        uint having = 0u;
         for (uint e = 0u; e < experts; e++) {
             begins[e] = at;
             at += shape.tight != 0u ? counted[e] : (counted[e] + 15u) / 16u * 16u;
+            if (counted[e] != 0u) {
+                l[used_at + 1u + having] = e;
+                having++;
+            }
         }
+        l[used_at] = having;
     }
     barrier ();
 

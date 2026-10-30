@@ -66,6 +66,24 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+//  A listed walk dispatched over the experts its batch uses rather than
+//  over all of them: members[15], where not nought, is one past where the
+//  invert step wrote how many it uses and which, and a workgroup past
+//  them has nothing to walk.
+uint listed_member (bool listed, out bool none) {
+    uint z = gl_WorkGroupID.z;
+    none = false;
+    if (!listed || shape.members[15] == 0u) {
+        return z;
+    }
+    uint at = shape.members[15] - 1u;
+    if (z >= route[at]) {
+        none = true;
+        return 0u;
+    }
+    return route[at + 1u + z];
+}
+
 //  How far apart one position's input is from the next in what a product
 //  reads: a row's width, but for a gather whose members each read their
 //  own stretch (apart), every member's stretch end to end -- the members
@@ -2761,14 +2779,15 @@ void main() {
     uint itid = tid & 15u;
     uint ix = tid >> 4u;
 
-    uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
+    bool none;
+    uint member = listed_member (listed, none);
     uint which = listed ? member
                : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
     uint experts = shape.members[0];
     uint run_at = listed ? route[experts + member] : 0u;
-    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint run_count = listed ? (none ? 0u : route[member]) : shape.count - shape.first;
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
@@ -2970,14 +2989,15 @@ void main_many() {
     uint ix = tid >> 4u;
     uint ib = itid / 2u;
 
-    uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
+    bool none;
+    uint member = listed_member (listed, none);
     uint which = listed ? member
                : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
     uint experts = shape.members[0];
     uint run_at = listed ? route[experts + member] : 0u;
-    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint run_count = listed ? (none ? 0u : route[member]) : shape.count - shape.first;
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
@@ -3111,14 +3131,15 @@ void main_many() {
     uint itid = tid & 7u;
     uint ix = tid >> 3u;
 
-    uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
+    bool none;
+    uint member = listed_member (listed, none);
     uint which = listed ? member
                : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
     uint experts = shape.members[0];
     uint run_at = listed ? route[experts + member] : 0u;
-    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint run_count = listed ? (none ? 0u : route[member]) : shape.count - shape.first;
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
@@ -3364,14 +3385,15 @@ void main_many() {
     const uint IN_FLIGHT = 4u;
 #endif
 
-    uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
+    bool none;
+    uint member = listed_member (listed, none);
     uint which = listed ? member
                : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
     uint experts = shape.members[0];
     uint run_at = listed ? route[experts + member] : 0u;
-    uint run_count = listed ? route[member] : shape.count - shape.first;
+    uint run_count = listed ? (none ? 0u : route[member]) : shape.count - shape.first;
     uint list_at = 2u * experts;
 
     if (run_count == 0u) {
@@ -3605,14 +3627,15 @@ void main_one() {
     const uint IN_FLIGHT = 4u;
 #endif
 
-    uint member = gl_WorkGroupID.z;
     bool listed = shape.routed >= LISTED_BY_POSITION;
+    bool none;
+    uint member = listed_member (listed, none);
     uint which = listed ? member
                : shape.routed != 0u ? route[member] : shape.members[member];
     uint slice = which * shape.stride;
     uint experts = shape.members[0];
     uint run_at = listed ? route[experts + member] : 0u;
-    uint run_count = listed ? route[member]
+    uint run_count = listed ? (none ? 0u : route[member])
                             : min(1u, shape.count - shape.first);
     uint list_at = 2u * experts;
 

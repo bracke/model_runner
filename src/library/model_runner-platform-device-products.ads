@@ -1215,6 +1215,17 @@ package Model_Runner.Platform.Device.Products is
       Added      : out Boolean;
       Kept       : Boolean := False);
 
+   --  The room an inversion's lists take a position, in words: two an
+   --  expert, three a position and rank, thirty an expert for the padding
+   --  of the runs, and one an expert and a count for which experts have a
+   --  run.
+   --
+   --  @param Experts The mixture's experts.
+   --  @param Used How many a position chooses.
+   --  @return Words a position.
+   function Invert_Rows (Experts, Used : Natural) return Natural
+   is (33 * Experts + 1 + 3 * Used);
+
    --  Slots a position takes in a batch's expert runs, the padding the
    --  matrix kernel needs included where the batch reaches it.
    --

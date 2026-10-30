@@ -5605,7 +5605,7 @@ package body Model_Runner.Backend.Device is
                   Step_Route := Products.Length (Steps);
                   Step_Room
                     (Model_Runner.Numerics.Element_Count
-                       (32 * Experts + 3 * Used));
+                       (Products.Invert_Rows (Experts, Used)));
 
                   --  Both from the one region where the two stacks are
                   --  held as one; see Pair_Of.

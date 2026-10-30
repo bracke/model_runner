@@ -13271,14 +13271,13 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      --  Rows is room: two words an expert, three a position and rank,
-      --  and thirty more an expert for the padding of the runs is what
-      --  the lists take, and a step's room is Rows a position.
+      --  Rows is room (Invert_Rows), a step's room being Rows a
+      --  position.
       Steps.Held := Steps.Held + 1;
       Steps.Items (Steps.Held) :=
         (Base => System.Null_Address, Span => 0, At_Byte => 0,
          Packing => Weight_Packing'First,
-         Rows => 32 * Experts + 3 * Used, Columns => Experts,
+         Rows => Invert_Rows (Experts, Used), Columns => Experts,
          Chained => True, Reads => Route_Step,
          Kept => Kept, Inverts => True, Used => Used,
          Attends => False, Blends => False,
@@ -13300,6 +13299,16 @@ package body Model_Runner.Platform.Device.Products is
    is (if Count < Tile_Least then Used
        else Used + (15 * Natural'Min (Experts, Count * Used) + Count - 1)
                    / Count);
+
+   --  Where invert.comp writes how many experts have a run and which,
+   --  in words from the front of its lists: past two words an expert,
+   --  the runs of positions and of shares with their padding, and a
+   --  slot a position and rank.
+   function Used_List_At
+     (Experts : Natural;
+      Count   : Natural;
+      Used    : Natural) return Natural
+   is (32 * Natural'Min (Experts, 512) + 3 * Count * Used);
 
    procedure Add_Listed_Product
      (Steps       : in out Sequence;
@@ -19353,9 +19362,14 @@ package body Model_Runner.Platform.Device.Products is
 
                --  A listed product is one dispatch, every expert down
                --  the third axis and each walking its own run; the rows
-               --  the shader is told are one expert's.
+               --  the shader is told are one expert's. Where the batch
+               --  chooses fewer than there are, the third axis is the
+               --  most it can choose, each workgroup finding its expert
+               --  in the invert step's list of those with a run.
                if This.Listed then
                   declare
+                     Short : constant Boolean :=
+                       Count * This.Used < This.Gathers;
                      Shape : aliased Shape_Constants :=
                        (Rows    => C.unsigned (This.Each),
                         Columns => C.unsigned (This.Columns),
@@ -19371,6 +19385,13 @@ package body Model_Runner.Platform.Device.Products is
                           (if Dotted (Index) and then Barrier /= null
                            then C.unsigned (Slot_Rows (Index)) else 0),
                         Members => [0 => C.unsigned (This.Gathers),
+                                    15 =>
+                                      (if Short
+                                       then C.unsigned
+                                              (Used_List_At
+                                                 (This.Gathers, Count,
+                                                  This.Used) + 1)
+                                       else 0),
                                     others => 0],
                         Stride  => C.unsigned (Slice_Bytes (Index)),
                         Apart   => 0,
@@ -19387,7 +19408,9 @@ package body Model_Runner.Platform.Device.Products is
                             + Row_Width (Item, This.Packing, Count) - 1)
                            / Row_Width (Item, This.Packing, Count)),
                         1,
-                        C.unsigned (This.Gathers));
+                        C.unsigned
+                          (if Short then Count * This.Used
+                           else This.Gathers));
                   end;
 
                   goto Next_Dispatch;
