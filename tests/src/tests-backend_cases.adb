@@ -10246,12 +10246,16 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Folded_Biased_Mixture_Says_What_The_Gathered_One_Says;
 
-   procedure A_Listed_Mixture_Says_What_The_Gathered_One_Says
-     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
-   is
-      pragma Unreferenced (T_Case);
+   type Count_List is array (Positive range <>) of Positive;
 
-      Experts : constant := 4;
+   --  The listed mixture against the gathered one over Experts experts,
+   --  at each of Counts positions.
+   generic
+      Experts : Positive;
+      Counts  : Count_List;
+   procedure Listed_Mixture_Against_Gathered;
+
+   procedure Listed_Mixture_Against_Gathered is
       Used    : constant := 2;
       --  A whole Q4_K super-block of columns either way round.
       Width   : constant := 256;
@@ -10267,15 +10271,15 @@ package body Tests.Backend_Cases is
       Added  : Boolean;
       Halted : Boolean;
 
-      Router : N.Real_Array (0 .. Experts * Width - 1);
+      Router : N.Real_Array (0 .. N.Element_Count (Experts * Width) - 1);
       --  On the heap, with the words encoded from them: a megabyte each
       --  at these widths, and the stack does not hold them all.
       Gates  : constant T.Real_Array_Access :=
-        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+        new N.Real_Array (0 .. N.Element_Count (Experts * Feed * Width) - 1);
       Ups    : constant T.Real_Array_Access :=
-        new N.Real_Array (0 .. Experts * Feed * Width - 1);
+        new N.Real_Array (0 .. N.Element_Count (Experts * Feed * Width) - 1);
       Downs  : constant T.Real_Array_Access :=
-        new N.Real_Array (0 .. Experts * Width * Feed - 1);
+        new N.Real_Array (0 .. N.Element_Count (Experts * Width * Feed) - 1);
 
       --  The products of one batch of Count positions over each packing,
       --  against the positions one at a time.
@@ -10293,7 +10297,7 @@ package body Tests.Backend_Cases is
 
          Batch : N.Real_Array (0 .. Batch_Room - 1) := [others => 0.0];
          One   : N.Real_Array
-           (0 .. Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width - 1)
+           (0 .. N.Element_Count (Experts + 2 * Used + 3 * Used * Feed + Used * Width + Width) - 1)
            := [others => 0.0];
 
          --  Run the batch and the positions one at a time over stacks in
@@ -10514,19 +10518,41 @@ package body Tests.Backend_Cases is
          Downs (Index) := N.Real ((Index * 7) mod 9) / 9.0 - 0.5;
       end loop;
 
+      for Count of Counts loop
+         At_Count (Count);
+      end loop;
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end Listed_Mixture_Against_Gathered;
+
+   procedure A_Listed_Mixture_Says_What_The_Gathered_One_Says
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
       --  Forty positions, two of four experts each: runs of twenty, on
       --  the listed tile of thirty-two. A hundred: runs of fifty, past
       --  Listed_Wide_Run, on the tile of sixty-four. And one, which
       --  chooses two experts of the four: walked over those two alone,
       --  each workgroup finding its expert in the invert step's list.
-      At_Count (40);
-      At_Count (100);
-      At_Count (1);
-
-      Products.Close (Engine);
-      Devices.Close (Opened);
-      Devices.Close (Held);
+      procedure Check is new Listed_Mixture_Against_Gathered (4, [40, 100, 1]);
+   begin
+      Check;
    end A_Listed_Mixture_Says_What_The_Gathered_One_Says;
+
+   --  A short batch over many experts -- three and six positions, two of
+   --  sixteen each -- walked in two passes, the runs of one and two on the
+   --  walk for two and the longer on the batch's own, each run by one.
+   procedure A_Short_Listed_Batch_Walks_Each_Run_Once
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      procedure Check is new Listed_Mixture_Against_Gathered (16, [3, 6]);
+   begin
+      Check;
+   end A_Short_Listed_Batch_Walks_Each_Run_Once;
 
    ---------------------------------------------------
    -- A_Whole_Group_Bundle_Attends_As_A_Host_Does --
@@ -14459,6 +14485,10 @@ package body Tests.Backend_Cases is
          & "over its positions as one dispatch a matrix -- says what the "
          & "positions gathered one at a time say, within the router's last "
          & "bit on the row kernel and a tolerance on the matrix kernel");
+      Register_Routine
+        (T, A_Short_Listed_Batch_Walks_Each_Run_Once'Access,
+         "a short batch's listed mixture over sixteen experts, walked in "
+         & "two passes by its runs' length, says what the gathered one says");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Split_Attention_Says_What_One_Piece_Says'Access,
          "one query against a cache cut into slices and merged says what "

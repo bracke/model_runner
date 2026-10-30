@@ -69,19 +69,30 @@ layout(push_constant) uniform Shape {
 //  A listed walk dispatched over the experts its batch uses rather than
 //  over all of them: members[15], where not nought, is one past where the
 //  invert step wrote how many it uses and which, and a workgroup past
-//  them has nothing to walk.
+//  them has nothing to walk. And walked in passes by the runs' length:
+//  a run no longer than members[14], or longer than members[13] where
+//  that is not nought, is another pass's.
 uint listed_member (bool listed, out bool none) {
     uint z = gl_WorkGroupID.z;
     none = false;
-    if (!listed || shape.members[15] == 0u) {
+    if (!listed) {
         return z;
     }
-    uint at = shape.members[15] - 1u;
-    if (z >= route[at]) {
-        none = true;
-        return 0u;
+    uint which = z;
+    if (shape.members[15] != 0u) {
+        uint at = shape.members[15] - 1u;
+        if (z >= route[at]) {
+            none = true;
+            return 0u;
+        }
+        which = route[at + 1u + z];
     }
-    return route[at + 1u + z];
+    uint run = route[which];
+    if (run <= shape.members[14]
+        || (shape.members[13] != 0u && run > shape.members[13])) {
+        none = true;
+    }
+    return which;
 }
 
 //  How far apart one position's input is from the next in what a product

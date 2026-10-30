@@ -19366,51 +19366,93 @@ package body Model_Runner.Platform.Device.Products is
                --  chooses fewer than there are, the third axis is the
                --  most it can choose, each workgroup finding its expert
                --  in the invert step's list of those with a run.
+               --  And there, where the batch is longer than two, two
+               --  passes: the runs of one and two on the walk for two,
+               --  the longer on the batch's own. A check of four to six
+               --  positions over Qwen3.6-35B-A3B's 256 experts runs one
+               --  or two positions an expert, and the batch's walk worked
+               --  out every one of its vectors for each.
                if This.Listed then
                   declare
                      Short : constant Boolean :=
                        Count * This.Used < This.Gathers;
-                     Shape : aliased Shape_Constants :=
-                       (Rows    => C.unsigned (This.Each),
-                        Columns => C.unsigned (This.Columns),
-                        Count   => C.unsigned (Count),
-                        First   => 0,
-                        Packing =>
-                          C.unsigned (Weight_Packing'Pos (This.Packing)),
-                        Base    => C.unsigned (Places (Index).Base),
-                        Joins   => 0,
-                        --  Where an integer walk by slot finds its
-                        --  rounding's scales, in rows.
-                        Table   =>
-                          (if Dotted (Index) and then Barrier /= null
-                           then C.unsigned (Slot_Rows (Index)) else 0),
-                        Members => [0 => C.unsigned (This.Gathers),
-                                    15 =>
-                                      (if Short
-                                       then C.unsigned
-                                              (Used_List_At
-                                                 (This.Gathers, Count,
-                                                  This.Used) + 1)
-                                       else 0),
-                                    others => 0],
-                        Stride  => C.unsigned (Slice_Bytes (Index)),
-                        Apart   => 0,
-                        Routed  => (if This.By_Slot then 3 else 2));
+                     Rounds : constant Boolean :=
+                       Dotted (Index) and then Barrier /= null;
+                     Narrow : constant := 2;
+                     Narrow_Line : constant Address :=
+                       (if not Short or else Count <= Narrow then Null_Handle
+                        elsif Rounds
+                        then Dots_Line
+                               (Item, This.Packing, Narrow, This.Columns)
+                        else Row_Line
+                               (Item, Narrow, This.Packing, This.Columns));
+
+                     --  One pass: the walk for Width vectors over the
+                     --  runs longer than Floor and, where Ceiling is not
+                     --  nought, no longer than it.
+                     procedure Walk (Width, Floor, Ceiling : Natural) is
+                        Shape : aliased Shape_Constants :=
+                          (Rows    => C.unsigned (This.Each),
+                           Columns => C.unsigned (This.Columns),
+                           Count   => C.unsigned (Count),
+                           First   => 0,
+                           Packing =>
+                             C.unsigned (Weight_Packing'Pos (This.Packing)),
+                           Base    => C.unsigned (Places (Index).Base),
+                           Joins   => 0,
+                           --  Where an integer walk by slot finds its
+                           --  rounding's scales, in rows.
+                           Table   =>
+                             (if Rounds
+                              then C.unsigned (Slot_Rows (Index)) else 0),
+                           Members =>
+                             [0  => C.unsigned (This.Gathers),
+                              13 => C.unsigned (Ceiling),
+                              14 => C.unsigned (Floor),
+                              15 =>
+                                (if Short
+                                 then C.unsigned
+                                        (Used_List_At
+                                           (This.Gathers, Count,
+                                            This.Used) + 1)
+                                 else 0),
+                              others => 0],
+                           Stride  => C.unsigned (Slice_Bytes (Index)),
+                           Apart   => 0,
+                           Routed  => (if This.By_Slot then 3 else 2));
+                     begin
+                        Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
+                              Product_Bytes, Shape'Address);
+                        Dispatch
+                          (Item.Buffer,
+                           C.unsigned
+                             ((Row_Reach (Item, This.Packing, Width,
+                                          Natural (Shape.Rows), This.Columns)
+                                 * Row_Lane_Count (Item, This.Packing, Width)
+                               + Row_Width (Item, This.Packing, Width) - 1)
+                              / Row_Width (Item, This.Packing, Width)),
+                           1,
+                           C.unsigned
+                             (if Short then Count * This.Used
+                              else This.Gathers));
+                     end Walk;
                   begin
-                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
-                           Product_Bytes, Shape'Address);
-                     Dispatch
-                       (Item.Buffer,
-                        C.unsigned
-                          ((Row_Reach (Item, This.Packing, Count,
-                                       Natural (Shape.Rows), This.Columns)
-                              * Row_Lane_Count (Item, This.Packing, Count)
-                            + Row_Width (Item, This.Packing, Count) - 1)
-                           / Row_Width (Item, This.Packing, Count)),
-                        1,
-                        C.unsigned
-                          (if Short then Count * This.Used
-                           else This.Gathers));
+                     if Narrow_Line /= Null_Handle then
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute, Narrow_Line);
+                        Walk (Narrow, 0, Narrow);
+                        Bind_Pipeline
+                          (Item.Buffer, Bind_Point_Compute,
+                           (if Rounds
+                            then Dots_Line
+                                   (Item, This.Packing, Count, This.Columns)
+                            else Row_Line
+                                   (Item, Count, This.Packing,
+                                    This.Columns)));
+                        Walk (Count, Narrow, 0);
+                     else
+                        Walk (Count, 0, 0);
+                     end if;
                   end;
 
                   goto Next_Dispatch;
