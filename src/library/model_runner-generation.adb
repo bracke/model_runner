@@ -750,6 +750,12 @@ package body Model_Runner.Generation is
       --  by Qwen2.5-Coder-0.5B, Ada: a new package 14.45 -> 15.22 t/s, an
       --  edit 21.4 -> 21.1 (within a run's noise); qwen3-8b and gemma-3-4b
       --  with their small drafts within a per cent on code and prose.
+      --  Measured and left, Qwen3.6-35B-A3B drafting from its block,
+      --  tokens a second: held at four rather than adapting from three,
+      --  41.8 against 38.6 at 4,093 positions and 37.6 against 36.3 at
+      --  16,377, but 41.4 against 47.8 and 32.1 against 36.9 on short
+      --  prompts; adapting from four past 2,048 positions, 37.5 against
+      --  38.6 at 4,093 and 37.0 against 36.2 at 16,377.
       Round_Draft : Natural :=
         Natural'Min (Item.Draft_Tokens, Largest_Draft);
 
