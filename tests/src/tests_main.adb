@@ -23,6 +23,8 @@ with Ada.Text_IO.Text_Streams;
 
 with AUnit;
 with AUnit.Reporter.Text;
+with AUnit.Test_Results;
+with Suite_Filter;
 with Case_Timing;
 with Device_Bench;
 with AUnit.Options;
@@ -103,6 +105,9 @@ procedure Tests_Main is
 
    function Run_Suite is
      new AUnit.Run.Test_Runner_With_Status (Tests.Suite.Suite);
+
+   procedure Run_Counted is
+     new AUnit.Run.Test_Runner_With_Results (Tests.Suite.Suite);
 
    Reporter : AUnit.Reporter.Text.Text_Reporter;
 
@@ -336,24 +341,48 @@ begin
          Filter : aliased AUnit.Test_Filters.Name_Filter;
          Chosen : AUnit.Options.AUnit_Options := AUnit.Options.Default_Options;
          Suite_Failed : Boolean := False;
+         None_Matched : Boolean := False;
       begin
          if Only /= "" then
             AUnit.Test_Filters.Set_Name (Filter, Only);
             Chosen.Filter := Filter'Unchecked_Access;
          end if;
          for Turn in 1 .. Times loop
-            if Run_Suite (Reporter, Chosen) /= AUnit.Success then
-               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-               Suite_Failed := True;
-            end if;
+            declare
+               Results : AUnit.Test_Results.Result;
+            begin
+               AUnit.Test_Results.Clear (Results);
+               Run_Counted (Reporter, Results, Chosen);
+               case Suite_Filter.Judge
+                      (Natural (AUnit.Test_Results.Test_Count (Results)),
+                       AUnit.Test_Results.Successful (Results), Only)
+               is
+                  when Suite_Filter.Passed =>
+                     null;
+                  when Suite_Filter.Failed =>
+                     Suite_Failed := True;
+                  when Suite_Filter.Matched_None =>
+                     Suite_Failed := True;
+                     None_Matched := True;
+               end case;
+            end;
          end loop;
+         if Suite_Failed then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
 
          --  One line at the end saying which, because a test that raised
          --  prints ERROR where a test that asserted prints FAIL, and a
-         --  reader looking for the one has missed the other.
+         --  reader looking for the one has missed the other. And a name
+         --  no test begins with ran none, which is not a pass: "backend"
+         --  for "cpu backend" said passed over nothing.
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error,
-            (if Suite_Failed
+            (if None_Matched
+             then "suite: FAILED -- no test's name begins with """ & Only
+                  & """; a name is the suite's, as ""cpu backend"", or "
+                  & "the suite's and a routine's after "" : """
+             elsif Suite_Failed
              then "suite: FAILED -- look for FAIL and ERROR lines above"
              else "suite: passed"));
       end;

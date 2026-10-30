@@ -14,6 +14,7 @@ with Spec_Conformance;
 with GNAT.SHA1;
 with Conformance;
 with Tiny_Model;
+with Suite_Filter;
 
 package body Tests.Gate_Cases is
 
@@ -471,6 +472,27 @@ package body Tests.Gate_Cases is
               & " (Model_Runner.Heap_Buffers):" & Ada.Strings.Unbounded.To_String (Over));
    end No_Frame_Is_A_Quarter_Megabyte;
 
+   --  A run narrowed to a name no test begins with ran none and says
+   --  so, where it said passed: "backend" for "cpu backend".
+   procedure A_Name_Matching_No_Test_Is_Not_A_Pass
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Suite_Filter.Verdict;
+   begin
+      Assert (Suite_Filter.Judge (0, True, "backend")
+                = Suite_Filter.Matched_None,
+              "a name that ran no test passed");
+      Assert (Suite_Filter.Judge (85, True, "cpu backend")
+                = Suite_Filter.Passed,
+              "a name that ran its tests, all passing, did not pass");
+      Assert (Suite_Filter.Judge (85, False, "cpu backend")
+                = Suite_Filter.Failed,
+              "a name whose tests failed did not fail");
+      Assert (Suite_Filter.Judge (0, True, "") = Suite_Filter.Passed,
+              "an unnarrowed run of nothing failed");
+   end A_Name_Matching_No_Test_Is_Not_A_Pass;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -482,6 +504,10 @@ package body Tests.Gate_Cases is
         (T, The_Tree_Holds_Its_Two_Cheap_Bounds'Access,
          "the build left no warnings and no file of the tree is past two "
          & "mebibytes");
+      Register_Routine
+        (T, A_Name_Matching_No_Test_Is_Not_A_Pass'Access,
+         "a run narrowed to a name no test begins with fails, rather than "
+         & "passing over nothing");
       Register_Routine
         (T, No_Frame_Is_A_Quarter_Megabyte'Access,
          "no frame of the library is a quarter of a megabyte, so a task's stack holds a chain of them");

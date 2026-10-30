@@ -478,6 +478,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **`tests test --only NAME` fails where no test's name begins with NAME.** AUnit's filter takes a prefix of "suite : routine", and a name that matched none -- "backend" for "cpu backend" -- ran nothing and printed "suite: passed". It now says no test's name begins with it, how a name is made, and exits with failure (Suite_Filter.Judge); a run that matched counts as before. In the suite: a name that ran nothing is not a pass, one whose tests failed fails, and an unnarrowed run is judged as before.
+
 - **A gather whose members each read their own stretch reads a batch's positions apart.** A product gathered over members, each member reading its own stretch of what came before, stepped from one position to the next by one stretch rather than by every member's -- so a batch's second position read its first's later members. No such gather had run on a batch before; the absorbed latent's are the first. And one sequence holds forty steps where it held thirty-two.
 
 - **`tests speed` repeats with run's own penalty.** Its --repeat-penalty stayed at 1.1 after run's default went to 1.0, so it measured a sampler nobody starts -- and DeepSeek-Coder-V2-Lite's first token after a 529-token prompt was its end, a figure of nothing generated. Unnamed, it now takes the penalty from the sampler's own defaults. DeepSeek-Coder-V2-Lite on the device, 567-token prompt: 606 against llama.cpp's 406 tokens a second, generating 32.8 against 32.3.
