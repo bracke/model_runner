@@ -360,6 +360,20 @@ package body Model_Runner.Tokenizer is
       Scratch    : E.Error_Info;
       Number     : Long_Long_Integer;
 
+      --  Where the vocabulary's arrays are among the file's entries,
+      --  found once rather than once an element: a hundred and fifty
+      --  thousand pieces read three ways each hashed the key every time.
+      Tokens_At   : constant Natural :=
+        Containers.Find (Source, "tokenizer.ggml.tokens");
+      Scores_At   : constant Natural :=
+        Containers.Find (Source, "tokenizer.ggml.scores");
+      Types_At    : constant Natural :=
+        Containers.Find (Source, "tokenizer.ggml.token_type");
+      Merges_At   : constant Natural :=
+        Containers.Find (Source, "tokenizer.ggml.merges");
+      Charsmap_At : constant Natural :=
+        Containers.Find (Source, "tokenizer.ggml.precompiled_charsmap");
+
       --  Whether the byte-pair rule the file names is one whose files
       --  begin a text with a marker where they do not say: the Llama 3
       --  family's, Tekken's and Chameleon's, as llama.cpp reads them.
@@ -665,7 +679,8 @@ package body Model_Runner.Tokenizer is
                Length : Natural;
             begin
                Containers.Get_String_Element_Length
-                 (Source, "tokenizer.ggml.tokens", Index, Length, Scratch);
+                 (Source, "tokenizer.ggml.tokens", Index, Length, Scratch,
+                  Tokens_At);
                if E.Is_Error (Scratch) or else Length > Max_Token_Bytes then
                   Status := E.Make (E.Tokenizer_Invalid_Token_Text);
                   E.Add_Integer (Status, "index", Long_Long_Integer (Index));
@@ -694,7 +709,8 @@ package body Model_Runner.Tokenizer is
             Entry_Value : Token_Entry;
          begin
             Containers.Get_String_Element
-              (Source, "tokenizer.ggml.tokens", Index, Buffer, Last, Scratch);
+              (Source, "tokenizer.ggml.tokens", Index, Buffer, Last, Scratch,
+               Tokens_At);
             if E.Is_Error (Scratch) then
                Status := E.Make (E.Tokenizer_Invalid_Token_Text);
                E.Add_Integer (Status, "index", Long_Long_Integer (Index));
@@ -714,7 +730,8 @@ package body Model_Runner.Tokenizer is
                   Value : Model_Runner.Numerics.Wide_Real;
                begin
                   Containers.Get_Float_Element
-                    (Source, "tokenizer.ggml.scores", Index, Value, Scratch);
+                    (Source, "tokenizer.ggml.scores", Index, Value, Scratch,
+                     Scores_At);
                   if E.Is_Ok (Scratch) then
                      Entry_Value.Score := Float (Value);
                   end if;
@@ -723,7 +740,8 @@ package body Model_Runner.Tokenizer is
 
             if Has_Types then
                Containers.Get_Integer_Element
-                 (Source, "tokenizer.ggml.token_type", Index, Number, Scratch);
+                 (Source, "tokenizer.ggml.token_type", Index, Number, Scratch,
+                  Types_At);
                if E.Is_Ok (Scratch) then
                   --  GGUF token types: 1 normal, 2 unknown, 3 control,
                   --  4 user defined, 5 unused, 6 byte.
@@ -1385,7 +1403,7 @@ package body Model_Runner.Tokenizer is
                begin
                   Containers.Get_String_Element
                     (Source, "tokenizer.ggml.merges", Index,
-                     Buffer, Last, Scratch);
+                     Buffer, Last, Scratch, Merges_At);
                   if E.Is_Error (Scratch) or else Last = 0 then
                      Status := E.Make (E.Tokenizer_Invalid_Merges);
                      E.Add_Integer (Status, "index", Long_Long_Integer (Index));
@@ -1457,7 +1475,7 @@ package body Model_Runner.Tokenizer is
                   for Index in 1 .. Bytes loop
                      Containers.Get_Integer_Element
                        (Source, "tokenizer.ggml.precompiled_charsmap",
-                        Index, Value, Scratch);
+                        Index, Value, Scratch, Charsmap_At);
                      if E.Is_Error (Scratch) then
                         Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
                         return;

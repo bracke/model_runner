@@ -431,6 +431,36 @@ package body Tests.GGUF_Cases is
                  "a buffer sized by the length accessor still did not fit");
       end;
 
+      --  Read where Find found the key, as a long array's reader does, an
+      --  element is the one the key reads; an entry that is no such array
+      --  is refused as the key's would be, and one past the entries is
+      --  found by the key.
+      declare
+         Strings_At : constant Natural :=
+           Containers.Find (Item, "fixture.strings");
+         Count_At   : constant Natural :=
+           Containers.Find (Item, "fixture.count");
+         Text : String (1 .. 16);
+         Last : Natural;
+      begin
+         Containers.Get_String_Element
+           (Item, "fixture.strings", 1, Text, Last, Status, Strings_At);
+         Assert (E.Is_Ok (Status) and then Text (1 .. Last) = "<unk>",
+                 "an element read where Find found its key is another");
+         Containers.Get_String_Element_Length
+           (Item, "fixture.strings", 1, Length, Status, Strings_At);
+         Assert (E.Is_Ok (Status) and then Length = 5,
+                 "a length read where Find found its key is another");
+         Containers.Get_String_Element
+           (Item, "fixture.strings", 1, Text, Last, Status, Count_At);
+         Refuses ("a string element of a scalar entry named by place",
+                  E.GGUF_Metadata_Type_Mismatch);
+         Containers.Get_String_Element
+           (Item, "fixture.strings", 1, Text, Last, Status, 1_000_000);
+         Assert (E.Is_Ok (Status) and then Text (1 .. Last) = "<unk>",
+                 "an entry past the file's was not found by its key");
+      end;
+
       --  An integer element.
       Containers.Get_Integer_Element (Item, "fixture.absent", 1, Number, Status);
       Refuses ("absent integer array", E.GGUF_Missing_Metadata_Key);

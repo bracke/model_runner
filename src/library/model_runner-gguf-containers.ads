@@ -237,13 +237,16 @@ package Model_Runner.GGUF.Containers is
    --  @param Value Element text; unspecified beyond Last.
    --  @param Last Length written; 0 on failure.
    --  @param Status Success or a GGUF metadata diagnostic.
+   --  @param At_Entry Where Find found Key, which spares finding it again
+   --    for every element of a long array; nought to find it.
    procedure Get_String_Element
      (Item   : Container;
       Key    : String;
       Index  : Positive;
       Value  : out String;
       Last   : out Natural;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      At_Entry : Natural := 0);
 
    --  Length of one element of a string array.
    --
@@ -255,12 +258,15 @@ package Model_Runner.GGUF.Containers is
    --  @param Index Element position.
    --  @param Length Element length in bytes; 0 on failure.
    --  @param Status Success or a GGUF metadata diagnostic.
+   --  @param At_Entry Where Find found Key, which spares finding it again
+   --    for every element of a long array; nought to find it.
    procedure Get_String_Element_Length
      (Item   : Container;
       Key    : String;
       Index  : Positive;
       Length : out Natural;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      At_Entry : Natural := 0);
 
    --  Read one element of an integer array.
    --
@@ -269,12 +275,15 @@ package Model_Runner.GGUF.Containers is
    --  @param Index Element position.
    --  @param Value Element value; 0 on failure.
    --  @param Status Success or a GGUF metadata diagnostic.
+   --  @param At_Entry Where Find found Key, which spares finding it again
+   --    for every element of a long array; nought to find it.
    procedure Get_Integer_Element
      (Item   : Container;
       Key    : String;
       Index  : Positive;
       Value  : out Long_Long_Integer;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      At_Entry : Natural := 0);
 
    --  Read one element of a boolean array.
    --
@@ -297,12 +306,15 @@ package Model_Runner.GGUF.Containers is
    --  @param Index Element position.
    --  @param Value Element value; 0.0 on failure.
    --  @param Status Success or a GGUF metadata diagnostic.
+   --  @param At_Entry Where Find found Key, which spares finding it again
+   --    for every element of a long array; nought to find it.
    procedure Get_Float_Element
      (Item   : Container;
       Key    : String;
       Index  : Positive;
       Value  : out Model_Runner.Numerics.Wide_Real;
-      Status : out Model_Runner.Errors.Error_Info);
+      Status   : out Model_Runner.Errors.Error_Info;
+      At_Entry : Natural := 0);
 
    ---------------------------------------------------------------------------
    --  Tensor descriptors

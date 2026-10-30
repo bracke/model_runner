@@ -439,9 +439,12 @@ package body Model_Runner.GGUF.Containers is
       Index   : Positive;
       Element : Value_Type;
       Found   : out Natural;
-      Status  : out E.Error_Info) is
+      Status  : out E.Error_Info;
+      At_Entry : Natural := 0) is
    begin
-      Found := Find (Item, Key);
+      Found :=
+        (if At_Entry in 1 .. Natural (Item.Entries.Length) then At_Entry
+         else Find (Item, Key));
 
       if Found = 0 then
          Status := Missing (Key);
@@ -488,12 +491,14 @@ package body Model_Runner.GGUF.Containers is
       Key    : String;
       Index  : Positive;
       Length : out Natural;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      At_Entry : Natural := 0)
    is
       Position : Natural;
    begin
       Length := 0;
-      Locate_Element (Item, Key, Index, Value_String, Position, Status);
+      Locate_Element
+        (Item, Key, Index, Value_String, Position, Status, At_Entry);
 
       if Position = 0 then
          return;
@@ -522,13 +527,14 @@ package body Model_Runner.GGUF.Containers is
       Index  : Positive;
       Value  : out String;
       Last   : out Natural;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      At_Entry : Natural := 0)
    is
       Position : Natural;
    begin
-      Value := [others => ' '];
       Last := 0;
-      Locate_Element (Item, Key, Index, Value_String, Position, Status);
+      Locate_Element
+        (Item, Key, Index, Value_String, Position, Status, At_Entry);
 
       if Position = 0 then
          return;
@@ -572,9 +578,12 @@ package body Model_Runner.GGUF.Containers is
       Key    : String;
       Index  : Positive;
       Value  : out Long_Long_Integer;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      At_Entry : Natural := 0)
    is
-      Position : constant Natural := Find (Item, Key);
+      Position : constant Natural :=
+        (if At_Entry in 1 .. Natural (Item.Entries.Length) then At_Entry
+         else Find (Item, Key));
    begin
       Value := 0;
 
@@ -736,9 +745,12 @@ package body Model_Runner.GGUF.Containers is
       Key    : String;
       Index  : Positive;
       Value  : out N.Wide_Real;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      At_Entry : Natural := 0)
    is
-      Position : constant Natural := Find (Item, Key);
+      Position : constant Natural :=
+        (if At_Entry in 1 .. Natural (Item.Entries.Length) then At_Entry
+         else Find (Item, Key));
    begin
       Value := 0.0;
 
