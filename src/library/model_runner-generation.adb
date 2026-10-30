@@ -796,15 +796,16 @@ package body Model_Runner.Generation is
       Lookup_Rest       : Natural := 0;
 
       --  Mixed: the rounds until the text is asked first again. A round
-      --  of the text's that kept less than half of what it proposed waits
-      --  Text_Again rounds of the draft's; one that kept more is followed
-      --  by another. On a model that does not restate its question the
-      --  text guesses rarely and badly, and every round it guessed was one
-      --  the draft did not: gemma-3-4b's story 29.5 tokens a second
-      --  drafted, 28.4 asking the text first every round. Judged over the
-      --  whole run instead, qwen3-8b's thinking -- whose first rounds of
-      --  the text keep little and whose later ones keep all -- lost what
-      --  the text was worth to it (36.5 -> 26.8).
+      --  of the text's that kept nothing waits Text_Again rounds of the
+      --  draft's; one that kept anything is followed by another. On a
+      --  model that does not restate its question the text guesses rarely
+      --  and badly, and every round it guessed was one the draft did not:
+      --  gemma-3-4b's story 29.5 tokens a second drafted, 28.4 asking the
+      --  text first every round, 29.2 so. Judged over the whole run
+      --  instead, qwen3-8b's thinking -- whose first rounds of the text
+      --  keep little and whose later ones keep all -- lost what the text
+      --  was worth to it (36.5 -> 26.8); waiting sixteen rounds after one
+      --  that kept less than half, 31.7; this way 35.6.
       Text_Wait         : Natural := 0;
       Text_Again        : constant := 8;
       Lookup_Rest_Next  : Natural := 32;
