@@ -473,6 +473,16 @@ package Model_Runner.Errors is
       Frames          => [others => Model_Runner.Text.Empty],
       Frame_Total     => 0);
 
+   --  Make an outcome a success, as assigning Success does, without
+   --  copying Success's parameters and frames: every reader stops at
+   --  the totals, which are nought, and an outcome is some ten
+   --  kilobytes. Assigned in every read of a model file's header, a
+   --  copy each, they were a third of Qwen3.6-35B-A3B's parse.
+   --
+   --  @param Item Outcome to clear.
+   procedure Clear (Item : in out Error_Info)
+     with Inline;
+
    --  Report whether an outcome is a success.
    --
    --  @param Item Outcome to inspect.

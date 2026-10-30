@@ -479,6 +479,41 @@ package body Tests.Catalog_Cases is
       Loc.Close (Catalog);
    end Locale_Fallback;
 
+   --  A condition cleared is a success to every reader: no code, no
+   --  parameter found by name, no frame, and the same words as Success,
+   --  though its parameters' storage was not copied over.
+   procedure A_Cleared_Condition_Reads_As_Success
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Catalog   : Loc.Catalog;
+      Condition : E.Error_Info := E.Make (E.CLI_Unknown_Option);
+      Found     : Boolean;
+      Given     : E.Parameter;
+   begin
+      Open (Catalog);
+      E.Add_Text (Condition, "option", "--nope", E.Param_Identifier);
+      E.Add_Frame (Condition, "reading the header");
+      E.Clear (Condition);
+
+      Assert (E.Is_Ok (Condition) and then not E.Is_Error (Condition),
+              "a cleared condition is still an error");
+      E.Find_Parameter (Condition, "option", Found, Given);
+      Assert (not Found, "a cleared condition still names its option");
+      Assert (Loc.Describe (Catalog, Condition)
+                = Loc.Describe (Catalog, E.Success),
+              "a cleared condition reads """
+              & Loc.Describe (Catalog, Condition) & """");
+
+      --  And a condition made on it afterwards carries only its own.
+      Condition := E.Make (E.Memory_Allocation_Failed);
+      E.Clear (Condition);
+      E.Add_Text (Condition, "category", "pictures", E.Param_Identifier);
+      E.Find_Parameter (Condition, "option", Found, Given);
+      Assert (not Found, "a parameter from before the clear came back");
+      Loc.Close (Catalog);
+   end A_Cleared_Condition_Reads_As_Success;
+
    --  A structured condition renders with its typed parameters substituted,
    --  and untrusted parameter values are escaped.
    procedure Conditions_Render (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -1011,6 +1046,9 @@ package body Tests.Catalog_Cases is
          "no two progress stages say the same thing");
       Register_Routine
         (T, Catalog_Loads'Access, "the repository catalog loads and resolves");
+      Register_Routine
+        (T, A_Cleared_Condition_Reads_As_Success'Access,
+         "a condition cleared reads as a success, and keeps nothing it held");
       Register_Routine
         (T, Quiet_Suppresses_Progress'Access,
          "quiet suppresses progress and the ordinary level does not");

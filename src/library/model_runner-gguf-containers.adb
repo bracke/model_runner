@@ -248,7 +248,7 @@ package body Model_Runner.GGUF.Containers is
             if Last > 0 then
                Value (Value'First .. Value'First + Last - 1) := Content;
             end if;
-            Status := E.Success;
+            E.Clear (Status);
          end;
       end;
    end Get_String;
@@ -316,7 +316,7 @@ package body Model_Runner.GGUF.Containers is
          end if;
 
          Value := Found.Signed;
-         Status := E.Success;
+         E.Clear (Status);
       end;
    end Get_Integer;
 
@@ -359,7 +359,7 @@ package body Model_Runner.GGUF.Containers is
          end if;
 
          Value := Found.Number;
-         Status := E.Success;
+         E.Clear (Status);
       end;
    end Get_Float;
 
@@ -388,7 +388,7 @@ package body Model_Runner.GGUF.Containers is
       end if;
 
       Value := Item.Entries (Index).Flag;
-      Status := E.Success;
+      E.Clear (Status);
    end Get_Boolean;
 
    ------------------------
@@ -428,7 +428,7 @@ package body Model_Runner.GGUF.Containers is
          end if;
 
          Length := Found.Length;
-         Status := E.Success;
+         E.Clear (Status);
       end;
    end Get_Array_Length;
 
@@ -476,7 +476,7 @@ package body Model_Runner.GGUF.Containers is
          end if;
       end;
 
-      Status := E.Success;
+      E.Clear (Status);
    end Locate_Element;
 
    -------------------------------
@@ -663,7 +663,7 @@ package body Model_Runner.GGUF.Containers is
          end;
       end;
 
-      Status := E.Success;
+      E.Clear (Status);
    end Get_Integer_Element;
 
    -------------------------
@@ -724,7 +724,7 @@ package body Model_Runner.GGUF.Containers is
          end;
       end;
 
-      Status := E.Success;
+      E.Clear (Status);
    end Get_Boolean_Element;
 
    ------------------------
@@ -794,7 +794,7 @@ package body Model_Runner.GGUF.Containers is
          end;
       end;
 
-      Status := E.Success;
+      E.Clear (Status);
    end Get_Float_Element;
 
    --------------------

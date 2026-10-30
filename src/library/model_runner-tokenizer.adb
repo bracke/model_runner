@@ -1523,7 +1523,7 @@ package body Model_Runner.Tokenizer is
       end if;
 
       Item.Loaded := True;
-      Status := E.Success;
+      E.Clear (Status);
    exception
       when Occurrence : others =>
          Close (Item);
@@ -2238,7 +2238,7 @@ package body Model_Runner.Tokenizer is
       Ok : Boolean;
    begin
       Last := 0;
-      Status := E.Success;
+      E.Clear (Status);
 
       if not Item.Loaded then
          Status := E.Make (E.Tokenizer_Invalid_Vocabulary);
@@ -3353,7 +3353,7 @@ package body Model_Runner.Tokenizer is
       Made  : Cutting.Piece_Ends_Access;
       Total : Natural;
    begin
-      Status := E.Success;
+      E.Clear (Status);
       Count := 0;
 
       if not Item.Loaded then
@@ -3455,7 +3455,7 @@ package body Model_Runner.Tokenizer is
       Ok   : Boolean;
    begin
       Last := 0;
-      Status := E.Success;
+      E.Clear (Status);
 
       if not Item.Loaded then
          Status := E.Make (E.Tokenizer_Invalid_Vocabulary);

@@ -103,7 +103,7 @@ package body Model_Runner.GGUF.Containers.Reader is
         A.To_Checked (Interfaces.Unsigned_64 (Item.Pool_Used))
         + A.To_Checked (Interfaces.Unsigned_64 (Extra));
    begin
-      Status := E.Success;
+      E.Clear (Status);
 
       if not A.Is_Valid (Needed) then
          Status := E.Make (E.GGUF_Arithmetic_Overflow);
@@ -347,7 +347,7 @@ package body Model_Runner.GGUF.Containers.Reader is
          Cursor.Cursor := Cursor.Cursor + Length;
       end if;
 
-      Status := E.Success;
+      E.Clear (Status);
    end Take_Into_Pool;
 
    --  Report whether a run already in the pool is well-formed UTF-8.
@@ -647,7 +647,7 @@ package body Model_Runner.GGUF.Containers.Reader is
             end;
          end loop;
 
-         Status := E.Success;
+         E.Clear (Status);
          return;
       end if;
 
@@ -915,7 +915,7 @@ package body Model_Runner.GGUF.Containers.Reader is
    is
       Index : constant Natural := Find (Item, "general.alignment");
    begin
-      Status := E.Success;
+      E.Clear (Status);
       Item.Align := Default_Alignment;
 
       if Index = 0 then
@@ -961,7 +961,7 @@ package body Model_Runner.GGUF.Containers.Reader is
       Highest : Interfaces.Unsigned_64 := Item.Data_Start;
       Order   : array (1 .. Count) of Natural;
    begin
-      Status := E.Success;
+      E.Clear (Status);
 
       for Index in 1 .. Count loop
          declare
@@ -1173,7 +1173,7 @@ package body Model_Runner.GGUF.Containers.Reader is
 
       Wanted : constant Natural := Shard_Count (Item);
    begin
-      Status := E.Success;
+      E.Clear (Status);
 
       --  A first shard that does not say it is one, given others to merge,
       --  is a caller mistake rather than a file's: refuse before reading
@@ -1367,7 +1367,7 @@ package body Model_Runner.GGUF.Containers.Reader is
       Item.Total_Size := Interfaces.Unsigned_64 (Source.Size);
       Cursor.Size := Source.Size;
       Cursor.Cursor := 0;
-      Status := E.Success;
+      E.Clear (Status);
 
       P.Publish (Observer, P.Load_Progress (P.Reading_Header));
 
@@ -1555,7 +1555,7 @@ package body Model_Runner.GGUF.Containers.Reader is
       end if;
 
       Item.Valid := True;
-      Status := E.Success;
+      E.Clear (Status);
    exception
       --  A malformed file must never escape as an exception. Anything that
       --  reaches here is a defect in this package, reported as an internal

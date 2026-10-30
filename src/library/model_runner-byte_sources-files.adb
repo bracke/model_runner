@@ -34,7 +34,7 @@ package body Model_Runner.Byte_Sources.Files is
       Mapped_Ok : Boolean := False;
    begin
       Close (Item);
-      Status := E.Success;
+      E.Clear (Status);
 
       if Path = "" or else Path'Length > Max_Path_Length then
          Status := E.Make (E.IO_Open_Failed);
@@ -216,7 +216,7 @@ package body Model_Runner.Byte_Sources.Files is
          E.Set_Location (Status, Interfaces.Unsigned_64 (Offset));
       end Report_Truncated;
    begin
-      Status := E.Success;
+      E.Clear (Status);
 
       if not Self.Opened then
          Target := [others => 0];

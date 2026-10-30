@@ -222,7 +222,7 @@ package body Model_Runner.GGUF.Shards is
       Count  : Positive;
       Status : out E.Error_Info) is
    begin
-      Status := E.Success;
+      E.Clear (Status);
 
       if Item.Held /= 1 then
          --  Either nothing is open or the rest are open already. Neither is
@@ -358,7 +358,7 @@ package body Model_Runner.GGUF.Shards is
    is
       Taken : B.Byte_Count := 0;
    begin
-      Status := E.Success;
+      E.Clear (Status);
 
       if Target'Length = 0 then
          return;

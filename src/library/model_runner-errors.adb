@@ -1,5 +1,20 @@
 package body Model_Runner.Errors is
 
+   -----------
+   -- Clear --
+   -----------
+
+   procedure Clear (Item : in out Error_Info) is
+   begin
+      Item.Code := No_Error;
+      Item.Severity := Severity_Information;
+      Item.Parameter_Total := 0;
+      Item.Has_Location := False;
+      Item.Location := 0;
+      Item.Cause := No_Error;
+      Item.Frame_Total := 0;
+   end Clear;
+
    package T renames Model_Runner.Text;
 
    --  Return the segment of Image before the first underscore. Every code
