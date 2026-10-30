@@ -19371,7 +19371,9 @@ package body Model_Runner.Platform.Device.Products is
                --  the longer on the batch's own. A check of four to six
                --  positions over Qwen3.6-35B-A3B's 256 experts runs one
                --  or two positions an expert, and the batch's walk worked
-               --  out every one of its vectors for each.
+               --  out every one of its vectors for each. A third pass,
+               --  the runs of one on the walk for one, measured level
+               --  (50.3 against 51.0 tokens a second drafted).
                if This.Listed then
                   declare
                      Short : constant Boolean :=
