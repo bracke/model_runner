@@ -248,6 +248,25 @@ package Model_Runner.Tensors is
    --  @return True when the view has a buffer and a non-zero shape.
    function Is_Present (Item : View) return Boolean;
 
+   --  Where a view's storage lies: its buffer and its offset into it.
+   type Storage_Place is record
+      Base   : System.Address := System.Null_Address;
+      Offset : Model_Runner.Bytes.Byte_Count := 0;
+   end record;
+
+   type Storage_Places is array (Positive range <>) of Storage_Place;
+   type Storage_Firsts is array (Positive range <>) of Boolean;
+
+   --  Which of a list of places is the first to name its storage -- the
+   --  same base and offset, as a tied output names its embedding's.
+   --  Sorted rather than each compared with every one before it: Qwen3.6-
+   --  35B-A3B's thirty thousand expert views took a second and a half of
+   --  every load that way.
+   --
+   --  @param Places The places, in the order that decides which is first.
+   --  @return True at each place no earlier one shares.
+   function First_Of_Storage (Places : Storage_Places) return Storage_Firsts;
+
    --  Serialized size of one row.
    --
    --  @param Item View to inspect.

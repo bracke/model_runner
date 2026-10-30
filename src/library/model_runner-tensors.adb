@@ -1,3 +1,4 @@
+with Ada.Containers.Generic_Array_Sort;
 with Ada.Unchecked_Conversion;
 with Ada.Unchecked_Deallocation;
 
@@ -130,6 +131,45 @@ package body Model_Runner.Tensors is
    function Is_Present (Item : View) return Boolean
    is (Item.Base /= System.Null_Address
        and then Item.Rows > 0 and then Item.Columns > 0);
+
+   ----------------------
+   -- First_Of_Storage --
+   ----------------------
+
+   function First_Of_Storage (Places : Storage_Places) return Storage_Firsts
+   is
+      type Order is array (Positive range <>) of Positive;
+      type Order_Access is access Order;
+
+      procedure Free is new Ada.Unchecked_Deallocation (Order, Order_Access);
+
+      function Before (Left, Right : Positive) return Boolean
+      is (if Places (Left).Base /= Places (Right).Base
+          then Places (Left).Base < Places (Right).Base
+          elsif Places (Left).Offset /= Places (Right).Offset
+          then Places (Left).Offset < Places (Right).Offset
+          else Left < Right);
+
+      procedure Sort is new Ada.Containers.Generic_Array_Sort
+        (Positive, Positive, Order, Before);
+
+      Result : Storage_Firsts (Places'Range) := [others => False];
+      Sorted : Order_Access := new Order (Places'Range);
+      Last   : Natural := 0;
+   begin
+      for Index in Places'Range loop
+         Sorted (Index) := Index;
+      end loop;
+      Sort (Sorted.all);
+      for Index of Sorted.all loop
+         if Last = 0 or else Places (Last) /= Places (Index) then
+            Result (Index) := True;
+         end if;
+         Last := Index;
+      end loop;
+      Free (Sorted);
+      return Result;
+   end First_Of_Storage;
 
    ----------------
    -- Row_Bytes --

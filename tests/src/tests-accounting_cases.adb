@@ -67,6 +67,64 @@ package body Tests.Accounting_Cases is
               "an allocation that exactly fills the budget was refused");
    end Over_Budget_Is_Refused;
 
+   --  Of views that share storage the first is the one counted, and a
+   --  list of a few hundred thousand is answered in a moment: compared
+   --  each with every one before it, Qwen3.6-35B-A3B's thirty thousand
+   --  took a second and a half of every load.
+   procedure Storage_Is_Counted_Once_And_Soon
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ts renames Model_Runner.Tensors;
+      use type Ts.Storage_Firsts;
+      use type Model_Runner.Bytes.Byte_Count;
+
+      One, Two : aliased Interfaces.Unsigned_8 := 0;
+
+      A : constant System.Address := One'Address;
+      B : constant System.Address := Two'Address;
+
+      Few : constant Ts.Storage_Places :=
+        [(A, 0), (B, 0), (A, 0), (A, 8), (B, 0), (A, 8), (B, 16)];
+      Got : constant Ts.Storage_Firsts := Ts.First_Of_Storage (Few);
+      Want : constant Ts.Storage_Firsts :=
+        [True, True, False, True, False, False, True];
+
+      type Places_Access is access Ts.Storage_Places;
+      Many  : constant Places_Access := new Ts.Storage_Places (1 .. 200_000);
+      Clock : Model_Runner.Clocks.System_Clock;
+      Began : Model_Runner.Clocks.Nanoseconds;
+      Took  : Model_Runner.Clocks.Nanoseconds;
+      Count : Natural := 0;
+   begin
+      Assert (Got = Want, "the first of each storage was not the one kept");
+
+      --  Each of a hundred thousand places twice, the second half in
+      --  the reverse order of the first.
+      for Index in 1 .. 100_000 loop
+         Many (Index) := (A, Model_Runner.Bytes.Byte_Count (Index) * 16);
+         Many (200_001 - Index) := Many (Index);
+      end loop;
+
+      Began := Model_Runner.Clocks.Now (Clock);
+      declare
+         Firsts : constant Ts.Storage_Firsts := Ts.First_Of_Storage (Many.all);
+      begin
+         Took := Model_Runner.Clocks.Now (Clock) - Began;
+         for Index in Firsts'Range loop
+            if Firsts (Index) then
+               Count := Count + 1;
+               Assert (Index <= 100_000,
+                       "a later place was kept over an earlier one");
+            end if;
+         end loop;
+      end;
+      Assert (Count = 100_000,
+              "distinct places kept:" & Count'Image & " of 100000");
+      Assert (Took < 2_000_000_000,
+              "two hundred thousand places took" & Took'Image & " ns");
+   end Storage_Is_Counted_Once_And_Soon;
+
    --  Totals follow allocation and release, and the peak does not fall.
    procedure Totals_Follow_Allocation
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1269,6 +1327,10 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Over_Budget_Is_Refused'Access,
          "an allocation past the budget is refused before it is attempted");
+      Register_Routine
+        (T, Storage_Is_Counted_Once_And_Soon'Access,
+         "of views sharing storage the first is counted, and a long list "
+         & "is answered in a moment");
       Register_Routine
         (T, Totals_Follow_Allocation'Access,
          "totals follow allocation and release, and the peak does not fall");

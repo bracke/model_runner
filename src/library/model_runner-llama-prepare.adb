@@ -88,6 +88,27 @@ is
       Status := Reason;
    end Fail;
 
+   subtype Storage_Firsts is T.Storage_Firsts;
+
+   --  Which of Held is the first to name its storage (T.First_Of_Storage).
+   function First_Of_Storage (Held : View_List) return Storage_Firsts is
+      type Places_Access is access T.Storage_Places;
+
+      procedure Free is new Ada.Unchecked_Deallocation
+        (T.Storage_Places, Places_Access);
+
+      Places : Places_Access := new T.Storage_Places (Held'Range);
+   begin
+      for Index in Held'Range loop
+         Places (Index) := (Held (Index).all.Base, Held (Index).all.Offset);
+      end loop;
+      return Result : constant Storage_Firsts :=
+        T.First_Of_Storage (Places.all)
+      do
+         Free (Places);
+      end return;
+   end First_Of_Storage;
+
    --  A mixture's matrices, each storage counted once, and what of them
    --  its feed-forward takes -- the stacks, the router and the shared
    --  expert, which the processor's mixture reads where the device does
@@ -96,7 +117,8 @@ is
      (Total : out Interfaces.Unsigned_64;
       Feed  : out Interfaces.Unsigned_64)
    is
-      Held : constant View_List := Matrices (Item);
+      Held  : constant View_List := Matrices (Item);
+      First : constant Storage_Firsts := First_Of_Storage (Held);
 
       procedure Count (View : T.View) is
       begin
@@ -106,22 +128,9 @@ is
       Total := 0;
       Feed := 0;
       for Index in Held'Range loop
-         declare
-            Seen_Before : Boolean := False;
-         begin
-            for Earlier in Held'First .. Index - 1 loop
-               if Held (Earlier).all.Base = Held (Index).all.Base
-                 and then Held (Earlier).all.Offset = Held (Index).all.Offset
-               then
-                  Seen_Before := True;
-                  exit;
-               end if;
-            end loop;
-
-            if not Seen_Before then
-               Total := Total + Bytes_Of (Held (Index).all);
-            end if;
-         end;
+         if First (Index) then
+            Total := Total + Bytes_Of (Held (Index).all);
+         end if;
       end loop;
 
       if Item.Layers /= null then
@@ -2582,23 +2591,15 @@ begin
          --  than one the caller named.
          Counted_Here : Boolean := False;
       begin
-         for Index in Held'Range loop
-            declare
-               Seen_Before : Boolean := False;
-            begin
-               for Earlier in Held'First .. Index - 1 loop
-                  if Held (Earlier).all.Base = Held (Index).all.Base
-                    and then Held (Earlier).all.Offset = Held (Index).all.Offset
-                  then
-                     Seen_Before := True;
-                     exit;
-                  end if;
-               end loop;
-               if not Seen_Before then
+         declare
+            First : constant Storage_Firsts := First_Of_Storage (Held);
+         begin
+            for Index in Held'Range loop
+               if First (Index) then
                   Total := Total + Bytes_Of (Held (Index).all);
                end if;
-            end;
-         end loop;
+            end loop;
+         end;
 
          --  Unnamed, the longest context halving down from the model's own
          --  at which every matrix still fits, and Planned_Context where none
@@ -3710,21 +3711,10 @@ begin
          --  Distinct storage, because a model with a tied output holds
          --  one matrix under two names and a device asked to keep it
          --  twice keeps it once: the address is the key.
-         function Counted_Before (Upto : Natural) return Boolean is
-         begin
-            for Earlier in Held'First .. Upto - 1 loop
-               if Held (Earlier).all.Base = Held (Upto).all.Base
-                 and then Held (Earlier).all.Offset
-                          = Held (Upto).all.Offset
-               then
-                  return True;
-               end if;
-            end loop;
-            return False;
-         end Counted_Before;
+         First : constant Storage_Firsts := First_Of_Storage (Held);
       begin
          for Index in Held'Range loop
-            if not Counted_Before (Index) then
+            if First (Index) then
                Total := Total
                  + Interfaces.Unsigned_64 (Held (Index).all.Rows)
                    * Interfaces.Unsigned_64 (T.Row_Bytes (Held (Index).all));
