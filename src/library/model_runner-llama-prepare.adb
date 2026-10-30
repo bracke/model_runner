@@ -3913,6 +3913,11 @@ begin
             end;
          end loop;
 
+         --  Not the layers' other matrices with them: held here too,
+         --  Qwen3.6-35B-A3B's cold load read open to first token in 9.87 s
+         --  against 9.86, its first prompt 1.85 -> 0.62 s and the load as
+         --  much longer -- the disk is the bound, wherever the bytes go.
+
          --  And the block past the stack's, which drafts: counted in the
          --  fit above, and never held, its stacks were copied over again
          --  every draft -- qwen3.6-35B-A3B drafting from it lost to not
