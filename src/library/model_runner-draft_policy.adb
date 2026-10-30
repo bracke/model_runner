@@ -5,9 +5,23 @@ package body Model_Runner.Draft_Policy is
 
    package L renames Model_Runner.Llama;
 
+   --  Whether the model runs on the processor, where a draft model costs
+   --  more than it keeps: checking several positions there is several
+   --  positions' arithmetic, and the draft's own tokens are the processor's
+   --  too. Alternated rounds of a story, plain against the draft found
+   --  unasked: Steelman-14B with its paired draft 5.05-5.23 against
+   --  4.65-4.68 tokens a second (three), qwen3-8b with the draft the
+   --  store offered 9.45-9.49 against 6.93-7.14 (two). Drafting from the context costs
+   --  nothing where nothing repeats and pays where it does, so it is the
+   --  processor's draft instead (Decide).
+   function On_Processor (Prepared : L.Model) return Boolean
+   is (Model_Runner.Backend."="
+         (L.Capability (Prepared).Kind, Model_Runner.Backend.Backend_CPU));
+
    function Seeks_Paired_Draft
      (Prepared : L.Model; Request : Asked) return Boolean
    is (not Request.Model_Named
+       and then not On_Processor (Prepared)
        and then not Request.Lookup
        and then Request.Tokens > 0
        and then L.Rewinds_Drafts (Prepared)
@@ -16,6 +30,7 @@ package body Model_Runner.Draft_Policy is
    function Seeks_Store_Draft
      (Prepared : L.Model; Session : L.Session; Request : Asked) return Boolean
    is (not Request.Model_Named
+       and then not On_Processor (Prepared)
        and then not Request.Lookup
        and then not Request.Tokens_Set
        and then Request.Tokens > 0
@@ -107,18 +122,25 @@ package body Model_Runner.Draft_Policy is
       --  And where nothing drafts, a model large enough that a round pays
       --  -- a dense one of Next_Draft_Bytes a token, or a mixture -- drafts
       --  out of its own context: what followed this phrase the last time.
-      --  Not on the processor, where checking several positions costs
-      --  several positions' arithmetic and too little is kept to pay.
+      --  On the processor a dense one only, where checking several
+      --  positions costs several positions' arithmetic yet a story's
+      --  proposals still pay or about break even -- alternated rounds,
+      --  plain against drafting from the context: LFM3-1.7B BF16 12.96
+      --  against 13.87 tokens a second and qwen3-8b 9.47 against 9.90
+      --  (two each), Steelman-14B 5.21 against 5.15 (medians of three)
+      --  -- and text that repeats doubles (LFM3 continuing the README,
+      --  12.8 -> 27.6). A mixture's check
+      --  there reads the union of its positions' experts, unmeasured.
       if not Result.From_Context
         and then not Result.From_Next
         and then not Draft_Ready
         and then not Request.Tokens_Set
         and then Request.Tokens > 0
-        and then (L.Config (Prepared).Experts > 0
-                  or else L.Token_Bytes (Prepared) >= Next_Draft_Bytes)
-        and then not Model_Runner.Backend."="
-                       (L.Capability (Prepared).Kind,
-                        Model_Runner.Backend.Backend_CPU)
+        and then (if On_Processor (Prepared)
+                  then L.Config (Prepared).Experts = 0
+                       and then L.Token_Bytes (Prepared) >= Next_Draft_Bytes
+                  else L.Config (Prepared).Experts > 0
+                       or else L.Token_Bytes (Prepared) >= Next_Draft_Bytes)
       then
          Result.From_Context := True;
          Result.Tokens := Request.Tokens;

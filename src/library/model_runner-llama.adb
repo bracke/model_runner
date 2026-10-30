@@ -9389,7 +9389,11 @@ package body Model_Runner.Llama is
          Into   : constant Element_Count :=
            Element_Count (Item.Committed) mod Slots;
       begin
-         T.Allocate (Slots * (Every_State + Record_Room (Settings)), States);
+         --  One number at least: LFM3's ring holds memories alone, and a
+         --  state room of nothing is still the ring's sign of being.
+         T.Allocate
+           (Element_Count'Max (1, Slots * (Every_State + Record_Room (Settings))),
+            States);
          T.Allocate (Slots * Every_Conv, Convs);
 
          if States = null or else Convs = null then
@@ -10466,12 +10470,16 @@ package body Model_Runner.Llama is
    --  by channel, the session's memory standing for the positions before
    --  the batch and taking on the batch's last; the answer times C goes
    --  through the projection back into Rows, for the residual to read.
-   --  A generated token is a batch of one.
+   --  A generated token is a batch of one. The memory is the ring's, as a
+   --  hybrid's linear layer keeps it: read from the slot Position reads,
+   --  and each of the batch's last positions the ring holds leaving its
+   --  own in the slot the position after it reads, so a draft rewinds.
    procedure Shortconv_Batch
      (Item        : in out Session;
       Source      : Model'Class;
       Current     : Layer;
       Layer_Index : Natural;
+      Position    : Natural;
       Rows        : T.Real_Array_Access;
       Count       : Element_Count;
       Status      : out E.Error_Info)

@@ -2131,7 +2131,8 @@ begin
             --  Shortconv_Batch. Its answer lands in the normalized rows.
             Charge (Item, Normalizing, Mark);
             Shortconv_Batch
-              (Item, Source, Current, Natural (Index), Norm, Count, Status);
+              (Item, Source, Current, Natural (Index), Natural (Sits_At (0)),
+               Norm, Count, Status);
             exit when E.Is_Error (Status);
             Charge (Item, Attending, Mark);
          elsif Is_Linear then

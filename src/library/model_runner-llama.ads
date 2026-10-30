@@ -772,8 +772,7 @@ package Model_Runner.Llama is
    --  @param Item Architecture to ask about.
    --  @return True where the state is read in one place.
    function One_State_Slot (Item : Architecture) return Boolean
-   is (Pure_SSM (Item) or else Is_RWKV (Item) or else Is_Jamba (Item)
-       or else Is_Lfm3 (Item));
+   is (Pure_SSM (Item) or else Is_RWKV (Item) or else Is_Jamba (Item));
 
    --  Whether a layer of a hybrid architecture is a linear one. The
    --  full attention layers are every Linear_Every-th, counting from one,

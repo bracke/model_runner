@@ -1057,8 +1057,8 @@ begin
                end if;
             elsif Is_Lfm3 (Settings.Kind) then
                Shortconv_Batch
-                 (Item, Source, Current, Natural (Index), Item.Normalized,
-                  1, Status);
+                 (Item, Source, Current, Natural (Index), Natural (Reserved),
+                  Item.Normalized, 1, Status);
             else
                Linear_Position
                  (Item, Source, Current, Natural (Index),

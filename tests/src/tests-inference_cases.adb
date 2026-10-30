@@ -7736,11 +7736,18 @@ package body Tests.Inference_Cases is
       --  proposals, which the fixture's own sixteen is not.
       Room : constant := 64;
 
-      Image : B.Byte_Array_Access;
-
       Prompt : constant String := "abababab";
-   begin
-      Tiny_Model.Build (Image, Room => Room);
+
+      --  The plain fixture, and LFM3's on both backends: its convolutions'
+      --  memories are a ring a rejected proposal rewinds, on the processor
+      --  and in the device's state room.
+      procedure Cross
+        (Kind : Tiny_Model.Fixture_Architecture;
+         On   : Model_Runner.Backend.Backend_Kind)
+      is
+         Image : B.Byte_Array_Access;
+      begin
+      Tiny_Model.Build (Image, Kind => Kind, Room => Room);
 
       declare
          Held  : aliased constant B.Byte_Array := Image.all;
@@ -7793,8 +7800,14 @@ package body Tests.Inference_Cases is
          Plain_Last, Look_Last : Natural;
          Ignored_A, Ignored_B  : Natural;
          Proposed, Accepted    : Natural;
+         Able : Boolean;
       begin
-         Start (Under);
+         Start (Under, On, Able);
+         if not Able then
+            Device_Notes.Skip ("to draft an LFM3 from its context on");
+            B.Free (Image);
+            return;
+         end if;
 
          Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B);
          Turn (True, Look_Text, Look_Last, Proposed, Accepted);
@@ -7824,7 +7837,10 @@ package body Tests.Inference_Cases is
          --  phrase before this one. On a prompt repeating with period two
          --  every proposal is right; with the key one short, one in five
          --  is.
-         Assert (Accepted * 2 >= Proposed,
+         --  The plain fixture's: LFM3's random weights need not repeat
+         --  the prompt's period, which is the rewinding asked of it.
+         Assert (Tiny_Model."/=" (Kind, Tiny_Model.Llama)
+                 or else Accepted * 2 >= Proposed,
                  "only" & Natural'Image (Accepted) & " of"
                  & Natural'Image (Proposed) & " proposals were accepted on "
                  & "a context that repeats, so the proposals are for the "
@@ -7835,6 +7851,21 @@ package body Tests.Inference_Cases is
       end;
 
       B.Free (Image);
+      end Cross;
+   begin
+      Cross (Tiny_Model.Llama, Model_Runner.Backend.Backend_CPU);
+      Cross (Tiny_Model.Lfm3, Model_Runner.Backend.Backend_CPU);
+      declare
+         Awake : Boolean;
+      begin
+         Model_Runner.Backend.Device.Open (Awake);
+         if Awake then
+            Cross (Tiny_Model.Lfm3, Model_Runner.Backend.Backend_Device);
+            Model_Runner.Backend.Device.Close;
+         else
+            Device_Notes.Skip ("to draft an LFM3 from its context on");
+         end if;
+      end;
    end Lookup_Drafting_Produces_The_Same_Text;
 
    --  A draft model asking the text first: on a context that repeats the
@@ -20162,26 +20193,52 @@ package body Tests.Inference_Cases is
         (Tokens => 4, Tokens_Set => False, Lookup => False,
          Model_Named => False);
 
-      function Seeks (Kind : Tiny_Model.Fixture_Architecture) return Boolean
+      --  Whether a model prepared on the backend looks for one; Able
+      --  says whether the backend took it.
+      function Seeks
+        (Kind    : Tiny_Model.Fixture_Architecture;
+         Backend : Model_Runner.Backend.Backend_Kind :=
+           Model_Runner.Backend.Backend_Device;
+         Able    : access Boolean := null) return Boolean
       is
          Image : B.Byte_Array_Access;
-         Found : Boolean;
+         Found : Boolean := False;
+         Ready : Boolean;
       begin
          Tiny_Model.Build (Image, Kind => Kind);
          declare
             Held  : aliased constant B.Byte_Array := Image.all;
             Under : Harness (Held'Access);
          begin
-            Start (Under);
-            Found := Model_Runner.Draft_Policy.Seeks_Paired_Draft
-                       (Under.Ready, Unasked);
+            Start (Under, Backend, Ready);
+            if Able /= null then
+               Able.all := Ready;
+            end if;
+            if Ready then
+               Found := Model_Runner.Draft_Policy.Seeks_Paired_Draft
+                          (Under.Ready, Unasked);
+            end if;
          end;
          B.Free (Image);
          return Found;
       end Seeks;
+
+      On_Device : aliased Boolean;
    begin
-      Assert (Seeks (Tiny_Model.Llama),
-              "a model that drafts looked for no paired draft");
+      --  On the device a model that drafts looks for one; on the
+      --  processor none does, where a draft model costs more than it
+      --  keeps (Draft_Policy.On_Processor).
+      if Seeks (Tiny_Model.Llama, Able => On_Device'Access)
+        or else not On_Device
+      then
+         if not On_Device then
+            Device_Notes.Skip ("to look for a paired draft on");
+         end if;
+      else
+         Assert (False, "a model that drafts looked for no paired draft");
+      end if;
+      Assert (not Seeks (Tiny_Model.Llama, Model_Runner.Backend.Backend_CPU),
+              "a model on the processor looked for a paired draft");
       for Kind of Never loop
          Assert (not Seeks (Kind),
                  Tiny_Model.Fixture_Architecture'Image (Kind)
