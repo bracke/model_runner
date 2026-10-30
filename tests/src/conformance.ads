@@ -283,7 +283,7 @@ package Conformance is
 
    --  How many architectures the sweep crosses: the most parts it can be
    --  split into, one an architecture.
-   Architecture_Count : constant := 30;
+   Architecture_Count : constant := 31;
 
    --  Whether this run was asked for the quantized arithmetic, from the
    --  command line and from nothing else.
@@ -306,9 +306,9 @@ package Conformance is
    --    it asked for, where the full sweep's is held to its own arithmetic.
    --  @param Part Which part of the architectures to cross, from one.
    --  @param Parts How many parts the sweep is split into; one for the
-   --    whole. A part crosses every Parts-th architecture from the Part-th,
-   --    through every format, shape, backend, repacking, cache and the
-   --    device, and its report counts what it crossed; the parts' reports
+   --    whole. A part crosses every Parts-th of each architecture's
+   --    formats, dealt across the architectures, through every shape,
+   --    backend, repacking, cache and the device, and its report counts what it crossed; the parts' reports
    --    added up are the whole sweep's.
    procedure Run
      (Result      : out Report;

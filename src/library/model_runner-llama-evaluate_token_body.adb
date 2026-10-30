@@ -115,6 +115,8 @@ is
        --  projections carry no bias, which the picking apart of the
        --  queries and the gates does not take.
        and then not Linear (Settings, Index)
+       --  LFM3's gate a head is the host's.
+       and then not Is_Lfm3 (Settings.Kind)
        and then (not Hybrid (Settings.Kind)
                  or else (Settings.Value_Size = Settings.Head_Size
                           and then L.Query_Bias = null))
@@ -1053,6 +1055,10 @@ begin
                   Mamba_Step
                     (Item, Source, Current, Natural (Index), Status);
                end if;
+            elsif Is_Lfm3 (Settings.Kind) then
+               Shortconv_Batch
+                 (Item, Source, Current, Natural (Index), Item.Normalized,
+                  1, Status);
             else
                Linear_Position
                  (Item, Source, Current, Natural (Index),
@@ -1126,7 +1132,7 @@ begin
                        (Element_Count (Settings.Rotary), Item.Committed,
                         Turn_Base (Settings, Natural (Index)),
                         Turn_Scaling (Settings, Natural (Index)),
-                        Turns (Source, Item),
+                        Turns (Source, Item, Natural (Index)),
                         Cosines => Cosines, Sines => Sines,
                         Sections => Settings.Sections,
                         Place => Place_At (Item, Item.Committed));
@@ -1515,10 +1521,12 @@ begin
                     or else Item.Turned_Base /= Base
                     or else Item.Turned_Scale /= Stretch
                     or else Item.Turned_Pairs /= Pairs
+                    or else Item.Turned_Factored
+                            /= (Turns (Source, Item, Natural (Index))'Length > 0)
                   then
                      K.Rotary_Table
                        (Element_Count (Settings.Rotary), Item.Committed,
-                        Base, Stretch, Turns (Source, Item),
+                        Base, Stretch, Turns (Source, Item, Natural (Index)),
                         Cosines => Item.Turned_Cos (0 .. Pairs - 1),
                         Sines => Item.Turned_Sin (0 .. Pairs - 1));
                      Item.Turned := True;
@@ -1526,6 +1534,8 @@ begin
                      Item.Turned_Base := Base;
                      Item.Turned_Scale := Stretch;
                      Item.Turned_Pairs := Pairs;
+                     Item.Turned_Factored :=
+                       Turns (Source, Item, Natural (Index))'Length > 0;
                   end if;
 
                   K.Apply_Rotary_Table
@@ -1544,14 +1554,14 @@ begin
                   K.Apply_Rotary
                     (Item.Query.all, Heads, Head_Size,
                      Element_Count (Settings.Rotary), Item.Committed,
-                     Base, Stretch, Turns (Source, Item), Settings.Pairing,
+                     Base, Stretch, Turns (Source, Item, Natural (Index)), Settings.Pairing,
                      Sections => Settings.Sections,
                      Place => Place_At (Item, Item.Committed),
                      Offset => Shift);
                   K.Apply_Rotary
                     (Item.Key_Row.all, KV_Heads, Head_Size,
                      Element_Count (Settings.Rotary), Item.Committed,
-                     Base, Stretch, Turns (Source, Item), Settings.Pairing,
+                     Base, Stretch, Turns (Source, Item, Natural (Index)), Settings.Pairing,
                      Sections => Settings.Sections,
                      Place => Place_At (Item, Item.Committed),
                      Offset => Shift);
@@ -1640,6 +1650,7 @@ begin
                  or else not Sinks_Fit
                                (Current.Sinks, Natural (Index), Item.Paged)
                  or else Hybrid (Settings.Kind)
+                 or else Is_Lfm3 (Settings.Kind)
                  or else Settings.Latent_Attention
                then
                   --  How much arithmetic the heads are between them: every
@@ -1767,6 +1778,14 @@ begin
                   --  first, where the query projection carried one.
                   if Hybrid (Settings.Kind) then
                      Gate_Heads (Item);
+                  end if;
+                  if Current.Head_Gate /= null then
+                     Gate_Rows
+                       (Current.Head_Gate.all, Item.Normalized.all,
+                        Item.Normalized.all'First, Item.Attention.all,
+                        Item.Attention.all'First, Heads,
+                        Element_Count (Settings.Value_Size),
+                        Element_Count (Settings.Embedding));
                   end if;
 
                   if Settings.Latent_Attention then

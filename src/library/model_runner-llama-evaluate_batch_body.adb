@@ -383,6 +383,8 @@ is
    function Front_Fits (L : Layer; Index : Natural) return Boolean
    is (Item.Seen = null
        and then not Linear (Settings, Index)
+       --  LFM3's gate a head is the host's.
+       and then not Is_Lfm3 (Settings.Kind)
        and then (not Hybrid (Settings.Kind)
                  or else (Settings.Value_Size = Settings.Head_Size
                           and then L.Query_Bias = null))
@@ -1586,7 +1588,7 @@ begin
                              (Element_Count (Settings.Rotary),
                               Natural (Sits_At (Which)),
                               Turn_Base (Settings, Natural (Index)),
-                              Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item),
+                              Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
                               Cosines => Cosines, Sines => Sines,
                               Sections => Settings.Sections,
                               Place =>
@@ -2123,6 +2125,14 @@ begin
             end;
             exit when E.Is_Error (Status);
             Charge (Item, Attending, Mark);
+         elsif Is_Linear and then Is_Lfm3 (Settings.Kind) then
+            --  LFM3's short convolution over the batch; see
+            --  Shortconv_Batch. Its answer lands in the normalized rows.
+            Charge (Item, Normalizing, Mark);
+            Shortconv_Batch
+              (Item, Source, Current, Natural (Index), Norm, Count, Status);
+            exit when E.Is_Error (Status);
+            Charge (Item, Attending, Mark);
          elsif Is_Linear then
             --  The linear layer's projections once over the whole batch,
             --  then its positions one after another, since each reads
@@ -2345,7 +2355,7 @@ begin
                         Head_Size, Element_Count (Settings.Rotary),
                         Natural (Sits_At (Which)),
                         Turn_Base (Settings, Natural (Index)),
-                        Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
                         Settings.Pairing,
                         Sections => Settings.Sections,
                         Place =>
@@ -2462,6 +2472,7 @@ begin
               and then not Item.Paged
               and then not Fused
               and then not Hybrid (Settings.Kind)
+              and then not Is_Lfm3 (Settings.Kind)
               and then not Has_Runs
             then
                declare
@@ -2593,6 +2604,7 @@ begin
             --  would have needed a row per share per head.
             if not Fused
               and then (Hybrid (Settings.Kind)
+                        or else Is_Lfm3 (Settings.Kind)
                         or else Has_Runs
                         or else Item.Paged
                         or else not (Item.Held = Exact and then Resident))
@@ -2868,6 +2880,15 @@ begin
                      for C in 0 .. Count * Blend - 1 loop
                         Attend.all (C) :=
                           Attend.all (C) * Sigmoid (Gates.all (C));
+                     end loop;
+                  end if;
+                  if Current.Head_Gate /= null then
+                     for P in 0 .. Count - 1 loop
+                        Gate_Rows
+                          (Current.Head_Gate.all, Norm.all,
+                           Norm.all'First + P * Width, Attend.all,
+                           P * Blend, Heads,
+                           Element_Count (Settings.Value_Size), Width);
                      end loop;
                   end if;
 

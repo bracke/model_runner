@@ -80,11 +80,18 @@ package Tiny_Model is
    --  key heads and as many value heads, after a convolution Linear_Taps
    --  long -- and its second attends in full with a gate beside each head
    --  and a normalization of every query and key head, as Qwen3 does.
+   --  Lfm3 is LiquidAI's: four blocks, a gated short convolution
+   --  Linear_Taps long where the index is even and attention where it is
+   --  odd -- the last of them windowed where the shape asks for a window,
+   --  the other seeing everything -- each sublayer's output normalized
+   --  before it joins the residual, as Gemma2's is. Dense whatever the
+   --  shape asks: the mixed fixture is its plain one.
    type Fixture_Architecture is
      (Llama, Qwen2, Qwen3, Qwen3_MoE, Qwen3_VL, GPT_OSS, Gemma, Gemma2, Gemma3, Phi3,
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Granite,
       Olmo2, Glm4, Starcoder2, Stablelm, Gptneox, Internlm2, Baichuan, Mpt,
-      Chatglm, Command_R, Mamba, Mamba2, Rwkv6, Jamba, Deepseek2, Mellum);
+      Chatglm, Command_R, Mamba, Mamba2, Rwkv6, Jamba, Deepseek2, Mellum,
+      Lfm3);
 
    Linear_State : constant := 4;
    Linear_Heads : constant := 2;

@@ -14918,6 +14918,9 @@ package body Tests.Inference_Cases is
          (Tiny_Model.Mellum, Tiny_Model.Plain),
          (Tiny_Model.Mellum, Tiny_Model.Windowed),
          (Tiny_Model.Mellum, Tiny_Model.Reaching),
+         (Tiny_Model.Lfm3, Tiny_Model.Plain),
+         (Tiny_Model.Lfm3, Tiny_Model.Windowed),
+         (Tiny_Model.Lfm3, Tiny_Model.Reaching),
          (Tiny_Model.GPT_OSS, Tiny_Model.Windowed),
          (Tiny_Model.Falcon, Tiny_Model.Plain),
          (Tiny_Model.Starcoder2, Tiny_Model.Plain)];
@@ -14973,6 +14976,37 @@ package body Tests.Inference_Cases is
                  "a windowed mellum did not slide by the period its file states");
          Assert (L."=" (Slid.Kind, L.Mellum) and then Slid.Experts > 0,
                  "a mellum file was not read as a mixture of its own kind");
+      end;
+
+      --  LFM3 windows the layers its list marks -- the last of the
+      --  fixture's four, an attention layer -- and not by its period of
+      --  four, which would window the first three; its convolution layers
+      --  are the ones stating no key-value heads, convolving over the taps
+      --  its file states.
+      declare
+         Plain : constant L.Configuration :=
+           Read_Of (Tiny_Model.Lfm3, Tiny_Model.Plain);
+         Slid  : constant L.Configuration :=
+           Read_Of (Tiny_Model.Lfm3, Tiny_Model.Windowed);
+      begin
+         Assert (L.Is_Lfm3 (Plain.Kind)
+                   and then not L.Is_Lfm3 (Read_Of (Tiny_Model.Jamba,
+                                                    Tiny_Model.Plain).Kind),
+                 "an lfm3 file was not read as lfm3, or a jamba one was");
+         Assert (not Plain.Alternating,
+                 "an lfm3 that states no window alternates one");
+         Assert (Slid.Alternating
+                 and then not Slid.Window_Layers (1)
+                 and then Slid.Window_Layers (3),
+                 "an lfm3 file listing which layers slide was not read "
+                 & "layer by layer");
+         Assert (Slid.Conv_Layer (0) and then not Slid.Conv_Layer (1)
+                 and then Slid.Conv_Layer (2) and then not Slid.Conv_Layer (3),
+                 "an lfm3 file's convolution layers were not read from its "
+                 & "key-value head counts");
+         Assert (Slid.Conv_Kernel = Tiny_Model.Linear_Taps,
+                 "an lfm3 file's convolution taps were read as"
+                 & Natural'Image (Slid.Conv_Kernel));
       end;
 
       --  What a gemma2 does not state is its window, which is the
@@ -15072,7 +15106,9 @@ package body Tests.Inference_Cases is
             Device_Notes.Skip ("to cross a window pattern on");
          else
             for Kind in Tiny_Model.Fixture_Architecture loop
-               if Kind in Tiny_Model.Olmo2 | Tiny_Model.Gemma3 | Tiny_Model.Mellum then
+               if Kind in Tiny_Model.Olmo2 | Tiny_Model.Gemma3 | Tiny_Model.Mellum
+                        | Tiny_Model.Lfm3
+               then
                   declare
                      Image    : B.Byte_Array_Access;
                      Expected : Reference_Transformer.Real_Vector
@@ -15133,9 +15169,11 @@ package body Tests.Inference_Cases is
                                    & E.Error_Code'Image (Status.Code));
                            --  But OLMo2, which normalizes its whole queries
                            --  and keys -- a step the sequence has none of --
-                           --  and goes over in pieces by design.
+                           --  and goes over in pieces by design; and LFM3,
+                           --  whose gate a head and convolution are the
+                           --  host's.
                            Assert
-                             ((if Tiny_Model."=" (Kind, Tiny_Model.Olmo2)
+                             ((if Kind in Tiny_Model.Olmo2 | Tiny_Model.Lfm3
                               then Model_Runner.Backend.Device.Layers_Whole
                                      = Whole_Was
                                    and then

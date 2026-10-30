@@ -90,7 +90,7 @@ begin
                     | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                     | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                     | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                    | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL =>
+                    | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL | Lfm3 =>
                    K.Split);
 
             --  What a position may see. Every architecture here
@@ -219,7 +219,9 @@ begin
    --  array it is: a nought marks a Mamba layer, and any non-nought is
    --  the count the attention layers share. Every other architecture
    --  states one number for the whole model.
-   if Is_Jamba (Settings.Kind) then
+   --  LFM3 states it the same way: nought heads where the layer
+   --  convolves, the attention count where it attends.
+   if Is_Jamba (Settings.Kind) or else Is_Lfm3 (Settings.Kind) then
       if Settings.Layers > Max_Block_Count then
          Status := E.Make (E.Arch_Invalid_Dimensions);
          E.Add_Integer
@@ -262,7 +264,11 @@ begin
                   E.Add_Integer (Status, "heads", Long_Long_Integer (Settings.Heads));
                   return;
                end if;
-               Settings.Mamba_Layer (Layer) := Number = 0;
+               if Is_Lfm3 (Settings.Kind) then
+                  Settings.Conv_Layer (Layer) := Number = 0;
+               else
+                  Settings.Mamba_Layer (Layer) := Number = 0;
+               end if;
                if Number /= 0 then
                   Settings.KV_Heads := Natural (Number);
                end if;
@@ -860,6 +866,21 @@ begin
    --  the hybrid uses, but their meaning is Mamba's -- the time step is a
    --  projection rank, not a count of heads. Jamba's Mamba layers read
    --  the same widths under the same keys.
+   --  LFM3's convolution looks back over shortconv.l_cache positions,
+   --  the one it is at among them; three where the file says nothing,
+   --  as LFM2's converter wrote it.
+   if Is_Lfm3 (Settings.Kind) then
+      Containers.Get_Integer
+        (Source, Model_Key (Settings.Kind, "shortconv.l_cache"),
+         2, 16, Number, Local);
+      if Present_And_Wrong (Local) then
+         Status := Local;
+         return;
+      end if;
+      Settings.Conv_Kernel :=
+        (if E.Is_Ok (Local) then Natural (Number) else 3);
+   end if;
+
    if Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind) then
       Containers.Get_Integer
         (Source, Model_Key (Settings.Kind, "ssm.state_size"),
@@ -1306,7 +1327,7 @@ begin
         (case Settings.Kind is
             when Gemma2 | GPT_OSS => 2,
             when Gemma3 => 6,
-            when Olmo2 | Mellum => 4,
+            when Olmo2 | Mellum | Lfm3 => 4,
             when others => 0);
       Key    : constant String :=
         Model_Key (Settings.Kind, "attention.sliding_window_pattern");

@@ -14,9 +14,9 @@
 package Conformance.Parts is
 
    --  How many parts of a sweep run at once on this machine: one a
-   --  processor but one, at most eight, at least one. A part is one
-   --  architecture, one process, mostly on one processor, and about a
-   --  gigabyte and a half.
+   --  processor but one, at most eight, at least one. A part is a share
+   --  of every architecture's formats, one process, mostly on one
+   --  processor, and about a gigabyte and a half.
    --
    --  @return The count.
    function Count return Positive;

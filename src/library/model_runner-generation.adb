@@ -896,7 +896,6 @@ package body Model_Runner.Generation is
       --  next sixteen, which made plain steps look the faster.
       Untimed : Natural := 8;
 
-
       --  A sampled run with a seed given is asked to come out the same
       --  again: drafted rounds draw from the seed's stream, and how many
       --  they draw must not hang on a clock. Such a run drafts throughout,

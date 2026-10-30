@@ -204,13 +204,17 @@ package body Conformance.Parts is
       Program     : String;
       Integers    : Boolean)
    is
-      --  One part an architecture, handed out to as many workers as the
-      --  machine has room for as each finishes: the architectures cost very
-      --  different amounts, and split into fixed shares the slowest share
-      --  held the whole sweep -- two of seven ran for an hour after the
-      --  other five were done.
-      Parts   : constant Positive := Architecture_Count;
+      --  Parts handed out to as many workers as the machine has room for
+      --  as each finishes: the architectures cost very different amounts,
+      --  and split into fixed shares the slowest share held the whole
+      --  sweep -- two of seven ran for an hour after the other five were
+      --  done. A part is a deal of every architecture's formats rather
+      --  than one architecture, so a sweep narrowed to one architecture
+      --  still keeps every worker busy -- one part an architecture ran it
+      --  on one processor for the whole of its seven minutes.
       Workers : constant Positive := Count;
+      Parts   : constant Positive :=
+        Positive'Max (2 * Workers, Architecture_Count);
 
       type Outcome is record
          Line   : Unbounded_String;

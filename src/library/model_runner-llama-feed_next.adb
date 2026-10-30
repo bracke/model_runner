@@ -172,7 +172,7 @@ begin
                Element_Count (Settings.Rotary), Position,
                Turn_Base (Settings, Layer_Index),
                Turn_Scaling (Settings, Layer_Index),
-               Turns (Source, Item), Settings.Pairing,
+               Turns (Source, Item, Layer_Index), Settings.Pairing,
                Sections => Settings.Sections,
                Place => K.Everywhere (Rope_Next (Item, Position)));
 

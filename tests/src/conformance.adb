@@ -57,10 +57,19 @@ package body Conformance is
    is
       Image : B.Byte_Array_Access;
 
-      --  Whether an architecture is this part's: every Parts-th, from the
-      --  Part-th. A sweep split into parts runs each in a process of its
-      --  own, side by side, and their reports are added up.
+      --  Whether an architecture is this part's for the report's count of
+      --  them: every Parts-th, from the Part-th.
       function In_Part (Which : Positive) return Boolean is ((Which - 1) mod Parts = Part - 1);
+
+      --  Whether one format of an architecture is this part's: the parts
+      --  deal out an architecture's formats, not whole architectures, so a
+      --  sweep narrowed to one architecture runs on every part rather
+      --  than on one while the rest sit idle. A slot is a format's place
+      --  in the host sweep or the device's, and the device's mixture one
+      --  past its formats.
+      Slots : constant := 64;
+      function In_Part (Which : Positive; Slot : Natural) return Boolean
+      is (((Which - 1) * Slots + Slot) mod Parts = Part - 1);
 
       --  Whether the caller has already put the whole sweep into the
       --  quantized arithmetic. When it has, the narrow pass below would be
@@ -285,7 +294,8 @@ package body Conformance is
          Tiny_Model.Stablelm, Tiny_Model.Gptneox, Tiny_Model.Internlm2,
          Tiny_Model.Baichuan, Tiny_Model.Mpt, Tiny_Model.Chatglm,
          Tiny_Model.Command_R, Tiny_Model.Mamba, Tiny_Model.Mamba2,
-         Tiny_Model.Rwkv6, Tiny_Model.Jamba, Tiny_Model.Deepseek2];
+         Tiny_Model.Rwkv6, Tiny_Model.Jamba, Tiny_Model.Deepseek2,
+         Tiny_Model.Lfm3];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -1168,7 +1178,11 @@ package body Conformance is
                   --  A short sweep crosses binary32 alone; the count below
                   --  is the same arithmetic over one format. Another part's
                   --  architecture is that part's to cross.
-                  if not Crosses (Format, Short_Sweep) or else not In_Part (Which_Arch) then
+                  if not Crosses (Format, Short_Sweep)
+                    or else not In_Part
+                                  (Which_Arch,
+                                   Tiny_Model.Weight_Format'Pos (Format))
+                  then
                      goto Next_Format;
                   end if;
 
@@ -1575,15 +1589,18 @@ package body Conformance is
 
          if Device_Ready then
             for Which_Arch in Crossed'Range loop
-               if not In_Part (Which_Arch) then
-                  goto Next_Device_Arch;
-               end if;
-               for Format of Device_Formats loop
+               for Device_Slot in Device_Formats'Range loop
+                  declare
+                     Format : Tiny_Model.Weight_Format renames
+                       Device_Formats (Device_Slot);
+                  begin
                   --  The short sweep's binary32 alone, here as above. The
                   --  cache arms below ride on the first device format,
                   --  which is binary32, and the mixture after the loop
                   --  is built in it, so both still run in a short sweep.
-                  if not Crosses (Format, Short_Sweep) then
+                  if not Crosses (Format, Short_Sweep)
+                    or else not In_Part (Which_Arch, Device_Slot)
+                  then
                      goto Next_Device_Format;
                   end if;
 
@@ -1715,6 +1732,7 @@ package body Conformance is
                   B.Free (Image);
 
                   <<Next_Device_Format>>
+                  end;
                end loop;
 
                --  And the mixture shape, on the device, for every
@@ -1726,6 +1744,7 @@ package body Conformance is
                --  The first device format, and the four sequences with
                --  the tiled one after them.
                if not Tiny_Model.Cannot_Hold (Crossed (Which_Arch), Mixed)
+                 and then In_Part (Which_Arch, Device_Formats'Last + 1)
                then
                   Since := Ada.Calendar.Clock;
                   Tiny_Model.Build
@@ -1761,7 +1780,6 @@ package body Conformance is
 
                   B.Free (Image);
                end if;
-               <<Next_Device_Arch>>
             end loop;
          end if;
 
@@ -1849,16 +1867,29 @@ package body Conformance is
             --  position. Only the plain shape, since Jamba holds no other.
             Lossy_Skipped : Natural := 0;
 
+            --  This part's formats of an architecture, over them all.
+            Pairs : Natural := 0;
+
             Expected : Natural := 0;
 
          begin
+            --  Over this part's formats of each architecture, as the
+            --  sweep dealt them.
             for Index in Crossed'Range loop
-               for Shape in Model_Shape loop
-                  exit when not In_Part (Index);
-                  if Tiny_Model.Cannot_Hold (Crossed (Index), Shape) then
-                     Skipped := Skipped + 1;
-                  elsif Crossed (Index) in Tiny_Model.Jamba | Tiny_Model.Deepseek2 then
-                     Lossy_Skipped := Lossy_Skipped + 1;
+               for Format in Tiny_Model.Weight_Format loop
+                  if In_Part (Index, Tiny_Model.Weight_Format'Pos (Format))
+                  then
+                     Pairs := Pairs + 1;
+                     for Shape in Model_Shape loop
+                        if Tiny_Model.Cannot_Hold (Crossed (Index), Shape)
+                        then
+                           Skipped := Skipped + 1;
+                        elsif Crossed (Index)
+                                in Tiny_Model.Jamba | Tiny_Model.Deepseek2
+                        then
+                           Lossy_Skipped := Lossy_Skipped + 1;
+                        end if;
+                     end loop;
                   end if;
                end loop;
             end loop;
@@ -1867,10 +1898,10 @@ package body Conformance is
             --  which is skipped for every architecture; an ungated one runs
             --  none of them at all.
             Expected :=
-              Formats * Arches * (Shapes * Repacks - 5) * Per_Model + Cached
+              Pairs * (Shapes * Repacks - 5) * Per_Model + Cached
               + On_Device
-              - Formats * Skipped * (Repacks - 1) * Per_Model
-              - Formats * Lossy_Skipped * Per_Model
+              - Skipped * (Repacks - 1) * Per_Model
+              - Lossy_Skipped * Per_Model
               + Also_Ran;
 
             --  What the sweep crossed, which a short one says it did.

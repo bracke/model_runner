@@ -31,8 +31,9 @@ begin
       begin
          for Layer in Item.Cells.all'Range loop
             Sliding := Sliding
-              or else Upto - Item.Origin.all (Layer)
-                      >= Item.Cells.all (Layer);
+              or else (Item.Cells.all (Layer) > 0
+                       and then Upto - Item.Origin.all (Layer)
+                                >= Item.Cells.all (Layer));
          end loop;
 
          if Sliding then
@@ -50,7 +51,9 @@ begin
          Cells  : constant Element_Count := Item.Cells.all (Layer);
          Origin : constant Element_Count := Item.Origin.all (Layer);
       begin
-         if Upto - Origin >= Cells then
+         --  A layer that holds no cells -- LFM3's convolutions -- has
+         --  nothing to slide.
+         if Cells > 0 and then Upto - Origin >= Cells then
             declare
                --  The lowest position anything will read from here on,
                --  which is the window measured back from the first of

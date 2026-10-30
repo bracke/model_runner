@@ -190,7 +190,7 @@ private
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2, Qwen35, Qwen35_MoE,
       Granite, Olmo2, Glm4, Starcoder2, Granite_MoE, Stablelm, Gptneox,
       Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba, Mamba2, Rwkv6,
-      Jamba, Deepseek2, Mellum);
+      Jamba, Deepseek2, Mellum, Lfm3);
 
    --  How a model stretches the rotation to reach past what it was trained
    --  on: not at all, by dividing every position, or by dividing only the
@@ -253,6 +253,11 @@ private
       Second_Attention_Norm      : Vector_Access := null;
       Second_Attention_Norm_Bias : Vector_Access := null;
       Attention_Out  : Matrix_Access := null;
+
+      --  LFM3's gate a head: a row of the embedding's width for each query
+      --  head, whose logistic against the block's normalized input scales
+      --  that head's blend. Null for every other architecture.
+      Head_Gate      : Matrix_Access := null;
 
       --  What Phi2 adds to a projection that is not one of the three above:
       --  on the way out of attention, and on each side of the feed-forward.

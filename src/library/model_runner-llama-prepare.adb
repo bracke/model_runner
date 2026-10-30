@@ -891,7 +891,7 @@ begin
          --  gemma2 file without them is not one this build can
          --  compute, and taking them if present would read such a
          --  file as a model with two normalizations missing.
-         if Item.Settings.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 then
+         if Item.Settings.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 | Lfm3 then
             Resolve_Norm
               (Item, Source,
                Layer_Key (Index, "post_attention_norm.weight"), Width,
@@ -953,7 +953,41 @@ begin
             Item.Settings.Parallel_Residual := True;
          end if;
 
-         if Is_Linear
+         if Is_Linear and then Is_Lfm3 (Item.Settings.Kind) then
+            --  LFM3's convolution layer: one projection in to B, C and x
+            --  end to end, the taps a channel, and the projection back.
+            --  The convolution has no bias; the share that runs it reads
+            --  one, so it is given noughts.
+            declare
+               Taps : constant Element_Count :=
+                 Element_Count (Item.Settings.Conv_Kernel);
+            begin
+               Resolve
+                 (Item, Source, Layer_Key (Index, "shortconv.in_proj.weight"),
+                  3 * Width, Width, Current.Mix, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Table
+                 (Item, Source, Layer_Key (Index, "shortconv.conv.weight"),
+                  Width, Taps, Current.Conv, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "shortconv.out_proj.weight"),
+                  Width, Width, Current.Linear_Out, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Current.Conv_Bias := new Real_Array (0 .. Width - 1);
+               Current.Conv_Bias.all := [others => 0.0];
+            end;
+
+         elsif Is_Linear
            and then (Pure_SSM (Item.Settings.Kind)
                      or else Is_Jamba (Item.Settings.Kind))
          then
@@ -1793,7 +1827,9 @@ begin
          --  across the heads. Required for the architectures that have
          --  it, for the same reason the biases are.
          if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Mellum
-           or else (Hybrid (Item.Settings.Kind) and then not Is_Linear)
+           or else ((Hybrid (Item.Settings.Kind)
+                     or else Is_Lfm3 (Item.Settings.Kind))
+                    and then not Is_Linear)
          then
             Resolve_Norm
               (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
@@ -1850,6 +1886,17 @@ begin
             Resolve
               (Item, Source, Layer_Key (Index, "attn_output.weight"),
                Width, Blend, Current.Attention_Out, Status, Repack);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end if;
+
+         --  LFM3's gate a head: a row of the model's width a query head.
+         if not Is_Linear and then Is_Lfm3 (Item.Settings.Kind) then
+            Resolve_Table
+              (Item, Source, Layer_Key (Index, "attn_gate.weight"),
+               Element_Count (Item.Settings.Heads), Width,
+               Current.Head_Gate, Status);
             if E.Is_Error (Status) then
                return;
             end if;

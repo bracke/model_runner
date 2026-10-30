@@ -276,6 +276,8 @@ package body Model_Runner.Llama is
                 * Element_Count (Settings.State_Size)
        elsif Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
+       elsif Is_Lfm3 (Settings.Kind)
+       then Element_Count (Settings.Embedding)
        else Element_Count (Mix_Width (Settings)));
 
    --  Mamba's state is a channel by a state, the delta rule's a value head
@@ -290,6 +292,9 @@ package body Model_Runner.Llama is
        elsif Pure_SSM (Settings.Kind) or else Is_Jamba (Settings.Kind)
        then Element_Count (Settings.Inner_Size)
             * Element_Count (Settings.State_Size)
+       --  LFM3's convolution keeps its memory and no state beside it.
+       elsif Is_Lfm3 (Settings.Kind)
+       then 0
        else Element_Count (Settings.Value_Heads)
             * Element_Count (Settings.State_Size)
             * Element_Count (Settings.State_Size));
@@ -3372,8 +3377,16 @@ package body Model_Runner.Llama is
    --  The per-dimension divisors a session turns by: of LongRoPE's two
    --  tables the one the session chose as it opened, the model's one table
    --  where it carries one, and none where it carries none.
-   function Turns (Item : Model'Class; Turning : Session'Class) return Real_Array
-   is (if Item.Rope_Long /= null and then Item.Rope_Short /= null
+   --  LFM3's table is its full layers': it zeroes the rotation past half
+   --  the head there, and its windowed layers turn the whole head.
+   function Turns
+     (Item    : Model'Class;
+      Turning : Session'Class;
+      Layer   : Natural) return Real_Array
+   is (if Is_Lfm3 (Item.Settings.Kind)
+         and then Windowed_Layer (Item.Settings, Layer)
+       then K.No_Factors
+       elsif Item.Rope_Long /= null and then Item.Rope_Short /= null
        then (if Turning.Long_Rope then Item.Rope_Long.all else Item.Rope_Short.all)
        elsif Item.Rope_Factors = null
        then K.No_Factors
@@ -10427,6 +10440,23 @@ package body Model_Runner.Llama is
       Status      : out E.Error_Info)
    is separate;
 
+   --  A batch through one of LFM3's convolution layers, on the host. The
+   --  normalized input in Rows is projected to B, C and x laid end to end;
+   --  B times x is convolved over the last Conv_Kernel positions channel
+   --  by channel, the session's memory standing for the positions before
+   --  the batch and taking on the batch's last; the answer times C goes
+   --  through the projection back into Rows, for the residual to read.
+   --  A generated token is a batch of one.
+   procedure Shortconv_Batch
+     (Item        : in out Session;
+      Source      : Model'Class;
+      Current     : Layer;
+      Layer_Index : Natural;
+      Rows        : T.Real_Array_Access;
+      Count       : Element_Count;
+      Status      : out E.Error_Info)
+   is separate;
+
    --  One position through one Mamba layer, on the host: Mamba_Batch over a
    --  batch of one. It reads the layer's normalized input in
    --  Item.Normalized and leaves the block's output there for the residual
@@ -11014,6 +11044,39 @@ package body Model_Runner.Llama is
            Item.Attention.all (C) * Sigmoid (Item.Head_Gate.all (C));
       end loop;
    end Gate_Heads;
+
+   --  LFM3's gate: a head's blend scaled by the sigmoid of the head's
+   --  row of the table against the layer's normalized input, so the
+   --  gate is a number a head where Qwen3.5's is one a component.
+   procedure Gate_Rows
+     (Table      : T.Real_Array;
+      Input      : T.Real_Array;
+      Input_At   : Element_Count;
+      Blend      : in out T.Real_Array;
+      Blend_At   : Element_Count;
+      Heads      : Element_Count;
+      Value_Size : Element_Count;
+      Width      : Element_Count)
+   is
+   begin
+      for H in 0 .. Heads - 1 loop
+         declare
+            Sum : Real := 0.0;
+            G   : Real;
+         begin
+            for C in 0 .. Width - 1 loop
+               Sum := Sum
+                 + Table (Table'First + H * Width + C)
+                   * Input (Input_At + C);
+            end loop;
+            G := Sigmoid (Sum);
+            for C in 0 .. Value_Size - 1 loop
+               Blend (Blend_At + H * Value_Size + C) :=
+                 Blend (Blend_At + H * Value_Size + C) * G;
+            end loop;
+         end;
+      end loop;
+   end Gate_Rows;
 
    -----------------
    -- Layer_Bytes --

@@ -401,6 +401,11 @@ begin
       if Source.Settings.Kind
            in Gemma2 | Gemma3 | Falcon | Phi2 | Olmo2 | Glm4 | Command_R
         or else Normalizes_After (Source.Settings.Kind)
+        --  And wherever a layer carries a normalization after either
+        --  sublayer, which LFM3 was left off the list for.
+        or else (for some L of Source.Layers.all =>
+                   L.Post_Attention_Norm /= null
+                   or else L.Post_Feed_Norm /= null)
       then
          T.Allocate (Width, Item.Post_Room);
       end if;
@@ -580,6 +585,28 @@ begin
             Status := E.Make (E.Memory_Allocation_Failed);
             return;
          end if;
+      end if;
+
+      --  LFM3's convolution layers keep the last few positions' B times x
+      --  a layer, one slot, cleared -- a memory and no state. The state is
+      --  given one number anyway: a session with linear layers is told by
+      --  having one, and a rewind clears it as it clears the memory.
+      if Is_Lfm3 (Settings.Kind) then
+         T.Allocate (Conv_Room (Settings), Item.Conv_State);
+         T.Allocate
+           (Element_Count'Max (State_Room (Settings), 1), Item.Delta_State);
+         if Item.Conv_State = null or else Item.Delta_State = null then
+            Close (Item);
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+         Item.Conv_State.all := [others => 0.0];
+         Item.Delta_State.all := [others => 0.0];
+         Item.Kept_States := 0;
+         Item.Kept_Newest := 0;
+         Item.Ring_Floor := 0;
+         Item.Record_Of := [others => 0];
+         Item.Made_At := 0;
       end if;
 
       --  Mamba keeps a state a session as a hybrid's linear layers do:

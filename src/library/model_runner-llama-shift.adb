@@ -181,7 +181,7 @@ begin
                        (Item.Key_Row.all, KV_Heads, Head_Size,
                         Element_Count (Settings.Rotary), Drop,
                         Turn_Base (Settings, Natural (Index)),
-                        Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item),
+                        Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
                         Settings.Pairing, Backwards => True);
 
                      if Item.Held in Eighth | Fourth then
@@ -280,7 +280,7 @@ begin
                  (Item.Key_Row.all, KV_Heads, Head_Size,
                   Element_Count (Settings.Rotary), Drop,
                   Turn_Base (Settings, Layer_Index),
-                  Turn_Scaling (Settings, Layer_Index), Turns (Source, Item),
+                  Turn_Scaling (Settings, Layer_Index), Turns (Source, Item, Layer_Index),
                   Settings.Pairing, Backwards => True);
                Keys.all (Into .. Into + KV_Width - 1) :=
                  Item.Key_Row.all (0 .. KV_Width - 1);

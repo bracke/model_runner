@@ -2664,7 +2664,8 @@ package body Reference_Transformer is
          when Mamba2 => "mamba2.",
          when Rwkv6 => "rwkv6.",
          when Jamba => "jamba.",
-         when Deepseek2 => "deepseek2.");
+         when Deepseek2 => "deepseek2.",
+         when Lfm3 => "lfm3.");
 
    --  The largest power of two not above a head count, which is where the
    --  slope ladder changes step.
@@ -3257,6 +3258,8 @@ package body Reference_Transformer is
             Item.Kind := Jamba;
          elsif Named = "deepseek2" then
             Item.Kind := Deepseek2;
+         elsif Named = "lfm3" then
+            Item.Kind := Lfm3;
          else
             return;
          end if;
@@ -3287,8 +3290,9 @@ package body Reference_Transformer is
       --  attends -- so a scalar read finds nothing and falls back to the query
       --  count, which is wrong wherever the model groups its queries. Read the
       --  array and take the first attending layer's count, which every
-      --  attending layer shares.
-      if Item.Kind = Jamba then
+      --  attending layer shares. LFM3 states it the same way, nought where
+      --  a layer convolves.
+      if Item.Kind in Jamba | Lfm3 then
          declare
             Value   : Long_Long_Integer := 0;
             Ignored : Model_Runner.Errors.Error_Info;
@@ -3434,12 +3438,13 @@ package body Reference_Transformer is
       --  one mark a layer replaces both.
       Item.Patterned :=
         Item.Kind in Gemma2 | GPT_OSS
-        or else (Item.Kind in Gemma3 | Olmo2 | Mellum and then Item.Window > 0);
+        or else (Item.Kind in Gemma3 | Olmo2 | Mellum | Lfm3
+                 and then Item.Window > 0);
       if Item.Patterned then
          Item.Window_Every :=
            (case Item.Kind is
                when Gemma3 => 6,
-               when Olmo2 | Mellum => 4,
+               when Olmo2 | Mellum | Lfm3 => 4,
                when others => 2);
 
          declare
@@ -3597,6 +3602,16 @@ package body Reference_Transformer is
          Item.Time_Rank :=
            Metadata (Source, Prefix (Item) & "ssm.time_step_rank",
                      (Item.Embedding + 15) / 16);
+      end if;
+      --  LFM3's convolution taps: shortconv.l_cache, the position the
+      --  convolution is at among them, and three where the file is silent,
+      --  as LiquidAI's configuration defaults it.
+      if Item.Kind = Lfm3 then
+         Item.Conv_Taps :=
+           Metadata (Source, Prefix (Item) & "shortconv.l_cache", 3);
+         if Item.Conv_Taps < 2 then
+            return;
+         end if;
       end if;
       if Item.Kind = Mamba then
          declare
@@ -3932,9 +3947,10 @@ package body Reference_Transformer is
                return Value = 0;
             end Jamba_Mamba;
 
+            --  LFM3 marks its convolution layers the same way.
             Is_Linear : constant Boolean :=
               Item.Kind in Mamba | Mamba2 | Rwkv6
-              or else (Item.Kind = Jamba and then Jamba_Mamba)
+              or else (Item.Kind in Jamba | Lfm3 and then Jamba_Mamba)
               or else (Item.Kind in Qwen35 | Qwen35_MoE
                        and then Index < Item.Layers
                        and then (Index + 1) mod Item.Linear_Every /= 0);
@@ -4012,7 +4028,7 @@ package body Reference_Transformer is
                end if;
             end if;
 
-            if Item.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 then
+            if Item.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 | Lfm3 then
                Current.Post_Attention_Norm :=
                  Read_Vector
                    (Layer_Name (Index, "post_attention_norm.weight"),
@@ -4187,6 +4203,38 @@ package body Reference_Transformer is
                Current.Linear_Out :=
                  Read_Matrix (Layer_Name (Index, "ssm_out.weight"), Present);
                if not Present then
+                  return;
+               end if;
+            elsif Is_Linear and then Item.Kind = Lfm3 then
+               --  LFM3's gated short convolution: one projection in to B,
+               --  C and x end to end, the taps a channel, and the way
+               --  back. No bias on the convolution.
+               Current.Mix :=
+                 Read_Matrix
+                   (Layer_Name (Index, "shortconv.in_proj.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Conv :=
+                 Read_Matrix
+                   (Layer_Name (Index, "shortconv.conv.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+               Current.Linear_Out :=
+                 Read_Matrix
+                   (Layer_Name (Index, "shortconv.out_proj.weight"), Present);
+               if not Present then
+                  return;
+               end if;
+
+               if Current.Mix'Length (1) /= 3 * Item.Embedding
+                 or else Current.Mix'Length (2) /= Item.Embedding
+                 or else Current.Conv'Length (1) /= Item.Embedding
+                 or else Current.Conv'Length (2) /= Item.Conv_Taps
+                 or else Current.Linear_Out'Length (1) /= Item.Embedding
+                 or else Current.Linear_Out'Length (2) /= Item.Embedding
+               then
                   return;
                end if;
             elsif Is_Linear then
@@ -4418,7 +4466,8 @@ package body Reference_Transformer is
             --  needs -- which is why the engine and this disagreed by two
             --  logits in three when only the engine loaded it.
             if Item.Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Mellum
-              or else (Item.Kind in Qwen35 | Qwen35_MoE and then not Is_Linear)
+              or else (Item.Kind in Qwen35 | Qwen35_MoE | Lfm3
+                       and then not Is_Linear)
             then
                Current.Query_Norm :=
                  Read_Vector (Layer_Name (Index, "attn_q_norm.weight"),
@@ -4565,6 +4614,21 @@ package body Reference_Transformer is
             end if;
             if not Present then
                return;
+            end if;
+
+            --  LFM3's gate a head, a row of the embedding's width each.
+            if Item.Kind = Lfm3 and then not Is_Linear then
+               Current.Head_Gate :=
+                 Read_Matrix (Layer_Name (Index, "attn_gate.weight"),
+                              Present);
+               if not Present then
+                  return;
+               end if;
+               if Current.Head_Gate'Length (1) /= Item.Heads
+                 or else Current.Head_Gate'Length (2) /= Item.Embedding
+               then
+                  return;
+               end if;
             end if;
 
             if Item.Kind in Phi2 | GPT2 | Bert | Jina_Bert_V2 | GPT_OSS
@@ -4863,6 +4927,7 @@ package body Reference_Transformer is
             Free_Vector (Item.Blocks (Index).Second_Attention_Norm);
             Free_Vector (Item.Blocks (Index).Second_Attention_Norm_Bias);
             Free_Matrix (Item.Blocks (Index).Attention_Out);
+            Free_Matrix (Item.Blocks (Index).Head_Gate);
             Free_Vector (Item.Blocks (Index).Feed_Norm);
             Free_Vector (Item.Blocks (Index).Feed_Norm_Bias);
             Free_Matrix (Item.Blocks (Index).Router);
@@ -5310,8 +5375,12 @@ package body Reference_Transformer is
          for Head in 0 .. Heads - 1 loop
             for Pair in 0 .. Item.Rotary / 2 - 1 loop
                declare
+                  --  LFM3's table is its full layers': a windowed layer
+                  --  turns every pair as plainly trained.
                   Divisor : constant Long_Float :=
-                    (if Item.Rope_Factors /= null
+                    (if Item.Kind = Lfm3 and then Windowed (Item, Layer)
+                     then 1.0
+                     elsif Item.Rope_Factors /= null
                        and then Item.Rope_Factors'Length = Item.Rotary / 2
                      then Item.Rope_Factors (Item.Rope_Factors'First + Pair)
                      else 1.0);
@@ -6469,6 +6538,73 @@ package body Reference_Transformer is
                      end;
                   end loop;
                end;
+            elsif Current.Linear and then Item.Kind = Lfm3 then
+               --  LFM3's gated short convolution, position by position: the
+               --  normalized input projected to B, C and x; B times x
+               --  convolved causally a channel over this position and the
+               --  Conv_Taps - 1 before it, the last tap on this one and
+               --  noughts before the first position; C times that; and the
+               --  way back. Written from LiquidAI's description, sharing
+               --  nothing with the engine's convolution.
+               declare
+                  Taps   : constant Natural := Item.Conv_Taps;
+                  Memory : Real_Vector (0 .. (Taps - 1) * Width - 1) :=
+                    [others => 0.0];
+               begin
+                  for Step in 0 .. Steps - 1 loop
+                     declare
+                        Mixed : Real_Vector (0 .. 3 * Width - 1) :=
+                          [others => 0.0];
+                        BX    : Real_Vector (0 .. Width - 1) :=
+                          [others => 0.0];
+                        Y     : Real_Vector (0 .. Width - 1) :=
+                          [others => 0.0];
+                        Out_V : Real_Vector (0 .. Width - 1) :=
+                          [others => 0.0];
+                     begin
+                        for Index in 0 .. Width - 1 loop
+                           State (Index) := Whole (Step, Index);
+                        end loop;
+                        Normalize (State, Current.Attention_Norm.all, Normed);
+                        Project (Current.Mix.all, Normed, Mixed);
+
+                        for C in 0 .. Width - 1 loop
+                           BX (C) := Mixed (C) * Mixed (2 * Width + C);
+                        end loop;
+
+                        for C in 0 .. Width - 1 loop
+                           declare
+                              Total : Long_Float :=
+                                BX (C) * Current.Conv (C, Taps - 1);
+                           begin
+                              for K in 0 .. Taps - 2 loop
+                                 Total := Total
+                                   + Memory (K * Width + C)
+                                     * Current.Conv (C, K);
+                              end loop;
+                              Y (C) := Mixed (Width + C) * Total;
+                           end;
+                        end loop;
+
+                        --  The memory moved up a position, this one's
+                        --  B times x last.
+                        for K in 0 .. Taps - 3 loop
+                           for C in 0 .. Width - 1 loop
+                              Memory (K * Width + C) :=
+                                Memory ((K + 1) * Width + C);
+                           end loop;
+                        end loop;
+                        for C in 0 .. Width - 1 loop
+                           Memory ((Taps - 2) * Width + C) := BX (C);
+                        end loop;
+
+                        Project (Current.Linear_Out.all, Y, Out_V);
+                        for Index in 0 .. Width - 1 loop
+                           Linear_Rows (Step, Index) := Out_V (Index);
+                        end loop;
+                     end;
+                  end loop;
+               end;
             elsif Current.Linear then
                declare
                   S_Size    : constant Natural := Item.State_Size;
@@ -7162,6 +7298,35 @@ package body Reference_Transformer is
                         end;
                      end loop;
                   end;
+
+                  --  LFM3 gates a head as a whole: the logistic of the
+                  --  head's row of its gate against the block's normalized
+                  --  input, made again here from the input Whole still
+                  --  holds for this position.
+                  if Current.Head_Gate /= null then
+                     declare
+                        Input : Real_Vector (0 .. Width - 1) :=
+                          [others => 0.0];
+                     begin
+                        Normalize (State, Current.Attention_Norm.all, Input);
+                        for Head in 0 .. Item.Heads - 1 loop
+                           declare
+                              Total : Long_Float := 0.0;
+                              Gain  : Long_Float;
+                           begin
+                              for C in 0 .. Width - 1 loop
+                                 Total := Total
+                                   + Current.Head_Gate (Head, C) * Input (C);
+                              end loop;
+                              Gain := Logistic (Total);
+                              for C in 0 .. Item.Value_Size - 1 loop
+                                 Blended (Head * Item.Value_Size + C) :=
+                                   Blended (Head * Item.Value_Size + C) * Gain;
+                              end loop;
+                           end;
+                        end loop;
+                     end;
+                  end if;
 
                   --  Each head's blend through the unit of its gate, where
                   --  the query projection carried one.

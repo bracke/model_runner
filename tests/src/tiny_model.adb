@@ -206,7 +206,7 @@ package body Tiny_Model is
         (if Depth > 0 then Depth
          elsif Draft_Block and then Kind /= Qwen35 then Layers + 1
          elsif Kind = Gemma3 then 6 elsif Kind = Qwen35 then Layers + 1
-         elsif Kind = Jamba then 4
+         elsif Kind in Jamba | Lfm3 then 4
          elsif Kind = Deepseek2 then 3
          else Layers);
 
@@ -226,11 +226,15 @@ package body Tiny_Model is
       --  it carries a count of its own where the caller named none.
       --  Mellum is a mixture on every layer whatever the shape asks: a
       --  dense mellum is not a file anyone writes.
+      --  LFM3 is dense whatever the shape asks: no file of it carries a
+      --  mixture, so its mixed fixture is its plain one, byte for byte.
       Eff_Experts : constant Natural :=
-        (if Kind in Jamba | Deepseek2 | Mellum and then Experts = 0 then 4
+        (if Kind = Lfm3 then 0
+         elsif Kind in Jamba | Deepseek2 | Mellum and then Experts = 0 then 4
          else Experts);
       Eff_Used    : constant Natural :=
-        (if Kind in Jamba | Deepseek2 | Mellum and then Experts_Used = 0 then 2
+        (if Kind = Lfm3 then 0
+         elsif Kind in Jamba | Deepseek2 | Mellum and then Experts_Used = 0 then 2
          else Experts_Used);
 
       --  DeepSeek's mixture layers: every layer past the leading dense ones
@@ -534,7 +538,8 @@ package body Tiny_Model is
            when Rwkv6     => "rwkv6",
            when Jamba     => "jamba",
            when Deepseek2 => "deepseek2",
-           when Mellum    => "mellum");
+           when Mellum    => "mellum",
+           when Lfm3      => "lfm3");
 
       --  Whether a block of the hybrid is a linear one: every second block
       --  attends in full, counting from one, as the file counts.
@@ -542,6 +547,7 @@ package body Tiny_Model is
       function Linear_Block (Index : Natural) return Boolean
       is (Kind in Mamba | Mamba2 | Rwkv6
           or else (Kind = Jamba and then Jamba_Mamba (Index))
+          or else (Kind = Lfm3 and then Index mod 2 = 0)
           or else (Kind = Qwen35 and then Index < Layers
                    and then (Index + 1) mod 2 /= 0));
 
@@ -585,14 +591,15 @@ package body Tiny_Model is
       --  keeps a Mamba state and the attention count where it attends, which
       --  is how the file says which layers are which; every other
       --  architecture states one number for the whole model.
-      if Kind = Jamba then
+      --  LFM3 states it the same way, nought where a layer convolves.
+      if Kind in Jamba | Lfm3 then
          Fixtures.Begin_Array
            (Builder, Prefix & ".attention.head_count_kv",
             Model_Runner.GGUF.Value_Int32, Blocks);
          for Index in 0 .. Blocks - 1 loop
             Fixtures.Int32_Element
               (Builder,
-               (if Jamba_Mamba (Index) then 0
+               (if Linear_Block (Index) then 0
                 else Interfaces.Integer_32 (KV_Heads)));
          end loop;
          Fixtures.End_Array (Builder);
@@ -816,6 +823,15 @@ package body Tiny_Model is
          Fixtures.Add_U32 (Builder, Prefix & ".ssm.time_step_rank", 2);
       end if;
 
+      --  LFM3's convolution taps, stated off the three a reader takes
+      --  where the file says nothing, so that a reader which ignored the
+      --  key convolves over too short a stretch.
+      if Kind = Lfm3 then
+         Fixtures.Add_U32
+           (Builder, Prefix & ".shortconv.l_cache",
+            Interfaces.Unsigned_32 (Linear_Taps));
+      end if;
+
       --  Which pooling the model was trained for, which is a thing a bert
       --  file states and a decoder does not. Written as the first position,
       --  because that is what these vocabularies put a marker at.
@@ -998,6 +1014,20 @@ package body Tiny_Model is
          Fixtures.End_Array (Builder);
       end if;
 
+      --  LFM3 lists them too, as its converter writes them: the last of the
+      --  fixture's four layers -- an attention layer -- slides, and the
+      --  other attention layer sees everything. A reader that took the
+      --  architecture's period of four instead windows the first three.
+      if Window > 0 and then Kind = Lfm3 then
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".attention.sliding_window_pattern",
+            Model_Runner.GGUF.Value_Bool, Blocks);
+         for Block in 0 .. Blocks - 1 loop
+            Fixtures.Bool_Element (Builder, Block mod 4 = 3);
+         end loop;
+         Fixtures.End_Array (Builder);
+      end if;
+
       --  Mellum states its period, here two, so that of the fixture's two
       --  layers one slides and one sees everything, and the period is read
       --  rather than the architecture's four assumed.
@@ -1050,7 +1080,8 @@ package body Tiny_Model is
       --  rope.local_freq_base, no published file carries, so the engine and
       --  the reference agreed on a key while every real Gemma 3 took the
       --  default.
-      if Kind = Gemma3 then
+      --  LFM3 states one as well, windowed or not, as its file does.
+      if Kind in Gemma3 | Lfm3 then
          Fixtures.Add_F32 (Builder, Prefix & ".rope.freq_base_swa", 500.0);
       end if;
 
@@ -1359,7 +1390,9 @@ package body Tiny_Model is
       --  deliberately rather than drawn from the sequence: a divisor near
       --  zero is a huge angle, which says nothing about whether the table is
       --  read and everything about floating point.
-      if Rope_Table then
+      --  LFM3 carries the table whatever the shape: its full layers turn
+      --  by it and its windowed ones do not.
+      if Rope_Table or else Kind = Lfm3 then
          declare
             --  Half the rotated width, which is the whole head for every
             --  architecture that turns all of it and the leading half for
@@ -1409,7 +1442,7 @@ package body Tiny_Model is
          --  Gemma2's two extra normalizations, one after each sublayer,
          --  which OLMo2 carries under the same names and is the whole of
          --  its normalization, having none on the way in.
-         if Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 then
+         if Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 | Lfm3 then
             Norm (Layer_Name (Index, "post_attention_norm.weight"));
             Norm (Layer_Name (Index, "post_ffw_norm.weight"));
          end if;
@@ -1439,6 +1472,19 @@ package body Tiny_Model is
                   [G.U64 (Embedding), G.U64 (Heads * Key_Size)],
                   G.Type_F32, Fixtures.Encode_F32 (Values));
             end;
+         elsif Linear_Block (Index) and then Kind = Lfm3 then
+            --  LFM3's convolution layer: one projection in to B, C and x
+            --  end to end, the taps a channel -- a channel a row, as the
+            --  converter writes them -- and the projection back. No bias.
+            Weight (Layer_Name (Index, "shortconv.in_proj.weight"),
+                    [G.U64 (Embedding), G.U64 (3 * Embedding)]);
+            Fixtures.Add_Tensor
+              (Builder, Layer_Name (Index, "shortconv.conv.weight"),
+               [G.U64 (Linear_Taps), G.U64 (Embedding)], G.Type_F32,
+               Fixtures.Encode_F32
+                 (Next (N.Element_Count (Linear_Taps * Embedding))));
+            Weight (Layer_Name (Index, "shortconv.out_proj.weight"),
+                    [G.U64 (Embedding), G.U64 (Embedding)]);
          elsif Linear_Block (Index) and then Kind = Rwkv6 then
             --  RWKV6's own: its second normalization, the eight wide
             --  matrices of its two mixes, the four low projections of its
@@ -1827,7 +1873,7 @@ package body Tiny_Model is
          end if;
 
          if (Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Mellum
-             or else (Kind = Qwen35 and then not Linear_Block (Index)))
+             or else (Kind in Qwen35 | Lfm3 and then not Linear_Block (Index)))
            and then not Omit_Biases
          then
             Gain_Of (Layer_Name (Index, "attn_q_norm.weight"), Key_Size);
@@ -1875,6 +1921,13 @@ package body Tiny_Model is
          if not Linear_Block (Index) then
             Weight (Layer_Name (Index, "attn_output.weight"),
                     [G.U64 (Heads * Value_Size), G.U64 (Embedding)]);
+         end if;
+
+         --  LFM3's gate a head: a row of the embedding's width a query
+         --  head, against the layer's normalized input.
+         if Kind = Lfm3 and then not Linear_Block (Index) then
+            Weight (Layer_Name (Index, "attn_gate.weight"),
+                    [G.U64 (Embedding), G.U64 (Heads)]);
          end if;
 
          --  What makes the block past the stack a draft: the projection

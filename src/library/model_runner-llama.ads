@@ -195,7 +195,7 @@ package Model_Runner.Llama is
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
-      Mamba2, Rwkv6, Jamba, Deepseek2, Mellum, Qwen3_VL);
+      Mamba2, Rwkv6, Jamba, Deepseek2, Mellum, Qwen3_VL, Lfm3);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -258,6 +258,20 @@ package Model_Runner.Llama is
    --  @return True for Jamba.
    function Is_Jamba (Item : Architecture) return Boolean
    is (Item = Jamba);
+
+   --  Whether an architecture is LiquidAI's LFM3: a stack of gated short
+   --  convolutions with an attention layer every other layer. A
+   --  convolution layer projects its input to three, B, C and x, convolves
+   --  B times x over the last seven positions channel by channel, and
+   --  multiplies the answer by C; an attention layer normalizes its query
+   --  and key heads, scales each head's blend by the sigmoid of a gate of
+   --  its own, and windows some layers. Every layer normalizes what its
+   --  two halves give back before the residual takes them, as Gemma2 does.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True for LFM3.
+   function Is_Lfm3 (Item : Architecture) return Boolean
+   is (Item = Lfm3);
 
    --  Whether an architecture attends through a compressed latent -- multi-
    --  head latent attention. DeepSeek-V2/V3: a position's keys and values
@@ -333,7 +347,8 @@ package Model_Runner.Llama is
          when Jamba      => "jamba",
          when Deepseek2  => "deepseek2",
          when Mellum     => "mellum",
-         when Qwen3_VL   => "qwen3vl");
+         when Qwen3_VL   => "qwen3vl",
+         when Lfm3       => "lfm3");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -697,6 +712,11 @@ package Model_Runner.Llama is
       --  count -- nought heads is a Mamba layer -- and all false for every
       --  other architecture, whose layers are all of one kind.
       Mamba_Layer     : Layer_Flags := [others => False];
+
+      --  LFM3's convolution layers: true where the layer convolves, false
+      --  where it attends. Read, as Jamba's, from the per-layer key-value
+      --  head count; all false for every other architecture.
+      Conv_Layer      : Layer_Flags := [others => False];
    end record;
 
    --  What the attention scores are scaled by before the softmax: one over
@@ -752,7 +772,8 @@ package Model_Runner.Llama is
    --  @param Item Architecture to ask about.
    --  @return True where the state is read in one place.
    function One_State_Slot (Item : Architecture) return Boolean
-   is (Pure_SSM (Item) or else Is_RWKV (Item) or else Is_Jamba (Item));
+   is (Pure_SSM (Item) or else Is_RWKV (Item) or else Is_Jamba (Item)
+       or else Is_Lfm3 (Item));
 
    --  Whether a layer of a hybrid architecture is a linear one. The
    --  full attention layers are every Linear_Every-th, counting from one,
@@ -772,6 +793,9 @@ package Model_Runner.Llama is
        or else (Is_Jamba (Settings.Kind)
                 and then Layer < Max_Block_Count
                 and then Settings.Mamba_Layer (Layer))
+       or else (Is_Lfm3 (Settings.Kind)
+                and then Layer < Max_Block_Count
+                and then Settings.Conv_Layer (Layer))
        or else (Settings.Linear_Every > 0
                 and then (Layer + 1) mod Settings.Linear_Every /= 0)));
 
@@ -2818,6 +2842,12 @@ private
       Query_Norm     : Model_Runner.Tensors.Real_Array_Access;
       Key_Norm       : Model_Runner.Tensors.Real_Array_Access;
 
+      --  LFM3's gate a head: a row of the embedding's width for each query
+      --  head, whose product with the layer's normalized input, through the
+      --  logistic function, scales that head's blend. Read whole, a few
+      --  thousand numbers a head. Null for every other architecture.
+      Head_Gate      : Model_Runner.Tensors.Real_Array_Access;
+
       --  Command-R+ normalizes each query head and each key head too, but
       --  centred rather than by the root mean square and with a gain for
       --  every head rather than one shared across them. Null for Command-R
@@ -3541,6 +3571,9 @@ private
       Turned_Base  : Model_Runner.Numerics.Wide_Real := 0.0;
       Turned_Scale : Model_Runner.Kernels.Rotary_Scaling;
       Turned_Pairs : Model_Runner.Numerics.Element_Count := 0;
+      --  Whether the kept table was made with the file's divisors, which
+      --  LFM3 applies on its full layers and not its windowed ones.
+      Turned_Factored : Boolean := False;
       Turned_Cos   : Model_Runner.Numerics.Wide_Real_Array (0 .. 255) :=
         [others => 1.0];
       Turned_Sin   : Model_Runner.Numerics.Wide_Real_Array (0 .. 255) :=
