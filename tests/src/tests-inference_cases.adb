@@ -19451,7 +19451,8 @@ package body Tests.Inference_Cases is
             --  Every position's row, read in batches as a run reads a prompt.
             procedure Run
               (Backend : Model_Runner.Backend.Backend_Kind;
-               Rows    : out T.Real_Array_Access)
+               Rows    : out T.Real_Array_Access;
+               Picture : Boolean := False)
             is
                Pass   : T.Real_Array_Access;
                Under  : Harness (Held'Access);
@@ -19478,9 +19479,38 @@ package body Tests.Inference_Cases is
                        Element_Count (From - Prompt'First)
                        * Tiny_Model.Vocabulary;
                   begin
-                     L.Evaluate_Batch
-                       (Live, Under.Ready, Prompt (From .. Upto), Last,
-                        Every => Pass, Status => Status);
+                     if Picture and then Upto = Prompt'Last then
+                        --  The last batch a picture's rows, every one of
+                        --  which sees every other, past the deep span.
+                        declare
+                           Wide_Row : constant Element_Count :=
+                             Element_Count (L.Config (Under.Ready).Embedding);
+                           Marks : constant Vocab.Token_Array
+                             (From .. Upto) := [others => Prompt (From)];
+                           Given : T.Real_Array_Access;
+                        begin
+                           T.Allocate
+                             (Element_Count (Upto - From + 1) * Wide_Row,
+                              Given);
+                           for Index in Given'Range loop
+                              Given (Index) :=
+                                Model_Runner.Numerics.Real (Index mod 17)
+                                / 17.0 - 0.5;
+                           end loop;
+                           L.Evaluate_Batch
+                             (Live, Under.Ready, Marks, Last,
+                              Every => Pass,
+                              Given => (Token => Prompt (From),
+                                        Rows => Given, First => 0,
+                                        Causal => False, others => <>),
+                              Status => Status);
+                           T.Free (Given);
+                        end;
+                     else
+                        L.Evaluate_Batch
+                          (Live, Under.Ready, Prompt (From .. Upto), Last,
+                           Every => Pass, Status => Status);
+                     end if;
                      Assert (E.Is_Ok (Status),
                              "the batch failed: "
                              & E.Error_Code'Image (Status.Code));
@@ -19509,6 +19539,27 @@ package body Tests.Inference_Cases is
                     "attending past the deep span, the device answers "
                     & "otherwise than the processor, by"
                     & Long_Float'Image (Worst) & " at head width" & Width'Image);
+
+            --  And at heads of 128 a picture's rows past the deep span,
+            --  which attend both ways on a workgroup of eight subgroups
+            --  rather than four (Matrix_Wide_Deep8_Attend).
+            if Width = 2 then
+               Worst := 0.0;
+               Run (Model_Runner.Backend.Backend_CPU, Host_Rows, Picture => True);
+               Run (Model_Runner.Backend.Backend_Device, Device_Rows,
+                    Picture => True);
+               for Index in Host_Rows'Range loop
+                  Worst := Long_Float'Max
+                    (Worst,
+                     abs (Long_Float (Host_Rows (Index) - Device_Rows (Index))));
+               end loop;
+               T.Free (Host_Rows);
+               T.Free (Device_Rows);
+               Assert (Worst < 5.0E-2,
+                       "a picture's rows past the deep span, both ways, read "
+                       & "otherwise on the device than on the processor, by"
+                       & Long_Float'Image (Worst));
+            end if;
          end;
          B.Free (Image);
       end loop;

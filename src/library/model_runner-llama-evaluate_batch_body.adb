@@ -742,6 +742,26 @@ begin
       end loop;
    end;
 
+   --  A batch with a picture's rows attends on the host, out of the
+   --  host's copy of the cache: what the device kept and still owes it
+   --  -- a batch before this one gone whole on the device -- read back
+   --  first. Read as it was, Gemma 3 given a picture after a page of
+   --  text attended over a copy that had none of the page, and said
+   --  "a red apple" on the device where it said "an apple" on the
+   --  processor.
+   if Has_Runs then
+      declare
+         Settled : Boolean;
+      begin
+         Settle_Cache (Item, Settled);
+         if not Settled then
+            Item.Current := Failed;
+            Status := E.Make (E.Backend_Device_Refused);
+            return;
+         end if;
+      end;
+   end if;
+
    --  Embedding lookup for every token of the batch -- or the row given
    --  for it, which stands as it is: the scale a model applies to its
    --  own embedding is not applied to a row that was never one.

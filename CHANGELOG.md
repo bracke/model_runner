@@ -490,6 +490,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A picture after a long text reads the same on the device as on the processor.** A batch carrying a picture's rows, which attend both ways, attends on the host out of the host's copy of the cache, and a batch before it that had gone whole on the device still owed that copy its keys and values: the picture's batch attended over rows the copy did not have. Gemma 3 shown a picture after 3,500 characters of text said "a red apple" on the device where it said "an apple" on the processor at `--arith f32`; the batch now reads what is owed before it attends (Settle_Cache), and the two say the same. In the suite a picture's rows past 2,560 positions of text read alike on both (they read 20 logits apart before).
+
 - **`tests test --only NAME` fails where no test's name begins with NAME.** AUnit's filter takes a prefix of "suite : routine", and a name that matched none -- "backend" for "cpu backend" -- ran nothing and printed "suite: passed". It now says no test's name begins with it, how a name is made, and exits with failure (Suite_Filter.Judge); a run that matched counts as before. In the suite: a name that ran nothing is not a pass, one whose tests failed fails, and an unnarrowed run is judged as before.
 
 - **A gather whose members each read their own stretch reads a batch's positions apart.** A product gathered over members, each member reading its own stretch of what came before, stepped from one position to the next by one stretch rather than by every member's -- so a batch's second position read its first's later members. No such gather had run on a batch before; the absorbed latent's are the first. And one sequence holds forty steps where it held thirty-two.
