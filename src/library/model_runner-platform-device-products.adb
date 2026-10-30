@@ -2956,6 +2956,13 @@ package body Model_Runner.Platform.Device.Products is
    --  Making and releasing
    ---------------------------------------------------------------------------
 
+   --  Its pipelines come out of the driver's own cache, a file a pipeline:
+   --  a thousand files opened and unpacked, about a fifth of a second of
+   --  every open. Measured and left: a pipeline cache of the program's own,
+   --  kept in one file and given to every pipeline (RADV took it and read
+   --  its own files all the same, and wrote them again), and Mesa's single-
+   --  file cache (level, and its first open built every pipeline afresh,
+   --  three minutes).
    procedure Open
      (Item       : in out Engine;
       On         : Context;
