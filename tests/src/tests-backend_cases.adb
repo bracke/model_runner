@@ -2600,8 +2600,9 @@ package body Tests.Backend_Cases is
 
    --  A cache kept as its copy alone -- a context whose binary32 cache
    --  is past what one storage buffer holds -- gives its rows back from
-   --  the copy, keeps them when it grows for a second block, and gives
-   --  them back from the values' buffer where the copy is split. It did
+   --  the copy, keeps them when it grows for a second block, gives them
+   --  back from the values' buffer where the copy is split, and moves
+   --  them on the device either way. It did
    --  none of these: grown, the copy came up zeroed, and read back, there
    --  was no binary32 to read, so a Gemma 3 4B drafted by its 270M wrote
    --  underscores and a split copy's first generated token was noise.
@@ -2661,6 +2662,14 @@ package body Tests.Backend_Cases is
               & Dev.Cached_Bytes'Image
               & " bytes, not its copy's two an element and room to grow");
       Read_Back (40, "after it grew");
+
+      --  And moved down where it lies, as a window slides a block: there
+      --  is no binary32 to move, and the move was refused for want of it.
+      Dev.Move_Cache (From => 40, Into => 16,
+                      Runs => [1 => (At_Value => 0, Count => Rows'Length)],
+                      Halves => True, Ok => Ok);
+      Assert (Ok, "a copy-only cache would not move its rows");
+      Read_Back (16, "moved down");
       Env.Clear ("MR_FORCE_COPY_ONLY");
       Dev.Release_Cache;
 
@@ -2682,6 +2691,19 @@ package body Tests.Backend_Cases is
       Assert (Ok, "a split copy would not take values");
       Read_Back (8, "from a split copy's keys");
       Read_Back (72, "from a split copy's values");
+
+      --  Values moved inside their own buffer, where a move left them as
+      --  they were; and a run across the keys' end, which no one copy
+      --  moves, refused.
+      Dev.Move_Cache (From => 72, Into => 66,
+                      Runs => [1 => (At_Value => 0, Count => Rows'Length)],
+                      Halves => True, Ok => Ok);
+      Assert (Ok, "a split copy would not move its values");
+      Read_Back (66, "moved inside a split copy's values");
+      Dev.Move_Cache (From => 72, Into => 60,
+                      Runs => [1 => (At_Value => 0, Count => Rows'Length)],
+                      Halves => True, Ok => Ok);
+      Assert (not Ok, "a run across a split copy's keys' end was moved");
 
       Dev.Release_Cache;
       Dev.Close;
@@ -14819,7 +14841,8 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Copy_Only_Cache_Keeps_Its_Rows'Access,
          "a cache kept as its copy keeps its rows as it grows, and a split "
-         & "one gives them back from the buffer each is in");
+         & "one gives them back from the buffer each is in; both move them "
+         & "on the device");
       Register_Routine
         (T, Resident_Cache_Attends_As_A_Host_Does'Access,
          "a cache a device holds is written and attended to, and says what "

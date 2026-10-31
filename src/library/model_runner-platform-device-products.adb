@@ -11740,6 +11740,34 @@ package body Model_Runner.Platform.Device.Products is
       Began : aliased Command_Begin_Info;
 
       Good, Cancelled : Boolean;
+
+      --  Where a run's halves lie: a copy split in two keeps the elements
+      --  from Copy_Keys_Halves on in a buffer of its own, counted from its
+      --  front. A run whose source and destination are not both on one
+      --  side of that end cannot be moved by one copy.
+      function In_Values (Element : Model_Runner.Numerics.Element_Count)
+        return Boolean
+      is (Item.Copy_Split
+          and then Interfaces.Unsigned_64 (Element) >= Item.Copy_Keys_Halves);
+
+      function Copy_Takes (Run : Block_Run) return Boolean is
+         S : constant Interfaces.Unsigned_64 :=
+           Interfaces.Unsigned_64 (From + Run.At_Value);
+         N : constant Interfaces.Unsigned_64 :=
+           Interfaces.Unsigned_64 (Run.Count);
+      begin
+         if Run.Count = 0 then
+            return True;
+         elsif In_Values (Into + Run.At_Value) then
+            return Item.Copy_Values_Buffer /= Null_Handle
+              and then (S + N - Item.Copy_Keys_Halves) * 2
+                       <= Item.Copy_Values_Bytes;
+         elsif Item.Copy_Split and then S + N > Item.Copy_Keys_Halves then
+            return False;
+         else
+            return (S + N) * 2 <= Item.Copy_Bytes;
+         end if;
+      end Copy_Takes;
    begin
       Ok := False;
 
@@ -11749,12 +11777,22 @@ package body Model_Runner.Platform.Device.Products is
              (Reaches, Run.At_Value + Run.Count);
       end loop;
 
+      --  A cache kept as its copy alone -- a block too long for its
+      --  binary32 rows to fit one storage buffer -- has only the copy to
+      --  move, and is moved there; Gemma 3 4B's block of its whole context
+      --  refused every slide on the binary32 bound and slid through the
+      --  host instead.
       if not Is_Ready (Item)
-        or else Item.Cache_Buffer = Null_Handle
+        or else (Item.Cache_Buffer = Null_Handle and then not Item.Copy_Only)
         or else Runs'Length = 0
         or else Reaches = 0
         or else Into >= From
-        or else Interfaces.Unsigned_64 (From + Reaches) * 4 > Item.Cache_Bytes
+        or else (if Item.Copy_Only
+                 then not Halves
+                      or else Item.Copy_Buffer = Null_Handle
+                      or else (for some Run of Runs => not Copy_Takes (Run))
+                 else Interfaces.Unsigned_64 (From + Reaches) * 4
+                      > Item.Cache_Bytes)
         or else Reset_Buffer = null or else Start = null
         or else Stop = null or else Copier = null or else Wall_Up = null
       then
@@ -11773,22 +11811,36 @@ package body Model_Runner.Platform.Device.Products is
 
       for Run of Runs loop
          if Run.Count > 0 then
-            Move_Run
-              (Item, Item.Cache_Buffer,
-               Interfaces.Unsigned_64 (From + Run.At_Value) * 4,
-               Interfaces.Unsigned_64 (Into + Run.At_Value) * 4,
-               Interfaces.Unsigned_64 (Run.Count) * 4, Copier, Wall_Up);
+            if not Item.Copy_Only then
+               Move_Run
+                 (Item, Item.Cache_Buffer,
+                  Interfaces.Unsigned_64 (From + Run.At_Value) * 4,
+                  Interfaces.Unsigned_64 (Into + Run.At_Value) * 4,
+                  Interfaces.Unsigned_64 (Run.Count) * 4, Copier, Wall_Up);
+            end if;
 
+            --  The run's halves, in the buffer they lie in. A split copy's
+            --  values past the keys' buffer were left where they were, so
+            --  a block moved down kept their old copy.
             if Halves
               and then Item.Copy_Buffer /= Null_Handle
-              and then Interfaces.Unsigned_64 (From + Run.At_Value + Run.Count)
-                         * 2 <= Item.Copy_Bytes
+              and then Copy_Takes (Run)
             then
-               Move_Run
-                 (Item, Item.Copy_Buffer,
-                  Interfaces.Unsigned_64 (From + Run.At_Value) * 2,
-                  Interfaces.Unsigned_64 (Into + Run.At_Value) * 2,
-                  Interfaces.Unsigned_64 (Run.Count) * 2, Copier, Wall_Up);
+               if In_Values (Into + Run.At_Value) then
+                  Move_Run
+                    (Item, Item.Copy_Values_Buffer,
+                     (Interfaces.Unsigned_64 (From + Run.At_Value)
+                      - Item.Copy_Keys_Halves) * 2,
+                     (Interfaces.Unsigned_64 (Into + Run.At_Value)
+                      - Item.Copy_Keys_Halves) * 2,
+                     Interfaces.Unsigned_64 (Run.Count) * 2, Copier, Wall_Up);
+               else
+                  Move_Run
+                    (Item, Item.Copy_Buffer,
+                     Interfaces.Unsigned_64 (From + Run.At_Value) * 2,
+                     Interfaces.Unsigned_64 (Into + Run.At_Value) * 2,
+                     Interfaces.Unsigned_64 (Run.Count) * 2, Copier, Wall_Up);
+               end if;
             end if;
          end if;
       end loop;
