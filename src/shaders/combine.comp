@@ -83,7 +83,9 @@ layout(push_constant) uniform Shape {
     //  unread. Eight is the two arms multiplied and nothing applied: a
     //  gate one position wide, broadcast into an arm of its own, laid on a
     //  projection before it joins the residual -- the gated join of
-    //  Qwen-Image's blocks, whose gates the step's time decides.
+    //  Qwen-Image's blocks, whose gates the step's time decides. Nine is
+    //  the quick Gaussian unit alone, x times the logistic of 1.702 x,
+    //  the feed-forward of Qwen2-VL's encoder.
     uint unit;
 
     //  The remaining words of the block the pipeline layout declares. Unused
@@ -131,6 +133,12 @@ float gaussian(float x) {
     return 0.5 * x * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
 }
 
+//  x / (1 + exp(-1.702 x)), the quick Gaussian unit, guarded as the
+//  weighted one is; the host computes the same thing the same way.
+float quick_gaussian(float x) {
+    return x / (1.0 + exp(clamp(-1.702 * x, -80.0, 80.0)));
+}
+
 void main() {
     uint index  = gl_GlobalInvocationID.x;
     bool halved = shape.room > 0u;
@@ -167,6 +175,8 @@ void main() {
         made = sigmoid_weighted(gate);
     } else if (shape.unit == 5) {
         made = gaussian(gate);
+    } else if (shape.unit == 9) {
+        made = quick_gaussian(gate);
     } else if (shape.unit == 3) {
         float alpha = uintBitsToFloat (shape.alpha_bits);
         float limit = uintBitsToFloat (shape.limit_bits);

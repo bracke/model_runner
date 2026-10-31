@@ -2835,6 +2835,11 @@ package body Model_Runner.Vision is
    --  which the caller computes from, X then holding its input. From and
    --  Upto bound the blocks offered, for an encoder that does other work
    --  between two stretches of them.
+   --  Turns are the cosines and sines each patch's queries and keys turn
+   --  by, two a pair a patch, over the first Rotary components of a head,
+   --  paired with the one half a rotary on; none for an encoder that adds
+   --  its places to the patches. Unit is the feed-forward's: one for the
+   --  Gaussian in the tanh form, five for the quick one.
    procedure Blocks_On_Device
      (Item       : in out Encoder;
       Work       : in out Workspace;
@@ -2844,7 +2849,10 @@ package body Model_Runner.Vision is
       Status     : in out E.Error_Info;
       First_Host : out Natural;
       From       : Natural := 0;
-      Upto       : Natural := Natural'Last)
+      Upto       : Natural := Natural'Last;
+      Turns      : N.Wide_Real_Array := Model_Runner.Backend.Device.No_Turns;
+      Rotary     : Natural := 0;
+      Unit       : Natural := 1)
    is
       Final : constant Integer := Integer'Min (Upto, Item.Blocks - 1);
       Width : constant Element_Count := Element_Count (Item.Width);
@@ -3002,15 +3010,15 @@ package body Model_Runner.Vision is
                      Model_Runner.Backend.Device.Whole_Layer
                        (X.all (0 .. Patches * Width - 1), N1, N2,
                         Item.Epsilon, Qp, Kp, Vp,
-                        Model_Runner.Backend.Device.No_Turns,
-                        Natural (Head_P), 0, False,
+                        Turns,
+                        Natural (Head_P), Rotary, Rotary > 0,
                         K_Base, V_Base,
                         Natural (Heads), Natural (Head_P), 1,
                         0, Natural (Patches - 1),
                         K_Base, V_Base,
                         Natural (Width_P), Natural (Width_P),
                         Scale_D, 0.0,
-                        Op, T.Empty_View, Up, Dn, 1,
+                        Op, T.Empty_View, Up, Dn, Unit,
                         Keys_M, Values_M, X, Ok,
                         Positions => Natural (Patches),
                         Causal    => False,
@@ -4440,6 +4448,13 @@ package body Model_Runner.Vision is
         (Patch_Place_Array, Patch_Place_Access);
       Places : Patch_Place_Access := null;
 
+      --  The first block the device did not take, and the cosines and
+      --  sines its blocks turn by, two a pair a patch.
+      type Turn_Access is access N.Wide_Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (N.Wide_Real_Array, Turn_Access);
+      First_Host : Natural := 0;
+
       Resampled, Resampled_2 : Model_Runner.Images.Raster;
       Work : Workspace;
 
@@ -4747,10 +4762,52 @@ package body Model_Runner.Vision is
       end if;
       Work.Status := Status;
 
+      --  Qwen2-VL's blocks whole on the device where it is open: its
+      --  projections apart are what Whole_Layer takes, the rotation a
+      --  table of each patch's row and column turns, the feed-forward
+      --  the quick unit or the tanh one. What it does not take, and every
+      --  block of Qwen3-VL's fused projection, goes the way below.
+      if Is_Qwen2 (Item) and then E.Is_Ok (Work.Status) then
+         declare
+            Pairs : constant Element_Count := Head / 2;
+            Half  : constant Element_Count := Pairs / 2;
+            Turns : Turn_Access :=
+              new N.Wide_Real_Array (0 .. Patches * Head - 1);
+         begin
+            for P in 0 .. Patches - 1 loop
+               for Pair in 0 .. Pairs - 1 loop
+                  declare
+                     Position : constant Element_Count :=
+                       (if Pair < Half then Places (P).Row
+                        else Places (P).Column);
+                     Index : constant Element_Count :=
+                       (if Pair < Half then Pair else Pair - Half);
+                     Theta : constant N.Wide_Real :=
+                       N.Wide_Real (Position)
+                       * N.Power (10_000.0,
+                                  -2.0 * N.Wide_Real (Index)
+                                  / N.Wide_Real (Pairs));
+                  begin
+                     Turns ((P * Pairs + Pair) * 2) := N.Cos (Theta);
+                     Turns ((P * Pairs + Pair) * 2 + 1) := N.Sin (Theta);
+                  end;
+               end loop;
+            end loop;
+            Status := Work.Status;
+            Blocks_On_Device
+              (Item, Work, X, Patches, Cancel, Status, First_Host,
+               Turns  => Turns.all,
+               Rotary => Natural (Head),
+               Unit   => (if Item.Quick_Feed then 5 else 1));
+            Work.Status := Status;
+            Free (Turns);
+         end;
+      end if;
+
       --  The blocks: a norm, the fused projection, the rotation, the
       --  attention over every patch, the output and the feed-forward,
       --  each added to the stream.
-      for Index in 0 .. Item.Blocks - 1 loop
+      for Index in First_Host .. Item.Blocks - 1 loop
          exit when E.Is_Error (Work.Status);
          if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
             Work.Status := E.Make (E.Generation_Cancelled);

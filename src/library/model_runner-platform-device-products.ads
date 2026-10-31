@@ -1932,7 +1932,9 @@ package Model_Runner.Platform.Device.Products is
    --    Seven is the first arm scaled by the logistic of one number a
    --    position, read from a second arm that holds one element a
    --    position: a hybrid mixture's shared expert, by its own router's
-   --    score.
+   --    score. Eight is the two arms multiplied, nothing applied; nine the
+   --    quick Gaussian unit alone, x times the logistic of 1.702 x, as four
+   --    and five are alone.
    --  @param Added False when the sequence is full, when there are not two
    --    steps to combine, or when their rows do not match.
    --  @param Kept False when nothing on the host reads this step's answer,

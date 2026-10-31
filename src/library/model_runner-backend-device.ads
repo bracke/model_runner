@@ -1898,7 +1898,8 @@ package Model_Runner.Backend.Device is
    --  @param Gate The gating arm of the feed-forward.
    --  @param Up The other arm.
    --  @param Down The projection back down to the layer's width.
-   --  @param Unit Which unit the combination applies.
+   --  @param Unit Which unit the combination applies; five, the quick
+   --    Gaussian unit, only on a feed-forward without a gate.
    --  @param Keys Receives the rotated keys, Positions of them.
    --  @param Values Receives the values, Positions of them.
    --  @param Into Receives the layer's output, Positions of them.

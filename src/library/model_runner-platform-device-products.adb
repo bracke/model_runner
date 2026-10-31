@@ -14236,7 +14236,7 @@ package body Model_Runner.Platform.Device.Products is
       --  A unit alone reads the one step before it, for both arms: the
       --  kernel reads the first and not the second, and naming the same
       --  step twice is what keeps the two-arm binding as it is.
-      Alone : constant Boolean := Unit in 4 | 5;
+      Alone : constant Boolean := Unit in 4 | 5 | 9;
 
       --  The arms: named, or the two before this step -- the one before,
       --  twice, for a unit alone.
@@ -14262,7 +14262,7 @@ package body Model_Runner.Platform.Device.Products is
                  elsif not Alone
                  then Steps.Items (First).Rows /= Steps.Items (Second).Rows
                  else False)
-        or else Unit > 8
+        or else Unit > 9
         or else (Unit = 3
                  and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
                            or else Model_Runner.Numerics."<=" (Limit, 0.0)))
@@ -17512,7 +17512,7 @@ package body Model_Runner.Platform.Device.Products is
                      if not Many
                        and then Only > 0
                        and then Steps.Items (Only).Blends
-                       and then Steps.Items (Only).Unit in 0 | 1 | 3 | 4 | 5
+                       and then Steps.Items (Only).Unit in 0 | 1 | 3 | 4 | 5 | 9
                        and then Halved (Only)
                      then
                         Halved (Which) := True;

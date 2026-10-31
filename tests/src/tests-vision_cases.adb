@@ -6,6 +6,7 @@ with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
 with AUnit.Assertions;
 with Interfaces;
+with Model_Runner.Backend.Device;
 
 with Fixtures;
 with Model_Runner.Byte_Sources.Memory;
@@ -2284,20 +2285,23 @@ package body Tests.Vision_Cases is
 
    --  The Qwen encoder's shape, written small: four-pixel patches walked
    --  in windows of two, a position grid of four a side, two heads of
-   --  four -- one pair turned by the row and one by the column -- and a
-   --  merger over a window's four rows.
+   --  sixty-four -- half the pairs turned by the row and half by the
+   --  column -- and a merger over a window's four rows. The width and the
+   --  feed-forward are whole tiles of the device's, so that its whole
+   --  layer takes the blocks unpadded, and differ, so that the shape
+   --  says which projection is the way up.
    Patch_Q  : constant := 4;
    Merge_Q  : constant := 2;
    Grid_Q   : constant := 4;
-   Width_Q  : constant := 8;
+   Width_Q  : constant := 128;
    Heads_Q  : constant := 2;
    Head_Q   : constant := Width_Q / Heads_Q;
-   Feed_Q   : constant := 16;
+   Feed_Q   : constant := 256;
    Blocks_Q : constant := 2;
    --  Wider than the merge, as a 27B's 5120 is wider than its 4608: the
    --  merger's way out is then the largest view the host decodes, and a
    --  buffer sized without it ran off its end.
-   Text_Q   : constant := 40;
+   Text_Q   : constant := 640;
    Joined_Q : constant := Width_Q * Merge_Q * Merge_Q;
    Elements_Q : constant := 3 * Patch_Q * Patch_Q;
    Cells_Q  : constant := Grid_Q * Grid_Q;
@@ -3200,6 +3204,77 @@ package body Tests.Vision_Cases is
       T.Free (Rows);
       Vision.Close (Eyes);
    end The_Qwen2_Projector_Encodes_As_The_Reference;
+
+   --  Qwen2-VL's blocks whole on the device: each turned by its table of
+   --  rows and columns, its feed-forward through the quick unit, the
+   --  answer the reference's to the half-precision rounding -- and not
+   --  the per-product path's to the bit, which is what says the blocks
+   --  went whole. Passes with a note where no device opens.
+   procedure The_Qwen2_Blocks_Run_Whole_On_The_Device
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Whole, Apart : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+      Ready   : Boolean;
+      Worst, Largest : Long_Float := 0.0;
+      Differs : Boolean := False;
+   begin
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+      declare
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for At_Pixel in Data'Range loop
+            Data (At_Pixel) := B.Byte ((At_Pixel * 53) mod 251);
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6" & Natural'Image (Wide_Q) & Natural'Image (Tall_Q)
+                      & " 255 ") & Data,
+            "test", Picture, Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+      Qwen_Reference_Rows (W.all, Picture, Wanted, Second_Kind => True);
+      Write_Qwen_Projector ("obj/vision-qwen2-device.gguf", W.all,
+                            Kind => "qwen2vl_merger");
+      Vision.Open (Eyes, "obj/vision-qwen2-device.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen2-VL projector did not open");
+
+      Vision.Encode (Eyes, Picture, null, Whole, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the Qwen2-VL blocks did not encode on the device: "
+              & E.Error_Code'Image (Status.Code));
+      Model_Runner.Backend.Device.Set_Whole_Layers (False);
+      Vision.Encode (Eyes, Picture, null, Apart, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Model_Runner.Backend.Device.Set_Whole_Layers (True);
+      Vision.Close (Eyes);
+      Model_Runner.Backend.Device.Close;
+      Assert (E.Is_Ok (Status), "the Qwen2-VL blocks did not encode apart");
+      Assert (Whole /= null and then Apart /= null
+              and then Whole.all'Length = Windows_Q * Text_Q
+              and then Apart.all'Length = Whole.all'Length,
+              "the Qwen2-VL encoder on the device made the wrong rows");
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Worst := Long_Float'Max
+           (Worst, abs (Long_Float (Whole (J)) - Long_Float (Wanted (J))));
+         Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (J)));
+         Differs := Differs or else Whole (J) /= Apart (J);
+      end loop;
+      T.Free (Whole);
+      T.Free (Apart);
+      Assert (Largest > 1.0E-3 and then Worst <= 2.0E-2 * Largest,
+              "the Qwen2-VL blocks on the device differ from the reference by"
+              & Worst'Image & " of" & Largest'Image);
+      Assert (Differs, "the Qwen2-VL blocks did not run whole on the device");
+   end The_Qwen2_Blocks_Run_Whole_On_The_Device;
 
    --  A pair of frames encodes as the reference: the first frame through
    --  the first temporal weights and the second through the second, where
@@ -5657,6 +5732,9 @@ package body Tests.Vision_Cases is
          & "plain computation of the same network gives, as a grid of its "
          & "windows, scales a small picture up to the least rows, and the "
          & "cubic filter resamples as PIL does");
+      Register_Routine
+        (T, The_Qwen2_Blocks_Run_Whole_On_The_Device'Access,
+         "Qwen2-VL's blocks run whole on the device");
       Register_Routine
         (T, The_Qwen2_Projector_Encodes_As_The_Reference'Access,
          "the small projector written as Qwen2-VL's -- no grid, no patch "
