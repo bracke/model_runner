@@ -41,18 +41,25 @@ package body Model_Runner.Vision is
    procedure Free is new Ada.Unchecked_Deallocation
      (Block_Array, Block_Array_Access);
 
-   --  The two projectors this build carries.
+   --  The projectors this build carries.
    Gemma_3 : constant String := "gemma3";
    Qwen_3  : constant String := "qwen3vl_merger";
 
-   --  Qwen2-VL's merger is not Qwen3-VL's: its patches carry no bias and
-   --  no learned position (llama.cpp's qwen2vl.cpp asserts the first and
-   --  turns the patches instead), its attention reads separate queries,
-   --  keys and values, and its feed-forward is a quick GELU. It was named
-   --  as taken and failed at load on a tensor it has not got; it is
-   --  refused by name.
+   --  Qwen2-VL's merger is Qwen3-VL's with three differences, which is
+   --  why one encoder reads both: its patches carry no learned position
+   --  (llama.cpp's qwen2vl.cpp turns them and places them no other way),
+   --  nor a bias where the file has none, its attention reads separate
+   --  queries, keys and values rather than one fused projection, and its
+   --  feed-forward's unit is the quick GELU unless the file says another.
+   --  No deepstack. Qwen2.5-VL's windowed attention is another projector,
+   --  "qwen2.5vl_merger", refused by name.
+   Qwen_2  : constant String := "qwen2vl_merger";
+
+   function Is_Qwen2 (Item : Encoder) return Boolean
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_2);
+
    function Is_Qwen (Item : Encoder) return Boolean
-   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3);
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3 or else Is_Qwen2 (Item));
 
    --  MiniCPM-V's projector, a resampler over a SigLIP encoder, which the
    --  file names for the resampler rather than the model.
@@ -280,41 +287,53 @@ package body Model_Runner.Vision is
          end if;
       end;
 
-      Bind_Vector (Item, "v.patch_embd.bias", Width, Item.Patch_Bias, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-
-      --  The position grid: as many rows as the grid has cells, and a
-      --  side that is their square root.
-      declare
-         Index : constant Natural :=
-           Containers.Find_Tensor (Item.Container, "v.position_embd.weight");
-         Cells : Element_Count := 0;
-      begin
-         if Index > 0
-           and then Containers.Tensor_Rank (Item.Container, Index) = 2
-         then
-            Cells := Element_Count
-              (Containers.Tensor_Dimension (Item.Container, Index, 2));
-         end if;
-         Item.Grid := 1;
-         while Element_Count (Item.Grid + 1) ** 2 <= Cells loop
-            Item.Grid := Item.Grid + 1;
-         end loop;
-         if Cells = 0 or else Element_Count (Item.Grid) ** 2 /= Cells then
-            Status := E.Make (E.Arch_Invalid_Tensor_Shape);
-            E.Add_Text
-              (Status, "tensor", "v.position_embd.weight", E.Param_Identifier);
-            E.Add_Integer (Status, "rows", Long_Long_Integer (Cells));
-            return;
-         end if;
-         Bind (Item, "v.position_embd.weight", Cells, Width, Item.Positions,
-               Status);
+      --  Qwen2-VL's patches carry no bias where the file writes none.
+      if not Is_Qwen2 (Item)
+        or else Containers.Find_Tensor (Item.Container, "v.patch_embd.bias")
+                /= 0
+      then
+         Bind_Vector (Item, "v.patch_embd.bias", Width, Item.Patch_Bias,
+                      Status);
          if E.Is_Error (Status) then
             return;
          end if;
-      end;
+      end if;
+
+      --  Nor a position grid: the rotation alone places them.
+      Item.Gridded := not Is_Qwen2 (Item);
+
+      --  The position grid: as many rows as the grid has cells, and a
+      --  side that is their square root.
+      if Item.Gridded then
+         declare
+            Index : constant Natural :=
+              Containers.Find_Tensor (Item.Container, "v.position_embd.weight");
+            Cells : Element_Count := 0;
+         begin
+            if Index > 0
+              and then Containers.Tensor_Rank (Item.Container, Index) = 2
+            then
+               Cells := Element_Count
+                 (Containers.Tensor_Dimension (Item.Container, Index, 2));
+            end if;
+            Item.Grid := 1;
+            while Element_Count (Item.Grid + 1) ** 2 <= Cells loop
+               Item.Grid := Item.Grid + 1;
+            end loop;
+            if Cells = 0 or else Element_Count (Item.Grid) ** 2 /= Cells then
+               Status := E.Make (E.Arch_Invalid_Tensor_Shape);
+               E.Add_Text
+                 (Status, "tensor", "v.position_embd.weight", E.Param_Identifier);
+               E.Add_Integer (Status, "rows", Long_Long_Integer (Cells));
+               return;
+            end if;
+            Bind (Item, "v.position_embd.weight", Cells, Width, Item.Positions,
+                  Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
+      end if;
 
       Bind_Vector (Item, "v.post_ln.weight", Width, Item.Post_Weight, Status);
       if E.Is_Ok (Status) then
@@ -354,8 +373,18 @@ package body Model_Runner.Vision is
             Take ("ln1.bias", Width, Current.Norm_1_Bias);
             Take ("ln2.weight", Width, Current.Norm_2_Weight);
             Take ("ln2.bias", Width, Current.Norm_2_Bias);
-            Take ("attn_qkv.weight", 3 * Width, Width, Current.Fused);
-            Take ("attn_qkv.bias", 3 * Width, Current.Fused_Bias);
+            --  One fused projection, or Qwen2-VL's three apart.
+            if Is_Qwen2 (Item) then
+               Take ("attn_q.weight", Width, Width, Current.Query);
+               Take ("attn_q.bias", Width, Current.Query_Bias);
+               Take ("attn_k.weight", Width, Width, Current.Key);
+               Take ("attn_k.bias", Width, Current.Key_Bias);
+               Take ("attn_v.weight", Width, Width, Current.Value);
+               Take ("attn_v.bias", Width, Current.Value_Bias);
+            else
+               Take ("attn_qkv.weight", 3 * Width, Width, Current.Fused);
+               Take ("attn_qkv.bias", 3 * Width, Current.Fused_Bias);
+            end if;
             Take ("attn_out.weight", Width, Width, Current.Output);
             Take ("attn_out.bias", Width, Current.Output_Bias);
 
@@ -770,7 +799,7 @@ package body Model_Runner.Vision is
          Kind : constant String :=
            Containers.String_Value (Item.Container, "clip.projector_type");
       begin
-         if Kind /= Gemma_3 and then Kind /= Qwen_3
+         if Kind /= Gemma_3 and then Kind /= Qwen_3 and then Kind /= Qwen_2
            and then Kind /= Resampler
            and then Kind /= Minicpm_46
          then
@@ -780,7 +809,7 @@ package body Model_Runner.Vision is
                E.Param_Identifier);
             E.Add_Text
               (Status, "supported",
-               Gemma_3 & " " & Qwen_3 & " " & Resampler
+               Gemma_3 & " " & Qwen_3 & " " & Qwen_2 & " " & Resampler
                & " " & Minicpm_46,
                E.Param_Identifier);
             Fail (Status);
@@ -887,6 +916,66 @@ package body Model_Runner.Vision is
            (Item.Container, "clip.vision.spatial_merge_size", 1, 8, Number,
             Local);
          Item.Merge := (if E.Is_Ok (Local) then Positive (Number) else 2);
+
+         --  Qwen2-VL's feed-forward unit, as llama.cpp chooses it: the
+         --  Gaussian where clip.use_gelu says so, the quick one where
+         --  neither it nor clip.use_silu does. The logistic-weighted unit
+         --  is Qwen2.5-VL's, whose projector this does not read.
+         if Is_Qwen2 (Item) then
+            declare
+               Gelu, Silu : Boolean := False;
+               Asked : E.Error_Info;
+            begin
+               Containers.Get_Boolean
+                 (Item.Container, "clip.use_gelu", Gelu, Asked);
+               if E.Is_Error (Asked) then
+                  Gelu := False;
+               end if;
+               Containers.Get_Boolean
+                 (Item.Container, "clip.use_silu", Silu, Asked);
+               if E.Is_Error (Asked) then
+                  Silu := False;
+               end if;
+               if Silu then
+                  Status := E.Make (E.Arch_Unsupported_Projector);
+                  E.Add_Text (Status, "format", Qwen_2 & " silu",
+                              E.Param_Identifier);
+                  E.Add_Text (Status, "supported", Qwen_2, E.Param_Identifier);
+                  Fail (Status);
+                  return;
+               end if;
+               Item.Quick_Feed := not Gelu;
+            end;
+
+            --  And its pictures held between eight rows and 4096, as
+            --  llama.cpp holds Qwen2-VL's, where Qwen3-VL's least is 64.
+            Item.Least_Rows := 8;
+
+            --  And its feed-forward's width from the tensors, as llama.cpp
+            --  takes it: Qwen2-VL-2B's file states 1536 under the key,
+            --  which is the projection's width, over halves 5120 wide.
+            declare
+               Up : constant Natural :=
+                 Containers.Find_Tensor
+                   (Item.Container, "v.blk.0.ffn_up.weight");
+               Wide : Natural := 0;
+            begin
+               if Up > 0 and then Containers.Tensor_Rank (Item.Container, Up) = 2
+               then
+                  for Axis in 1 .. 2 loop
+                     if Natural (Containers.Tensor_Dimension
+                                   (Item.Container, Up, Axis)) /= Item.Width
+                     then
+                        Wide := Natural (Containers.Tensor_Dimension
+                                           (Item.Container, Up, Axis));
+                     end if;
+                  end loop;
+               end if;
+               if Wide > 0 then
+                  Item.Feed := Positive (Wide);
+               end if;
+            end;
+         end if;
 
          declare
             Length  : Natural := 0;
@@ -1458,7 +1547,9 @@ package body Model_Runner.Vision is
 
    --  Work over rows: a bias added, the Gaussian unit, a softmax or a
    --  layer normalization, each row on its own.
-   type Row_Task is (Add_Bias, Gaussian, Gaussian_Exact, Soft_Max, Normalize);
+   type Row_Task is
+     (Add_Bias, Gaussian, Gaussian_Exact, Gaussian_Quick, Soft_Max,
+      Normalize);
 
    type Row_Work is new Model_Runner.Shares.Work with record
       Task_Kind : Row_Task := Add_Bias;
@@ -1486,6 +1577,8 @@ package body Model_Runner.Vision is
                   K.GELU (Item.Target (From .. To));
                when Gaussian_Exact =>
                   K.Exact_GELU (Item.Target (From .. To));
+               when Gaussian_Quick =>
+                  K.Quick_GELU (Item.Target (From .. To));
                when Soft_Max =>
                   K.Softmax (Item.Target (From .. To), Ok);
                   if not Ok then
@@ -4460,6 +4553,22 @@ package body Model_Runner.Vision is
          Blend (Y1 * Grid + X0, FY * (1.0 - FX));
          Blend (Y1 * Grid + X1, FY * FX);
       end Position_Row;
+      --  One of Qwen2-VL's projections over Normed into its third of
+      --  every patch's row of Fused, through Attended, which nothing
+      --  holds until the attention writes it.
+      procedure Fused_From
+        (Weights : T.View; Bias : T.Real_Array_Access;
+         At_Part : Element_Count) is
+      begin
+         Multiply (Work, Normed, Patches, Weights, Attended, Bias);
+         if E.Is_Ok (Work.Status) then
+            for P in 0 .. Patches - 1 loop
+               Fused (P * 3 * Width + At_Part
+                      .. P * 3 * Width + At_Part + Width - 1) :=
+                 Attended (P * Width .. (P + 1) * Width - 1);
+            end loop;
+         end if;
+      end Fused_From;
    begin
       Work.Owner := Item'Unchecked_Access;
       Rows := null;
@@ -4627,7 +4736,7 @@ package body Model_Runner.Vision is
                 (if Paired then Item.Patch_Pair else Item.Patch_Both),
                 X, Item.Patch_Bias);
       Status := Work.Status;
-      if E.Is_Ok (Status) then
+      if E.Is_Ok (Status) and then Item.Gridded then
          for P in 0 .. Patches - 1 loop
             Position_Row (P);
             exit when E.Is_Error (Status);
@@ -4654,8 +4763,18 @@ package body Model_Runner.Vision is
             Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
                           Bias => Current.Norm_1_Bias,
                           Weight => Current.Norm_1_Weight);
-            Multiply (Work, Normed, Patches, Current.Fused, Fused,
-                      Current.Fused_Bias);
+            if Is_Qwen2 (Item) then
+               --  The three projections apart, each laid where the fused
+               --  one puts it -- a patch's queries, then its keys, then
+               --  its values -- so that the rotation and the attention
+               --  below read Qwen2-VL's as they read Qwen3-VL's.
+               Fused_From (Current.Query, Current.Query_Bias, 0);
+               Fused_From (Current.Key, Current.Key_Bias, Width);
+               Fused_From (Current.Value, Current.Value_Bias, 2 * Width);
+            else
+               Multiply (Work, Normed, Patches, Current.Fused, Fused,
+                         Current.Fused_Bias);
+            end if;
             exit when E.Is_Error (Work.Status);
             Turn;
             Attend (Work, Fused, Fused, Fused, 0, Width, 2 * Width, 3 * Width,
@@ -4671,7 +4790,10 @@ package body Model_Runner.Vision is
                           Weight => Current.Norm_2_Weight);
             Multiply (Work, Normed, Patches, Current.Feed_In, Hidden,
                       Current.Feed_In_Bias);
-            Rows_Through (Work, Gaussian, Hidden, Patches, Feed);
+            Rows_Through (Work,
+                          (if Item.Quick_Feed then Gaussian_Quick
+                           else Gaussian),
+                          Hidden, Patches, Feed);
             Multiply (Work, Hidden, Patches, Current.Feed_Out, Normed,
                       Current.Feed_Out_Bias);
             exit when E.Is_Error (Work.Status);

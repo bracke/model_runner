@@ -15234,6 +15234,7 @@ package body Tests.Inference_Cases is
          (Tiny_Model.Lfm3, Tiny_Model.Plain),
          (Tiny_Model.Lfm3, Tiny_Model.Windowed),
          (Tiny_Model.Lfm3, Tiny_Model.Reaching),
+         (Tiny_Model.Qwen2_VL, Tiny_Model.Plain),
          (Tiny_Model.GPT_OSS, Tiny_Model.Windowed),
          (Tiny_Model.Falcon, Tiny_Model.Plain),
          (Tiny_Model.Starcoder2, Tiny_Model.Plain)];

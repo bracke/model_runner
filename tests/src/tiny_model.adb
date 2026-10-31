@@ -508,6 +508,7 @@ package body Tiny_Model is
            when Qwen3     => "qwen3",
            when Qwen3_MoE => "qwen3moe",
            when Qwen3_VL  => "qwen3vl",
+           when Qwen2_VL  => "qwen2vl",
            when GPT_OSS   => "gpt-oss",
            when Gemma     => "gemma",
            when Gemma2    => "gemma2",
@@ -707,6 +708,19 @@ package body Tiny_Model is
            (Builder, Prefix & ".attention.temperature_scale", 0.1);
          Fixtures.Add_U32
            (Builder, Prefix & ".attention.temperature_length", 8_192);
+      end if;
+
+      --  Qwen2-VL's text model states the sections it deals in runs,
+      --  always: on text, where the three parts are equal, the plain
+      --  rotation.
+      if Kind = Qwen2_VL then
+         Fixtures.Begin_Array
+           (Builder, Prefix & ".rope.dimension_sections", G.Value_Int32, 4);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 1);
+         Fixtures.Int32_Element (Builder, 0);
+         Fixtures.Int32_Element (Builder, 0);
+         Fixtures.End_Array (Builder);
       end if;
 
       --  GLM4's vision-capable conversions state sections, which turn
@@ -1817,7 +1831,8 @@ package body Tiny_Model is
          --  And gpt-oss, as llama.cpp's converter writes it: the fixture
          --  wrote none, and an engine that read none passed it while the
          --  published file answered nonsense.
-         if Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2 | Stablelm
+         if Kind in Qwen2 | Qwen2_VL | Bert | Jina_Bert_V2 | Glm4 | Starcoder2
+                  | Stablelm
                   | GPT_OSS
            and then not Omit_Biases
          then

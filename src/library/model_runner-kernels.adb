@@ -3176,6 +3176,27 @@ package body Model_Runner.Kernels is
       end loop;
    end Exact_GELU;
 
+   ----------------
+   -- Quick_GELU --
+   ----------------
+
+   procedure Quick_GELU (Target : in out Real_Array) is
+   begin
+      for Index in Target'Range loop
+         declare
+            Value : constant Wide_Real := Wide_Real (Target (Index));
+         begin
+            --  The exponent held where binary64 holds it: past eighty
+            --  the logistic is nought or one to the last bit anyway.
+            Target (Index) :=
+              Real (Value
+                    / (1.0 + N.Exp (Wide_Real'Max
+                                      (-80.0,
+                                       Wide_Real'Min (80.0, -1.702 * Value)))));
+         end;
+      end loop;
+   end Quick_GELU;
+
    -------------------
    -- Apply_Rotary --
    -------------------

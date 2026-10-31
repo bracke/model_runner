@@ -1743,7 +1743,8 @@ begin
          --  Bert biases the same three and writes them as Qwen2
          --  does, one vector a projection rather than three in one,
          --  and jina-bert-v2 does the same.
-         if Item.Settings.Kind in Qwen2 | Bert | Jina_Bert_V2 | Starcoder2
+         if Item.Settings.Kind in Qwen2 | Qwen2_VL | Bert | Jina_Bert_V2
+                                  | Starcoder2
          then
             Resolve_Norm
               (Item, Source, Layer_Key (Index, "attn_q.bias"),

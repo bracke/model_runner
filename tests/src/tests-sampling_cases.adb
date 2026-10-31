@@ -1243,6 +1243,21 @@ package body Tests.Sampling_Cases is
                  and then K.Part_Of (32, Q, P) = 1,
                  "the interleaved deal is not time, row, column, round");
       end;
+
+      --  And in runs, at the sections Qwen2-VL states, as llama.cpp's
+      --  MROPE deals them: sixteen pairs to time, twenty-four to the row,
+      --  twenty-four to the column, round again past sixty-four.
+      declare
+         Q : constant K.Rotary_Sections :=
+           (T => 16, H => 24, W => 24, E => 0, Interleaved => False);
+         P : constant K.Rotary_Place := (T => 1, H => 2, W => 3);
+      begin
+         Assert (K.Part_Of (0, Q, P) = 1 and then K.Part_Of (15, Q, P) = 1
+                 and then K.Part_Of (16, Q, P) = 2 and then K.Part_Of (39, Q, P) = 2
+                 and then K.Part_Of (40, Q, P) = 3 and then K.Part_Of (63, Q, P) = 3
+                 and then K.Part_Of (64, Q, P) = 1,
+                 "the deal in runs is not time, then row, then column");
+      end;
    end Sections_Deal_The_Pairs;
 
    --  A head is rotated in pairs. Llama's weights are laid out for the pairs

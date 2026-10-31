@@ -272,9 +272,9 @@ The largest infra investment; also the largest device win for models already
 
 ## Phase 6 — Vision projectors
 
-16. ⏳ **Partial. Done: gemma3, qwen3vl_merger, resampler and minicpmv4_6
-    (MiniCPM-V). Beyond:** (`vision.adb`). Per projector: qwen2vl_merger (no
-    patch bias, rotated patches, separate q/k/v, quick GELU), pixtral, llama4/mtmd,
+16. ⏳ **Partial. Done: gemma3, qwen3vl_merger, qwen2vl_merger, resampler and
+    minicpmv4_6 (MiniCPM-V). Beyond:** (`vision.adb`). Per projector:
+    qwen2.5vl_merger (window attention, RMS norms), pixtral, llama4/mtmd,
     InternVL, SmolVLM, LLaVA. Each is a distinct patch-embed + merge shape.
     MiniCPM-V is the first with a resampler rather than a pool or merge -- a
     fixed bank of learned query rows reading the SigLIP patch states by

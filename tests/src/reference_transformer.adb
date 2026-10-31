@@ -2634,6 +2634,7 @@ package body Reference_Transformer is
          when Qwen3     => "qwen3.",
          when Qwen3_MoE => "qwen3moe.",
          when Qwen3_VL  => "qwen3vl.",
+         when Qwen2_VL  => "qwen2vl.",
          when Mellum => "mellum.",
          when GPT_OSS   => "gpt-oss.",
          when Gemma     => "gemma.",
@@ -3188,6 +3189,8 @@ package body Reference_Transformer is
             Item.Kind := Qwen3_MoE;
          elsif Named = "qwen3vl" then
             Item.Kind := Qwen3_VL;
+         elsif Named = "qwen2vl" then
+            Item.Kind := Qwen2_VL;
          elsif Named = "mellum" then
             Item.Kind := Mellum;
          elsif Named = "gpt-oss" then
@@ -4438,8 +4441,8 @@ package body Reference_Transformer is
 
             --  Bert biases the same three and writes them apart, as
             --  Qwen2 does.
-            if Item.Kind in Qwen2 | Bert | Jina_Bert_V2 | Glm4 | Starcoder2 | Stablelm
-                          | GPT_OSS
+            if Item.Kind in Qwen2 | Qwen2_VL | Bert | Jina_Bert_V2 | Glm4
+                          | Starcoder2 | Stablelm | GPT_OSS
             then
                Current.Query_Bias :=
                  Read_Vector (Layer_Name (Index, "attn_q.bias"), Present);

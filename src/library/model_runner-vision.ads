@@ -397,6 +397,14 @@ private
       --  rows a picture may become.
       Merge         : Positive := 2;
       Grid          : Positive := 48;
+
+      --  Whether the patches are placed by the learned grid, as Qwen3-VL's
+      --  are; Qwen2-VL's carry no grid and are placed by the rotation
+      --  alone. And whether the feed-forward's unit is the quick one,
+      --  which a file stating neither clip.use_gelu nor clip.use_silu
+      --  takes, as llama.cpp does: Qwen2-VL's.
+      Gridded       : Boolean := True;
+      Quick_Feed    : Boolean := False;
       Patch_Sum     : T.Real_Array_Access := null;
       Patch_Both    : T.View := T.Empty_View;
 

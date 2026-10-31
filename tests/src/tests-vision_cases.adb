@@ -2405,6 +2405,7 @@ package body Tests.Vision_Cases is
      (Path : String; W : Qwen_Weights;
       Kind : String := "qwen3vl_merger";
       Deep_Block : Integer := -1) is
+      Second_Kind : constant Boolean := Kind = "qwen2vl_merger";
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
       use Ada.Streams.Stream_IO;
@@ -2442,17 +2443,24 @@ package body Tests.Vision_Cases is
          Fixtures.Float_Element (Builder, 0.5);
       end loop;
       Fixtures.End_Array (Builder);
-      Fixtures.Begin_Array
-        (Builder, "clip.vision.is_deepstack_layers", G.Value_Bool, Blocks_Q);
-      for Index in 1 .. Blocks_Q loop
-         Fixtures.Bool_Element (Builder, Index - 1 = Deep_Block);
-      end loop;
-      Fixtures.End_Array (Builder);
+      --  Qwen2-VL's projector carries no deepstack, no patch bias and no
+      --  position grid, and writes its queries, keys and values apart.
+      if not Second_Kind then
+         Fixtures.Begin_Array
+           (Builder, "clip.vision.is_deepstack_layers", G.Value_Bool,
+            Blocks_Q);
+         for Index in 1 .. Blocks_Q loop
+            Fixtures.Bool_Element (Builder, Index - 1 = Deep_Block);
+         end loop;
+         Fixtures.End_Array (Builder);
+      end if;
 
       Tensor ("v.patch_embd.weight", [Patch_Q, Patch_Q, 3, Width_Q], W.Patch_0);
       Tensor ("v.patch_embd.weight.1", [Patch_Q, Patch_Q, 3, Width_Q], W.Patch_1);
-      Tensor ("v.patch_embd.bias", [Width_Q], W.Patch_B);
-      Tensor ("v.position_embd.weight", [Width_Q, Cells_Q], W.Pos);
+      if not Second_Kind then
+         Tensor ("v.patch_embd.bias", [Width_Q], W.Patch_B);
+         Tensor ("v.position_embd.weight", [Width_Q, Cells_Q], W.Pos);
+      end if;
       for Index in W.Blocks'Range loop
          declare
             Prefix : constant String :=
@@ -2463,8 +2471,30 @@ package body Tests.Vision_Cases is
             Tensor (Prefix & "ln1.bias", [Width_Q], Current.Ln1_B);
             Tensor (Prefix & "ln2.weight", [Width_Q], Current.Ln2_W);
             Tensor (Prefix & "ln2.bias", [Width_Q], Current.Ln2_B);
-            Tensor (Prefix & "attn_qkv.weight", [Width_Q, Triple_Q], Current.QKV);
-            Tensor (Prefix & "attn_qkv.bias", [Triple_Q], Current.QKV_B);
+            if Second_Kind then
+               --  The fused rows apart: the queries' Width rows first,
+               --  then the keys', then the values'.
+               declare
+                  Square : constant N.Element_Count := Width_Q * Width_Q;
+               begin
+                  Tensor (Prefix & "attn_q.weight", [Width_Q, Width_Q],
+                          Current.QKV (0 .. Square - 1));
+                  Tensor (Prefix & "attn_k.weight", [Width_Q, Width_Q],
+                          Current.QKV (Square .. 2 * Square - 1));
+                  Tensor (Prefix & "attn_v.weight", [Width_Q, Width_Q],
+                          Current.QKV (2 * Square .. 3 * Square - 1));
+                  Tensor (Prefix & "attn_q.bias", [Width_Q],
+                          Current.QKV_B (0 .. Width_Q - 1));
+                  Tensor (Prefix & "attn_k.bias", [Width_Q],
+                          Current.QKV_B (Width_Q .. 2 * Width_Q - 1));
+                  Tensor (Prefix & "attn_v.bias", [Width_Q],
+                          Current.QKV_B (2 * Width_Q .. 3 * Width_Q - 1));
+               end;
+            else
+               Tensor (Prefix & "attn_qkv.weight", [Width_Q, Triple_Q],
+                       Current.QKV);
+               Tensor (Prefix & "attn_qkv.bias", [Triple_Q], Current.QKV_B);
+            end if;
             Tensor (Prefix & "attn_out.weight", [Width_Q, Width_Q], Current.O);
             Tensor (Prefix & "attn_out.bias", [Width_Q], Current.O_B);
             Tensor (Prefix & "ffn_up.weight", [Width_Q, Feed_Q], Current.Up);
@@ -2519,7 +2549,8 @@ package body Tests.Vision_Cases is
      (W : Qwen_Weights; Picture : Images.Raster; Rows : out N.Wide_Real_Array;
       Second : Images.Raster := (others => <>);
       Deep_Block : Integer := -1;
-      Deep : access N.Wide_Real_Array := null)
+      Deep : access N.Wide_Real_Array := null;
+      Second_Kind : Boolean := False)
    is
       Paired : constant Boolean := Second.Pixels /= null;
       subtype WR is N.Wide_Real;
@@ -2640,7 +2671,11 @@ package body Tests.Vision_Cases is
       for P in 0 .. Patches_Q - 1 loop
          for R in 0 .. Width_Q - 1 loop
             declare
-               Sum : WR := WR (W.Patch_B (N.Element_Count (R))) + Position (P, R);
+               --  Qwen2-VL's patches carry neither a bias nor a place
+               --  of the grid's.
+               Sum : WR :=
+                 (if Second_Kind then 0.0
+                  else WR (W.Patch_B (N.Element_Count (R))) + Position (P, R));
             begin
                for C in 0 .. 2 loop
                   for KY in 0 .. Patch_Q - 1 loop
@@ -2783,7 +2818,12 @@ package body Tests.Vision_Cases is
                         Sum := Sum + H (P, C)
                           * WR (Current.Up (N.Element_Count (R * Width_Q + C)));
                      end loop;
-                     F (P, R) := GELU (Sum);
+                     --  Qwen2-VL's unit is the quick one, x times the
+                     --  logistic of 1.702 x.
+                     F (P, R) :=
+                       (if Second_Kind
+                        then Sum / (1.0 + Wide_Math.Exp (-1.702 * Sum))
+                        else GELU (Sum));
                   end;
                end loop;
                for R in 0 .. Width_Q - 1 loop
@@ -3058,16 +3098,18 @@ package body Tests.Vision_Cases is
       end;
       Vision.Close (Eyes);
 
-      --  Qwen2-VL's merger is not this shape -- no patch bias, no learned
-      --  position, separate queries, keys and values, a quick GELU -- and
-      --  a file of it is refused by name, not taken and failed at load.
+      --  Qwen2.5-VL's merger is not a shape this reads -- windowed
+      --  attention, a gated feed-forward, root-mean-square norms -- and a
+      --  file of it is refused by name, not taken and failed at load.
+      --  Written apart from the projector the tests after this one read.
       Write_Qwen_Projector
-        ("obj/vision-qwen.gguf", W.all, Kind => "qwen2vl_merger");
-      Vision.Open (Eyes, "obj/vision-qwen.gguf", Status);
+        ("obj/vision-qwen25.gguf", W.all, Kind => "qwen2.5vl_merger");
+      Vision.Open (Eyes, "obj/vision-qwen25.gguf", Status);
       Assert (Status.Code = E.Arch_Unsupported_Projector,
-              "a Qwen2-VL projector was not refused by name: "
+              "a Qwen2.5-VL projector was not refused by name: "
               & E.Error_Code'Image (Status.Code));
-      Assert (not Vision.Is_Ready (Eyes), "a refused Qwen2-VL projector reads as ready");
+      Assert (not Vision.Is_Ready (Eyes),
+              "a refused Qwen2.5-VL projector reads as ready");
       Vision.Close (Eyes);
 
       --  The cubic filter: a two-pixel row 0 and 200 stretched to four
@@ -3096,6 +3138,68 @@ package body Tests.Vision_Cases is
 
       Images.Free (Picture);
    end The_Qwen_Projector_Encodes_As_The_Reference;
+
+   --  The same small projector written as Qwen2-VL's: no deepstack, no
+   --  patch bias, no position grid, its queries, keys and values apart,
+   --  and the quick unit in its feed-forward. Encoded, it gives the rows
+   --  the plain computation does with those differences and no other.
+   procedure The_Qwen2_Projector_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted  : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for At_Pixel in Data'Range loop
+            Data (At_Pixel) := B.Byte ((At_Pixel * 53) mod 251);
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6" & Natural'Image (Wide_Q) & Natural'Image (Tall_Q)
+                      & " 255 ") & Data,
+            "test", Picture, Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+
+      Qwen_Reference_Rows (W.all, Picture, Wanted, Second_Kind => True);
+
+      Write_Qwen_Projector ("obj/vision-qwen2.gguf", W.all,
+                            Kind => "qwen2vl_merger");
+      Vision.Open (Eyes, "obj/vision-qwen2.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen2-VL projector did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Is_Ready (Eyes)
+              and then Vision.Placed_Rows (Eyes)
+              and then Vision.Stacked_Rows (Eyes) = 0
+              and then Vision.Row_Width (Eyes) = Text_Q
+              and then Vision.Projector (Eyes) = "qwen2vl_merger",
+              "the small Qwen2-VL projector's shape was misread");
+
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the small Qwen2-VL projector did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Grid_Rows = Windows_Y_Q and then Grid_Columns = Windows_X_Q
+              and then Rows /= null
+              and then Rows.all'Length = Windows_Q * Text_Q,
+              "the Qwen2-VL encoder made the wrong rows");
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "Qwen2-VL row element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Rows (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
+      Vision.Close (Eyes);
+   end The_Qwen2_Projector_Encodes_As_The_Reference;
 
    --  A pair of frames encodes as the reference: the first frame through
    --  the first temporal weights and the second through the second, where
@@ -5553,6 +5657,11 @@ package body Tests.Vision_Cases is
          & "plain computation of the same network gives, as a grid of its "
          & "windows, scales a small picture up to the least rows, and the "
          & "cubic filter resamples as PIL does");
+      Register_Routine
+        (T, The_Qwen2_Projector_Encodes_As_The_Reference'Access,
+         "the small projector written as Qwen2-VL's -- no grid, no patch "
+         & "bias, its projections apart, the quick unit -- encodes as the "
+         & "reference does");
       Register_Routine
         (T, The_Qwen_Deepstack_Encodes_As_The_Reference'Access,
          "a projector's deepstack merges its block's state as the plain computation does");

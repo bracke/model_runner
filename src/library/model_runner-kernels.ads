@@ -728,6 +728,14 @@ package Model_Runner.Kernels is
    --  @param Target Values to transform, updated in place.
    procedure Exact_GELU (Target : in out Real_Array);
 
+   --  The quick Gaussian unit, x times the logistic of 1.702 x: the one
+   --  Qwen2-VL's and CLIP's encoders were trained with, which llama.cpp
+   --  computes as its FFN_GELU_QUICK. Within about two hundredths of the
+   --  exact unit near one, so not a stand-in for it either way.
+   --
+   --  @param Target Values to transform, updated in place.
+   procedure Quick_GELU (Target : in out Real_Array);
+
    --  How a head's elements are paired for the rotation.
    --
    --  Interleaved rotates element 2i against element 2i + 1 within a head,

@@ -90,7 +90,8 @@ begin
                     | Gemma3 | Phi3 | Falcon | Phi2 | GPT2 | Bert
                     | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                     | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
-                    | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL | Lfm3 =>
+                    | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL | Lfm3
+                    | Qwen2_VL =>
                    K.Split);
 
             --  What a position may see. Every architecture here
@@ -1775,8 +1776,10 @@ begin
    --  turns: stated as four counts, the fourth unused, and dealt
    --  interleaved. A text token has the three parts equal, so a model
    --  read without them rotates the same; they matter to a picture's
-   --  rows, which have a row and a column of their own.
-   if Settings.Kind in Qwen35 | Qwen35_MoE | Qwen3_VL then
+   --  rows, which have a row and a column of their own. Qwen2-VL states
+   --  them the same way and deals them in runs, llama.cpp's MROPE where
+   --  the others are its IMROPE.
+   if Settings.Kind in Qwen35 | Qwen35_MoE | Qwen3_VL | Qwen2_VL then
       declare
          Key    : constant String :=
            Model_Key (Settings.Kind, "rope.dimension_sections");
@@ -1797,7 +1800,7 @@ begin
                   when others => Settings.Sections.E := Natural (Count);
                end case;
             end loop;
-            Settings.Sections.Interleaved := True;
+            Settings.Sections.Interleaved := Settings.Kind /= Qwen2_VL;
             if E.Is_Error (Found) then
                Settings.Sections := K.No_Sections;
             end if;
