@@ -2675,6 +2675,27 @@ package Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural) return Boolean;
 
+   --  The window word that says an attention step's queries attend in
+   --  segments rather than over its span: this added to where, in the
+   --  cache's floats, a table of each query's first and last key begins,
+   --  two a query in order. Read only by attention_split.comp.
+   Segmented_Window : constant := 2 ** 30;
+
+   --  Whether a batch of this shape, attending both ways, is taken by a
+   --  kernel that reads segments -- the one a short span's heads go to,
+   --  which every step that attends in segments is held to.
+   --
+   --  @param Item Engine to ask.
+   --  @param Positions How many queries the batch has.
+   --  @param Head_Size How wide a query head is.
+   --  @param Value_Size How wide a value head is.
+   --  @return True where the step may attend in segments.
+   function Attends_In_Segments
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean;
+
    --  Where the half-precision copy begins, in halves of the buffer it
    --  is in. Nought, the copy having a buffer of its own; kept as a
    --  question rather than written down as nought by its callers,

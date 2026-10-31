@@ -3524,10 +3524,17 @@ package body Model_Runner.Backend.Device is
       Stream_Feed    : Boolean := False;
       MLA_Absorb     : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
-      MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0)
+      MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0;
+      Segments_At    : Natural := 0)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
+
+      --  The window word the attention is given: the layer's sliding
+      --  window, or where its segments' table lies, flagged.
+      Attend_Window : constant Natural :=
+        (if Segments_At > 0 then Products.Segmented_Window + Segments_At
+         else Window);
 
       Slots : constant Model_Runner.Numerics.Element_Count :=
         Model_Runner.Numerics.Element_Count (Natural'Max (Positions, 1));
@@ -3887,7 +3894,19 @@ package body Model_Runner.Backend.Device is
                          or else Rotary > Head_Size
                          or else Rotary mod 2 /= 0
                          or else Heads = 0
-                         or else Keys = null or else Values = null)
+                         or else Keys = null or else Values = null
+                         --  Segments only both ways, with no sliding window,
+                         --  on the kernel that reads them, and with the
+                         --  table inside the flag's bits.
+                         or else (Segments_At > 0
+                                  and then (Causal or else Window /= 0
+                                            or else Segments_At
+                                                    >= Products.Segmented_Window
+                                            or else Packed.K_Bits /= 0
+                                            or else not Products.Attends_In_Segments
+                                                          (Engine, Positions,
+                                                           Head_Size,
+                                                           Value_Size))))
            --  The normalizations, as the architecture arranges them: one on
            --  the way in and one before the feed-forward, the second absent
            --  where the two halves run side by side, both absent and the
@@ -3954,14 +3973,21 @@ package body Model_Runner.Backend.Device is
                     and then (Post_Feed_Norm.all'Length /= Norm_Span
                               or else (Experts > 0 and then not After)))
            --  The expert biases are a mixture's; a plain feed-forward's
-           --  are the one slice each on its two projections.
+           --  are the one slice each on its projections, a gated one's on
+           --  both arms or neither.
            or else (not No_Feed
                     and then not Mixed
-                    and then (Gate_Bias /= null
-                              or else (Up_Bias /= null
-                                       and then (Gated
-                                                 or else Up_Bias.all'Length
-                                                         /= Up.Rows))
+                    and then ((if Gated
+                               then (Gate_Bias = null) /= (Up_Bias = null)
+                                    or else (Gate_Bias /= null
+                                             and then (Gate_Bias.all'Length
+                                                         /= Gate.Rows
+                                                       or else Up_Bias.all'Length
+                                                               /= Up.Rows))
+                               else Gate_Bias /= null
+                                    or else (Up_Bias /= null
+                                             and then Up_Bias.all'Length
+                                                      /= Up.Rows))
                               or else (Down_Bias /= null
                                        and then Down_Bias.all'Length /= Width)))
          then
@@ -5322,7 +5348,7 @@ package body Model_Runner.Backend.Device is
                Model_Runner.Numerics.Element_Count (Unpacked.V_Base),
                KV_Width, V_Width, Scale, Cap,
                Added,
-               Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+               Window => Attend_Window, Causal => Causal, Max_Bias => Max_Bias,
                Chained => True, From_Step => Step_Q_Turned, Kept => False,
                Sinks_At => Sinks_At);
             if not Added then
@@ -5336,7 +5362,7 @@ package body Model_Runner.Backend.Device is
          Products.Add_Attention
            (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last,
             K_Base, V_Base, KV_Width, V_Width, Scale, Cap, Added,
-            Window => Window, Causal => Causal, Max_Bias => Max_Bias,
+            Window => Attend_Window, Causal => Causal, Max_Bias => Max_Bias,
             Chained => True, From_Step => Step_Q_Turned, Kept => False,
             Packed => Packed, Sinks_At => Sinks_At,
             Pages_At => Pages_At, Page_Shift => Page_Shift);
@@ -6194,7 +6220,27 @@ package body Model_Runner.Backend.Device is
             --  Gated, the unit on the gate arm multiplied by the up arm;
             --  not, the unit alone on the one projection up, with its bias
             --  added first because the bias is the projection's.
-            if Gated then
+            if Gated and then Gate_Bias /= null then
+               --  Each arm's bias on its own product -- the gate's the
+               --  step before the up's -- and the combination told which
+               --  two it reads, the biases standing between.
+               declare
+                  Step_Up   : Natural := Products.Length (Steps);
+                  Step_Gate : Natural := Step_Up - 1;
+               begin
+                  Add_Projection_Bias (Gate_Bias, Gate.Rows, Step_Gate, Added);
+                  if Added then
+                     Add_Projection_Bias (Up_Bias, Up.Rows, Step_Up, Added);
+                  end if;
+                  if not Added then
+                     return;
+                  end if;
+                  Products.Add_Combination
+                    (Steps, Unit, Added, Kept => False,
+                     Alpha => Alpha, Limit => Limit,
+                     From_Step => Step_Gate, Other_Step => Step_Up);
+               end;
+            elsif Gated then
                Products.Add_Combination (Steps, Unit, Added, Kept => False,
                                          Alpha => Alpha, Limit => Limit);
             else

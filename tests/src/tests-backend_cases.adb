@@ -12636,6 +12636,123 @@ package body Tests.Backend_Cases is
                  & N.Real'Image (Worst) & " away from the queries one at a "
                  & "time");
       end Compare_Both_Ways;
+
+      --  And in segments, every query seeing only the positions of its
+      --  own -- a picture's windowed attention, Qwen2.5-VL's -- by a table
+      --  of each query's first and last in the cache's floats, against
+      --  the queries one at a time, each told its segment. Segments of
+      --  uneven lengths, one shorter than a block of sixteen and one
+      --  crossing two; and too few queries for the kernel that reads them
+      --  is said to be so.
+      procedure Compare_In_Segments (Head_Size : Positive) is
+         Many    : constant := 160;
+         Starts  : constant array (0 .. 4) of Natural := [0, 40, 52, 110, Many];
+         Span    : constant N.Element_Count :=
+           N.Element_Count (Heads * Head_Size);
+         KV_Span : constant N.Element_Count :=
+           N.Element_Count (Groups * Head_Size);
+         Room    : constant N.Element_Count := N.Element_Count (Many) * KV_Span;
+         Table_At : constant N.Element_Count := 2 * Room;
+
+         Cache   : T.Real_Array_Access :=
+           new N.Real_Array (0 .. Table_At + 2 * Many - 1);
+         Query   : N.Real_Array (0 .. Span * Many - 1);
+         Alone   : N.Real_Array (0 .. Span * Many - 1) := [others => 0.0];
+         Segmented : N.Real_Array (0 .. Span * Many - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+         Moved  : N.Real := 0.0;
+      begin
+         Assert (Products.Attends_In_Segments (Engine, Many, Head_Size, Head_Size),
+                 "a batch of" & Natural'Image (Many) & " heads of"
+                 & Positive'Image (Head_Size) & " is not said to attend in segments");
+         Assert (not Products.Attends_In_Segments (Engine, 4, Head_Size, Head_Size),
+                 "four queries are said to attend in segments");
+         for Index in 0 .. Table_At - 1 loop
+            Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+         end loop;
+         for Segment in 0 .. 3 loop
+            for Q in Starts (Segment) .. Starts (Segment + 1) - 1 loop
+               Cache (Table_At + 2 * N.Element_Count (Q)) := N.Real (Starts (Segment));
+               Cache (Table_At + 2 * N.Element_Count (Q) + 1) :=
+                 N.Real (Starts (Segment + 1) - 1);
+            end loop;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+         end loop;
+
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+         Assert (Ok, "the segmented cache would not be reserved");
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         Assert (Ok, "the segmented cache would not be written");
+
+         for Segment in 0 .. 3 loop
+            for Which in Starts (Segment) .. Starts (Segment + 1) - 1 loop
+               declare
+                  One : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+               begin
+                  Products.Attend_Resident
+                    (Engine, Query (Span * N.Element_Count (Which)
+                                    .. Span * N.Element_Count (Which + 1) - 1),
+                     Heads => Heads, Head_Size => Head_Size,
+                     Value_Size => Head_Size, Group_Size => Heads / Groups,
+                     First => Starts (Segment), Last => Starts (Segment + 1) - 1,
+                     K_Base => 0, V_Base => Room,
+                     KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+                     Scale => 0.0625, Cap => 0.0, Target => One, Ok => Ok);
+                  Assert (Ok, "a query of a segment on its own was refused");
+                  Alone (Span * N.Element_Count (Which)
+                         .. Span * N.Element_Count (Which + 1) - 1) := One;
+               end;
+            end loop;
+         end loop;
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+            Group_Size => Heads / Groups, First => 0, Last => Many - 1,
+            K_Base => 0, V_Base => Room,
+            KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+            Scale => 0.0625, Cap => 0.0, Added => Added, Causal => False,
+            Window => Products.Segmented_Window + Natural (Table_At));
+         Assert (Added, "a sequence would not take the segmented step");
+
+         Products.Run (Engine, Steps, Query, Many, Segmented, Ok, Halted);
+         Assert (Ok, "the segmented batch was refused");
+
+         --  And the same batch seeing everything, which the segments
+         --  must have moved well past the rounding.
+         declare
+            Everything : N.Real_Array (0 .. Span * Many - 1) := [others => 0.0];
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Attention
+              (Steps,
+               Heads => Heads, Head_Size => Head_Size, Value_Size => Head_Size,
+               Group_Size => Heads / Groups, First => 0, Last => Many - 1,
+               K_Base => 0, V_Base => Room,
+               KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
+               Scale => 0.0625, Cap => 0.0, Added => Added, Causal => False);
+            Products.Run (Engine, Steps, Query, Many, Everything, Ok, Halted);
+            for Index in Segmented'Range loop
+               Worst := N.Real'Max (Worst, abs (Alone (Index) - Segmented (Index)));
+               Moved := N.Real'Max (Moved, abs (Everything (Index) - Segmented (Index)));
+            end loop;
+         end;
+         T.Free (Cache);
+
+         Assert (Worst <= Near,
+                 "a batch in segments with heads" & Positive'Image (Head_Size)
+                 & " answers" & N.Real'Image (Worst)
+                 & " away from the queries one at a time");
+         Assert (Moved > 10.0 * Near,
+                 "a batch in segments answers as if it saw everything");
+      end Compare_In_Segments;
    begin
       Devices.Open (Held, Found);
 
@@ -12697,6 +12814,9 @@ package body Tests.Backend_Cases is
       --  values sixty-four lanes a position.
       Compare (Head_Size => 256, Positions => 300);
       Compare_Both_Ways;
+      Compare_In_Segments (Head_Size => 64);
+      Compare_In_Segments (Head_Size => 80);
+      Compare_In_Segments (Head_Size => 128);
 
       Products.Close (Engine);
       Devices.Close (Opened);
@@ -14685,7 +14805,8 @@ package body Tests.Backend_Cases is
         (T, A_Wide_Head_Attends_Through_The_Matrix_Like_A_Narrow_One'Access,
          "a batch with heads a hundred and twenty-eight wide attends "
          & "through the matrix instruction and says what the queries one "
-         & "at a time say, as a head of sixty-four does");
+         & "at a time say, as a head of sixty-four does, and in segments "
+         & "each query its own");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Few_Positions_Deep_Attend_As_One_At_A_Time_Does'Access,
          "a round's few positions over a cache past the few-position span, "

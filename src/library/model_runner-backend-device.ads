@@ -2099,6 +2099,12 @@ package Model_Runner.Backend.Device is
    --    model's layer whose feed-forward the processor holds, run whole on
    --    the device for a batch long enough that the upload is the lesser
    --    cost.
+   --  @param Segments_At Where, in the cache's floats, a table of each
+   --    position's first and last key begins, two a position, for a
+   --    batch whose positions attend only within their own segments --
+   --    Qwen2.5-VL's windows of a picture -- or zero for one attending
+   --    over First .. Last. Refused but both ways, without a window, and
+   --    where the short span's kernel would not take the batch.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -2212,7 +2218,8 @@ package Model_Runner.Backend.Device is
       Stream_Feed    : Boolean := False;
       MLA_Absorb     : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
-      MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0);
+      MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0;
+      Segments_At    : Natural := 0);
 
    --  Whether the last Whole_Layer refused a layer it was carried into and
    --  could not bring that layer's input home from the device. A caller

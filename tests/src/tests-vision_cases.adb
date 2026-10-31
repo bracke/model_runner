@@ -3374,6 +3374,88 @@ package body Tests.Vision_Cases is
       Assert (Differs, "the Qwen2-VL blocks did not run whole on the device");
    end The_Qwen2_Blocks_Run_Whole_On_The_Device;
 
+   --  Qwen2.5-VL's blocks whole on the device too: the root-mean-square
+   --  norms, the gated feed-forward with its two biases, and the windowed
+   --  block attending within the segments its windows were walked into --
+   --  the reference's rows to the half-precision rounding, and not the
+   --  per-product path's to the bit. Passes with a note where no device
+   --  opens.
+   procedure The_Qwen25_Blocks_Run_Whole_On_The_Device
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted, Unwindowed : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Whole, Apart : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+      Ready   : Boolean;
+      Worst, Largest, Windows_Move : Long_Float := 0.0;
+      Differs : Boolean := False;
+   begin
+      Model_Runner.Backend.Device.Open (Ready);
+      if not Ready then
+         return;
+      end if;
+      declare
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for At_Pixel in Data'Range loop
+            Data (At_Pixel) := B.Byte ((At_Pixel * 53) mod 251);
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6" & Natural'Image (Wide_Q) & Natural'Image (Tall_Q)
+                      & " 255 ") & Data,
+            "test", Picture, Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+      Qwen_Reference_Rows (W.all, Picture, Wanted, Second_Kind => True,
+                           Third_Kind => True);
+      Qwen_Reference_Rows (W.all, Picture, Unwindowed, Second_Kind => True,
+                           Third_Kind => False);
+      Write_Qwen_Projector ("obj/vision-qwen25-device.gguf", W.all,
+                            Kind => "qwen2.5vl_merger");
+      Vision.Open (Eyes, "obj/vision-qwen25-device.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen2.5-VL projector did not open");
+
+      Vision.Encode (Eyes, Picture, null, Whole, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the Qwen2.5-VL blocks did not encode on the device: "
+              & E.Error_Code'Image (Status.Code));
+      Model_Runner.Backend.Device.Set_Whole_Layers (False);
+      Vision.Encode (Eyes, Picture, null, Apart, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Model_Runner.Backend.Device.Set_Whole_Layers (True);
+      Vision.Close (Eyes);
+      Model_Runner.Backend.Device.Close;
+      Assert (E.Is_Ok (Status), "the Qwen2.5-VL blocks did not encode apart");
+      Assert (Whole /= null and then Apart /= null
+              and then Whole.all'Length = Windows_Q * Text_Q
+              and then Apart.all'Length = Whole.all'Length,
+              "the Qwen2.5-VL encoder on the device made the wrong rows");
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Worst := Long_Float'Max
+           (Worst, abs (Long_Float (Whole (J)) - Long_Float (Wanted (J))));
+         Largest := Long_Float'Max (Largest, abs Long_Float (Wanted (J)));
+         Differs := Differs or else Whole (J) /= Apart (J);
+         Windows_Move := Long_Float'Max
+           (Windows_Move, abs Long_Float (Wanted (J) - Unwindowed (J)));
+      end loop;
+      T.Free (Whole);
+      T.Free (Apart);
+      Assert (Largest > 1.0E-3 and then Worst <= 2.0E-2 * Largest,
+              "the Qwen2.5-VL blocks on the device differ from the reference by"
+              & Worst'Image & " of" & Largest'Image);
+      Assert (Differs, "the Qwen2.5-VL blocks did not run whole on the device");
+      --  And the windows were kept: what they move the rows by is well
+      --  past the rounding.
+      Assert (Windows_Move > 4.0 * Worst,
+              "the Qwen2.5-VL device rows are no nearer the windowed reference: "
+              & Worst'Image & " against the windows'" & Windows_Move'Image);
+   end The_Qwen25_Blocks_Run_Whole_On_The_Device;
+
    --  The small projector written as Qwen2.5-VL's -- root-mean-square
    --  norms with no bias, a feed-forward gated by the logistic-weighted
    --  unit, and the first block attending only within windows of three
@@ -5904,6 +5986,9 @@ package body Tests.Vision_Cases is
          & "plain computation of the same network gives, as a grid of its "
          & "windows, scales a small picture up to the least rows, and the "
          & "cubic filter resamples as PIL does");
+      Register_Routine
+        (T, The_Qwen25_Blocks_Run_Whole_On_The_Device'Access,
+         "Qwen2.5-VL's blocks run whole on the device, its windows as segments");
       Register_Routine
         (T, The_Qwen25_Projector_Encodes_As_The_Reference'Access,
          "the small projector written as Qwen2.5-VL's -- norms by the root "

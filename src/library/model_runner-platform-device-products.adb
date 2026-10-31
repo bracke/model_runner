@@ -816,6 +816,25 @@ package body Model_Runner.Platform.Device.Products is
    is (Matrix_Kernel (Item, Positions, Head_Size, Value_Size)
        /= Null_Handle);
 
+   function Attends_In_Segments
+     (Item       : Engine;
+      Positions  : Natural;
+      Head_Size  : Natural;
+      Value_Size : Natural) return Boolean
+   is (Matrix_Kernel (Item, Positions, Head_Size, Value_Size,
+                      Span => 0, Causal => False)
+       in Item.Matrix_Split_Attend | Item.Matrix_Split_Narrow_Attend
+        | Item.Matrix_Split_Mid_Attend | Item.Matrix_Split_Wider_Attend
+       and then Matrix_Kernel (Item, Positions, Head_Size, Value_Size,
+                               Span => 0, Causal => False) /= Null_Handle);
+
+   --  The span a step's kernel is chosen by: its own, or none where it
+   --  attends in segments, which only a short span's kernel reads.
+   function Chosen_Span (First, Last, Window : Natural) return Natural
+   is (if Window >= Segmented_Window then 0
+       elsif Last >= First then Last - First + 1
+       else 0);
+
    --  Whether attention reads the half-precision copy rather than the
    --  cache proper: a round always, where the kernel exists, and a token
    --  where the copy is preferred. A token read the cache proper alone
@@ -17895,7 +17914,7 @@ package body Model_Runner.Platform.Device.Products is
                                     V_Base => This.V_Base,
                                     KV_Width => This.KV_Width,
                                     V_Width => This.V_Width,
-                                    Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0),
+                                    Span => Chosen_Span (This.First, This.Last, This.Window),
                                     Causal => This.Causal)));
 
                   declare
@@ -18016,9 +18035,8 @@ package body Model_Runner.Platform.Device.Products is
                           Attend_Groups
                             (Item, Seated, This.Head_Size, This.Value_Size,
                              Rounding => False,
-                             Span => (if This.Last >= This.First
-                                      then This.Last - This.First + 1
-                                      else 0),
+                             Span => Chosen_Span
+                                       (This.First, This.Last, This.Window),
                              Causal => This.Causal);
                      begin
                         --  The matrix kernel takes its blocks along the

@@ -2930,7 +2930,12 @@ package body Model_Runner.Vision is
    --  by, two a pair a patch, over the first Rotary components of a head,
    --  paired with the one half a rotary on; none for an encoder that adds
    --  its places to the patches. Unit is the feed-forward's: one for the
-   --  Gaussian in the tanh form, five for the quick one.
+   --  Gaussian in the tanh form, five for the quick one, nought for the
+   --  logistic-weighted one on a gated feed-forward. Segments, where the
+   --  encoder has windows, is each patch's first and last key of its
+   --  window, two a patch, which every block but each Window_Every-th
+   --  attends within; norms by the root mean square where the encoder's
+   --  are.
    procedure Blocks_On_Device
      (Item       : in out Encoder;
       Work       : in out Workspace;
@@ -2943,7 +2948,8 @@ package body Model_Runner.Vision is
       Upto       : Natural := Natural'Last;
       Turns      : N.Wide_Real_Array := Model_Runner.Backend.Device.No_Turns;
       Rotary     : Natural := 0;
-      Unit       : Natural := 1)
+      Unit       : Natural := 1;
+      Segments   : T.Real_Array_Access := null)
    is
       Final : constant Integer := Integer'Min (Upto, Item.Blocks - 1);
       Width : constant Element_Count := Element_Count (Item.Width);
@@ -2969,7 +2975,7 @@ package body Model_Runner.Vision is
          Keys_M, Values_M : T.Real_Array_Access := null;
          Carried : Boolean := False;
          Ok      : Boolean := True;
-         K_Base, V_Base : Element_Count;
+         K_Base, V_Base, Table_At : Element_Count;
       begin
          if Model_Runner.Backend.Device.Is_Ready
            and then not Exactly
@@ -2984,9 +2990,14 @@ package body Model_Runner.Vision is
             end if;
             K_Base := Work.Cache_Base;
             V_Base := K_Base + Patches * Width_P;
+            Table_At := V_Base + Patches * Width_P;
             Model_Runner.Backend.Device.Reserve_Cache
-              (V_Base + Patches * Width_P, V_Base + Patches * Width_P, Ok);
+              (Table_At + 2 * Patches, Table_At + 2 * Patches, Ok);
             Ok := Ok and then Keys_M /= null and then Values_M /= null;
+            if Ok and then Segments /= null then
+               Model_Runner.Backend.Device.Put_Cache
+                 (Table_At, Segments.all (0 .. 2 * Patches - 1), Ok);
+            end if;
 
             while Ok and then First_Host <= Final loop
                declare
@@ -3034,6 +3045,16 @@ package body Model_Runner.Vision is
                      Into (Into'First .. Into'First + Feed - 1) :=
                        Current.Feed_In_Bias.all;
                   end Up_Fill;
+                  procedure Gate_Fill (Into : in out T.Real_Array) is
+                  begin
+                     Into (Into'First .. Into'First + Feed - 1) :=
+                       Current.Feed_Gate_Bias.all;
+                  end Gate_Fill;
+
+                  --  Whether this block attends within its windows.
+                  Windowed : constant Boolean :=
+                    Segments /= null and then Item.Window_Every > 0
+                    and then (First_Host + 1) mod Item.Window_Every /= 0;
 
                   Hidden_P : constant Element_Count :=
                     Rounded (Feed, Pad_Columns);
@@ -3044,9 +3065,12 @@ package body Model_Runner.Vision is
                     and then Current.Feed_In_Bias /= null
                     and then Current.Feed_Out_Bias /= null
                     and then Current.Norm_1_Weight /= null
-                    and then Current.Norm_1_Bias /= null
                     and then Current.Norm_2_Weight /= null
-                    and then Current.Norm_2_Bias /= null;
+                    and then (Item.Rms_Norms
+                              or else (Current.Norm_1_Bias /= null
+                                       and then Current.Norm_2_Bias /= null))
+                    and then (not Item.Gated_Feed
+                              or else Current.Feed_Gate_Bias /= null);
                begin
                   exit when not Usable;
                   declare
@@ -3061,6 +3085,20 @@ package body Model_Runner.Vision is
                      Up : constant T.View := Padded_To
                        (Work, Current.Feed_In, Hidden_P,
                         Rounded (Current.Feed_In.Columns, Pad_Columns));
+                     Gp : constant T.View :=
+                       (if Item.Gated_Feed
+                        then Padded_To
+                               (Work, Current.Feed_Gate, Hidden_P,
+                                Rounded (Current.Feed_Gate.Columns,
+                                         Pad_Columns))
+                        else T.Empty_View);
+                     Gb : constant T.Real_Array_Access :=
+                       (if Item.Gated_Feed
+                        then Kept_Values
+                               (Work, Current.Feed_Gate_Bias.all
+                                        (Current.Feed_Gate_Bias.all'First)'Address,
+                                Hidden_P, Gate_Fill'Access)
+                        else null);
                      Dn : constant T.View := Padded_To
                        (Work, Current.Feed_Out,
                         Rounded (Current.Feed_Out.Rows, Pad_Rows), Hidden_P);
@@ -3080,14 +3118,18 @@ package body Model_Runner.Vision is
                        (Work, Current.Feed_In_Bias.all
                                 (Current.Feed_In_Bias.all'First)'Address,
                         Hidden_P, Up_Fill'Access);
-                     N1 : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Norm_1_Weight.all
-                                (Current.Norm_1_Weight.all'First)'Address,
-                        2 * Width, Pair_1'Access);
-                     N2 : constant T.Real_Array_Access := Kept_Values
-                       (Work, Current.Norm_2_Weight.all
-                                (Current.Norm_2_Weight.all'First)'Address,
-                        2 * Width, Pair_2'Access);
+                     N1 : constant T.Real_Array_Access :=
+                       (if Item.Rms_Norms then Current.Norm_1_Weight
+                        else Kept_Values
+                          (Work, Current.Norm_1_Weight.all
+                                   (Current.Norm_1_Weight.all'First)'Address,
+                           2 * Width, Pair_1'Access));
+                     N2 : constant T.Real_Array_Access :=
+                       (if Item.Rms_Norms then Current.Norm_2_Weight
+                        else Kept_Values
+                          (Work, Current.Norm_2_Weight.all
+                                   (Current.Norm_2_Weight.all'First)'Address,
+                           2 * Width, Pair_2'Access));
                      Last : constant Boolean := First_Host = Final;
                   begin
                      exit when Qp.Rows /= Width_P or else Kp.Rows /= Width_P
@@ -3095,7 +3137,9 @@ package body Model_Runner.Vision is
                        or else Up.Rows /= Hidden_P or else Dn.Columns /= Hidden_P
                        or else Dn.Rows /= Width
                        or else Qb = null or else Kb = null or else Vb = null
-                       or else Ub = null or else N1 = null or else N2 = null;
+                       or else Ub = null or else N1 = null or else N2 = null
+                       or else (Item.Gated_Feed
+                                and then (Gp.Rows /= Hidden_P or else Gb = null));
 
                      Model_Runner.Backend.Device.Attend_Exactly (False);
                      Model_Runner.Backend.Device.Whole_Layer
@@ -3109,7 +3153,7 @@ package body Model_Runner.Vision is
                         K_Base, V_Base,
                         Natural (Width_P), Natural (Width_P),
                         Scale_D, 0.0,
-                        Op, T.Empty_View, Up, Dn, Unit,
+                        Op, Gp, Up, Dn, Unit,
                         Keys_M, Values_M, X, Ok,
                         Positions => Natural (Patches),
                         Causal    => False,
@@ -3121,7 +3165,14 @@ package body Model_Runner.Vision is
                         Down_Bias => Current.Feed_Out_Bias,
                         Query_Bias => Qb, Key_Bias => Kb, Value_Bias => Vb,
                         Out_Bias  => Current.Output_Bias,
-                        Shifted   => True);
+                        Gate_Bias => Gb,
+                        Shifted   => not Item.Rms_Norms,
+                        Segments_At =>
+                          (if Windowed
+                           then Natural (Element_Count'Min
+                                           (Table_At,
+                                            Element_Count (Natural'Last)))
+                           else 0));
                      exit when not Ok;
                      Carried := not Last;
                      First_Host := First_Host + 1;
@@ -4904,18 +4955,32 @@ package body Model_Runner.Vision is
       end if;
       Work.Status := Status;
 
-      --  Qwen2-VL's blocks whole on the device where it is open: its
-      --  projections apart are what Whole_Layer takes, the rotation a
-      --  table of each patch's row and column turns, the feed-forward
-      --  the quick unit or the tanh one. What it does not take, and every
+      --  Qwen2-VL's and Qwen2.5-VL's blocks whole on the device where it
+      --  is open: their projections apart are what Whole_Layer takes, the
+      --  rotation a table of each patch's row and column turns, the
+      --  feed-forward the quick unit, the tanh one or the gated one, and
+      --  a windowed block's patches attending within the segments the
+      --  walk laid their windows in. What it does not take, and every
       --  block of Qwen3-VL's fused projection, goes the way below.
-      if Is_Qwen2 (Item) and then E.Is_Ok (Work.Status) then
+      if Is_Apart (Item) and then E.Is_Ok (Work.Status) then
          declare
             Pairs : constant Element_Count := Head / 2;
             Half  : constant Element_Count := Pairs / 2;
             Turns : Turn_Access :=
               new N.Wide_Real_Array (0 .. Patches * Head - 1);
+            Segments : T.Real_Array_Access := null;
          begin
+            if Item.Window_Every > 0 then
+               T.Allocate (2 * Patches, Segments);
+               if Segments /= null then
+                  for Which in 0 .. Window_Count - 1 loop
+                     for P in Starts (Which) .. Starts (Which + 1) - 1 loop
+                        Segments (2 * P) := Real (Starts (Which));
+                        Segments (2 * P + 1) := Real (Starts (Which + 1) - 1);
+                     end loop;
+                  end loop;
+               end if;
+            end if;
             for P in 0 .. Patches - 1 loop
                for Pair in 0 .. Pairs - 1 loop
                   declare
@@ -4935,14 +5000,21 @@ package body Model_Runner.Vision is
                   end;
                end loop;
             end loop;
-            Status := Work.Status;
-            Blocks_On_Device
-              (Item, Work, X, Patches, Cancel, Status, First_Host,
-               Turns  => Turns.all,
-               Rotary => Natural (Head),
-               Unit   => (if Item.Quick_Feed then 5 else 1));
-            Work.Status := Status;
+            --  A windowed encoder without its table goes the way below,
+            --  which walks the windows itself.
+            if Item.Window_Every = 0 or else Segments /= null then
+               Status := Work.Status;
+               Blocks_On_Device
+                 (Item, Work, X, Patches, Cancel, Status, First_Host,
+                  Turns  => Turns.all,
+                  Rotary => Natural (Head),
+                  Unit   => (if Item.Gated_Feed then 0
+                             elsif Item.Quick_Feed then 5 else 1),
+                  Segments => Segments);
+               Work.Status := Status;
+            end if;
             Free (Turns);
+            T.Free (Segments);
          end;
       end if;
 

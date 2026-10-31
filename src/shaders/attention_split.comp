@@ -24,6 +24,12 @@
 //  as HEAD_64, HEAD_80 and HEAD_256 for the other widths that kernel is
 //  compiled at.
 //
+//  A window word with bit thirty set is not a sliding window: the bits
+//  below it are where, in the cache's floats, each query's own first and
+//  last key lie, two a query -- the segments a picture's windowed blocks
+//  attend within, Qwen2.5-VL's, each patch seeing only its own window.
+//  The engine sends that only here, never to the deep pipeline.
+//
 //  Two things decided whether it was faster at all. Shared memory's rows
 //  are padded: at their own width every row a matrix load reads begins
 //  on the same bank, and the attention over 468 positions took 3.49 ms a
@@ -192,8 +198,16 @@ void main() {
     uint last_max = shape.last + (causal != 0u ? slot_high : 0u);
     uint last_low = shape.last + (causal != 0u ? slot_low  : 0u);
 
+    bool segmented = shape.window >= 0x40000000u;
+    uint segments  = shape.window & 0x3fffffffu;
+
     uint first_min = shape.first;
-    if (shape.window > 0u) {
+    if (segmented) {
+        //  The segments run in order, so the block's first row starts
+        //  the earliest and its last ends the latest.
+        first_min = uint (kvf[segments + 2u * slot_low]);
+        last_max  = uint (kvf[segments + 2u * slot_high + 1u]);
+    } else if (shape.window > 0u) {
         first_min = last_low + 1u > shape.window
                     ? last_low + 1u - shape.window : 0u;
     }
@@ -264,7 +278,10 @@ void main() {
             uint la   = shape.last + (causal != 0u ? slot : 0u);
             uint fi   = shape.first;
 
-            if (shape.window > 0u) {
+            if (segmented) {
+                fi = uint (kvf[segments + 2u * slot]);
+                la = uint (kvf[segments + 2u * slot + 1u]);
+            } else if (shape.window > 0u) {
                 fi = la + 1u > shape.window ? la + 1u - shape.window : 0u;
             }
             mine_rows[e] = r;
