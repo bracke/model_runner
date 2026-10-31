@@ -757,8 +757,7 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural;
       Span       : Natural := 0;
-      Causal     : Boolean := True;
-      Sunk       : Boolean := False) return Address
+      Causal     : Boolean := True) return Address
    is (if Span >= Deep_Span
          and then Deep_Kernel (Item, Positions, Head_Size, Value_Size, Causal)
                   /= Null_Handle
@@ -773,17 +772,16 @@ package body Model_Runner.Platform.Device.Products is
          or else Head_Size mod 16 /= 0
          or else Value_Size mod 16 /= 0
        then Null_Handle
-       --  Not with sinks: gpt-oss-20b's perplexity over chunks of 120
-       --  read 4.1096 that way against this compilation's 4.1289 and the
-       --  processor's 4.1280. Not a fault of the split: the 128-wide
-       --  compilation of this kernel reads 4.1354 at the same heads, and
-       --  one of gpt-oss's first ten layers alone on the split moves it
-       --  by as much as the whole -- its sinks' attention is that
-       --  sensitive to how the weights round, where qwen3-8b's, LFM3's
-       --  and TinyLlama's move by a hundredth of a per cent.
+       --  Sinks too: gpt-oss-20b's attention moves its perplexity by up
+       --  to half a per cent on whichever kernel reads it -- over chunks
+       --  of 120 of one text 4.1096 here, 4.1289 on the other
+       --  compilation, 4.1354 on the 128-wide one and 4.1280 on the
+       --  processor; over README chunks of 256, 25.4737 here, 25.4616 there
+       --  and 25.5580 on the processor -- neither kernel the nearer on
+       --  both, and its prompt of 1,257 reads 621 -> 635 tokens a second
+       --  this way.
        elsif Head_Size <= Matrix_Head
          and then Value_Size <= Matrix_Head
-         and then not Sunk
          and then Item.Matrix_Split_Narrow_Attend /= Null_Handle
        then Item.Matrix_Split_Narrow_Attend
        elsif Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
@@ -1040,12 +1038,11 @@ package body Model_Runner.Platform.Device.Products is
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Span       : Natural := Bundle_Least;
-      Causal     : Boolean := True;
-      Sunk       : Boolean := False) return Address
+      Causal     : Boolean := True) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then Matrix_Kernel (Item, Positions, Head_Size, Value_Size, Span,
-                           Causal, Sunk)
+                           Causal)
        elsif not Rounding
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
@@ -17899,8 +17896,7 @@ package body Model_Runner.Platform.Device.Products is
                                     KV_Width => This.KV_Width,
                                     V_Width => This.V_Width,
                                     Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0),
-                                    Causal => This.Causal,
-                                    Sunk => This.Sinks /= 0)));
+                                    Causal => This.Causal)));
 
                   declare
                      Few : constant Boolean :=
