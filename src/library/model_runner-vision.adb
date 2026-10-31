@@ -51,15 +51,29 @@ package body Model_Runner.Vision is
    --  nor a bias where the file has none, its attention reads separate
    --  queries, keys and values rather than one fused projection, and its
    --  feed-forward's unit is the quick GELU unless the file says another.
-   --  No deepstack. Qwen2.5-VL's windowed attention is another projector,
-   --  "qwen2.5vl_merger", refused by name.
+   --  No deepstack.
    Qwen_2  : constant String := "qwen2vl_merger";
+
+   --  Qwen2.5-VL's: Qwen2-VL's projections apart, with root-mean-square
+   --  norms that carry no bias, a feed-forward gated by the
+   --  logistic-weighted unit, and every block but each n_wa_pattern-th
+   --  attending only within its window of the picture -- 112 pixels a
+   --  side unless the file says another.
+   Qwen_25 : constant String := "qwen2.5vl_merger";
 
    function Is_Qwen2 (Item : Encoder) return Boolean
    is (Item.Kind (1 .. Item.Kind_Last) = Qwen_2);
 
+   function Is_Qwen25 (Item : Encoder) return Boolean
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_25);
+
+   --  Whether the projections are three apart and nothing places the
+   --  patches but the rotation: Qwen2-VL's and Qwen2.5-VL's.
+   function Is_Apart (Item : Encoder) return Boolean
+   is (Is_Qwen2 (Item) or else Is_Qwen25 (Item));
+
    function Is_Qwen (Item : Encoder) return Boolean
-   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3 or else Is_Qwen2 (Item));
+   is (Item.Kind (1 .. Item.Kind_Last) = Qwen_3 or else Is_Apart (Item));
 
    --  MiniCPM-V's projector, a resampler over a SigLIP encoder, which the
    --  file names for the resampler rather than the model.
@@ -288,7 +302,7 @@ package body Model_Runner.Vision is
       end;
 
       --  Qwen2-VL's patches carry no bias where the file writes none.
-      if not Is_Qwen2 (Item)
+      if not Is_Apart (Item)
         or else Containers.Find_Tensor (Item.Container, "v.patch_embd.bias")
                 /= 0
       then
@@ -300,7 +314,7 @@ package body Model_Runner.Vision is
       end if;
 
       --  Nor a position grid: the rotation alone places them.
-      Item.Gridded := not Is_Qwen2 (Item);
+      Item.Gridded := not Is_Apart (Item);
 
       --  The position grid: as many rows as the grid has cells, and a
       --  side that is their square root.
@@ -336,7 +350,7 @@ package body Model_Runner.Vision is
       end if;
 
       Bind_Vector (Item, "v.post_ln.weight", Width, Item.Post_Weight, Status);
-      if E.Is_Ok (Status) then
+      if E.Is_Ok (Status) and then not Item.Rms_Norms then
          Bind_Vector (Item, "v.post_ln.bias", Width, Item.Post_Bias, Status);
       end if;
       if E.Is_Error (Status) then
@@ -369,12 +383,15 @@ package body Model_Runner.Vision is
                end if;
             end Take;
          begin
+            --  The norms' gains, and their biases where they centre.
             Take ("ln1.weight", Width, Current.Norm_1_Weight);
-            Take ("ln1.bias", Width, Current.Norm_1_Bias);
             Take ("ln2.weight", Width, Current.Norm_2_Weight);
-            Take ("ln2.bias", Width, Current.Norm_2_Bias);
+            if not Item.Rms_Norms then
+               Take ("ln1.bias", Width, Current.Norm_1_Bias);
+               Take ("ln2.bias", Width, Current.Norm_2_Bias);
+            end if;
             --  One fused projection, or Qwen2-VL's three apart.
-            if Is_Qwen2 (Item) then
+            if Is_Apart (Item) then
                Take ("attn_q.weight", Width, Width, Current.Query);
                Take ("attn_q.bias", Width, Current.Query_Bias);
                Take ("attn_k.weight", Width, Width, Current.Key);
@@ -407,6 +424,10 @@ package body Model_Runner.Vision is
                begin
                   Take (In_Name & ".weight", Feed, Width, Current.Feed_In);
                   Take (In_Name & ".bias", Feed, Current.Feed_In_Bias);
+                  if Item.Gated_Feed then
+                     Take ("ffn_gate.weight", Feed, Width, Current.Feed_Gate);
+                     Take ("ffn_gate.bias", Feed, Current.Feed_Gate_Bias);
+                  end if;
                   Take (Out_Name & ".weight", Width, Feed, Current.Feed_Out);
                   Take (Out_Name & ".bias", Width, Current.Feed_Out_Bias);
                end;
@@ -800,6 +821,7 @@ package body Model_Runner.Vision is
            Containers.String_Value (Item.Container, "clip.projector_type");
       begin
          if Kind /= Gemma_3 and then Kind /= Qwen_3 and then Kind /= Qwen_2
+           and then Kind /= Qwen_25
            and then Kind /= Resampler
            and then Kind /= Minicpm_46
          then
@@ -809,7 +831,8 @@ package body Model_Runner.Vision is
                E.Param_Identifier);
             E.Add_Text
               (Status, "supported",
-               Gemma_3 & " " & Qwen_3 & " " & Qwen_2 & " " & Resampler
+               Gemma_3 & " " & Qwen_3 & " " & Qwen_2 & " " & Qwen_25 & " "
+               & Resampler
                & " " & Minicpm_46,
                E.Param_Identifier);
             Fail (Status);
@@ -818,6 +841,15 @@ package body Model_Runner.Vision is
          Item.Kind_Last := Kind'Length;
          Item.Kind (1 .. Kind'Length) := Kind;
       end;
+
+      --  What a kind sets below starts where a fresh encoder has it, so
+      --  that one reopened for another kind keeps nothing of the last.
+      Item.Quick_Feed := False;
+      Item.Least_Rows := 64;
+      Item.Rms_Norms := False;
+      Item.Gated_Feed := False;
+      Item.Window_Every := 0;
+      Item.Window_Pixels := 0;
 
       --  Its shape.
       Containers.Get_Integer
@@ -975,6 +1007,44 @@ package body Model_Runner.Vision is
                   Item.Feed := Positive (Wide);
                end if;
             end;
+         end if;
+
+         --  Qwen2.5-VL's: the logistic-weighted unit on a gated
+         --  feed-forward, which its files state and the reader needs; norms
+         --  by the root mean square; and which blocks attend within their
+         --  windows, and how wide a window is.
+         if Is_Qwen25 (Item) then
+            declare
+               Silu  : Boolean := False;
+               Asked : E.Error_Info;
+            begin
+               Containers.Get_Boolean
+                 (Item.Container, "clip.use_silu", Silu, Asked);
+               if E.Is_Error (Asked) or else not Silu then
+                  Status := E.Make (E.Arch_Unsupported_Projector);
+                  E.Add_Text (Status, "format", Qwen_25 & " without silu",
+                              E.Param_Identifier);
+                  E.Add_Text (Status, "supported", Qwen_25, E.Param_Identifier);
+                  Fail (Status);
+                  return;
+               end if;
+            end;
+            Item.Gated_Feed := True;
+            Item.Rms_Norms := True;
+            Item.Least_Rows := 8;
+            Containers.Get_Integer
+              (Item.Container, "clip.vision.n_wa_pattern", 1,
+               Long_Long_Integer (Item.Blocks), Number, Status);
+            if E.Is_Error (Status) then
+               Fail (Status);
+               return;
+            end if;
+            Item.Window_Every := Natural (Number);
+            Containers.Get_Integer
+              (Item.Container, "clip.vision.window_size", 1, 4096, Number,
+               Local);
+            Item.Window_Pixels := (if E.Is_Ok (Local) then Natural (Number)
+                                   else 112);
          end if;
 
          declare
@@ -1547,9 +1617,12 @@ package body Model_Runner.Vision is
 
    --  Work over rows: a bias added, the Gaussian unit, a softmax or a
    --  layer normalization, each row on its own.
+   --  Normalize_Root is the root-mean-square norm, a gain and no bias;
+   --  Weighted_Gate the logistic-weighted unit on Target multiplied by
+   --  Source, a gated feed-forward's two arms joined.
    type Row_Task is
      (Add_Bias, Gaussian, Gaussian_Exact, Gaussian_Quick, Soft_Max,
-      Normalize);
+      Normalize, Normalize_Root, Weighted_Gate);
 
    type Row_Work is new Model_Runner.Shares.Work with record
       Task_Kind : Row_Task := Add_Bias;
@@ -1588,6 +1661,16 @@ package body Model_Runner.Vision is
                   K.Layer_Norm
                     (Item.Source (From .. To), Item.Weight.all, Item.Bias.all,
                      Item.Epsilon, Item.Target (From .. To));
+               when Normalize_Root =>
+                  K.RMS_Norm
+                    (Item.Source (From .. To), Item.Weight.all,
+                     Item.Epsilon, Item.Target (From .. To));
+               when Weighted_Gate =>
+                  K.SiLU (Item.Target (From .. To));
+                  for At_Element in From .. To loop
+                     Item.Target (At_Element) :=
+                       Item.Target (At_Element) * Item.Source (At_Element);
+                  end loop;
             end case;
          end;
       end loop;
@@ -2423,6 +2506,9 @@ package body Model_Runner.Vision is
    --
    --  @param Took True when the device did it all; False leaves Attended
    --    untouched and the pool to do it.
+   --  @param Into_At The row of Attended the first query's answer goes
+   --    to: a window's patches attending among themselves answer into
+   --    their own rows.
    procedure Attend_On_Device
      (Work     : in out Workspace;
       Q, Kv, V : T.Real_Array_Access;
@@ -2431,7 +2517,8 @@ package body Model_Runner.Vision is
       Attended : T.Real_Array_Access;
       Width, Patches, Heads, Head : Element_Count;
       Took     : out Boolean;
-      Queries  : Element_Count := 0)
+      Queries  : Element_Count := 0;
+      Into_At  : Element_Count := 0)
    is
       --  How many rows ask: every patch of a picture attending to the
       --  others, or a resampler's own queries attending to the patches.
@@ -2557,7 +2644,8 @@ package body Model_Runner.Vision is
                      K_Base, V_Base,
                      Natural (Width), Natural (Width),
                      Scale, 0.0,
-                     Attended (From * Width .. (From + Take) * Width - 1), Ok,
+                     Attended ((Into_At + From) * Width
+                               .. (Into_At + From + Take) * Width - 1), Ok,
                      Positions => Natural (Take), Causal => False);
                else
                   for P in 0 .. Take - 1 loop
@@ -2577,8 +2665,9 @@ package body Model_Runner.Vision is
                      for P in 0 .. Take - 1 loop
                         for H in 0 .. Heads - 1 loop
                            Attended
-                             ((From + P) * Width + H * Head
-                              .. (From + P) * Width + H * Head + Head - 1) :=
+                             ((Into_At + From + P) * Width + H * Head
+                              .. (Into_At + From + P) * Width + H * Head
+                                 + Head - 1) :=
                              Answer (P * Width_P + H * Head_P
                                      .. P * Width_P + H * Head_P + Head - 1);
                         end loop;
@@ -2602,7 +2691,8 @@ package body Model_Runner.Vision is
       Stride   : Element_Count;
       Attended : T.Real_Array_Access;
       Width, Patches, Heads, Head : Element_Count;
-      K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access)
+      K_Head, Q_Head, V_Head_T, Scores, Blended : T.Real_Array_Access;
+      Into_At  : Element_Count := 0)
    is
       Scale : constant Real :=
         Real (N.Wide_Real'(1.0) / Elementary.Sqrt (N.Wide_Real (Head)));
@@ -2615,7 +2705,7 @@ package body Model_Runner.Vision is
 
       Attend_On_Device
         (Work, Q, Kv, V, Q_At, K_At, V_At, Stride, Attended,
-         Width, Patches, Heads, Head, Took);
+         Width, Patches, Heads, Head, Took, Into_At => Into_At);
       if Took then
          return;
       end if;
@@ -2651,7 +2741,8 @@ package body Model_Runner.Vision is
          end if;
          exit when E.Is_Error (Work.Status);
          for P in 0 .. Patches - 1 loop
-            Attended (P * Width + H * Head .. P * Width + (H + 1) * Head - 1)
+            Attended ((Into_At + P) * Width + H * Head
+                      .. (Into_At + P) * Width + (H + 1) * Head - 1)
               := Blended (P * Head .. (P + 1) * Head - 1);
          end loop;
       end loop;
@@ -4455,6 +4546,26 @@ package body Model_Runner.Vision is
         (N.Wide_Real_Array, Turn_Access);
       First_Host : Natural := 0;
 
+      --  Where the walk put each merged row, by its place in the
+      --  picture read row by row; and the first patch of each window a
+      --  windowed block attends within, one past the last at the end.
+      --  Without windows the walk is the picture's own order, one
+      --  window of every patch.
+      type Index_Array is array (Element_Count range <>) of Element_Count;
+      type Index_Access is access Index_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (Index_Array, Index_Access);
+      Order, Starts : Index_Access := null;
+      Window_Count : Element_Count := 1;
+
+      --  The gating arm of a gated feed-forward, Patches rows of Feed.
+      Gate_Arm : T.Real_Array_Access := null;
+
+      --  The norm the blocks take: centred with a bias, or by the root
+      --  mean square with none.
+      Norm_Task : constant Row_Task :=
+        (if Item.Rms_Norms then Normalize_Root else Normalize);
+
       Resampled, Resampled_2 : Model_Runner.Images.Raster;
       Work : Workspace;
 
@@ -4473,6 +4584,9 @@ package body Model_Runner.Vision is
          T.Free (Merged);
          T.Free (Deep_Rows);
          T.Free (Main_Rows);
+         T.Free (Gate_Arm);
+         Free (Order);
+         Free (Starts);
          Free (Places);
          Clear (Work);
          Model_Runner.Images.Free (Resampled);
@@ -4649,8 +4763,13 @@ package body Model_Runner.Vision is
          Element_Count'Max (Joined, Element_Count'Max (Feed, Patch_In)),
          Element_Count'Max (Joined, Element_Count'Max (3 * Width, Feed)));
       Places := new Patch_Place_Array (0 .. Patches - 1);
+      Order := new Index_Array (0 .. Windows - 1);
+      Starts := new Index_Array (0 .. Windows);
+      if Item.Gated_Feed then
+         T.Allocate (Patches * Feed, Gate_Arm);
+      end if;
 
-      if X = null or else Normed = null or else Fused = null
+      if X = null or else (Item.Gated_Feed and then Gate_Arm = null) or else Normed = null or else Fused = null
         or else Attended = null or else Hidden = null or else K_Head = null
         or else Q_Head = null or else V_Head_T = null or else Scores = null
         or else Blended = null or else Merged = null
@@ -4718,27 +4837,50 @@ package body Model_Runner.Vision is
                end loop;
             end loop;
          end Cut;
+         --  The merged rows a window holds a side, as llama.cpp's
+         --  Qwen2.5-VL counts them; a picture whole without windows.
+         Side : constant Element_Count :=
+           (if Item.Window_Every > 0
+            then Element_Count'Max
+                   (1, Element_Count (Item.Window_Pixels) / (Patch * Merge))
+            else Element_Count'Max (Windows_X, Windows_Y));
+         M : Element_Count := 0;
       begin
-         for WY in 0 .. Windows_Y - 1 loop
-            for WX in 0 .. Windows_X - 1 loop
-               for DY in 0 .. Merge - 1 loop
-                  for DX in 0 .. Merge - 1 loop
-                     declare
-                        PY : constant Element_Count := WY * Merge + DY;
-                        PX : constant Element_Count := WX * Merge + DX;
-                        At_Patch : constant Element_Count := P * Patch_In;
-                     begin
-                        Places (P) := (Row => PY, Column => PX);
-                        Cut (Resampled, PY, PX, At_Patch);
-                        if Paired then
-                           Cut (Resampled_2, PY, PX, At_Patch + Patch_Elements);
-                        end if;
-                        P := P + 1;
-                     end;
+         Window_Count := 0;
+         for BY in 0 .. (Windows_Y + Side - 1) / Side - 1 loop
+            for BX in 0 .. (Windows_X + Side - 1) / Side - 1 loop
+               Starts (Window_Count) := P;
+               Window_Count := Window_Count + 1;
+               for WY in BY * Side
+                         .. Element_Count'Min (Windows_Y, (BY + 1) * Side) - 1
+               loop
+                  for WX in BX * Side
+                            .. Element_Count'Min (Windows_X, (BX + 1) * Side) - 1
+                  loop
+                     Order (M) := WY * Windows_X + WX;
+                     M := M + 1;
+                     for DY in 0 .. Merge - 1 loop
+                        for DX in 0 .. Merge - 1 loop
+                           declare
+                              PY : constant Element_Count := WY * Merge + DY;
+                              PX : constant Element_Count := WX * Merge + DX;
+                              At_Patch : constant Element_Count := P * Patch_In;
+                           begin
+                              Places (P) := (Row => PY, Column => PX);
+                              Cut (Resampled, PY, PX, At_Patch);
+                              if Paired then
+                                 Cut (Resampled_2, PY, PX,
+                                      At_Patch + Patch_Elements);
+                              end if;
+                              P := P + 1;
+                           end;
+                        end loop;
+                     end loop;
                   end loop;
                end loop;
             end loop;
          end loop;
+         Starts (Window_Count) := P;
       end;
       Model_Runner.Images.Free (Resampled);
       Model_Runner.Images.Free (Resampled_2);
@@ -4817,10 +4959,10 @@ package body Model_Runner.Vision is
          declare
             Current : Block renames Item.Layers (Index);
          begin
-            Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
+            Rows_Through (Work, Norm_Task, Normed, Patches, Width, Source => X,
                           Bias => Current.Norm_1_Bias,
                           Weight => Current.Norm_1_Weight);
-            if Is_Qwen2 (Item) then
+            if Is_Apart (Item) then
                --  The three projections apart, each laid where the fused
                --  one puts it -- a patch's queries, then its keys, then
                --  its values -- so that the rotation and the attention
@@ -4834,23 +4976,58 @@ package body Model_Runner.Vision is
             end if;
             exit when E.Is_Error (Work.Status);
             Turn;
-            Attend (Work, Fused, Fused, Fused, 0, Width, 2 * Width, 3 * Width,
-                    Attended, Width, Patches, Heads, Head,
-                    K_Head, Q_Head, V_Head_T, Scores, Blended);
+            --  Every patch attending to every other, or, in a windowed
+            --  block, each window's patches -- which the walk laid
+            --  together -- among themselves.
+            if Item.Window_Every > 0
+              and then (Index + 1) mod Item.Window_Every /= 0
+            then
+               for Which in 0 .. Window_Count - 1 loop
+                  declare
+                     First : constant Element_Count := Starts (Which);
+                     Count : constant Element_Count :=
+                       Starts (Which + 1) - First;
+                  begin
+                     Attend (Work, Fused, Fused, Fused,
+                             First * 3 * Width, First * 3 * Width + Width,
+                             First * 3 * Width + 2 * Width, 3 * Width,
+                             Attended, Width, Count, Heads, Head,
+                             K_Head, Q_Head, V_Head_T, Scores, Blended,
+                             Into_At => First);
+                  end;
+               end loop;
+            else
+               Attend (Work, Fused, Fused, Fused, 0, Width, 2 * Width,
+                       3 * Width, Attended, Width, Patches, Heads, Head,
+                       K_Head, Q_Head, V_Head_T, Scores, Blended);
+            end if;
             Multiply (Work, Attended, Patches, Current.Output, Normed,
                       Current.Output_Bias);
             exit when E.Is_Error (Work.Status);
             K.Add (X.all, Normed.all);
 
-            Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
+            Rows_Through (Work, Norm_Task, Normed, Patches, Width, Source => X,
                           Bias => Current.Norm_2_Bias,
                           Weight => Current.Norm_2_Weight);
             Multiply (Work, Normed, Patches, Current.Feed_In, Hidden,
                       Current.Feed_In_Bias);
-            Rows_Through (Work,
-                          (if Item.Quick_Feed then Gaussian_Quick
-                           else Gaussian),
-                          Hidden, Patches, Feed);
+            if Item.Gated_Feed then
+               --  The gate through the logistic-weighted unit, times the
+               --  arm up, into the arm up's place.
+               Multiply (Work, Normed, Patches, Current.Feed_Gate, Gate_Arm,
+                         Current.Feed_Gate_Bias);
+               Rows_Through (Work, Weighted_Gate, Gate_Arm, Patches, Feed,
+                             Source => Hidden);
+               if E.Is_Ok (Work.Status) then
+                  Hidden (0 .. Patches * Feed - 1) :=
+                    Gate_Arm (0 .. Patches * Feed - 1);
+               end if;
+            else
+               Rows_Through (Work,
+                             (if Item.Quick_Feed then Gaussian_Quick
+                              else Gaussian),
+                             Hidden, Patches, Feed);
+            end if;
             Multiply (Work, Hidden, Patches, Current.Feed_Out, Normed,
                       Current.Feed_Out_Bias);
             exit when E.Is_Error (Work.Status);
@@ -4893,7 +5070,7 @@ package body Model_Runner.Vision is
       --  walk laid together, joined into one row of Joined, through the
       --  square step and the Gaussian unit, then to the text width.
       if E.Is_Ok (Work.Status) then
-         Rows_Through (Work, Normalize, Normed, Patches, Width, Source => X,
+         Rows_Through (Work, Norm_Task, Normed, Patches, Width, Source => X,
                        Bias => Item.Post_Bias, Weight => Item.Post_Weight);
       end if;
 
@@ -4913,6 +5090,29 @@ package body Model_Runner.Vision is
             Rows_Through (Work, Gaussian_Exact, Merged, Windows, Joined);
             Multiply (Work, Merged, Windows, Item.Merge_Out, Rows,
                       Item.Merge_Out_Bias);
+
+            --  A walk in windows made the rows in its own order; the text
+            --  model reads them row by row of the picture.
+            if E.Is_Ok (Work.Status) and then Window_Count > 1 then
+               declare
+                  Walked : T.Real_Array_Access := null;
+               begin
+                  T.Allocate (Windows * Text_Width, Walked);
+                  if Walked = null then
+                     Work.Status := E.Make (E.Memory_Allocation_Failed);
+                     E.Add_Text (Work.Status, "category", "vision",
+                                 E.Param_Identifier);
+                  else
+                     Walked.all := Rows.all;
+                     for M in 0 .. Windows - 1 loop
+                        Rows (Order (M) * Text_Width
+                              .. (Order (M) + 1) * Text_Width - 1) :=
+                          Walked (M * Text_Width .. (M + 1) * Text_Width - 1);
+                     end loop;
+                     T.Free (Walked);
+                  end if;
+               end;
+            end if;
          end if;
       end if;
 

@@ -313,6 +313,11 @@ private
       Fused_Bias : T.Real_Array_Access := null;
       Feed_In, Feed_Out : T.View := T.Empty_View;
       Feed_In_Bias, Feed_Out_Bias : T.Real_Array_Access := null;
+
+      --  The gating arm, where the feed-forward is gated: its unit's
+      --  answer multiplies Feed_In's.
+      Feed_Gate      : T.View := T.Empty_View;
+      Feed_Gate_Bias : T.Real_Array_Access := null;
    end record;
 
    type Block_Array is array (Natural range <>) of Block;
@@ -405,6 +410,15 @@ private
       --  takes, as llama.cpp does: Qwen2-VL's.
       Gridded       : Boolean := True;
       Quick_Feed    : Boolean := False;
+
+      --  Qwen2.5-VL's differences: norms by the root mean square with no
+      --  bias, a feed-forward gated by the logistic-weighted unit, and
+      --  every block but each Window_Every-th attending within windows of
+      --  Window_Pixels a side. Zero Window_Every: every block sees all.
+      Rms_Norms     : Boolean := False;
+      Gated_Feed    : Boolean := False;
+      Window_Every  : Natural := 0;
+      Window_Pixels : Natural := 0;
       Patch_Sum     : T.Real_Array_Access := null;
       Patch_Both    : T.View := T.Empty_View;
 

@@ -2319,6 +2319,11 @@ package body Tests.Vision_Cases is
    Windows_Y_Q : constant := Side_Y_Q / Merge_Q;
    Windows_Q : constant := Windows_X_Q * Windows_Y_Q;
 
+   --  Qwen2.5-VL's windows, written small: every second block attends
+   --  within windows of three merged rows a side.
+   Window_Every_Q : constant := 2;
+   Window_Side_Q  : constant := 3;
+
    type Qwen_Block_Weights is record
       Ln1_W, Ln1_B, Ln2_W, Ln2_B : N.Real_Array (0 .. Width_Q - 1);
       QKV   : N.Real_Array (0 .. 3 * Width_Q * Width_Q - 1);  --  3 Width rows
@@ -2329,6 +2334,11 @@ package body Tests.Vision_Cases is
       Up_B  : N.Real_Array (0 .. Feed_Q - 1);
       Down  : N.Real_Array (0 .. Width_Q * Feed_Q - 1);
       Down_B : N.Real_Array (0 .. Width_Q - 1);
+
+      --  The gating arm, written only for Qwen2.5-VL's gated
+      --  feed-forward.
+      Gate   : N.Real_Array (0 .. Feed_Q * Width_Q - 1);
+      Gate_B : N.Real_Array (0 .. Feed_Q - 1);
    end record;
 
    type Qwen_Block_List is array (0 .. Blocks_Q - 1) of Qwen_Block_Weights;
@@ -2402,14 +2412,20 @@ package body Tests.Vision_Cases is
       W.Deep_In_B := Random_Row (Joined_Q, 0.1);
       W.Deep_Out := Random_Row (Text_Q * Joined_Q, 0.2);
       W.Deep_Out_B := Random_Row (Text_Q, 0.1);
+      for Index in W.Blocks'Range loop
+         W.Blocks (Index).Gate := Random_Row (Feed_Q * Width_Q, 0.3);
+         W.Blocks (Index).Gate_B := Random_Row (Feed_Q, 0.1);
+      end loop;
       return W;
    end Fresh_Qwen_Weights;
 
    procedure Write_Qwen_Projector
      (Path : String; W : Qwen_Weights;
       Kind : String := "qwen3vl_merger";
-      Deep_Block : Integer := -1) is
-      Second_Kind : constant Boolean := Kind = "qwen2vl_merger";
+      Deep_Block : Integer := -1;
+      Silu : Boolean := True) is
+      Third_Kind : constant Boolean := Kind = "qwen2.5vl_merger";
+      Second_Kind : constant Boolean := Kind = "qwen2vl_merger" or else Third_Kind;
       Builder : Fixtures.Builder;
       File    : B.Byte_Array_Access;
       use Ada.Streams.Stream_IO;
@@ -2449,6 +2465,18 @@ package body Tests.Vision_Cases is
       Fixtures.End_Array (Builder);
       --  Qwen2-VL's projector carries no deepstack, no patch bias and no
       --  position grid, and writes its queries, keys and values apart.
+      --  Qwen2.5-VL's: the logistic-weighted unit, every second block
+      --  windowed, and windows of three merged rows a side, which the
+      --  picture's eight by ten leaves ragged at two edges.
+      if Third_Kind then
+         if Silu then
+            Fixtures.Add_Bool (Builder, "clip.use_silu", True);
+         end if;
+         Fixtures.Add_U32 (Builder, "clip.vision.n_wa_pattern", Window_Every_Q);
+         Fixtures.Add_U32 (Builder, "clip.vision.window_size",
+                           Interfaces.Unsigned_32
+                             (Window_Side_Q * Merge_Q * Patch_Q));
+      end if;
       if not Second_Kind then
          Fixtures.Begin_Array
            (Builder, "clip.vision.is_deepstack_layers", G.Value_Bool,
@@ -2472,9 +2500,11 @@ package body Tests.Vision_Cases is
             Current : Qwen_Block_Weights renames W.Blocks (Index);
          begin
             Tensor (Prefix & "ln1.weight", [Width_Q], Current.Ln1_W);
-            Tensor (Prefix & "ln1.bias", [Width_Q], Current.Ln1_B);
             Tensor (Prefix & "ln2.weight", [Width_Q], Current.Ln2_W);
-            Tensor (Prefix & "ln2.bias", [Width_Q], Current.Ln2_B);
+            if not Third_Kind then
+               Tensor (Prefix & "ln1.bias", [Width_Q], Current.Ln1_B);
+               Tensor (Prefix & "ln2.bias", [Width_Q], Current.Ln2_B);
+            end if;
             if Second_Kind then
                --  The fused rows apart: the queries' Width rows first,
                --  then the keys', then the values'.
@@ -2505,10 +2535,17 @@ package body Tests.Vision_Cases is
             Tensor (Prefix & "ffn_up.bias", [Feed_Q], Current.Up_B);
             Tensor (Prefix & "ffn_down.weight", [Feed_Q, Width_Q], Current.Down);
             Tensor (Prefix & "ffn_down.bias", [Width_Q], Current.Down_B);
+            if Third_Kind then
+               Tensor (Prefix & "ffn_gate.weight", [Width_Q, Feed_Q],
+                       Current.Gate);
+               Tensor (Prefix & "ffn_gate.bias", [Feed_Q], Current.Gate_B);
+            end if;
          end;
       end loop;
       Tensor ("v.post_ln.weight", [Width_Q], W.Post_W);
-      Tensor ("v.post_ln.bias", [Width_Q], W.Post_B);
+      if not Third_Kind then
+         Tensor ("v.post_ln.bias", [Width_Q], W.Post_B);
+      end if;
       Tensor ("mm.0.weight", [Joined_Q, Joined_Q], W.MM0);
       Tensor ("mm.0.bias", [Joined_Q], W.MM0_B);
       Tensor ("mm.2.weight", [Joined_Q, Text_Q], W.MM2);
@@ -2554,7 +2591,8 @@ package body Tests.Vision_Cases is
       Second : Images.Raster := (others => <>);
       Deep_Block : Integer := -1;
       Deep : access N.Wide_Real_Array := null;
-      Second_Kind : Boolean := False)
+      Second_Kind : Boolean := False;
+      Third_Kind : Boolean := False)
    is
       Paired : constant Boolean := Second.Pixels /= null;
       subtype WR is N.Wide_Real;
@@ -2612,6 +2650,26 @@ package body Tests.Vision_Cases is
       procedure Layer_Norm
         (Source : Matrix; Gain, Bias : N.Real_Array; Target : out Matrix) is
       begin
+         --  Qwen2.5-VL's norms divide by the root mean square and add
+         --  nothing.
+         if Third_Kind then
+            for P in 0 .. Patches_Q - 1 loop
+               declare
+                  Squares : WR := 0.0;
+               begin
+                  for D in 0 .. Width_Q - 1 loop
+                     Squares := Squares + Source (P, D) ** 2;
+                  end loop;
+                  for D in 0 .. Width_Q - 1 loop
+                     Target (P, D) :=
+                       Source (P, D)
+                       / Wide_Math.Sqrt (Squares / WR (Width_Q) + 1.0e-6)
+                       * WR (Gain (N.Element_Count (D)));
+                  end loop;
+               end;
+            end loop;
+            return;
+         end if;
          for P in 0 .. Patches_Q - 1 loop
             declare
                Mean, Variance : WR := 0.0;
@@ -2764,6 +2822,18 @@ package body Tests.Vision_Cases is
                   declare
                      Scores : array (0 .. Patches_Q - 1) of WR;
                      Largest, Total : WR;
+
+                     --  Whether O lies in P's window, where this block
+                     --  attends within windows: the same window of the
+                     --  picture's patches, the window's side in patches.
+                     Windowed : constant Boolean :=
+                       Third_Kind and then (Index + 1) mod Window_Every_Q /= 0;
+                     Span : constant Natural := Window_Side_Q * Merge_Q;
+                     function Seen (O : Natural) return Boolean
+                     is (not Windowed
+                         or else (Row_Of (O) / Span = Row_Of (P) / Span
+                                  and then Column_Of (O) / Span
+                                           = Column_Of (P) / Span));
                   begin
                      for O in 0 .. Patches_Q - 1 loop
                         Scores (O) := 0.0;
@@ -2774,13 +2844,17 @@ package body Tests.Vision_Cases is
                         end loop;
                         Scores (O) := Scores (O) / Wide_Math.Sqrt (WR (Head_Q));
                      end loop;
-                     Largest := Scores (0);
-                     for O in 1 .. Patches_Q - 1 loop
-                        Largest := WR'Max (Largest, Scores (O));
+                     Largest := Scores (P);
+                     for O in 0 .. Patches_Q - 1 loop
+                        if Seen (O) then
+                           Largest := WR'Max (Largest, Scores (O));
+                        end if;
                      end loop;
                      Total := 0.0;
                      for O in 0 .. Patches_Q - 1 loop
-                        Scores (O) := Wide_Math.Exp (Scores (O) - Largest);
+                        Scores (O) :=
+                          (if Seen (O) then Wide_Math.Exp (Scores (O) - Largest)
+                           else 0.0);
                         Total := Total + Scores (O);
                      end loop;
                      for D in 0 .. Head_Q - 1 loop
@@ -2823,11 +2897,24 @@ package body Tests.Vision_Cases is
                           * WR (Current.Up (N.Element_Count (R * Width_Q + C)));
                      end loop;
                      --  Qwen2-VL's unit is the quick one, x times the
-                     --  logistic of 1.702 x.
-                     F (P, R) :=
-                       (if Second_Kind
-                        then Sum / (1.0 + Wide_Math.Exp (-1.702 * Sum))
-                        else GELU (Sum));
+                     --  logistic of 1.702 x; Qwen2.5-VL's the logistic-
+                     --  weighted one on its gate, times this arm.
+                     if Third_Kind then
+                        declare
+                           Gate : WR := WR (Current.Gate_B (N.Element_Count (R)));
+                        begin
+                           for C in 0 .. Width_Q - 1 loop
+                              Gate := Gate + H (P, C)
+                                * WR (Current.Gate (N.Element_Count (R * Width_Q + C)));
+                           end loop;
+                           F (P, R) := Gate / (1.0 + Wide_Math.Exp (-Gate)) * Sum;
+                        end;
+                     else
+                        F (P, R) :=
+                          (if Second_Kind
+                           then Sum / (1.0 + Wide_Math.Exp (-1.702 * Sum))
+                           else GELU (Sum));
+                     end if;
                   end;
                end loop;
                for R in 0 .. Width_Q - 1 loop
@@ -3102,18 +3189,29 @@ package body Tests.Vision_Cases is
       end;
       Vision.Close (Eyes);
 
-      --  Qwen2.5-VL's merger is not a shape this reads -- windowed
-      --  attention, a gated feed-forward, root-mean-square norms -- and a
-      --  file of it is refused by name, not taken and failed at load.
-      --  Written apart from the projector the tests after this one read.
+      --  A projector of a kind this does not read -- Pixtral's -- is
+      --  refused by name, not taken and failed at load. Written apart
+      --  from the projector the tests after this one read.
       Write_Qwen_Projector
-        ("obj/vision-qwen25.gguf", W.all, Kind => "qwen2.5vl_merger");
-      Vision.Open (Eyes, "obj/vision-qwen25.gguf", Status);
+        ("obj/vision-pixtral.gguf", W.all, Kind => "pixtral");
+      Vision.Open (Eyes, "obj/vision-pixtral.gguf", Status);
       Assert (Status.Code = E.Arch_Unsupported_Projector,
-              "a Qwen2.5-VL projector was not refused by name: "
+              "a Pixtral projector was not refused by name: "
               & E.Error_Code'Image (Status.Code));
       Assert (not Vision.Is_Ready (Eyes),
-              "a refused Qwen2.5-VL projector reads as ready");
+              "a refused Pixtral projector reads as ready");
+      Vision.Close (Eyes);
+
+      --  And a Qwen2.5-VL file that does not say its unit is the
+      --  logistic-weighted one is refused by name too: its gated
+      --  feed-forward is read with no other.
+      Write_Qwen_Projector
+        ("obj/vision-qwen25-unit.gguf", W.all, Kind => "qwen2.5vl_merger",
+         Silu => False);
+      Vision.Open (Eyes, "obj/vision-qwen25-unit.gguf", Status);
+      Assert (Status.Code = E.Arch_Unsupported_Projector,
+              "a Qwen2.5-VL projector without its unit was not refused: "
+              & E.Error_Code'Image (Status.Code));
       Vision.Close (Eyes);
 
       --  The cubic filter: a two-pixel row 0 and 200 stretched to four
@@ -3275,6 +3373,80 @@ package body Tests.Vision_Cases is
               & Worst'Image & " of" & Largest'Image);
       Assert (Differs, "the Qwen2-VL blocks did not run whole on the device");
    end The_Qwen2_Blocks_Run_Whole_On_The_Device;
+
+   --  The small projector written as Qwen2.5-VL's -- root-mean-square
+   --  norms with no bias, a feed-forward gated by the logistic-weighted
+   --  unit, and the first block attending only within windows of three
+   --  merged rows a side, ragged at the picture's edges -- encodes as the
+   --  reference does, its rows read back row by row of the picture
+   --  whatever order the windows walked them in.
+   procedure The_Qwen25_Projector_Encodes_As_The_Reference
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      W : constant Qwen_Weights_Access := Fresh_Qwen_Weights;
+      Picture : Images.Raster;
+      Status  : E.Error_Info;
+      Wanted, Unwindowed : N.Wide_Real_Array (0 .. Windows_Q * Text_Q - 1);
+      Rows    : T.Real_Array_Access;
+      Grid_Rows, Grid_Columns : Natural;
+      Eyes    : Vision.Encoder;
+      Apart   : Boolean := False;
+   begin
+      declare
+         Data : B.Byte_Array (1 .. 3 * Wide_Q * Tall_Q);
+      begin
+         for At_Pixel in Data'Range loop
+            Data (At_Pixel) := B.Byte ((At_Pixel * 53) mod 251);
+         end loop;
+         Images.Decode
+           (Bytes_Of ("P6" & Natural'Image (Wide_Q) & Natural'Image (Tall_Q)
+                      & " 255 ") & Data,
+            "test", Picture, Status);
+         Assert (E.Is_Ok (Status), "the test picture was refused");
+      end;
+
+      Qwen_Reference_Rows (W.all, Picture, Wanted, Second_Kind => True,
+                           Third_Kind => True);
+
+      --  The windows matter: the same weights with every patch seen.
+      Write_Qwen_Projector ("obj/vision-qwen25.gguf", W.all,
+                            Kind => "qwen2.5vl_merger");
+      Vision.Open (Eyes, "obj/vision-qwen25.gguf", Status);
+      Assert (E.Is_Ok (Status), "the small Qwen2.5-VL projector did not open: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Vision.Is_Ready (Eyes)
+              and then Vision.Row_Width (Eyes) = Text_Q
+              and then Vision.Projector (Eyes) = "qwen2.5vl_merger",
+              "the small Qwen2.5-VL projector's shape was misread");
+
+      Vision.Encode (Eyes, Picture, null, Rows, Grid_Rows, Grid_Columns,
+                     Status => Status);
+      Assert (E.Is_Ok (Status), "the small Qwen2.5-VL projector did not encode: "
+              & E.Error_Code'Image (Status.Code));
+      Assert (Grid_Rows = Windows_Y_Q and then Grid_Columns = Windows_X_Q
+              and then Rows /= null
+              and then Rows.all'Length = Windows_Q * Text_Q,
+              "the Qwen2.5-VL encoder made the wrong rows");
+      for J in 0 .. N.Element_Count (Windows_Q * Text_Q - 1) loop
+         Assert (abs (N.Wide_Real (Rows (J)) - Wanted (J))
+                 <= 1.0e-4 * (1.0 + abs Wanted (J)),
+                 "Qwen2.5-VL row element" & N.Element_Count'Image (J) & " is "
+                 & N.Real'Image (Rows (J)) & " where the reference has "
+                 & N.Wide_Real'Image (Wanted (J)));
+      end loop;
+      T.Free (Rows);
+      Vision.Close (Eyes);
+
+      --  And the windows are not nothing: unwindowed, the reference's rows
+      --  are others.
+      Qwen_Reference_Rows (W.all, Picture, Unwindowed, Second_Kind => True,
+                           Third_Kind => False);
+      for J in Wanted'Range loop
+         Apart := Apart or else abs (Wanted (J) - Unwindowed (J)) > 1.0e-3;
+      end loop;
+      Assert (Apart, "the Qwen2.5-VL windows changed nothing");
+   end The_Qwen25_Projector_Encodes_As_The_Reference;
 
    --  A pair of frames encodes as the reference: the first frame through
    --  the first temporal weights and the second through the second, where
@@ -5732,6 +5904,11 @@ package body Tests.Vision_Cases is
          & "plain computation of the same network gives, as a grid of its "
          & "windows, scales a small picture up to the least rows, and the "
          & "cubic filter resamples as PIL does");
+      Register_Routine
+        (T, The_Qwen25_Projector_Encodes_As_The_Reference'Access,
+         "the small projector written as Qwen2.5-VL's -- norms by the root "
+         & "mean square, a gated feed-forward, a block windowed -- encodes "
+         & "as the reference does, its rows read back in the picture's order");
       Register_Routine
         (T, The_Qwen2_Blocks_Run_Whole_On_The_Device'Access,
          "Qwen2-VL's blocks run whole on the device");
