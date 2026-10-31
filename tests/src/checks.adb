@@ -7417,6 +7417,10 @@ package body Checks is
          elsif Digest /= Model_Runner.Shaders.Attend.Attention_Split_Digest
            or else Digest
                    /= Model_Runner.Shaders.Attend.Attention_Split_Narrow_Digest
+           or else Digest
+                   /= Model_Runner.Shaders.Attend.Attention_Split_Mid_Digest
+           or else Digest
+                   /= Model_Runner.Shaders.Attend.Attention_Split_Wider_Digest
          then
             Fail ("src/shaders/attention_split.comp has changed since it "
                   & "was compiled; run ./compile-shaders.sh");

@@ -12659,6 +12659,12 @@ package body Tests.Backend_Cases is
       Compare (Head_Size => 64, Positions => 1);
       Compare (Head_Size => 128, Positions => 1);
 
+      --  And eighty, a picture encoder's heads spread to the sixteen, and
+      --  ninety-six, under the compilation of 128.
+      Compare (Head_Size => 80);
+      Compare (Head_Size => 96, Rising => True);
+      Compare (Head_Size => 256, Rising => True);
+
       --  And two hundred and fifty-six, which is Gemma's: the matrix
       --  kernel's third compilation, and past the four-at-a-time path's
       --  width, held to the queries one at a time and, with a sink a

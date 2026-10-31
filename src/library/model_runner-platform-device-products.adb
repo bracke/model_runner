@@ -777,8 +777,8 @@ package body Model_Runner.Platform.Device.Products is
        --  read 4.1096 that way against the other kernel's 4.1289 and the
        --  processor's 4.1280, which the suite's sinks at heads of 64 do
        --  not reproduce, and gpt-oss is the one model with them.
-       elsif Head_Size = Matrix_Head
-         and then Value_Size = Matrix_Head
+       elsif Head_Size <= Matrix_Head
+         and then Value_Size <= Matrix_Head
          and then not Sunk
          and then Item.Matrix_Split_Narrow_Attend /= Null_Handle
        then Item.Matrix_Split_Narrow_Attend
@@ -787,11 +787,13 @@ package body Model_Runner.Platform.Device.Products is
        elsif Head_Size <= Matrix_Mid_Head
          and then Value_Size <= Matrix_Mid_Head
          and then Item.Matrix_Mid_Attend /= Null_Handle
-       then Item.Matrix_Mid_Attend
+       then (if Item.Matrix_Split_Mid_Attend /= Null_Handle
+             then Item.Matrix_Split_Mid_Attend
+             else Item.Matrix_Mid_Attend)
        --  A short span's heads of 128 on the kernel that splits each tile
        --  between the four subgroups of a block: see attention_split.comp.
-       elsif Head_Size = Matrix_Wide_Head
-         and then Value_Size = Matrix_Wide_Head
+       elsif Head_Size <= Matrix_Wide_Head
+         and then Value_Size <= Matrix_Wide_Head
          and then Item.Matrix_Split_Attend /= Null_Handle
        then Item.Matrix_Split_Attend
        elsif Head_Size <= Matrix_Wide_Head
@@ -799,7 +801,9 @@ package body Model_Runner.Platform.Device.Products is
        then Item.Matrix_Wide_Attend
        elsif Head_Size <= Matrix_Wider_Head
          and then Value_Size <= Matrix_Wider_Head
-       then Item.Matrix_Wider_Attend
+       then (if Item.Matrix_Split_Wider_Attend /= Null_Handle
+             then Item.Matrix_Split_Wider_Attend
+             else Item.Matrix_Wider_Attend)
        else Null_Handle);
 
    function Attends_By_Matrix
@@ -4409,7 +4413,7 @@ package body Model_Runner.Platform.Device.Products is
                   end if;
                end;
 
-               --  And for heads of sixty-four.
+               --  And for heads of sixty-four, of eighty and of 256.
                declare
                   Split : aliased constant Model_Runner.Shaders.Word_Array :=
                     Model_Runner.Shaders.Attend.Attention_Split_Narrow;
@@ -4421,6 +4425,34 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Attend_Split_Narrow := Made;
+                  end if;
+               end;
+
+               declare
+                  Split : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Split_Mid;
+               begin
+                  Request.Size := Interfaces.C.size_t (Split'Length * 4);
+                  Request.Code := Split'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Split_Mid := Made;
+                  end if;
+               end;
+
+               declare
+                  Split : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Split_Wider;
+               begin
+                  Request.Size := Interfaces.C.size_t (Split'Length * 4);
+                  Request.Code := Split'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Split_Wider := Made;
                   end if;
                end;
 
@@ -5700,6 +5732,26 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Attend_Split_Mid /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Split_Mid;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Split_Mid_Attend := Made;
+            end if;
+         end if;
+
+         if Item.Attend_Split_Wider /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Split_Wider;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Split_Wider_Attend := Made;
+            end if;
+         end if;
+
          --  Four subgroups of sixty-four, fixed in its source.
          if Item.Attend_Latent /= Null_Handle then
             Request.Stage.Module := Item.Attend_Latent;
@@ -6706,6 +6758,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Split_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Split_Narrow_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Split_Mid_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Split_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Batch_Attend, "vkDestroyPipeline");
@@ -6725,6 +6779,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Split, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Split_Narrow, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Split_Mid, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Split_Wider, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent_Batch, "vkDestroyShaderModule");

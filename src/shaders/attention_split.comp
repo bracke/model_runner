@@ -19,8 +19,10 @@
 //
 //  The same push block and bindings as attention_matrix.comp, which the
 //  engine takes this in place of for a batch of heads of DM whose span is
-//  short of the deep pipeline's. Heads exactly DM wide, keys and values;
-//  a second compilation, HEAD_64, for heads of sixty-four.
+//  short of the deep pipeline's. Heads up to DM wide, a whole number of
+//  sixteens, as attention_matrix.comp takes them; compiled at 128, and
+//  as HEAD_64, HEAD_80 and HEAD_256 for the other widths that kernel is
+//  compiled at.
 //
 //  Two things decided whether it was faster at all. Shared memory's rows
 //  are padded: at their own width every row a matrix load reads begins
@@ -99,14 +101,21 @@ uint place_of (uint pos, uint offset, uint width) {
 //  Queries a workgroup answers, keys a tile holds, and the head.
 const uint BR = 16u;
 const uint BC = 16u * SUBS;
-#ifdef HEAD_64
+#if defined(HEAD_64)
 const uint DM = 64u;
+#elif defined(HEAD_80)
+const uint DM = 80u;
+#elif defined(HEAD_256)
+const uint DM = 256u;
 #else
 const uint DM = 128u;
 #endif
 
 //  A subgroup's sixteens of the head, for the values.
-const uint OUT_T = DM / 16u / SUBS;
+//  A subgroup's sixteens of the head, for the values: its own run of
+//  them, the last subgroups' short or empty where the sixteens do not
+//  divide by the subgroups.
+const uint OUT_T = (DM / 16u + SUBS - 1u) / SUBS;
 
 //  The queries, staged once for all four subgroups; the tile's weights,
 //  a sixteen of keys a subgroup; each subgroup's largest score a row and
@@ -158,8 +167,10 @@ void main() {
                    | shape.v_width) & 3u) == 0u;
 
     uint group = head / shape.group_size;
-    uint k_at  = group * DM;
-    uint v_at  = group * DM;
+    uint dk    = shape.head_size;
+    uint dv    = shape.value_size;
+    uint k_at  = group * dk;
+    uint v_at  = group * dv;
 
     float slope = 0.0;
     if (shape.max_bias > 0.0) {
@@ -199,7 +210,8 @@ void main() {
         uint slot = min (block * BR + m, shape.positions - 1u);
 
         qs[m * QSTRIDE + c] =
-            float16_t (q[slot * shape.heads * DM + head * DM + c]);
+            c < dk ? float16_t (q[slot * shape.heads * dk + head * dk + c])
+                   : float16_t (0.0);
     }
 
     //  Which row each element of an accumulator is.
@@ -296,11 +308,12 @@ void main() {
                 coopMatLoad (qm, qs, t * 16u, QSTRIDE,
                              gl_CooperativeMatrixLayoutRowMajor);
                 if (fours) {
-                    coopMatLoad (km, kvh4, (at + t * 16u) / 4u,
+                    coopMatLoad (km, kvh4, (at + min (t * 16u, dk - 16u)) / 4u,
                                  shape.kv_width / 4u,
                                  gl_CooperativeMatrixLayoutColumnMajor);
                 } else {
-                    coopMatLoad (km, kvh, at + t * 16u, shape.kv_width,
+                    coopMatLoad (km, kvh, at + min (t * 16u, dk - 16u),
+                                 shape.kv_width,
                                  gl_CooperativeMatrixLayoutColumnMajor);
                 }
                 sacc = coopMatMulAdd (qm, km, sacc);
@@ -398,6 +411,10 @@ void main() {
                       + v_at + sub * OUT_T * 16u;
 
             [[unroll]] for (uint t = 0u; t < OUT_T; t++) {
+                if ((sub * OUT_T + t) * 16u >= dv) {
+                    continue;
+                }
+
                 coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB>
                     vm;
 
@@ -437,6 +454,10 @@ void main() {
 
     //  And out, sixteen components at a time through this subgroup's room.
     [[unroll]] for (uint t = 0u; t < OUT_T; t++) {
+        if ((sub * OUT_T + t) * 16u >= dv) {
+            continue;
+        }
+
         for (int e = 0; e < pacc[t].length(); ++e) {
             pacc[t][e] *= final_of[e];
         }
@@ -451,9 +472,10 @@ void main() {
             uint r     = at / 16u;
             uint c     = (sub * OUT_T + t) * 16u + at % 16u;
             uint slot  = block * BR + r;
-            uint where = slot * shape.heads * DM + head * DM + c;
+            uint where = slot * shape.heads * dv + head * dv + c;
 
-            if (slot >= shape.positions) {
+            if (c >= dv) {
+            } else if (slot >= shape.positions) {
                 if (halved && slot < reach) {
                     hb[where] = float16_t (0.0);
                 }
