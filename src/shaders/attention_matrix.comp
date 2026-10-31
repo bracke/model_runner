@@ -272,7 +272,13 @@ layout(std430, binding = 0) readonly buffer Floats { float kvf[]; };
 #define QREG
 #endif
 #ifndef QREG
-shared float16_t qs[SUBS * BR * DM];
+//  Rows of shared memory a little longer than they are wide, as in
+//  attention_split.comp: at their own width every row a matrix load
+//  reads begins on the same bank. qwen3-8b's prompt of 16,214 read 210
+//  tokens a second unpadded and 217 so, the same text; 4,175 330 against
+//  326, Gemma's and gpt-oss's level.
+const uint QST = DM + 8u;
+shared float16_t qs[SUBS * BR * QST];
 #endif
 
 //  The scores of a tile, and at the very end the answer on its way out of
@@ -283,7 +289,8 @@ shared float16_t qs[SUBS * BR * DM];
 #ifdef IN_PLACE
 const uint SS_ROOM = 256u;
 #else
-const uint SS_ROOM = BR * BC;
+const uint SST = BC + 4u;
+const uint SS_ROOM = BR * SST;
 #endif
 shared float ss[SUBS * SS_ROOM];
 
@@ -293,7 +300,8 @@ shared float rowscale[SUBS * BR];
 shared uint rowmap[256];
 
 //  The weights, in what the instruction reads.
-shared float16_t ps[SUBS * BR * BC];
+const uint PST = BC + 8u;
+shared float16_t ps[SUBS * BR * PST];
 
 //  Not the keys: a tile of them staged once for a workgroup's subgroups,
 //  where each reads its own out of the cache, read qwen3-8b's prompt
@@ -368,10 +376,10 @@ void main() {
 
     //  This subgroup's part of the shared memory.
 #ifndef QREG
-    uint QS0 = sub * BR * DM;
+    uint QS0 = sub * BR * QST;
 #endif
     uint SS0 = sub * SS_ROOM;
-    uint PS0 = sub * BR * BC;
+    uint PS0 = sub * BR * PST;
     uint RS0 = sub * BR;
     //  One map for every subgroup: it is the order of the instruction's
     //  elements, the same for every matrix of the type.
@@ -505,7 +513,7 @@ void main() {
             uint asks = row_head (sub, head, m);
             uint c    = ch + lane;
 
-            ps[PS0 + m * BC + lane] =
+            ps[PS0 + m * PST + lane] =
                 c < dk ? float16_t (q[slot * shape.heads * dk + asks * dk + c])
                        : float16_t (0.0);
         }
@@ -514,7 +522,7 @@ void main() {
             [[unroll]] for (uint t = 0u; t < BC / 16u; t++) {
                 if (ch / 16u + t < DM / 16u) {
                     coopMatLoad (qreg[m][ch / 16u + t], ps,
-                                 PS0 + m * 16u * BC + t * 16u, BC,
+                                 PS0 + m * 16u * PST + t * 16u, PST,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
             }
@@ -530,7 +538,7 @@ void main() {
             uint asks = row_head (sub, head, m);
             uint c    = c0 + lane;
 
-            qs[QS0 + m * DM + c] =
+            qs[QS0 + m * QST + c] =
                 c < dk ? float16_t (q[slot * shape.heads * dk + asks * dk + c])
                        : float16_t (0.0);
         }
@@ -738,7 +746,7 @@ void main() {
 #ifdef QREG
                     qm[m] = qreg[m][t];
 #else
-                    coopMatLoad (qm[m], qs, QS0 + m * 16u * DM + d0, DM,
+                    coopMatLoad (qm[m], qs, QS0 + m * 16u * QST + d0, QST,
                                  gl_CooperativeMatrixLayoutRowMajor);
 #endif
                 }
@@ -841,14 +849,14 @@ void main() {
                     //  209.9 and 208.8 tokens a second against 210.2 and
                     //  208.9. Paired, the partner's weights come through
                     //  here in any case.
-                    coopMatStore (weights, ps, PS0 + m * 16u * BC + n * 16u, BC,
+                    coopMatStore (weights, ps, PS0 + m * 16u * PST + n * 16u, PST,
                                   gl_CooperativeMatrixLayoutRowMajor);
                 }
             }
 #else
             [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
                 [[unroll]] for (uint n = 0u; n < BC / 16u; n++) {
-                    coopMatStore (sacc[m][n], ss, SS0 + m * 16u * BC + n * 16u, BC,
+                    coopMatStore (sacc[m][n], ss, SS0 + m * 16u * SST + n * 16u, SST,
                                   gl_CooperativeMatrixLayoutRowMajor);
                 }
             }
@@ -890,7 +898,7 @@ void main() {
 
             if (inside) {
                 [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
-                    float score = ss[SS0 + r * BC + c * 32u + col] * shape.scale;
+                    float score = ss[SS0 + r * SST + c * 32u + col] * shape.scale;
 
                     mine[c] = score;
                     best = max (best, score);
@@ -902,7 +910,7 @@ void main() {
                 float score = -1.0 / 0.0;
 
                 if (step >= fi && step <= la) {
-                    score = ss[SS0 + r * BC + at] * shape.scale;
+                    score = ss[SS0 + r * SST + at] * shape.scale;
 
                     if (slope > 0.0) {
                         uint asking =
@@ -938,7 +946,7 @@ void main() {
             [[unroll]] for (uint c = 0u; c < BC / 32u; c++) {
                 float w = empty ? 0.0 : exp (mine[c] - raised);
 
-                ps[PS0 + r * BC + c * 32u + col] = float16_t (w);
+                ps[PS0 + r * PST + c * 32u + col] = float16_t (w);
                 run += w;
             }
 
@@ -982,7 +990,7 @@ void main() {
                         gl_MatrixUseA> pm[2];
 
                 [[unroll]] for (uint m = 0u; m < 2u; m++) {
-                    coopMatLoad (pm[m], ps, (pair0 + m) * BR * BC + n0, BC,
+                    coopMatLoad (pm[m], ps, (pair0 + m) * BR * PST + n0, PST,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
@@ -1076,7 +1084,7 @@ void main() {
                         gl_MatrixUseA> pm[BR / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    coopMatLoad (pm[m], ps, PS0 + m * 16u * BC + n0, BC,
+                    coopMatLoad (pm[m], ps, PS0 + m * 16u * PST + n0, PST,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
@@ -1213,7 +1221,7 @@ void main() {
                         gl_MatrixUseA> pm[BR / 16u];
 
                 [[unroll]] for (uint m = 0u; m < BR / 16u; m++) {
-                    coopMatLoad (pm[m], ps, PS0 + m * 16u * BC + n0, BC,
+                    coopMatLoad (pm[m], ps, PS0 + m * 16u * PST + n0, PST,
                                  gl_CooperativeMatrixLayoutRowMajor);
                 }
 
@@ -1245,7 +1253,7 @@ void main() {
                         //  and the scores' store take it: DM is BC here,
                         //  so the stretch holds the block's components.
                         coopMatStore (pacc[m][t], ss,
-                                      SS0 + m * 16u * DM + t * 16u, DM,
+                                      SS0 + m * 16u * SST + t * 16u, SST,
                                       gl_CooperativeMatrixLayoutRowMajor);
                     }
                 }
@@ -1259,7 +1267,7 @@ void main() {
                         uint r = (lane >> 5u) + 2u * i;
 
                         held[ch][i] = held[ch][i] * carry[i]
-                                      + ss[SS0 + r * DM + ch * 32u + col];
+                                      + ss[SS0 + r * SST + ch * 32u + col];
                     }
                 }
             }
