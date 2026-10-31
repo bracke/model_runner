@@ -5406,9 +5406,10 @@ package body Reference_Transformer is
                   --  Gemma 3 states is for the layers that see the whole
                   --  context, and a windowed layer turns as it was trained.
                   --  The other family that windows on a base of its own,
-                  --  GPT-OSS, stretches every layer.
+                  --  GPT-OSS, stretches every layer; LFM3's windowed
+                  --  layers turn as trained, as llama.cpp's do.
                   Unstretched : constant Boolean :=
-                    Item.Kind in Gemma3 | Olmo2 | Mellum
+                    Item.Kind in Gemma3 | Olmo2 | Mellum | Lfm3
                     and then Windowed (Item, Layer);
 
                   --  The angle as trained, and the angle the model's factor

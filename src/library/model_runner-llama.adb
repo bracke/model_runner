@@ -1455,10 +1455,14 @@ package body Model_Runner.Llama is
    --  rest, which the reference does too. OLMo-3 and Mellum are Gemma3's
    --  way round: the reference turns their windowed layers with a scale of
    --  one and no magnitude, so a file stating YaRN stretched three layers
-   --  in four that were trained unstretched.
+   --  in four that were trained unstretched. And LFM3, whose windowed
+   --  layers the reference leaves at its default scale of one: an LFM3
+   --  file given YaRN four times over read 1,024-token chunks at 86.87
+   --  stretched where llama.cpp reads 91.67, and the file unstretched
+   --  61.69 against its 61.65.
    function Turn_Scaling
      (Settings : Configuration; Layer : Natural) return K.Rotary_Scaling
-   is (if Settings.Kind in Gemma3 | Olmo2 | Mellum
+   is (if Settings.Kind in Gemma3 | Olmo2 | Mellum | Lfm3
          and then Windowed_Layer (Settings, Layer)
        then K.Rotary_Scaling'(others => <>)
        else Settings.Scaling);
