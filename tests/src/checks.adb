@@ -7401,6 +7401,28 @@ package body Checks is
          end if;
       end;
 
+      --  And a short span's, four subgroups a block, in its two widths.
+      declare
+         Found : Boolean;
+
+         Digest : constant Interfaces.Unsigned_64 :=
+           Shader_Generation.Source_Digest
+             (Root & "/src/shaders/attention_split.comp", Found);
+      begin
+         Result.Performed := Result.Performed + 1;
+
+         if not Found then
+            Fail ("src/shaders/attention_split.comp is missing, and the "
+                  & "words compiled from it are committed");
+         elsif Digest /= Model_Runner.Shaders.Attend.Attention_Split_Digest
+           or else Digest
+                   /= Model_Runner.Shaders.Attend.Attention_Split_Narrow_Digest
+         then
+            Fail ("src/shaders/attention_split.comp has changed since it "
+                  & "was compiled; run ./compile-shaders.sh");
+         end if;
+      end;
+
       --  And the fifth, which goes with it.
       declare
          Found : Boolean;

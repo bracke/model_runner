@@ -168,6 +168,8 @@ compile attention_matrix             attention_matrix.comp vulkan1.3
 compile attention_matrix_wide        attention_matrix.comp vulkan1.3 WIDE_HEAD
 compile attention_matrix_mid         attention_matrix.comp vulkan1.3 MID_HEAD
 compile attention_matrix_wider       attention_matrix.comp vulkan1.3 WIDER_HEAD
+compile attention_split              attention_split.comp  vulkan1.3
+compile attention_split_narrow       attention_split.comp  vulkan1.3 HEAD_64
 compile attention_latent             attention_latent.comp vulkan1.3
 compile attention_latent_batch       attention_latent.comp vulkan1.3 WIDE_TILE
 compile attention_latent_split       attention_latent.comp vulkan1.3 SPLIT_DEPTH

@@ -3783,6 +3783,8 @@ private
       Attend_Matrix_Wide : System.Address := System.Null_Address;
       Attend_Matrix_Mid : System.Address := System.Null_Address;
       Attend_Matrix_Wider : System.Address := System.Null_Address;
+      Attend_Split : System.Address := System.Null_Address;
+      Attend_Split_Narrow : System.Address := System.Null_Address;
 
       --  And attention_latent.comp: an absorbed latent's one key-value
       --  head, past the matrix kernels' widest, read by every query head
@@ -4157,6 +4159,8 @@ private
       Tile_Line   : System.Address := System.Null_Address;
       Matrix_Attend : System.Address := System.Null_Address;
       Matrix_Wide_Attend : System.Address := System.Null_Address;
+      Matrix_Split_Attend : System.Address := System.Null_Address;
+      Matrix_Split_Narrow_Attend : System.Address := System.Null_Address;
       Matrix_Mid_Attend : System.Address := System.Null_Address;
       Matrix_Wider_Attend : System.Address := System.Null_Address;
       Latent_Attend : System.Address := System.Null_Address;

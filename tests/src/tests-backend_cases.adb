@@ -12314,7 +12314,15 @@ package body Tests.Backend_Cases is
       Near  : constant N.Real := 4.0e-3;
       Exact : constant N.Real := 1.0e-4;
 
-      procedure Compare (Head_Size : Positive; Positions : Positive := 200)
+      --  Rising, every key scores above the one before it, so each tile
+      --  raises a row's largest score and the answer so far is weighed
+      --  down by it: with the patterns' scores a few hundredths apart,
+      --  an answer never rescaled stays inside the tolerance.
+      procedure Compare
+        (Head_Size : Positive;
+         Positions : Positive := 200;
+         Rising    : Boolean := False;
+         Window    : Natural := 0)
       is
          Span    : constant N.Element_Count :=
            N.Element_Count (Heads * Head_Size);
@@ -12334,10 +12342,14 @@ package body Tests.Backend_Cases is
          Worst  : N.Real := 0.0;
       begin
          for Index in Cache'Range loop
-            Cache (Index) := N.Real (Index mod 13) / 13.0 - 0.5;
+            Cache (Index) :=
+              (if Rising and then Index < Room
+               then 0.004 * N.Real (Index / KV_Span)
+               else N.Real (Index mod 13) / 13.0 - 0.5);
          end loop;
          for Index in Query'Range loop
-            Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
+            Query (Index) :=
+              (if Rising then 0.25 else N.Real (Index mod 7) / 7.0 - 0.25);
          end loop;
 
          Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
@@ -12358,7 +12370,8 @@ package body Tests.Backend_Cases is
                   First => 0, Last => Positions - 1 + Which,
                   K_Base => 0, V_Base => Room,
                   KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
-                  Scale => 0.0625, Cap => 0.0, Target => One, Ok => Ok);
+                  Scale => 0.0625, Cap => 0.0, Window => Window,
+                  Target => One, Ok => Ok);
                Assert (Ok, "attention on its own was refused");
                Alone (Span * N.Element_Count (Which)
                       .. Span * N.Element_Count (Which + 1) - 1) := One;
@@ -12372,7 +12385,7 @@ package body Tests.Backend_Cases is
             Group_Size => Heads / Groups, First => 0, Last => Positions - 1,
             K_Base => 0, V_Base => Room,
             KV_Width => Natural (KV_Span), V_Width => Natural (KV_Span),
-            Scale => 0.0625, Cap => 0.0, Added => Added);
+            Scale => 0.0625, Cap => 0.0, Window => Window, Added => Added);
          Assert (Added, "a sequence would not take the attention step");
 
          Products.Run (Engine, Steps, Query, Batch, Batched, Ok, Halted);
@@ -12416,6 +12429,11 @@ package body Tests.Backend_Cases is
          Assert (not Products.Prefers_Exact_Attention (Engine),
                  "the engine kept a batch off the instruction after being "
                  & "told not to");
+
+         --  The sinks' softmax below is worked out over every position.
+         if Window > 0 then
+            return;
+         end if;
 
          --  And with a sink a head, through the instruction and off it,
          --  against a softmax worked out here with the sink in its
@@ -12629,6 +12647,17 @@ package body Tests.Backend_Cases is
 
       Compare (Head_Size => 64);
       Compare (Head_Size => 128);
+      Compare (Head_Size => 64, Rising => True);
+      Compare (Head_Size => 128, Rising => True);
+
+      --  And windowed, as every other of gpt-oss's layers and every fourth
+      --  of LFM3's are.
+      Compare (Head_Size => 64, Window => 100);
+      Compare (Head_Size => 128, Window => 100);
+
+      --  And a batch at the front of the cache, as a prompt's first is.
+      Compare (Head_Size => 64, Positions => 1);
+      Compare (Head_Size => 128, Positions => 1);
 
       --  And two hundred and fifty-six, which is Gemma's: the matrix
       --  kernel's third compilation, and past the four-at-a-time path's

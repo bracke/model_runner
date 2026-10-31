@@ -29,8 +29,16 @@
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 
-const uint LANES = 256u;
+//  Sixty-four lanes, a component or a few each. A lane a component, at
+//  two hundred and fifty-six, left half of them idle at a head of 128
+//  and paid the barriers of four subgroups: qwen3-8b's query heads over
+//  468 positions took 853 us a layer, and 401 so (its keys 264 -> 155).
+//  Thirty-two took 435, and four heads a workgroup of four subgroups 421.
+const uint LANES = 64u;
 layout(local_size_x = LANES) in;
+
+//  The widest head a workgroup holds.
+const uint WIDEST = 256u;
 
 //  Held to the largest half a value can be before it is written as one
 //  into the cache's copy: past it the conversion makes an infinity, and
@@ -147,7 +155,7 @@ uint placed_at (uint pos, uint offset, uint stride) {
            + offset + (at & ((1u << shape.page_shift) - 1u)) * stride;
 }
 
-shared float row[LANES];
+shared float row[WIDEST];
 shared float partial[LANES];
 
 //  Every lane's value added, as norm.comp adds it -- in each subgroup and
@@ -225,18 +233,24 @@ void main() {
                 + head * shape.head_size;
 
     //  The head, into shared memory, and normalized there where it is.
-    if (lane < shape.head_size) {
-        row[lane] = x[from + lane];
+    for (uint c = lane; c < shape.head_size; c += LANES) {
+        float here = x[from + c];
 
         if (shape.biased != 0u) {
-            row[lane] = row[lane]
-                        + g[shape.bias_base + head * shape.head_size + lane];
+            here = here + g[shape.bias_base + head * shape.head_size + c];
         }
+
+        row[c] = here;
     }
 
     if (shape.normed != 0u) {
-        float v = lane < shape.head_size ? row[lane] : 0.0;
-        float squares = whole_sum (v * v);
+        //  A sixty-four at a time and the sums in order, which is the
+        //  order the subgroups of a lane an element added them in.
+        float squares = 0.0;
+        for (uint c0 = 0u; c0 < shape.head_size; c0 += LANES) {
+            float v = c0 + lane < shape.head_size ? row[c0 + lane] : 0.0;
+            squares += whole_sum (v * v);
+        }
 
         float gain =
           sqrt (squares / float (shape.head_size)
@@ -248,8 +262,8 @@ void main() {
             gain = 1.0 / gain;
         }
 
-        if (lane < shape.head_size) {
-            row[lane] = row[lane] * gain * g[shape.base + lane];
+        for (uint c = lane; c < shape.head_size; c += LANES) {
+            row[c] = row[c] * gain * g[shape.base + c];
         }
     }
 

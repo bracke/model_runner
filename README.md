@@ -898,9 +898,11 @@ Radeon 780M a 1024 Turbo picture takes 2 min 14-21 s (steps of 15 s, the
 first 17-18 s with the weights' upload beside it, the decoder about 5.2 s;
 2 min 16 s on the morning of 2026-10-30 and 2 min 21 s that afternoon; steps
 of 13.7 s and 2 min 20 s that evening, once a picture's attention took eight
-subgroups a workgroup at heads of 128) and
+subgroups a workgroup at heads of 128; 2 min 7 s on 2026-10-31, steps of
+14.3-14.5 s) and
 a 512 picture in forty steps 2 min 10-18 s
-(steps of 3.2 s)
+(steps of 3.2 s; 2 min 13 s on 2026-10-31, steps of 3.0 s, its attention
+on four subgroups a block)
 -- stable-diffusion.cpp's Vulkan build takes 3 min 16 s for that one, 4.1
 s a step (docs/plan-image-generation.md, step 7; docs/measured-figures.txt,
 image).
@@ -2541,15 +2543,17 @@ tests speed --model MODEL --backend device --prompt-file tests/fixtures/speed-pr
 
 | Run | `cpu`, 7 workers | `device` |
 | --- | --- | --- |
-| 6-token prompt, 12 generated | 0.324 s | **0.223 s** |
+| 6-token prompt, 12 generated | 0.324 s | **0.224 s** |
 | -- evaluating the prompt | 0.031 s | 0.020 s |
-| -- generating | 0.293 s | **0.203 s** |
-| -- processor time | 1.71 s | **0.07 s** |
-| 110-token prompt, one token | 0.197 s | **0.080 s** |
-| -- evaluating the prompt | 0.171 s | **0.061 s** |
+| -- generating | 0.293 s | **0.204 s** |
+| -- processor time | 1.71 s | **0.06 s** |
+| 110-token prompt, one token | 0.197 s | **0.077 s** |
+| -- evaluating the prompt | 0.171 s | **0.058 s** |
 | -- processor time | 1.46 s | **0.02 s** |
 
-Every cell was taken again on the afternoon of 2026-10-30, each within its
+The device column was taken again on 2026-10-31, once a short span's
+attention went to four subgroups a block (0.080 s and 0.061 for the
+110-token prompt before), the same digests. Every cell was taken again on the afternoon of 2026-10-30, each within its
 spread of the morning's, the same digests. Every cell was taken again on 2026-10-30, each within its spread of the
 2026-10-16 reading; the device's twelve tokens are 0.012 s quicker. The
 two columns print the same digest at `--arith f32`, and since `tests speed`
@@ -7708,10 +7712,12 @@ somebody else's tool runs, not what it says.
 | --- | ---: | ---: |
 | model_runner, processor | **642.2 t/s** | 40.5 t/s |
 | llama.cpp, processor | 390.4 t/s | 40.3 t/s |
-| model_runner, device | **1775.1 t/s** | **57.7 t/s** |
+| model_runner, device | **1834.5 t/s** | **57.7 t/s** |
 | llama.cpp, device | 1628.0 t/s | 56.1 t/s |
 
-Taken again on the afternoon of 2026-10-30, the same way; the morning's
+This program's device row taken again on 2026-10-31, once a short span's
+attention went to four subgroups a block (1775.1 and 57.7 before); the
+other rows are the sitting below. Taken again on the afternoon of 2026-10-30, the same way; the morning's
 sitting read 611.8, 366.9, 1765.8 and 1644.6 on the prompt and 39.5, 39.8,
 57.7 and 55.6 generating, the same standing. Taken again on 2026-10-30, both sides in one sitting, each side's processor
 rows and then its device rows, with `--backend` named on this program's:
@@ -7778,10 +7784,12 @@ every change in this section is actually judged on:
 | --- | ---: | ---: |
 | model_runner, processor | **473.0 t/s** | 40.5 t/s |
 | llama.cpp, processor | 301.4 t/s | 40.3 t/s |
-| model_runner, device | **2030.7 t/s** | **57.7 t/s** |
+| model_runner, device | **2084.8 t/s** | **57.7 t/s** |
 | llama.cpp, device | 1797.7 t/s | 56.1 t/s |
 
-(The afternoon of 2026-10-30, as above; the device's prompt the mean of two
+(This program's device prompt taken again on 2026-10-31 at a load of 1.3,
+after the short span's attention went to four subgroups a block; 2030.7
+before. The afternoon of 2026-10-30, as above; the device's prompt the mean of two
 quieter readings later in the sitting, 2005.2 and 2056.2 -- 1907.3 at a load
 of 5.3 after llama-bench's processor rows. The morning read 462.3, 295.5,
 2038.6 and 1772.9; 2026-10-16 read 432.4, 286.2, 2022.7 and 1757.4.)

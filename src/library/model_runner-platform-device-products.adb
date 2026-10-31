@@ -757,7 +757,8 @@ package body Model_Runner.Platform.Device.Products is
       Head_Size  : Natural;
       Value_Size : Natural;
       Span       : Natural := 0;
-      Causal     : Boolean := True) return Address
+      Causal     : Boolean := True;
+      Sunk       : Boolean := False) return Address
    is (if Span >= Deep_Span
          and then Deep_Kernel (Item, Positions, Head_Size, Value_Size, Causal)
                   /= Null_Handle
@@ -772,12 +773,27 @@ package body Model_Runner.Platform.Device.Products is
          or else Head_Size mod 16 /= 0
          or else Value_Size mod 16 /= 0
        then Null_Handle
+       --  Not with sinks: gpt-oss-20b's perplexity over chunks of 120
+       --  read 4.1096 that way against the other kernel's 4.1289 and the
+       --  processor's 4.1280, which the suite's sinks at heads of 64 do
+       --  not reproduce, and gpt-oss is the one model with them.
+       elsif Head_Size = Matrix_Head
+         and then Value_Size = Matrix_Head
+         and then not Sunk
+         and then Item.Matrix_Split_Narrow_Attend /= Null_Handle
+       then Item.Matrix_Split_Narrow_Attend
        elsif Head_Size <= Matrix_Head and then Value_Size <= Matrix_Head
        then Item.Matrix_Attend
        elsif Head_Size <= Matrix_Mid_Head
          and then Value_Size <= Matrix_Mid_Head
          and then Item.Matrix_Mid_Attend /= Null_Handle
        then Item.Matrix_Mid_Attend
+       --  A short span's heads of 128 on the kernel that splits each tile
+       --  between the four subgroups of a block: see attention_split.comp.
+       elsif Head_Size = Matrix_Wide_Head
+         and then Value_Size = Matrix_Wide_Head
+         and then Item.Matrix_Split_Attend /= Null_Handle
+       then Item.Matrix_Split_Attend
        elsif Head_Size <= Matrix_Wide_Head
          and then Value_Size <= Matrix_Wide_Head
        then Item.Matrix_Wide_Attend
@@ -1016,11 +1032,12 @@ package body Model_Runner.Platform.Device.Products is
       KV_Width   : Natural := 0;
       V_Width    : Natural := 0;
       Span       : Natural := Bundle_Least;
-      Causal     : Boolean := True) return Address
+      Causal     : Boolean := True;
+      Sunk       : Boolean := False) return Address
    is (if not Rounding
          and then Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then Matrix_Kernel (Item, Positions, Head_Size, Value_Size, Span,
-                           Causal)
+                           Causal, Sunk)
        elsif not Rounding
          and then Item.Tile_Line /= Null_Handle
          and then Positions >= Query_Block
@@ -4377,6 +4394,36 @@ package body Model_Runner.Platform.Device.Products is
                   end if;
                end;
 
+               --  And the short span's split kernel for heads of 128.
+               declare
+                  Split : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Split;
+               begin
+                  Request.Size := Interfaces.C.size_t (Split'Length * 4);
+                  Request.Code := Split'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Split := Made;
+                  end if;
+               end;
+
+               --  And for heads of sixty-four.
+               declare
+                  Split : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Split_Narrow;
+               begin
+                  Request.Size := Interfaces.C.size_t (Split'Length * 4);
+                  Request.Code := Split'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Split_Narrow := Made;
+                  end if;
+               end;
+
                --  And the absorbed latent's.
                declare
                   Latent : aliased constant Model_Runner.Shaders.Word_Array :=
@@ -5633,6 +5680,27 @@ package body Model_Runner.Platform.Device.Products is
          end if;
 
          --  Four subgroups of sixty-four, fixed in its source.
+         if Item.Attend_Split /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Split;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Split_Attend := Made;
+            end if;
+         end if;
+
+         if Item.Attend_Split_Narrow /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Split_Narrow;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Matrix_Split_Narrow_Attend := Made;
+            end if;
+         end if;
+
+         --  Four subgroups of sixty-four, fixed in its source.
          if Item.Attend_Latent /= Null_Handle then
             Request.Stage.Module := Item.Attend_Latent;
 
@@ -6636,6 +6704,8 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Matrix_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Split_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Matrix_Split_Narrow_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wider_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Batch_Attend, "vkDestroyPipeline");
@@ -6653,6 +6723,8 @@ package body Model_Runner.Platform.Device.Products is
       end loop;
       Give_Back (Item.Attend_Matrix, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wide, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Split, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Split_Narrow, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Wider, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent_Batch, "vkDestroyShaderModule");
@@ -17715,7 +17787,8 @@ package body Model_Runner.Platform.Device.Products is
                                     KV_Width => This.KV_Width,
                                     V_Width => This.V_Width,
                                     Span => (if This.Last >= This.First then This.Last - This.First + 1 else 0),
-                                    Causal => This.Causal)));
+                                    Causal => This.Causal,
+                                    Sunk => This.Sinks /= 0)));
 
                   declare
                      Few : constant Boolean :=
