@@ -30651,7 +30651,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_split.comp when these
    --  words were made from it.
    Attention_Split_Digest : constant Interfaces.Unsigned_64 :=
-     16#0C5DBD06C0F2BC4E#;
+     16#207705844D277A57#;
 
    --  The compiled words, as the device is given them.
    Attention_Split : constant Word_Array :=
@@ -32026,7 +32026,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_split.comp when these
    --  words were made from it.
    Attention_Split_Narrow_Digest : constant Interfaces.Unsigned_64 :=
-     16#0C5DBD06C0F2BC4E#;
+     16#207705844D277A57#;
 
    --  The compiled words, as the device is given them.
    Attention_Split_Narrow : constant Word_Array :=
@@ -33397,7 +33397,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_split.comp when these
    --  words were made from it.
    Attention_Split_Mid_Digest : constant Interfaces.Unsigned_64 :=
-     16#0C5DBD06C0F2BC4E#;
+     16#207705844D277A57#;
 
    --  The compiled words, as the device is given them.
    Attention_Split_Mid : constant Word_Array :=
@@ -34773,7 +34773,7 @@ package Model_Runner.Shaders.Attend is
    --  Digest of ../src/shaders/attention_split.comp when these
    --  words were made from it.
    Attention_Split_Wider_Digest : constant Interfaces.Unsigned_64 :=
-     16#0C5DBD06C0F2BC4E#;
+     16#207705844D277A57#;
 
    --  The compiled words, as the device is given them.
    Attention_Split_Wider : constant Word_Array :=

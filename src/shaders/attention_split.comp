@@ -111,7 +111,6 @@ const uint DM = 256u;
 const uint DM = 128u;
 #endif
 
-//  A subgroup's sixteens of the head, for the values.
 //  A subgroup's sixteens of the head, for the values: its own run of
 //  them, the last subgroups' short or empty where the sixteens do not
 //  divide by the subgroups.
@@ -449,7 +448,8 @@ void main() {
         [[unroll]] for (uint s = 0u; s < SUBS; s++) {
             total += rowsum[s * BR + r];
         }
-        final_of[e] = block * BR + r < shape.positions ? 1.0 / total : 0.0;
+        final_of[e] = block * BR + r < shape.positions
+                      ? 1.0 / total : 0.0;
     }
 
     //  And out, sixteen components at a time through this subgroup's room.

@@ -774,9 +774,13 @@ package body Model_Runner.Platform.Device.Products is
          or else Value_Size mod 16 /= 0
        then Null_Handle
        --  Not with sinks: gpt-oss-20b's perplexity over chunks of 120
-       --  read 4.1096 that way against the other kernel's 4.1289 and the
-       --  processor's 4.1280, which the suite's sinks at heads of 64 do
-       --  not reproduce, and gpt-oss is the one model with them.
+       --  read 4.1096 that way against this compilation's 4.1289 and the
+       --  processor's 4.1280. Not a fault of the split: the 128-wide
+       --  compilation of this kernel reads 4.1354 at the same heads, and
+       --  one of gpt-oss's first ten layers alone on the split moves it
+       --  by as much as the whole -- its sinks' attention is that
+       --  sensitive to how the weights round, where qwen3-8b's, LFM3's
+       --  and TinyLlama's move by a hundredth of a per cent.
        elsif Head_Size <= Matrix_Head
          and then Value_Size <= Matrix_Head
          and then not Sunk
