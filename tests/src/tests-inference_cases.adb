@@ -7400,9 +7400,11 @@ package body Tests.Inference_Cases is
    --  so a context of a few hundred never slides at all: the test above
    --  rings no cell. Past that, a paged layer slides by letting its
    --  oldest pages go to the end of its list rather than through the
-   --  host, which read the whole cache back each batch. Prompts of whole
+   --  host, which read the whole cache back each batch; and a block's
+   --  layer slides on the device where its rows lie. Prompts of whole
    --  batches and tokens after them, far enough that the window slides
-   --  several times both ways, say what the block session says.
+   --  several times both ways, say what the block session says, and the
+   --  block what the processor says within the backends' tolerance.
    procedure A_Paged_Window_Slides_By_Its_Pages
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7520,6 +7522,57 @@ package body Tests.Inference_Cases is
                        & " away from the same session in a block");
 
                L.Close (Paged);
+            end if;
+         end;
+
+         --  And the block against the processor, which slides neither way.
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under   : Harness (Held'Access);
+            On_Host : Harness (Held'Access);
+            Ready, Up : Boolean;
+
+            Status : E.Error_Info;
+
+            Blocked, Hosted_Run : L.Session;
+
+            Said, Host_Said : Trail := [others => [others => 0.0]];
+
+            Apart : N.Real := 0.0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+            Start (On_Host, Backend => Model_Runner.Backend.Backend_CPU,
+                   Ready => Up);
+
+            if Ready and then Up then
+               L.Open (Blocked, Under.Ready, Context => Room,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the block window did not open");
+               Read (Blocked, Under, Said);
+               L.Close (Blocked);
+
+               L.Open (Hosted_Run, On_Host.Ready, Context => Room,
+                       Status => Status);
+               Assert (E.Is_Ok (Status),
+                       "the processor's window did not open");
+               Read (Hosted_Run, On_Host, Host_Said);
+               L.Close (Hosted_Run);
+
+               for Which in Trail'Range loop
+                  for Index in Logit_Vector'Range loop
+                     Apart :=
+                       N.Real'Max
+                         (Apart,
+                          abs (Said (Which) (Index)
+                               - Host_Said (Which) (Index)));
+                  end loop;
+               end loop;
+
+               Assert (Apart <= 0.02,
+                       "a block window slid on the device says"
+                       & N.Real'Image (Apart)
+                       & " away from the processor");
             end if;
          end;
 
@@ -22039,7 +22092,7 @@ package body Tests.Inference_Cases is
         (T, A_Paged_Window_Slides_By_Its_Pages'Access,
          "a paged window slid by its pages, in batches and tokens past "
          & "several slides and on the host after, says what a block "
-         & "session says");
+         & "session slid on the device says, and that the processor's");
       Register_Routine
         (T, Two_Backends_Agree_On_A_Long_Prompt'Access,
          "the processor and the device agree on a prompt long enough to "

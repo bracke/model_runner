@@ -63,6 +63,23 @@ is
        and then (Page_Start (Layer) - Item.Origin.all (Layer)) / P
                 < Item.Page_Count.all (Layer));
 
+   --  Whether a layer slides on the device where its rows lie: a session
+   --  in a block of the device's, its rows exact and its keys and values
+   --  as wide, so that one submission moves both by the same distance.
+   --  The host's copy moves too, and what the device wrote and the host
+   --  was not given goes down with the device's: a settle after reads
+   --  the positions the layer still holds where they now are. It read
+   --  the whole cache back a slide, as a page's did.
+   function Device_Moves return Boolean
+   is (not Item.Paged
+       and then Item.Seat >= 0
+       and then Item.Held = Exact
+       and then (Item.Values_In_Keys or else KV_Width = V_Width));
+
+   --  Set where a move on the device was refused: the layers after it
+   --  slide through the host, settled first.
+   Fell_Back : Boolean := False;
+
 begin
    if Item.Cells = null or else Settings.Window = 0 then
       return;
@@ -79,7 +96,9 @@ begin
       begin
          for Layer in Item.Cells.all'Range loop
             Sliding := Sliding
-              or else (Make_Room.Sliding (Layer) and then not Turns (Layer));
+              or else (Make_Room.Sliding (Layer)
+                       and then not Turns (Layer)
+                       and then not Device_Moves);
          end loop;
 
          if Sliding then
@@ -115,7 +134,44 @@ begin
                Rows_Base : constant Element_Count := Rows_At (Item, Layer);
 
                From : constant Element_Count := Start - Origin;
+
+               On_Device : Boolean := False;
             begin
+               if Moved > 0
+                 and then not By_Pages
+                 and then Device_Moves
+                 and then not Fell_Back
+               then
+                  declare
+                     Runs : constant Model_Runner.Backend.Device.Block_Runs :=
+                       (if Item.Values_In_Keys
+                        then [1 => (At_Value => Keys_Base,
+                                    Count    => Moved * KV_Width)]
+                        else [(At_Value => Keys_Base,
+                               Count    => Moved * KV_Width),
+                              (At_Value => Item.Keys.all'Length + Vals_Base,
+                               Count    => Moved * V_Width)]);
+                  begin
+                     Model_Runner.Backend.Device.Move_Cache
+                       (From   => Block_Base (Item) + From * KV_Width,
+                        Into   => Block_Base (Item),
+                        Runs   => Runs,
+                        Halves => True,
+                        Ok     => On_Device);
+                  end;
+
+                  if not On_Device then
+                     Fell_Back := True;
+                     if Item.Owed_Count > 0 then
+                        declare
+                           Settled : Boolean;
+                        begin
+                           Settle_Cache (Item, Settled);
+                        end;
+                     end if;
+                  end if;
+               end if;
+
                if Moved > 0 then
                   case Item.Held is
                      when Exact =>
@@ -214,6 +270,7 @@ begin
                   end;
                   Turned := True;
                elsif Moved > 0
+                 and then not On_Device
                  and then Item.Seat >= 0
                  and then Item.Held = Exact
                then
