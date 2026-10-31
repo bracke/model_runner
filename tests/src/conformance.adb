@@ -1594,144 +1594,144 @@ package body Conformance is
                      Format : Tiny_Model.Weight_Format renames
                        Device_Formats (Device_Slot);
                   begin
-                  --  The short sweep's binary32 alone, here as above. The
-                  --  cache arms below ride on the first device format,
-                  --  which is binary32, and the mixture after the loop
-                  --  is built in it, so both still run in a short sweep.
-                  if not Crosses (Format, Short_Sweep)
-                    or else not In_Part (Which_Arch, Device_Slot)
-                  then
-                     goto Next_Device_Format;
-                  end if;
-
-                  Since := Ada.Calendar.Clock;
-
-                  --  Room for the tiled sequence, which the default
-                  --  context of sixteen has not got.
-                  Tiny_Model.Build
-                    (Image, Format, Kind => Crossed (Which_Arch),
-                     Room => 64);
-                  Current_Kind := Crossed (Which_Arch);
-                  Result.Built := Result.Built
-                    + (Ada.Calendar.Clock - Since);
-                  Forget;
-
-                  for Which in Sequence_Index loop
-                     if Which /= Tiled_Index then
-                        Compare
-                          (Which, L.Exact,
-                           Model_Runner.Backend.Backend_Device, L.No_Repack);
-                        On_Device := On_Device + 1;
+                     --  The short sweep's binary32 alone, here as above. The
+                     --  cache arms below ride on the first device format,
+                     --  which is binary32, and the mixture after the loop
+                     --  is built in it, so both still run in a short sweep.
+                     if not Crosses (Format, Short_Sweep)
+                       or else not In_Part (Which_Arch, Device_Slot)
+                     then
+                        goto Next_Device_Format;
                      end if;
-                  end loop;
 
-                  --  The tile kernels: the long sequence in one batch,
-                  --  which is a narrow tile and a third, and in chunks of
-                  --  seventeen, which cross a seam inside one. The
-                  --  processor's arithmetic does not change with the
-                  --  count, so these are the device's alone.
-                  Compare
-                    (Tiled_Index, L.Exact,
-                     Model_Runner.Backend.Backend_Device, L.No_Repack,
-                     Batched => True);
-                  Compare
-                    (Tiled_Index, L.Exact,
-                     Model_Runner.Backend.Backend_Device, L.No_Repack,
-                     Batched => True, Chunk => 17);
-                  On_Device := On_Device + 2;
+                     Since := Ada.Calendar.Clock;
 
-                  --  Eight tokens in one pass, and the same eight three at a
-                  --  time, which is a batch longer than the eight an
-                  --  invocation carries and a batch that is not a whole
-                  --  number of them.
-                  Compare
-                    (4, L.Exact, Model_Runner.Backend.Backend_Device,
-                     L.No_Repack, Batched => True);
-                  Compare
-                    (4, L.Exact, Model_Runner.Backend.Backend_Device,
-                     L.No_Repack, Batched => True, Chunk => 3);
-                  On_Device := On_Device + 2;
+                     --  Room for the tiled sequence, which the default
+                     --  context of sixteen has not got.
+                     Tiny_Model.Build
+                       (Image, Format, Kind => Crossed (Which_Arch),
+                        Room => 64);
+                     Current_Kind := Crossed (Which_Arch);
+                     Result.Built := Result.Built
+                       + (Ada.Calendar.Clock - Since);
+                     Forget;
 
-                  --  And the same with the session storing what it commits
-                  --  in half precision, on the first format only.
-                  --
-                  --  What the cache holds has nothing to do with how a
-                  --  weight is encoded: it is keys and values the session
-                  --  wrote, and rounding them is the session's doing rather
-                  --  than the backend's. Crossing it with all fifteen
-                  --  formats would run the same halving fifteen times. What
-                  --  had never run at all is the halved cache with products
-                  --  computed on a device -- every comparison of it was
-                  --  against a processor -- and once is what that costs.
-                  if Format = Device_Formats (Device_Formats'First) then
-                     Compare
-                       (3, L.Halved, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack);
-                     Compare
-                       (4, L.Halved, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack);
-                     Compare
-                       (4, L.Halved, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack, Batched => True);
+                     for Which in Sequence_Index loop
+                        if Which /= Tiled_Index then
+                           Compare
+                             (Which, L.Exact,
+                              Model_Runner.Backend.Backend_Device, L.No_Repack);
+                           On_Device := On_Device + 1;
+                        end if;
+                     end loop;
 
-                     --  And the byte storage, for the same reason and on the
-                     --  same terms: what a session rounds is its own doing,
-                     --  and the only thing crossing it with a device adds is
-                     --  whether products computed there read a rounded row
-                     --  back the way products computed here do.
+                     --  The tile kernels: the long sequence in one batch,
+                     --  which is a narrow tile and a third, and in chunks of
+                     --  seventeen, which cross a seam inside one. The
+                     --  processor's arithmetic does not change with the
+                     --  count, so these are the device's alone.
                      Compare
-                       (3, L.Eighth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack);
-                     Compare
-                       (4, L.Eighth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack);
-                     Compare
-                       (4, L.Eighth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack, Batched => True);
-                     Compare
-                       (3, L.Fourth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack);
-                     Compare
-                       (4, L.Fourth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack);
-                     Compare
-                       (4, L.Fourth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack, Batched => True);
-                     Compare
-                       (4, L.Eighth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack, Values => L.Value_Fourth);
-                     Compare
-                       (4, L.Fourth, Model_Runner.Backend.Backend_Device,
-                        L.No_Repack, Batched => True, Values => L.Value_Eighth);
-                     On_Device := On_Device + 11;
-
-                     --  And the packed caches over the tile: the layer's
-                     --  rows unpacked into the block's own copy and
-                     --  attended through the matrix instruction, on a
-                     --  fixture of two layers -- a block padded out to
-                     --  them -- in one batch and across a seam.
-                     Compare
-                       (Tiled_Index, L.Eighth,
+                       (Tiled_Index, L.Exact,
                         Model_Runner.Backend.Backend_Device, L.No_Repack,
                         Batched => True);
                      Compare
-                       (Tiled_Index, L.Fourth,
-                        Model_Runner.Backend.Backend_Device, L.No_Repack,
-                        Batched => True);
-                     Compare
-                       (Tiled_Index, L.Eighth,
+                       (Tiled_Index, L.Exact,
                         Model_Runner.Backend.Backend_Device, L.No_Repack,
                         Batched => True, Chunk => 17);
+                     On_Device := On_Device + 2;
+
+                     --  Eight tokens in one pass, and the same eight three at
+                     --  a time, which is a batch longer than the eight an
+                     --  invocation carries and a batch that is not a whole
+                     --  number of them.
                      Compare
-                       (Tiled_Index, L.Fourth,
-                        Model_Runner.Backend.Backend_Device, L.No_Repack,
-                        Batched => True, Chunk => 17);
-                     On_Device := On_Device + 4;
-                  end if;
+                       (4, L.Exact, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Batched => True);
+                     Compare
+                       (4, L.Exact, Model_Runner.Backend.Backend_Device,
+                        L.No_Repack, Batched => True, Chunk => 3);
+                     On_Device := On_Device + 2;
 
-                  B.Free (Image);
+                     --  And the same with the session storing what it commits
+                     --  in half precision, on the first format only.
+                     --
+                     --  What the cache holds has nothing to do with how a
+                     --  weight is encoded: it is keys and values the session
+                     --  wrote, and rounding them is the session's doing rather
+                     --  than the backend's. Crossing it with all fifteen
+                     --  formats would run the same halving fifteen times. What
+                     --  had never run at all is the halved cache with products
+                     --  computed on a device -- every comparison of it was
+                     --  against a processor -- and once is what that costs.
+                     if Format = Device_Formats (Device_Formats'First) then
+                        Compare
+                          (3, L.Halved, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                        Compare
+                          (4, L.Halved, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                        Compare
+                          (4, L.Halved, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack, Batched => True);
 
-                  <<Next_Device_Format>>
+                        --  And the byte storage, for the same reason and on
+                        --  the same terms: what a session rounds is its own
+                        --  doing, and the only thing crossing it with a device
+                        --  adds is whether products computed there read a
+                        --  rounded row back the way products computed here do.
+                        Compare
+                          (3, L.Eighth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                        Compare
+                          (4, L.Eighth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                        Compare
+                          (4, L.Eighth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack, Batched => True);
+                        Compare
+                          (3, L.Fourth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                        Compare
+                          (4, L.Fourth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack);
+                        Compare
+                          (4, L.Fourth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack, Batched => True);
+                        Compare
+                          (4, L.Eighth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack, Values => L.Value_Fourth);
+                        Compare
+                          (4, L.Fourth, Model_Runner.Backend.Backend_Device,
+                           L.No_Repack, Batched => True, Values => L.Value_Eighth);
+                        On_Device := On_Device + 11;
+
+                        --  And the packed caches over the tile: the layer's
+                        --  rows unpacked into the block's own copy and
+                        --  attended through the matrix instruction, on a
+                        --  fixture of two layers -- a block padded out to
+                        --  them -- in one batch and across a seam.
+                        Compare
+                          (Tiled_Index, L.Eighth,
+                           Model_Runner.Backend.Backend_Device, L.No_Repack,
+                           Batched => True);
+                        Compare
+                          (Tiled_Index, L.Fourth,
+                           Model_Runner.Backend.Backend_Device, L.No_Repack,
+                           Batched => True);
+                        Compare
+                          (Tiled_Index, L.Eighth,
+                           Model_Runner.Backend.Backend_Device, L.No_Repack,
+                           Batched => True, Chunk => 17);
+                        Compare
+                          (Tiled_Index, L.Fourth,
+                           Model_Runner.Backend.Backend_Device, L.No_Repack,
+                           Batched => True, Chunk => 17);
+                        On_Device := On_Device + 4;
+                     end if;
+
+                     B.Free (Image);
+
+                     <<Next_Device_Format>>
                   end;
                end loop;
 

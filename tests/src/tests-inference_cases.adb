@@ -7297,8 +7297,9 @@ package body Tests.Inference_Cases is
    --  slides, a cell is rewritten for a new position and its page reused,
    --  where a layer that keeps everything only ever takes another. A paged
    --  session on a windowed model must still say, bit for bit, what a block
-   --  session says -- past far more positions than the window holds, so the
-   --  cells ring many times over.
+   --  session says. A context this short is inside the window's cells,
+   --  which hold a batch and more past it, so nothing slides here; the
+   --  test after this one slides.
    procedure A_Paged_Window_Says_What_A_Block_Window_Says
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -7390,6 +7391,143 @@ package body Tests.Inference_Cases is
 
       B.Free (Image);
    end A_Paged_Window_Says_What_A_Block_Window_Says;
+
+   ------------------------------------------------
+   -- A_Paged_Window_Slides_By_Its_Pages --
+   ------------------------------------------------
+
+   --  A windowed layer's cells hold a window, a batch and a little more,
+   --  so a context of a few hundred never slides at all: the test above
+   --  rings no cell. Past that, a paged layer slides by letting its
+   --  oldest pages go to the end of its list rather than through the
+   --  host, which read the whole cache back each batch. Prompts of whole
+   --  batches and tokens after them, far enough that the window slides
+   --  several times both ways, say what the block session says.
+   procedure A_Paged_Window_Slides_By_Its_Pages
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room   : constant := 1_800;
+      Batch  : constant := 512;
+      Rounds : constant := 3;
+      Steps  : constant := 40;
+
+      function Token_Of (Place : Positive) return Vocab.Token_Id
+      is (Vocab.Token_Id (2 + (Place * 7) mod 12));
+
+      --  And two after them on the host, which reads its copy of the
+      --  cache settled from pages that slid.
+      Hosted : constant := 2;
+
+      type Trail is array (1 .. Rounds + Steps + Hosted) of Logit_Vector;
+
+      procedure Read
+        (Session : in out L.Session;
+         Under   : Harness;
+         Said    : out Trail)
+      is
+         Status : E.Error_Info;
+      begin
+         for Round in 1 .. Rounds loop
+            declare
+               Tokens : Model_Runner.Tokenizer.Token_Array (1 .. Batch);
+            begin
+               for Place in Tokens'Range loop
+                  Tokens (Place) := Token_Of ((Round - 1) * Batch + Place);
+               end loop;
+               L.Evaluate_Batch
+                 (Session, Under.Ready, Tokens, Said (Round),
+                  Status => Status);
+               Assert (E.Is_Ok (Status), "a batch failed in round"
+                       & Integer'Image (Round) & ": "
+                       & E.Error_Code'Image (Status.Code));
+            end;
+         end loop;
+
+         for Step in 1 .. Steps loop
+            L.Evaluate (Session, Under.Ready,
+                        Token_Of (Rounds * Batch + Step),
+                        Said (Rounds + Step), Status => Status);
+            Assert (E.Is_Ok (Status), "a token failed at"
+                    & Integer'Image (Step) & ": "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+
+         for Step in 1 .. Hosted loop
+            Model_Runner.Backend.Device.Set_Whole_Layers (False);
+            L.Evaluate (Session, Under.Ready,
+                        Token_Of (Rounds * Batch + Steps + Step),
+                        Said (Rounds + Steps + Step), Status => Status);
+            Model_Runner.Backend.Device.Set_Whole_Layers (True);
+            Assert (E.Is_Ok (Status), "a token on the host failed: "
+                    & E.Error_Code'Image (Status.Code));
+         end loop;
+      end Read;
+
+      Image : B.Byte_Array_Access;
+      Awake : Boolean;
+   begin
+      Tiny_Model.Build (Image, Room => Room, Window => 3);
+
+      Model_Runner.Backend.Device.Open (Awake);
+
+      if Awake then
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : Harness (Held'Access);
+            Ready : Boolean;
+
+            Status : E.Error_Info;
+
+            Blocked, Paged : L.Session;
+
+            Said, Paged_Said : Trail := [others => [others => 0.0]];
+
+            Worst : N.Real := 0.0;
+         begin
+            Start (Under, Backend => Model_Runner.Backend.Backend_Device,
+                   Ready => Ready);
+
+            if Ready then
+               L.Open (Blocked, Under.Ready, Context => Room,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the block window did not open");
+               Read (Blocked, Under, Said);
+               L.Close (Blocked);
+
+               L.Open (Paged, Under.Ready, Context => Room, Paged => True,
+                       Status => Status);
+               Assert (E.Is_Ok (Status), "the paged window did not open");
+               Read (Paged, Under, Paged_Said);
+
+               Assert (L.Holds_Pages (Paged),
+                       "the paged window did not reach the device in pages");
+
+               for Which in Trail'Range loop
+                  for Index in Logit_Vector'Range loop
+                     Worst :=
+                       N.Real'Max
+                         (Worst,
+                          abs (Said (Which) (Index)
+                               - Paged_Said (Which) (Index)));
+                  end loop;
+               end loop;
+
+               Assert (Worst <= Paged_Layout_Slack,
+                       "a paged window that slid by its pages says"
+                       & N.Real'Image (Worst)
+                       & " away from the same session in a block");
+
+               L.Close (Paged);
+            end if;
+         end;
+
+         Model_Runner.Backend.Device.Close;
+      end if;
+
+      B.Free (Image);
+   end A_Paged_Window_Slides_By_Its_Pages;
 
    --  Two sessions on one prepared model, evaluated a token at a time in
    --  turn, each get what they would have got alone.
@@ -7838,110 +7976,110 @@ package body Tests.Inference_Cases is
       is
          Image : B.Byte_Array_Access;
       begin
-      Tiny_Model.Build (Image, Kind => Kind, Room => Room);
+         Tiny_Model.Build (Image, Kind => Kind, Room => Room);
 
-      declare
-         Held  : aliased constant B.Byte_Array := Image.all;
-         Under : aliased Harness (Held'Access);
+         declare
+            Held  : aliased constant B.Byte_Array := Image.all;
+            Under : aliased Harness (Held'Access);
 
-         procedure Turn
-           (With_Lookup : Boolean;
-            Text        : out Model_Runner.Bytes.Byte_Array_Access;
-            Length      : out Natural;
-            Proposed    : out Natural;
-            Accepted    : out Natural)
-         is
-            Live    : L.Session;
-            Request : Gen.Request;
-            Stop    : Model_Runner.Stops.Set;
-            Outcome : Gen.Result;
-            Local   : E.Error_Info;
+            procedure Turn
+              (With_Lookup : Boolean;
+               Text        : out Model_Runner.Bytes.Byte_Array_Access;
+               Length      : out Natural;
+               Proposed    : out Natural;
+               Accepted    : out Natural)
+            is
+               Live    : L.Session;
+               Request : Gen.Request;
+               Stop    : Model_Runner.Stops.Set;
+               Outcome : Gen.Result;
+               Local   : E.Error_Info;
+            begin
+               L.Open (Live, Under.Ready, Context => Room, Status => Local);
+               Assert (E.Is_Ok (Local), "the session did not open");
+
+               Model_Runner.Stops.Open (Stop);
+               Request.Max_Tokens := 12;
+               Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+               Request.Seed := 7;
+               Request.Has_Seed := True;
+               Request.Add_Beginning := True;
+               Request.Retain_Text := True;
+               Request.Draft_Tokens := (if With_Lookup then 4 else 0);
+               Request.Draft_From_Context := With_Lookup;
+
+               Gen.Generate
+                 (Under.Ready, Live, Prompt, Request, Stop, null, null,
+                  null, null, null, null, Outcome => Outcome);
+
+               Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
+                       "the run failed: "
+                       & E.Error_Code'Image (Outcome.Error.Code));
+
+               Text := Outcome.Text;
+               Length := Outcome.Text_Length;
+               Proposed := Outcome.Drafted;
+               Accepted := Outcome.Accepted;
+
+               Model_Runner.Stops.Close (Stop);
+               L.Close (Live);
+            end Turn;
+
+            Plain_Text, Look_Text : Model_Runner.Bytes.Byte_Array_Access;
+            Plain_Last, Look_Last : Natural;
+            Ignored_A, Ignored_B  : Natural;
+            Proposed, Accepted    : Natural;
+            Able : Boolean;
          begin
-            L.Open (Live, Under.Ready, Context => Room, Status => Local);
-            Assert (E.Is_Ok (Local), "the session did not open");
+            Start (Under, On, Able);
+            if not Able then
+               Device_Notes.Skip ("to draft an LFM3 from its context on");
+               B.Free (Image);
+               return;
+            end if;
 
-            Model_Runner.Stops.Open (Stop);
-            Request.Max_Tokens := 12;
-            Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
-            Request.Seed := 7;
-            Request.Has_Seed := True;
-            Request.Add_Beginning := True;
-            Request.Retain_Text := True;
-            Request.Draft_Tokens := (if With_Lookup then 4 else 0);
-            Request.Draft_From_Context := With_Lookup;
+            Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B);
+            Turn (True, Look_Text, Look_Last, Proposed, Accepted);
 
-            Gen.Generate
-              (Under.Ready, Live, Prompt, Request, Stop, null, null,
-               null, null, null, null, Outcome => Outcome);
+            Assert (Plain_Last > 0, "the plain run produced nothing");
+            Assert (Look_Last = Plain_Last,
+                    "the drafted run produced" & Natural'Image (Look_Last)
+                    & " bytes against" & Natural'Image (Plain_Last));
 
-            Assert (not Gen."=" (Outcome.Reason, Gen.Runtime_Error),
-                    "the run failed: "
-                    & E.Error_Code'Image (Outcome.Error.Code));
+            Assert (B."/=" (Plain_Text, null)
+                      and then B."/=" (Look_Text, null),
+                    "a run retained no text");
+            Assert (B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
+                           Look_Text.all (1 .. B.Byte_Index (Look_Last))),
+                    "drafting from the context produced different text");
 
-            Text := Outcome.Text;
-            Length := Outcome.Text_Length;
-            Proposed := Outcome.Drafted;
-            Accepted := Outcome.Accepted;
+            --  And the path was taken, rather than the run quietly falling
+            --  back to one token at a time.
+            Assert (Proposed > 0,
+                    "the run proposed nothing from a context that repeats, so "
+                    & "this compares two runs of the same path");
+            --  And most of them were right, which is the part the same text
+            --  cannot show. A proposal is checked either way, so a lookup that
+            --  proposes nonsense produces the same text and costs passes to do
+            --  it: the fault this holds is the key not ending at the token the
+            --  round is already certain of, which proposes what follows the
+            --  phrase before this one. On a prompt repeating with period two
+            --  every proposal is right; with the key one short, one in five
+            --  is.
+            --  The plain fixture's: LFM3's random weights need not repeat
+            --  the prompt's period, which is the rewinding asked of it.
+            Assert (Tiny_Model."/=" (Kind, Tiny_Model.Llama)
+                    or else Accepted * 2 >= Proposed,
+                    "only" & Natural'Image (Accepted) & " of"
+                    & Natural'Image (Proposed) & " proposals were accepted on "
+                    & "a context that repeats, so the proposals are for the "
+                    & "wrong position");
 
-            Model_Runner.Stops.Close (Stop);
-            L.Close (Live);
-         end Turn;
+            B.Free (Plain_Text);
+            B.Free (Look_Text);
+         end;
 
-         Plain_Text, Look_Text : Model_Runner.Bytes.Byte_Array_Access;
-         Plain_Last, Look_Last : Natural;
-         Ignored_A, Ignored_B  : Natural;
-         Proposed, Accepted    : Natural;
-         Able : Boolean;
-      begin
-         Start (Under, On, Able);
-         if not Able then
-            Device_Notes.Skip ("to draft an LFM3 from its context on");
-            B.Free (Image);
-            return;
-         end if;
-
-         Turn (False, Plain_Text, Plain_Last, Ignored_A, Ignored_B);
-         Turn (True, Look_Text, Look_Last, Proposed, Accepted);
-
-         Assert (Plain_Last > 0, "the plain run produced nothing");
-         Assert (Look_Last = Plain_Last,
-                 "the drafted run produced" & Natural'Image (Look_Last)
-                 & " bytes against" & Natural'Image (Plain_Last));
-
-         Assert (B."/=" (Plain_Text, null)
-                   and then B."/=" (Look_Text, null),
-                 "a run retained no text");
-         Assert (B."=" (Plain_Text.all (1 .. B.Byte_Index (Plain_Last)),
-                        Look_Text.all (1 .. B.Byte_Index (Look_Last))),
-                 "drafting from the context produced different text");
-
-         --  And the path was taken, rather than the run quietly falling
-         --  back to one token at a time.
-         Assert (Proposed > 0,
-                 "the run proposed nothing from a context that repeats, so "
-                 & "this compares two runs of the same path");
-         --  And most of them were right, which is the part the same text
-         --  cannot show. A proposal is checked either way, so a lookup that
-         --  proposes nonsense produces the same text and costs passes to do
-         --  it: the fault this holds is the key not ending at the token the
-         --  round is already certain of, which proposes what follows the
-         --  phrase before this one. On a prompt repeating with period two
-         --  every proposal is right; with the key one short, one in five
-         --  is.
-         --  The plain fixture's: LFM3's random weights need not repeat
-         --  the prompt's period, which is the rewinding asked of it.
-         Assert (Tiny_Model."/=" (Kind, Tiny_Model.Llama)
-                 or else Accepted * 2 >= Proposed,
-                 "only" & Natural'Image (Accepted) & " of"
-                 & Natural'Image (Proposed) & " proposals were accepted on "
-                 & "a context that repeats, so the proposals are for the "
-                 & "wrong position");
-
-         B.Free (Plain_Text);
-         B.Free (Look_Text);
-      end;
-
-      B.Free (Image);
+         B.Free (Image);
       end Cross;
    begin
       Cross (Tiny_Model.Llama, Model_Runner.Backend.Backend_CPU);
@@ -21897,6 +22035,11 @@ package body Tests.Inference_Cases is
          "a paged session on a sliding-window model, whose cells ring as "
          & "the window slides and whose pages are reused, says bit for bit "
          & "what a block session says");
+      Register_Routine
+        (T, A_Paged_Window_Slides_By_Its_Pages'Access,
+         "a paged window slid by its pages, in batches and tokens past "
+         & "several slides and on the host after, says what a block "
+         & "session says");
       Register_Routine
         (T, Two_Backends_Agree_On_A_Long_Prompt'Access,
          "the processor and the device agree on a prompt long enough to "

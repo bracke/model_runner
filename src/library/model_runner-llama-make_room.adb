@@ -11,9 +11,57 @@ is
    Width    : constant Element_Count :=
      Element_Count (Settings.Window);
 
+   P : constant Element_Count := Element_Count (Page_Positions);
+
    --  Whether any layer's rows moved down, which a paged session's
    --  pages do not follow.
    Slid : Boolean := False;
+
+   --  Whether any layer's pages were turned, which its page table on
+   --  the device has to be written again to say.
+   Turned : Boolean := False;
+
+   --  Whether Layer slides before Upto is written.
+   function Sliding (Layer : Natural) return Boolean
+   is (Item.Cells.all (Layer) > 0
+       and then Upto - Item.Origin.all (Layer) >= Item.Cells.all (Layer));
+
+   --  The lowest position anything will read from here on, which is the
+   --  window measured back from the first of the positions about to be
+   --  written; and a window's worth behind the newest position, and a
+   --  little more: a drafted round runs positions ahead and rewinds to
+   --  the last agreed, and the window of a position rewound to reaches
+   --  back past one kept for the newest. Kept to the window alone,
+   --  gemma-3-4b drafted by Gemma 3 270M stopped with a range check some
+   --  1,200 positions in, reading a cell the slide had let go.
+   function Window_Start return Element_Count is
+     (if Element_Count (Item.Committed) < Width + Rewind_Slack then 0
+      else Element_Count (Item.Committed) - Width - Rewind_Slack + 1);
+
+   --  The same, down to a whole number of pages past the layer's origin:
+   --  where a paged layer slides by turning its pages over.
+   function Page_Start (Layer : Natural) return Element_Count is
+     (Item.Origin.all (Layer)
+      + (Element_Count'Max (Window_Start, Item.Origin.all (Layer))
+         - Item.Origin.all (Layer)) / P * P);
+
+   --  Whether Layer slides by its pages: a session whose rows are in
+   --  pages it holds, with a page or more to let go, and room in the
+   --  layer's cells for what is kept down to the page and the positions
+   --  coming. The pages that held the oldest rows go to the end of the
+   --  layer's list, where the positions coming are written, and the rows
+   --  between keep the pages they were in -- moved on neither copy of
+   --  the device's, so nothing the device wrote has to be read back
+   --  first. LFM3's prompt of 1,257 read the whole cache back a batch
+   --  through the device's uncached mapping, a tenth of the prompt.
+   function Turns (Layer : Natural) return Boolean
+   is (Item.Paged
+       and then Item.Paged_In
+       and then Item.Page_Count /= null
+       and then Page_Start (Layer) > Item.Origin.all (Layer)
+       and then Upto - Page_Start (Layer) < Item.Cells.all (Layer)
+       and then (Page_Start (Layer) - Item.Origin.all (Layer)) / P
+                < Item.Page_Count.all (Layer));
 
 begin
    if Item.Cells = null or else Settings.Window = 0 then
@@ -21,19 +69,17 @@ begin
    end if;
 
    --  What the device wrote and the host has not read back, before any
-   --  of it is moved. Asked only when something is about to slide, so
-   --  the lazy settle this backend was built around still holds for
-   --  every call that does not: a layer slides about once every batch
-   --  of positions.
+   --  of it is moved. Asked only when something is about to slide other
+   --  than by its pages, so the lazy settle this backend was built
+   --  around still holds for every call that does not: a layer slides
+   --  about once every batch of positions.
    if Item.Owed_Count > 0 then
       declare
          Sliding : Boolean := False;
       begin
          for Layer in Item.Cells.all'Range loop
             Sliding := Sliding
-              or else (Item.Cells.all (Layer) > 0
-                       and then Upto - Item.Origin.all (Layer)
-                                >= Item.Cells.all (Layer));
+              or else (Make_Room.Sliding (Layer) and then not Turns (Layer));
          end loop;
 
          if Sliding then
@@ -55,21 +101,11 @@ begin
          --  nothing to slide.
          if Cells > 0 and then Upto - Origin >= Cells then
             declare
-               --  The lowest position anything will read from here on,
-               --  which is the window measured back from the first of
-               --  the positions about to be written.
                Held  : constant Element_Count :=
                  Element_Count (Item.Committed);
-               --  A window's worth behind the newest position, and a
-               --  little more: a drafted round runs positions ahead and
-               --  rewinds to the last agreed, and the window of a
-               --  position rewound to reaches back past one kept for the
-               --  newest. Kept to the window alone, gemma-3-4b drafted by
-               --  Gemma 3 270M stopped with a range check some 1,200
-               --  positions in, reading a cell the slide had let go.
+               By_Pages : constant Boolean := Turns (Layer);
                Start : constant Element_Count :=
-                 (if Held < Width + Rewind_Slack then 0
-                  else Held - Width - Rewind_Slack + 1);
+                 (if By_Pages then Page_Start (Layer) else Window_Start);
                Moved : constant Element_Count :=
                  (if Start >= Held then 0 else Held - Start);
 
@@ -161,7 +197,23 @@ begin
                --  same bytes in this session's own block. Only the
                --  exact storage ever reaches a device, which is what
                --  Take_Block asks of a session before it deals it one.
-               if Moved > 0
+               if By_Pages then
+                  declare
+                     First : constant Natural :=
+                       Natural (Item.Page_First.all (Layer));
+                     Count : constant Natural :=
+                       Natural (Item.Page_Count.all (Layer));
+                     Drop  : constant Natural := Natural (From / P);
+                     Was   : constant Cell_Counts :=
+                       Item.Pages.all (First .. First + Count - 1);
+                  begin
+                     for Page in 0 .. Count - 1 loop
+                        Item.Pages.all (First + Page) :=
+                          Was (Was'First + (Page + Drop) mod Count);
+                     end loop;
+                  end;
+                  Turned := True;
+               elsif Moved > 0
                  and then Item.Seat >= 0
                  and then Item.Held = Exact
                then
@@ -203,7 +255,7 @@ begin
                end if;
 
                Item.Origin.all (Layer) := Start;
-               Slid := Slid or else Moved > 0;
+               Slid := Slid or else (Moved > 0 and then not By_Pages);
             end;
          end if;
       end;
@@ -219,5 +271,7 @@ begin
    --  slides.
    if Slid and then Item.Paged and then Item.Paged_In then
       Release_Session_Pages (Item'Unchecked_Access);
+   elsif Turned then
+      Tables_Of := null;
    end if;
 end Make_Room;

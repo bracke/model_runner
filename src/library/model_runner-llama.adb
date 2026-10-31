@@ -6175,7 +6175,7 @@ package body Model_Runner.Llama is
          V_Width  : constant Element_Count :=
            Element_Count (Settings.KV_Heads * Settings.Value_Size);
 
-         Span  : constant Element_Count := Element_Count (Item.Owed_Count);
+         Owed  : constant Element_Count := Element_Count (Item.Owed_Count);
          First : constant Element_Count := Element_Count (Item.Owed_At);
 
          Read : Boolean := True;
@@ -6196,17 +6196,29 @@ package body Model_Runner.Llama is
                Layer_Vals : constant Element_Count :=
                  Values_At (Item, Natural (Index));
 
-               --  Where the positions sit in this layer: at their cells,
-               --  which on a layer that has slid are not their numbers.
-               --  Every owed position was written since the layer last
-               --  slid -- a slide settles first -- so each is still held.
+               --  The owed positions this layer still holds. A slide
+               --  settles first, except a paged layer's, which turns its
+               --  pages over and lets the oldest go owed or not: those
+               --  are nobody's to read any more, and the rest are where
+               --  the pages kept them.
+               Low  : constant Element_Count :=
+                 (if Item.Origin = null then First
+                  else Element_Count'Max
+                         (First, Item.Origin.all (Natural (Index))));
+               Span : constant Element_Count :=
+                 Element_Count'Max (0, First + Owed - Low);
+
+               --  Where they sit in this layer: at their cells, which on
+               --  a layer that has slid are not their numbers.
                Cell : constant Element_Count :=
-                 Cell_Of (Item, Natural (Index), First);
+                 Cell_Of (Item, Natural (Index), Low);
 
                Base : constant Element_Count := Layer_Keys + Cell * KV_Width;
                V_At : constant Element_Count := Layer_Vals + Cell * V_Width;
             begin
-               if Item.Paged and then Item.Held in Exact | Halved then
+               if Span = 0 then
+                  null;
+               elsif Item.Paged and then Item.Held in Exact | Halved then
                   --  Out of the pages the layer's positions are scattered
                   --  through, a page at a time, into the host's contiguous
                   --  copy: the same positions the block reads back, found
@@ -8188,6 +8200,12 @@ package body Model_Runner.Llama is
    --  any prompt whose last batch ran from 1,536 past 1,985.
    Rewind_Slack : constant := 64;
 
+   --  And a page's worth more, the default page's: a paged layer slides
+   --  by letting whole pages go, so it keeps what the window wants down
+   --  to the page it begins in. A larger page than this slides as a
+   --  block does, through the host.
+   Slide_Page : constant := 16;
+
    procedure Make_Room
      (Item     : in out Session;
       Settings : Configuration;
@@ -8225,9 +8243,9 @@ package body Model_Runner.Llama is
    is separate;
 
    --  How many positions a layer holds at a capacity: none for a linear
-   --  layer of the stack, which keeps a state; a window, a batch and the
-   --  slack a slide keeps for a rewind for a layer that slides; the whole
-   --  context otherwise. Open lays the cache out by it and the plans count
+   --  layer of the stack, which keeps a state; a window, a batch, the
+   --  slack a slide keeps for a rewind and a page for a layer that
+   --  slides; the whole context otherwise. Open lays the cache out by it and the plans count
    --  by it, so the two cannot drift: the plan's margin was a batch while
    --  Open's had the rewind slack beside it, and a windowed model planned
    --  sixty-four positions a sliding layer short.
@@ -8247,7 +8265,8 @@ package body Model_Runner.Llama is
          and then Slides (Settings, Layer)
        then Natural'Min
               (Capacity,
-               Settings.Window + Window_Margin (Settings) + Rewind_Slack)
+               Settings.Window + Window_Margin (Settings) + Rewind_Slack
+               + Slide_Page)
        else Capacity);
 
    ------------------
