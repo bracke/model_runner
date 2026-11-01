@@ -288,8 +288,12 @@ procedure Tests_Main is
             --  would otherwise refuse on that tool's behalf.
             exit when Argument = "--";
 
+            --  An option's name has no space in it, and a value that has
+            --  one is no name: agent-trial's --options "--top-k 0 --min-p
+            --  0.05" was refused as an option of its own.
             if Argument'Length > 2
               and then Argument (Argument'First .. Argument'First + 1) = "--"
+              and then Ada.Strings.Fixed.Index (Argument, " ") = 0
               and then not Project_Tools.Text.Contains
                              (Known, " " & Argument & " ")
             then
