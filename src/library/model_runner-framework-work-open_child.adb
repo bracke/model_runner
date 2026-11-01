@@ -69,10 +69,14 @@ begin
    end if;
    Host.Open.Append (To_String (Child_Id));
    Host.Opened.Append (Ada.Calendar.Clock);
-   --  Its calls set by its role's profile, where the project maps one, and
-   --  its parent's otherwise; recovery where it is run for one that failed,
+   --  Its calls set by its role's profile, where the project maps one, by
+   --  the documents profile where it writes documents alone, and by its
+   --  parent's otherwise; recovery where it is run for one that failed --
+   --  set as its parent then, thinking being what a retry may need --
    --  analysis where its role checks.
-   Host.Policies.Append (Inference_Policy.For_Child (Host.Item.all, Selection_Now (Host), Named, Documents_Only));
+   Host.Policies.Append
+     (Inference_Policy.For_Child
+        (Host.Item.all, Selection_Now (Host), Named, Documents_Only => Documents_Only and then Retry_Of = ""));
    Host.Doing.Append
      (if Retry_Of /= "" then Inference_Policy.Failure_Recovery else Inference_Policy.Activity_Of_Role (Named));
 

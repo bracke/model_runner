@@ -19389,7 +19389,7 @@ package body Tests.Framework_Cases is
               and then Tm.Effort_Word (Tm.Effort_High) = "high"
               and then Tm.Takes_Effort (Tm.Effort_Low) and then not Tm.Takes_Effort (Tm.Effort_Minimal),
               "a policy's word was not as a record keeps it");
-      Assert (Natural (Ip.Built_In_Names.Length) = 8 and then Ip.Built_In_Names.Contains ("reporting")
+      Assert (Natural (Ip.Built_In_Names.Length) = 9 and then Ip.Built_In_Names.Contains ("documents")
               and then Ip.Is_Profile (Config, "coding") and then not Ip.Is_Profile (Config, "nonesuch")
               and then Ip.Is_Profile_Field ("top_k") and then not Ip.Is_Profile_Field ("colour"),
               "the profiles or their fields were not as built in");
@@ -19667,6 +19667,32 @@ package body Tests.Framework_Cases is
                  and then To_String (Probe_Recovery.Asked.Profile) = "",
                  "a project that says nothing of inference did not keep its calls as the session's: "
                  & Ip.Line_Of (Probe_Recovery));
+      end;
+
+      --  And in fixed mode a helper writing documents alone does not think,
+      --  only that changed; one writing code is the session's, and none
+      --  sets the first as its parent too.
+      declare
+         Fixed     : constant Ip.Selection := Ip.Select_For (Store, Made ("Written"));
+         Writing   : constant Ip.Selection := Ip.For_Child (Store, Fixed, "writer", Documents_Only => True);
+         Asked     : constant Ip.Request := Ip.Merge (Store, Writing, Ip.Task_Work);
+         Changes   : Cf.Value_Maps.Map;
+         Planned   : Cf.Change_Plan;
+         Revision  : Natural;
+      begin
+         Assert (Writing.Mode = Ip.Fixed and then To_String (Writing.Profile) = "documents"
+                 and then Asked.Settings.Thinking = Tm.Thinking_Off
+                 and then not Asked.Settings.Has_Temperature and then Asked.Settings.Effort = Tm.Effort_Unstated
+                 and then To_String (Ip.For_Child (Store, Fixed, "writer").Profile) = "",
+                 "a helper writing documents in fixed mode was not set apart, or more than its thinking: "
+                 & To_String (Writing.Profile));
+         Changes.Include ("scalar.inference.helpers", "none");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Assert (E.Is_Ok (Status)
+                 and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Unset")), "writer",
+                                                   Documents_Only => True).Profile) = "",
+                 "inference.helpers=none did not set a helper writing documents as its parent");
       end;
       S.Close (Store);
    end Inference_Policies_Reach_The_Work;

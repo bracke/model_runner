@@ -1614,7 +1614,8 @@ package body Model_Runner.Framework.Configurations is
       elsif Name = "scalar.inference.adapts" then
          return "both: a profile's sampling and its reasoning";
       elsif Name = "scalar.inference.helpers" then
-         return "none: a helper no role mapping reaches is set as its parent";
+         return "documents: a helper whose outputs are documents alone does not think; none sets it as its"
+           & " parent";
       end if;
       return "";
    end Default_Of;
@@ -2411,9 +2412,8 @@ package body Model_Runner.Framework.Configurations is
          return "the inference profile tasks of kind " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";
       elsif Name = "scalar.inference.helpers" then
-         return "the inference profile a helper that writes only documents (.md, .txt, .rst, .adoc) is set by"
-           & " in adaptive mode, where no inference.role.ROLE maps its role; one that writes code keeps its"
-           & " parent's";
+         return "the inference profile a helper that writes only documents (.md, .txt, .rst, .adoc) is set by,"
+           & " in any mode, or none; one that writes code, and one run again, keeps its parent's";
       elsif Starts (Name, "scalar.inference.role.") then
          return "the inference profile helpers of role " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";

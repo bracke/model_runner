@@ -337,10 +337,7 @@ then the model file's own settings. `profile` sets every call by one
 profile, `scalar inference.default`; `adaptive` sets a task's calls by its
 kind (`scalar inference.task.KIND`, which `standard-development` maps:
 implementation to coding, bugfix to debugging, test to testing, analysis to
-analysis), a helper's by its role (`inference.role.ROLE`, else
-`inference.helpers` for one whose outputs are documents alone -- `.md`,
-`.txt`, `.rst`, `.adoc`; a model names its helpers' roles as it likes, but
-says what each must write), and each call by
+analysis), a helper's by its role (`inference.role.ROLE`), and each call by
 what the harness saw lead to it: one after checks failed is
 `failure_recovery` (the debugging profile), one asked only for the report
 `result_reporting` (reporting), a helper's whose role verifies, reviews,
@@ -349,8 +346,13 @@ tests or checks `verification_analysis` (verification), each mappable with
 mapping reaches is set as in fixed mode. The built-in profiles are analysis,
 architecture, coding, testing, debugging, exploration, reporting and
 verification -- temperatures from 0 to 0.5 and reasoning low to high, first
-values for a model's benchmark to confirm; `scalar
-inference.profile.NAME.FIELD` changes one (`temperature`, `top_k`, `top_p`,
+values for a model's benchmark to confirm -- and documents. In every mode,
+fixed too, a helper whose delegate outputs are documents alone (`.md`,
+`.txt`, `.rst`, `.adoc`) is set by `inference.helpers`, `documents` unless
+named: thinking off and nothing else, measured below; `none` sets it as its
+parent, as a helper that writes code is and one run again after a failure.
+A model names its helpers' roles as it likes, but says what each must
+write. `scalar inference.profile.NAME.FIELD` changes one (`temperature`, `top_k`, `top_p`,
 `min_p`, `reasoning`, `thinking`, `max_tokens`) or makes one of its own, and
 `scalar inference.adapts` takes `both` halves of a profile, only its
 `reasoning`, or only its `temperature` and filters -- what tells apart which

@@ -203,13 +203,14 @@ package Model_Runner.Framework.Inference_Policy is
    --  @return Its selection; fixed where the configuration cannot be read.
    function Select_For (Item : Stores.Store; Task_Id : String) return Selection;
 
-   --  The selection for a helper of an agent, in adaptive mode: its role's
-   --  profile where the project maps it, else -- for a helper that writes
-   --  documents alone -- the profile such helpers are set by
-   --  (inference.helpers), else its parent's; the task's own field, as its
-   --  parent's. A helper that writes code keeps its parent's: one that
-   --  edited code without thinking measured no faster and made twice the
-   --  calls, where one writing prose was a third faster.
+   --  The selection for a helper of an agent: its role's profile where the
+   --  project is adaptive and maps it; else, in any mode, for a helper that
+   --  writes documents alone, the profile such helpers are set by
+   --  (inference.helpers: documents unless named, none for its parent's);
+   --  else its parent's; the task's own field, as its parent's. A helper
+   --  that writes code keeps its parent's: one that edited code without
+   --  thinking measured no faster and made twice the calls, where one
+   --  writing prose was a third faster.
    --
    --  @param Item The store.
    --  @param Parent The parent's selection.

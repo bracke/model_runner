@@ -169,7 +169,7 @@ package body Model_Runner.Framework.Inference_Policy is
 
    function Built_In_Names return Name_Lists.Vector
    is (["analysis", "architecture", "coding", "testing", "debugging", "exploration", "reporting",
-        "verification"]);
+        "verification", "documents"]);
 
    --------------
    -- Built_In --
@@ -199,6 +199,10 @@ package body Model_Runner.Framework.Inference_Policy is
          return Made (0.0, Tm.Effort_Low);
       elsif Name = "verification" then
          return Made (0.2, Tm.Effort_High);
+      --  Measured, unlike the rest: a helper writing prose without thinking
+      --  was a third faster, all its runs complete. Only that is changed.
+      elsif Name = "documents" then
+         return (No_Overrides with delta Thinking => Tm.Thinking_Off);
       end if;
       Found := False;
       return No_Overrides;
@@ -426,8 +430,10 @@ package body Model_Runner.Framework.Inference_Policy is
       elsif Rest = "adapts" then
          return (if Value in "both" | "reasoning" | "temperature" then ""
                  else "scalar.inference.adapts is both, reasoning or temperature, not " & Value);
-      elsif Rest = "default" or else Rest = "helpers" then
+      elsif Rest = "default" then
          return Named_Profile;
+      elsif Rest = "helpers" then
+         return (if Value = "none" then "" else Named_Profile);
       elsif Starts (Rest, "task.") and then Rest'Length > 5 then
          return Named_Profile;
       elsif Starts (Rest, "role.") and then Rest'Length > 5 then
@@ -485,7 +491,7 @@ package body Model_Runner.Framework.Inference_Policy is
                null;
             elsif Setting_Problem (Name, Value) /= "" then
                return Name & ": " & Setting_Problem (Name, Value);
-            elsif (Rest = "default" or else Rest = "helpers" or else Starts (Rest, "task.")
+            elsif (Rest = "default" or else (Rest = "helpers" and then Value /= "none") or else Starts (Rest, "task.")
                    or else Starts (Rest, "role.") or else (Starts (Rest, "activity.") and then Value /= "task"))
               and then not Is_Profile (Config, Value)
             then
@@ -588,7 +594,7 @@ package body Model_Runner.Framework.Inference_Policy is
       Config : Records.Item;
       Read   : E.Error_Info;
    begin
-      if Parent.Task_Named or else Parent.Mode /= Adaptive then
+      if Parent.Task_Named or else (Parent.Mode /= Adaptive and then not Documents_Only) then
          return Parent;
       end if;
       --  The mapping as it stood when the work was selected, as Merge reads
@@ -601,15 +607,20 @@ package body Model_Runner.Framework.Inference_Policy is
       if E.Is_Error (Read) then
          return Parent;
       end if;
-      --  Its role's own mapping, else the one for helpers that write only
-      --  documents: a model names its helpers' roles as it likes --
-      --  investigator, documentation writer -- and a mapping by name catches
-      --  only the names it lists, where what it must write is said.
+      --  Its role's own mapping, in adaptive mode; else, in any mode, the
+      --  one for helpers that write only documents -- documents unless the
+      --  project names another, or none: a model names its helpers' roles
+      --  as it likes -- investigator, documentation writer -- and a mapping
+      --  by name catches only the names it lists, where what it must write
+      --  is said.
       declare
-         Mapped : constant String :=
-           (if Records.Get (Config, Prefix & "role." & Role) /= "" then Records.Get (Config, Prefix & "role." & Role)
-            elsif Documents_Only then Records.Get (Config, Prefix & "helpers")
-            else "");
+         Helpers : constant String := Records.Get (Config, Prefix & "helpers");
+         Mapped  : constant String :=
+           (if Parent.Mode = Adaptive and then Records.Get (Config, Prefix & "role." & Role) /= ""
+            then Records.Get (Config, Prefix & "role." & Role)
+            elsif not Documents_Only or else Helpers = "none" then ""
+            elsif Helpers = "" then "documents"
+            else Helpers);
       begin
          return (if Mapped = "" then Parent else (Parent with delta Profile => To_Unbounded_String (Mapped)));
       end;
@@ -936,7 +947,12 @@ package body Model_Runner.Framework.Inference_Policy is
       end Each_Activity;
    begin
       Each_Activity (Chosen);
-      if E.Is_Error (Status) or else Chosen.Mode /= Adaptive or else Chosen.Task_Named then
+      if E.Is_Error (Status) or else Chosen.Task_Named then
+         return;
+      end if;
+      --  A helper writing documents, in any mode.
+      Each_Activity (For_Child (Item, Chosen, "", Documents_Only => True));
+      if E.Is_Error (Status) or else Chosen.Mode /= Adaptive then
          return;
       end if;
       if Chosen.Revision > 0 then
@@ -946,12 +962,6 @@ package body Model_Runner.Framework.Inference_Policy is
       end if;
       if E.Is_Error (Read) then
          return;
-      end if;
-      if Records.Get (Config, Prefix & "helpers") /= "" then
-         Each_Activity (For_Child (Item, Chosen, "", Documents_Only => True));
-         if E.Is_Error (Status) then
-            return;
-         end if;
       end if;
       for Index in 1 .. Records.Field_Count (Config) loop
          declare
