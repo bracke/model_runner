@@ -1596,13 +1596,15 @@ package body Tests.Template_Cases is
       Talk   : Conv.History;
       Status : E.Error_Info;
 
-      function Rendered (Choice : Tmpl.Thinking_Choice) return String is
+      function Rendered
+        (Choice : Tmpl.Thinking_Choice; Level : Tmpl.Reasoning_Effort := Tmpl.Effort_Unstated) return String
+      is
          Room : String (1 .. 16_384);
          Used : Natural;
          St   : E.Error_Info;
       begin
          Tmpl.Render (Item, Talk, "", "", True, Room, Used, St,
-                      Thinking => Choice);
+                      Thinking => Choice, Effort => Level);
          Assert (E.Is_Ok (St), "gpt-oss's template did not render");
          return Room (1 .. Used);
       end Rendered;
@@ -1632,8 +1634,40 @@ package body Tests.Template_Cases is
       Assert (Has (Rendered (Tmpl.Thinking_On), "Reasoning: high"),
               "thinking on did not ask for high effort");
 
+      --  A level named is the level given, whatever the thinking choice.
+      Assert (Has (Rendered (Tmpl.Thinking_Unstated, Tmpl.Effort_Medium), "Reasoning: medium")
+              and then Has (Rendered (Tmpl.Thinking_On, Tmpl.Effort_Low), "Reasoning: low")
+              and then Has (Rendered (Tmpl.Thinking_Off, Tmpl.Effort_High), "Reasoning: high"),
+              "a reasoning level named was not the one rendered");
+
+      --  What it reads is what it is said to take: a level.
+      Assert (Tmpl.Controls_Of (Item).Known and then Tmpl.Controls_Of (Item).Effort,
+              "gpt-oss's template was not said to take a reasoning level");
+
       Conv.Close (Talk);
       Tmpl.Close (Item);
+
+      --  A template that reads only whether to think, and one that reads
+      --  neither, by what they ask after -- not by a model's name.
+      declare
+         use type Tmpl.Reasoning_Controls;
+         Thinking : Tmpl.Compiled;
+         Plain    : Tmpl.Compiled;
+         Unmade   : Tmpl.Compiled;
+      begin
+         Tmpl.Compile
+           (Thinking, "{% if enable_thinking is defined and not enable_thinking %}off{% endif %}{{ 'x' }}",
+            Status => Status);
+         Assert (E.Is_Ok (Status) and then Tmpl.Controls_Of (Thinking) = (Known => True, Thinking => True,
+                                                                           Effort => False),
+                 "a template reading enable_thinking was not said to take whether to think");
+         Tmpl.Compile (Plain, "{{ 'x' }}", Status => Status);
+         Assert (E.Is_Ok (Status) and then Tmpl.Controls_Of (Plain) = (Known => True, others => False),
+                 "a template reading no control was said to take one");
+         Assert (not Tmpl.Controls_Of (Unmade).Known, "a template not compiled was said to be known");
+         Tmpl.Close (Thinking);
+         Tmpl.Close (Plain);
+      end;
    end Reasoning_Effort_Follows_The_Thinking_Choice;
 
    procedure Carried_Formats_Match_The_Models_Own_Templates

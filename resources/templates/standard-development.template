@@ -78,6 +78,15 @@ map task_field.reproduction = text
 map task_field.question = text
 scalar task.derived_kind = implementation
 
+# How /work sets each model call, once scalar inference.mode = adaptive
+# turns it on: the inference profile each kind's calls are set by -- its
+# temperature and how much it reasons. Until then every call is set as the
+# session is, so a project's calls change only when someone says so.
+scalar inference.task.implementation = coding
+scalar inference.task.bugfix = debugging
+scalar inference.task.test = testing
+scalar inference.task.analysis = analysis
+
 # Where the project's files are: what a scan leaves out, and what is a test
 # or documentation, and what a tool generates. A name is a directory at any
 # depth, a path is one place, and *text is part of a file's name.

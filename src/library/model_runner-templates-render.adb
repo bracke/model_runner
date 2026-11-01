@@ -13,7 +13,8 @@ procedure Render
      := null;
    Image_Marker          : String := "";
    Video_Marker          : String := "";
-   Literal               : access function (Text : String) return String := null)
+   Literal               : access function (Text : String) return String := null;
+   Effort                : Reasoning_Effort := Effort_Unstated)
 is
    Count      : constant Natural := Conv.Length (Messages);
 
@@ -4215,7 +4216,11 @@ begin
          Offset => (if Thinking = Thinking_On then 1 else 0),
          others => <>);
    end if;
-   if Item.Effort_Slot /= 0 and then Thinking /= Thinking_Unstated then
+   --  A level named is the level given; none named, the one whether to
+   --  reason at all implies.
+   if Item.Effort_Slot /= 0 and then Effort /= Effort_Unstated then
+      Assign_Text (Item.Effort_Slot, Effort_Word (Effort));
+   elsif Item.Effort_Slot /= 0 and then Thinking /= Thinking_Unstated then
       Assign_Text (Item.Effort_Slot,
                    (if Thinking = Thinking_On then "high" else "low"));
    end if;

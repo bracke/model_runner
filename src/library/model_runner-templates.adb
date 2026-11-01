@@ -104,6 +104,26 @@ package body Model_Runner.Templates is
    function Reads_Tools (Item : Compiled) return Boolean
    is (Item.Ready and then Item.Tools_Slot /= 0);
 
+   -----------------
+   -- Effort_Word --
+   -----------------
+
+   function Effort_Word (Level : Reasoning_Effort) return String
+   is (case Level is
+          when Effort_Unstated => "",
+          when Effort_Minimal  => "minimal",
+          when Effort_Low      => "low",
+          when Effort_Medium   => "medium",
+          when Effort_High     => "high");
+
+   -----------------
+   -- Controls_Of --
+   -----------------
+
+   function Controls_Of (Item : Compiled) return Reasoning_Controls
+   is (if not Item.Ready then (others => False)
+       else (Known => True, Thinking => Item.Thinking_Slot /= 0, Effort => Item.Effort_Slot /= 0));
+
    ---------------------------------------------------------------------------
    --  Compilation
    ---------------------------------------------------------------------------
@@ -893,7 +913,8 @@ package body Model_Runner.Templates is
         := null;
       Image_Marker          : String := "";
       Video_Marker          : String := "";
-      Literal               : access function (Text : String) return String := null)
+      Literal               : access function (Text : String) return String := null;
+      Effort                : Reasoning_Effort := Effort_Unstated)
    is separate;
 
    -------------
@@ -910,7 +931,8 @@ package body Model_Runner.Templates is
       Tools           : access constant Offered_Tools.Definitions := null;
       Image_Marker    : String := "";
       Video_Marker    : String := "";
-      Literal         : access function (Text : String) return String := null) return Natural
+      Literal         : access function (Text : String) return String := null;
+      Effort          : Reasoning_Effort := Effort_Unstated) return Natural
    is
       --  Room for the rendering without the prompt, which is no longer
       --  than the one with it where the template is the usual shape, and
@@ -927,7 +949,7 @@ package body Model_Runner.Templates is
    begin
       Render
         (Item, Messages, Beginning_Token, End_Token, False, Buffer.all,
-         Last, Status, Thinking, Tools, Image_Marker, Video_Marker, Literal);
+         Last, Status, Thinking, Tools, Image_Marker, Video_Marker, Literal, Effort);
       if E.Is_Error (Status) then
          Free_Text (Buffer);
          return 0;

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 130) of Registry_Row :=
+   Registry : constant array (1 .. 132) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -70,6 +70,10 @@ package body Model_Runner.CLI.Options is
        Text ("think")),
       (Text ("--no-think"), [Command_Run => True, others => False],
        Text ("no_think")),
+      (Text ("--reasoning-effort"), [Command_Run => True, others => False],
+       Text ("reasoning_effort")),
+      (Text ("--policy-file"), [Command_Run => True, others => False],
+       Text ("policy_file")),
       (Text ("--hide-reasoning"), [Command_Run => True, others => False],
        Text ("hide_reasoning")),
       (Text ("--repack"),
@@ -941,7 +945,8 @@ package body Model_Runner.CLI.Options is
          Flag_Threads, Flag_Backend,
          --  Each pair one setting said two ways: the second is refused as
          --  a repeat, not taken over the first.
-         Flag_Thinking, Flag_Paging);
+         Flag_Thinking, Flag_Paging,
+         Flag_Effort, Flag_Policy_File);
       Seen : array (Option_Flag) of Boolean := [others => False];
 
       procedure Fail (Code : E.Error_Code; Name : String; Detail : String := "")
@@ -1816,6 +1821,37 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Thinking := Model_Runner.Templates.Thinking_Off;
+
+                  --  How much it reasons, where its template takes a level:
+                  --  named, and refused where the template takes none.
+                  elsif Name = "--reasoning-effort" then
+                     declare
+                        Asked : T.Bounded;
+                        Found : Boolean := False;
+                     begin
+                        Bounded_Value (Flag_Effort, Asked, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        for Level in Model_Runner.Templates.Effort_Minimal .. Model_Runner.Templates.Effort_High loop
+                           if Model_Runner.Templates.Effort_Word (Level) = T.To_String (Asked) then
+                              Result.Effort := Level;
+                              Found := True;
+                           end if;
+                        end loop;
+                        if not Found then
+                           Fail (E.CLI_Invalid_Option_Value, Name, T.To_String (Asked));
+                           return;
+                        end if;
+                     end;
+
+                  --  The inference policy a harness resolved for an agent it
+                  --  runs as a process of its own.
+                  elsif Name = "--policy-file" then
+                     Bounded_Value (Flag_Policy_File, Result.Policy_File, Good);
+                     if not Good then
+                        return;
+                     end if;
 
                   elsif Name = "--system" then
                      Mark (Flag_System, Name, Good);
@@ -3366,6 +3402,9 @@ package body Model_Runner.CLI.Options is
                elsif Model_Runner.Templates."/=" (Result.Thinking,
                                                   Model_Runner.Templates.Thinking_Unstated)
                then "--think"
+               elsif Model_Runner.Templates."/=" (Result.Effort, Model_Runner.Templates.Effort_Unstated)
+               then "--reasoning-effort"
+               elsif not T.Is_Empty (Result.Policy_File) then "--policy-file"
                elsif not T.Is_Empty (Result.Chat_Template) then "--chat-template"
                elsif not T.Is_Empty (Result.Chat_Template_Path) then "--chat-template-file"
                else "");

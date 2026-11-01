@@ -16,6 +16,7 @@ with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Indexes;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Repository;
@@ -1482,7 +1483,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 51) of access constant String :=
+   Known_Settings : constant array (1 .. 53) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.child_retries"),
@@ -1506,6 +1507,8 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.execution.process_slots"),
       new String'("scalar.execution.shell"),
       new String'("scalar.execution.timeout"),
+      new String'("scalar.inference.default"),
+      new String'("scalar.inference.mode"),
       new String'("scalar.init.confirm"),
       new String'("scalar.model.default"),
       new String'("scalar.recovery.running"),
@@ -1602,6 +1605,10 @@ package body Model_Runner.Framework.Configurations is
            & " runs is this session's, or model=PATH";
       elsif Name = "scalar.verification.default" then
          return "none: it must name a profile";
+      elsif Name = "scalar.inference.mode" then
+         return "fixed: every model call is set as the session is";
+      elsif Name = "scalar.inference.default" then
+         return "none: profile mode needs one named";
       end if;
       return "";
    end Default_Of;
@@ -1662,6 +1669,8 @@ package body Model_Runner.Framework.Configurations is
         or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.token_budget.")
       then
          return "work: how agents run tasks from now on";
+      elsif Starts (Name, "scalar.inference.") then
+         return "inference: how /work sets each model call, from the next run on";
       elsif Starts (Name, "map.model.") or else Name = "scalar.model.default" then
          return "context: the room a run's context is planned with, from the next /work or /task context on";
       elsif Starts (Name, "list.automation.") then
@@ -1683,6 +1692,10 @@ package body Model_Runner.Framework.Configurations is
    --  Whether a value reads as its field needs.
    function Problem (Name, Value : String) return String is
    begin
+      --  How a model call is set: read as Inference_Policy reads it.
+      if Starts (Name, "scalar.inference.") then
+         return Inference_Policy.Setting_Problem (Name, Value);
+      end if;
       --  A constraint a capability does not take: places for reading and
       --  writing, helpers' bounds for helpers.
       if Starts (Name, "map.permission.") then
@@ -1862,6 +1875,10 @@ package body Model_Runner.Framework.Configurations is
       is (Records.Get (Config, Field) = ""
           or else Choices_Of (Words).Contains (Records.Get (Config, Field)));
    begin
+      --  A mapping to a profile there is not, as any other setting naming one.
+      if Inference_Policy.Configuration_Problem (Config) /= "" then
+         return Inference_Policy.Configuration_Problem (Config);
+      end if;
       for Index in 1 .. Records.Field_Count (Config) loop
          declare
             Name  : constant String := Records.Field_Name (Config, Index);
@@ -2375,6 +2392,24 @@ package body Model_Runner.Framework.Configurations is
          return "how long a check may run: seconds";
       elsif Name = "scalar.init.confirm" then
          return "whether /init asks before it writes: yes or no";
+      elsif Name = "scalar.inference.mode" then
+         return "how /work sets each model call: fixed, as the session is; profile, by scalar.inference.default;"
+           & " adaptive, by the task's kind (inference.task.KIND), a helper's role (inference.role.ROLE) and what"
+           & " the call is for (inference.activity.ACTIVITY)";
+      elsif Name = "scalar.inference.default" then
+         return "the inference profile every model call is set by in profile mode";
+      elsif Starts (Name, "scalar.inference.task.") then
+         return "the inference profile tasks of kind " & Name (Name'First + 22 .. Name'Last)
+           & " are set by in adaptive mode";
+      elsif Starts (Name, "scalar.inference.role.") then
+         return "the inference profile helpers of role " & Name (Name'First + 22 .. Name'Last)
+           & " are set by in adaptive mode";
+      elsif Starts (Name, "scalar.inference.activity.") then
+         return "the inference profile a call for " & Name (Name'First + 26 .. Name'Last)
+           & " is set by in adaptive mode, or task for the task's own";
+      elsif Starts (Name, "scalar.inference.profile.") then
+         return "a field of an inference profile: temperature, top_k, top_p, min_p, reasoning"
+           & " (minimal|low|medium|high), thinking (on|off) or max_tokens";
       elsif Name = "scalar.model.default" then
          return "the model profile, map.model.NAME, a run's context is planned with";
       elsif Name = "scalar.recovery.running" then

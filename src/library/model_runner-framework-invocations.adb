@@ -726,6 +726,66 @@ package body Model_Runner.Framework.Invocations is
       Stores.Put (Change, Invocations_Area, Id, Value);
    end Note_Call;
 
+   -------------------
+   -- Note_Settings --
+   -------------------
+
+   procedure Note_Settings
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Line   : String;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Value  : Records.Item;
+      Staged : Boolean;
+      Kept   : Natural := 0;
+   begin
+      Status := E.Success;
+      Stores.Pending (Change, Invocations_Area, Id, Value, Staged);
+      if not Staged then
+         Stores.Read (Item, Invocations_Area, Id, Value, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Records.Set_Revision (Value, Records.Revision (Value) + 1);
+      end if;
+      if Records.Get (Value, "state") /= "started" then
+         Status := E.Make (E.Framework_Transition_Invalid);
+         E.Add_Text (Status, "name", Id);
+         return;
+      end if;
+      for Index in 1 .. Records.Field_Count (Value) loop
+         if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "settings.") = 1 then
+            Kept := Kept + 1;
+         end if;
+      end loop;
+      Records.Set
+        (Value, "settings." & [1 .. Integer'Max (0, 4 - Image (Kept + 1)'Length) => '0'] & Image (Kept + 1),
+         Line);
+      Stores.Put (Change, Invocations_Area, Id, Value);
+   end Note_Settings;
+
+   -----------------
+   -- Settings_Of --
+   -----------------
+
+   function Settings_Of (Item : Stores.Store; Id : String) return Name_Lists.Vector is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+      Result : Name_Lists.Vector;
+   begin
+      Stores.Read (Item, Invocations_Area, Id, Value, Status);
+      if E.Is_Ok (Status) then
+         for Index in 1 .. Records.Field_Count (Value) loop
+            if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "settings.") = 1 then
+               Result.Append (Records.Get (Value, Records.Field_Name (Value, Index)));
+            end if;
+         end loop;
+      end if;
+      return Result;
+   end Settings_Of;
+
    ----------------
    -- Note_Start --
    ----------------

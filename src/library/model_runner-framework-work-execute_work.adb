@@ -228,6 +228,9 @@ is
       Generate_Stage   : Unbounded_String;
       Format_Stage     : Unbounded_String;
       Limits           : Agents.Limits;
+
+      --  What its model calls are set by.
+      Inference        : Inference_Policy.Selection;
    end record;
 
    function Resolve return Settings is
@@ -261,6 +264,7 @@ is
         Check_Capability (Item, To_String (Result.Verification_Profile));
       Result.Integrate := To_Unbounded_String (Work_Setting (Item, "integrate"));
       Result.Child_Retries := Retries_Allowed (Item);
+      Result.Inference := Inference_Policy.Select_For (Item, Task_Id);
       Result.Generate_Stage := To_Unbounded_String (Scalar (Item, "stage.generate"));
       Result.Format_Stage := To_Unbounded_String (Scalar (Item, "stage.format"));
       Result.Limits := Agents.Limits_Of (Item);
@@ -311,7 +315,10 @@ is
       & "on_child_failure=" & To_String (Frozen.On_Child_Failure) & ASCII.LF
       & "verification_profile=" & To_String (Frozen.Verification_Profile) & ASCII.LF
       & "integrate=" & To_String (Frozen.Integrate) & ASCII.LF
-      & "child_retries=" & Image (Frozen.Child_Retries));
+      & "child_retries=" & Image (Frozen.Child_Retries) & ASCII.LF
+      --  What its calls are set by; each call's settings are kept on it
+      --  as it is made.
+      & Inference_Policy.Selection_Lines (Frozen.Inference));
    Place    : Unbounded_String := To_Unbounded_String (Project);
 
    --  End the work with the task moved and the agent recorded.
@@ -601,6 +608,19 @@ begin
       return;
    end if;
 
+   --  So is a setting the task or the project named that its model takes
+   --  no control for, or that makes no sampling: refused before the task
+   --  is moved, not found at its first call.
+   declare
+      Tried : Inference_Policy.Effective;
+   begin
+      Inference_Policy.Resolve
+        (Item, Frozen.Inference, Inference_Policy.Task_Work, (others => <>), Model.Controls, Tried, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+   end;
+
    --  An agent of its own, holding the task, in a new generation, with
    --  what its task's kind and its role allow.
    declare
@@ -848,8 +868,19 @@ begin
                     (Permissions.Permissions_Beside (Prompt),
                      (if E.Is_Ok (Read) then Permissions.Image (Held_From) else ""),
                      Status);
+                  --  And what its first call is to be set by, for a runner
+                  --  that runs it as a process of its own to fit to its model.
+                  if E.Is_Ok (Status) then
+                     Files.Write_Text
+                       (Inference_Policy.Policy_Beside (Prompt),
+                        Inference_Policy.Image_Of
+                          (Inference_Policy.Merge (Item, Frozen.Inference, Inference_Policy.Task_Work)),
+                        Status);
+                  end if;
                   --  Kept, as anything it may not write is, to be put back.
-                  if E.Is_Ok (Read) and then not Isolated then
+                  --  Only where what it may do was written: a failure there is
+                  --  the work's, not to be cleared by the copies' success.
+                  if E.Is_Ok (Status) and then E.Is_Ok (Read) and then not Isolated then
                      Keep_Originals (Item, To_String (Result.Agent_Id), To_String (Place), Before,
                                      Held_From, Status);
                   end if;
@@ -890,6 +921,8 @@ begin
          Host.Open.Append (To_String (Result.Agent_Id));
          Host.Calls.Append (To_String (Result.Invocation_Id));
          Host.Opened.Append (Ada.Calendar.Clock);
+         Host.Policies.Append (Frozen.Inference);
+         Host.Retried.Append (False);
 
          --  Ended elsewhere meanwhile -- cancelled from another process
          --  -- what runs for it is stopped.
@@ -937,6 +970,21 @@ begin
                         Spent := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
                      elsif Ada.Strings.Fixed.Index (Line, "prompt_tokens ") = Line'First then
                         Seen := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
+                     elsif Ada.Strings.Fixed.Index (Line, "settings ") = Line'First then
+                        --  What it fitted its calls to, kept as the session's
+                        --  own are, on its invocation.
+                        declare
+                           Change : Stores.Transaction;
+                           Kept   : E.Error_Info;
+                        begin
+                           Invocations.Note_Settings
+                             (Item, Change, To_String (Result.Invocation_Id), Line (Line'First + 9 .. Line'Last),
+                              Kept);
+                           if E.Is_Ok (Kept) then
+                              Stores.Commit (Item, Change, Kept);
+                           end if;
+                           Keep_Unkept (Host, Kept);
+                        end;
                      elsif Ada.Strings.Fixed.Index (Line, "call ") = Line'First then
                         declare
                            Rest : constant String := Line (Line'First + 5 .. Line'Last);
@@ -973,6 +1021,7 @@ begin
       end loop;
       Files.Discard (Prompt);
       Files.Discard (Permissions.Permissions_Beside (Prompt));
+      Files.Discard (Inference_Policy.Policy_Beside (Prompt));
 
       --  What changed is what the files say, not what the answer says.
       declare

@@ -3713,6 +3713,9 @@ begin
             Carry     => Option ("--carry", "off") = "on",
             --  --retrieval whole: the context as it was before excerpts.
             Whole_Files => Option ("--retrieval", "excerpts") = "whole",
+            --  --inference adaptive|PROFILE: the calls set by a policy, not as
+            --  the session is.
+            Inference => Option ("--inference", "fixed"),
             Max_Seconds =>
               (if Option ("--max-seconds", "0")'Length in 1 .. 5
                  and then (for all C of Option ("--max-seconds", "0") => C in '0' .. '9')

@@ -12,6 +12,7 @@ with Ada.Text_IO;
 with Interfaces;
 with Model_Runner.Drafts;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -669,9 +670,12 @@ package body Model_Runner.CLI.Execute.Run_Command is
         Watcher : access Agent_Watch := null;
         Helpers : Natural := 0;
 
-        --  The run's thinking choice, which its helpers are given too.
+        --  The run's thinking choice and reasoning level, which its helpers
+        --  are given too.
         Thinking : Model_Runner.Templates.Thinking_Choice :=
           Model_Runner.Templates.Thinking_Unstated;
+        Effort : Model_Runner.Templates.Reasoning_Effort :=
+          Model_Runner.Templates.Effort_Unstated;
      end record;
 
    overriding procedure Run_Sub
@@ -814,6 +818,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                           Model_Runner.Templates.Reading_Syntax
                             (L.Template_Format (Self.Src.all)),
                         Thinking         => Self.Thinking,
+                        Effort           => Self.Effort,
                         Result           => Loop_Out);
                   end;
 

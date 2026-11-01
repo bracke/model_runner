@@ -29,6 +29,7 @@ with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Work;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Tasks;
 with Model_Runner.Framework.Transitions;
@@ -956,6 +957,11 @@ package body Model_Runner.CLI.Tasks is
                      if Pair (Pair'First .. Cut - 1) in "roots" | "deny" and then Fields.Contains ("permissions")
                      then
                         Fields.Include ("permissions", Fields ("permissions") & " " & Pair);
+                     --  And a profile's fields after inference=, the same way.
+                     elsif Model_Runner.Framework.Inference_Policy.Is_Profile_Field (Pair (Pair'First .. Cut - 1))
+                       and then Fields.Contains ("inference")
+                     then
+                        Fields.Include ("inference", Fields ("inference") & " " & Pair);
                      else
                         Fields.Include
                           (Pair (Pair'First .. Cut - 1), Pair (Cut + 1 .. Pair'Last));
@@ -2158,6 +2164,11 @@ package body Model_Runner.CLI.Tasks is
                      Fail (Outcome);
                      return;
                   end;
+               elsif Cut > Pair'First
+                 and then Model_Runner.Framework.Inference_Policy.Is_Profile_Field (Pair (Pair'First .. Cut - 1))
+                 and then Fields.Contains ("inference")
+               then
+                  Fields.Include ("inference", Fields ("inference") & " " & Pair);
                elsif Cut > Pair'First then
                   --  permissions=inherit clears a task's own: its kind's
                   --  then, as a level set to inherit takes the one above.

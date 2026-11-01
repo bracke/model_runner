@@ -59,7 +59,7 @@ procedure Show_Config (Store : in out S.Store) is
                 or else Starts ("scalar.task.max_") or else Starts ("scalar.task.token_budget")
                 or else Starts ("scalar.task.coordination") or else Starts ("scalar.recovery.")
                 or else Starts ("scalar.model.") or else Starts ("scalar.context.")
-                or else Starts ("map.model.")
+                or else Starts ("map.model.") or else Starts ("scalar.inference.")
               then "work"
               elsif Starts ("profile.") or else Starts ("scalar.verification.")
                 or else Starts ("list.verification.") or else Starts ("scalar.profile_capability.")

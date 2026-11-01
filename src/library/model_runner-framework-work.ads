@@ -6,6 +6,7 @@ with Model_Runner.Agent;
 with Model_Runner.Errors;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Agents;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Stores;
 
@@ -55,7 +56,8 @@ package Model_Runner.Framework.Work is
    --  Where a runner that runs its agent apart -- as a process of its own,
    --  whose calls the harness does not see -- says what the agent used, for
    --  the harness to account as its own: a line each of prompt_tokens N,
-   --  output_tokens N, and call NAME, a tab and its arguments.
+   --  output_tokens N, call NAME, a tab and its arguments, and settings
+   --  LINE for what its calls were set to (Inference_Policy.Line_Of).
    --
    --  @param Prompt_Path The agent's prompt.
    --  @return The file's path.
@@ -269,6 +271,12 @@ package Model_Runner.Framework.Work is
       Max_Calls    : Natural := 0;
       Max_Steps    : Natural := 0;
       Seconds      : Natural := 0;
+
+      --  What its model calls are set by: the mode, the profile its kind
+      --  or its own field picks, and the configuration's revision. Each
+      --  call's settings are resolved as it is made, by what it is for and
+      --  the model it runs on (Policy_For_Call) -- never told the agent.
+      Inference    : Inference_Policy.Selection;
    end record;
 
    --  The plan for a task's run, by the permissions its agent holds.
@@ -651,6 +659,35 @@ package Model_Runner.Framework.Work is
    --  @return The lines.
    function Shown_Revisions (Host : Child_Host) return Name_Lists.Vector;
 
+   --  Set the call the agent now working is about to make, and keep what
+   --  it was set to on its invocation: the run's selection -- its helper's
+   --  own, for a helper -- and what the call is for, settled against what
+   --  the session was told and what its model takes. A helper run again
+   --  for one that failed recovers, whatever it is asked. Made before each
+   --  of the agent's generations begins, never during one.
+   --
+   --  @param Host The host.
+   --  @param Doing What the call is for.
+   --  @param Invoked What the session was told.
+   --  @param Model The controls the model's template reads.
+   --  @param Policy The call's settings; the session's own where Status
+   --    fails.
+   --  @param Status As Inference_Policy.Fit says; the call is then not to
+   --    be made.
+   procedure Policy_For_Call
+     (Host    : in out Child_Host;
+      Doing   : Inference_Policy.Activity;
+      Invoked : Inference_Policy.Invocation_Settings;
+      Model   : Inference_Policy.Reasoning_Controls;
+      Policy  : out Inference_Policy.Effective;
+      Status  : out Model_Runner.Errors.Error_Info);
+
+   --  The selection the agent now working's calls are set by.
+   --
+   --  @param Host The host.
+   --  @return The selection.
+   function Selection_Now (Host : Child_Host) return Inference_Policy.Selection;
+
    --  Count tokens the agent now working generated against its budget.
    --
    --  @param Host The host.
@@ -994,6 +1031,10 @@ private
    package Time_Vectors is new Ada.Containers.Vectors (Positive, Ada.Calendar.Time,
                                                         Ada.Calendar."=");
 
+   package Selection_Vectors is new Ada.Containers.Vectors (Positive, Inference_Policy.Selection,
+                                                             Inference_Policy."=");
+   package Flag_Vectors is new Ada.Containers.Vectors (Positive, Boolean);
+
    type Child_Host (Item : not null access Stores.Store) is tagged limited record
       Task_Id : Ada.Strings.Unbounded.Unbounded_String;
 
@@ -1079,6 +1120,11 @@ private
 
       --  The root, then each child still open, innermost last.
       Open    : Name_Lists.Vector;
+
+      --  What each open agent's calls are set by, in step with Open, and
+      --  whether it is a helper run again for one that failed.
+      Policies : Selection_Vectors.Vector;
+      Retried  : Flag_Vectors.Vector;
    end record;
 
 end Model_Runner.Framework.Work;

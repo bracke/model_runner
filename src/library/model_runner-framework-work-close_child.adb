@@ -167,6 +167,7 @@ begin
       Host.Open.Delete_Last;
       Host.Calls.Delete_Last;
       Host.Opened.Delete_Last;
+      Drop_Policy (Host);
 
       --  Not run again where it went round: the same model on the same
       --  brief goes round the same way, and the parent's time goes with

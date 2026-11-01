@@ -268,6 +268,28 @@ begin
       return;
    end if;
 
+   --  How much to reason, where the command line named it: refused for a
+   --  model whose template reads no such level, by the rule /work's
+   --  calls are fitted by.
+   if Model_Runner.Templates."/=" (Item.Effort, Model_Runner.Templates.Effort_Unstated) then
+      declare
+         Fitted : Model_Runner.Framework.Inference_Policy.Effective;
+      begin
+         Model_Runner.Framework.Inference_Policy.Fit
+           ((others => <>),
+            (Base     => Opt.Sampling_For (Item, Prepared),
+             Given    => Item.Sampling_Given,
+             Thinking => Item.Thinking,
+             Effort   => Item.Effort,
+             others   => <>),
+            Model_Runner.Templates.Controls_Of (L.Template (Prepared).all), Fitted, Condition);
+         if E.Is_Error (Condition) then
+            Fail (Condition);
+            return;
+         end if;
+      end;
+   end if;
+
    if not T.Is_Empty (Item.Draft_Path)
      or else not T.Is_Empty (Auto_Draft)
    then
@@ -657,6 +679,13 @@ begin
          --  or --json-schema-file, or null for a free-text answer.
          Answer : Opt.Text_Access := null;
 
+         --  Whether and how much the agent reasons: as the command line
+         --  says, or as the policy a harness resolved for it is fitted to
+         --  this model (--policy-file); and that fitting, for its trace.
+         Agent_Thinking : Model_Runner.Templates.Thinking_Choice := Item.Thinking;
+         Agent_Effort   : Model_Runner.Templates.Reasoning_Effort := Item.Effort;
+         Agent_Settings : US.Unbounded_String;
+
          Using_Command : constant Boolean :=
            Item.Tool_Command /= null
            and then Item.Tool_Command.all /= "";
@@ -691,7 +720,8 @@ begin
                Time       => Clock'Unchecked_Access,
                Seeds      => Seeds'Unchecked_Access,
                Max_Steps  => Positive'Max (1, Item.Max_Steps),
-               Thinking   => Item.Thinking,
+               Thinking   => Agent_Thinking,
+               Effort     => Agent_Effort,
                Hide_Reasoning => Item.Hide_Reasoning,
                Watch      => Watcher'Unchecked_Access,
                Approve    =>
@@ -782,6 +812,8 @@ begin
                      & N (Loop_Out.Generated_Tokens)
                      & ",""prompt_tokens"":" & N (Loop_Out.Prompt_Tokens)
                      & ",""compactions"":" & N (Loop_Out.Compactions)
+                     & (if US.Length (Agent_Settings) = 0 then ""
+                        else ",""settings"":""" & JSON_Escape (US.To_String (Agent_Settings)) & """")
                      & ",""elapsed_ms"":" & Elapsed_Ms (Watcher)
                      & ",""events"":[" & US.To_String (Watcher.Events)
                      & "]}");
@@ -967,6 +999,53 @@ begin
          Request.Has_Seed := Item.Has_Seed;
          Request.Batch_Size := Item.Batch_Size;
 
+         --  The policy a harness resolved for this agent, fitted here, where
+         --  the model and what the command line said are known: what it
+         --  named stands over the policy, and the reply keeps to its room.
+         if not T.Is_Empty (Item.Policy_File) then
+            declare
+               package Ip renames Model_Runner.Framework.Inference_Policy;
+               Text   : Opt.Text_Access := null;
+               Asked  : Ip.Request;
+               Fitted : Ip.Effective;
+            begin
+               Read_File (T.To_String (Item.Policy_File), 65_536, Text, Condition);
+               if E.Is_Ok (Condition) then
+                  declare
+                     Said : constant String := Ip.Read_Request (Text.all, Asked);
+                  begin
+                     if Said /= "" then
+                        Condition := E.Make (E.CLI_Invalid_Option_Value);
+                        E.Add_Text (Condition, "option", "--policy-file", E.Param_Identifier);
+                        E.Add_Text (Condition, "value", Said);
+                     end if;
+                  end;
+               end if;
+               Free_Text (Text);
+               if E.Is_Ok (Condition) then
+                  Ip.Fit
+                    (Asked,
+                     (Base         => Request.Sampling,
+                      Given        => Item.Sampling_Given,
+                      Thinking     => Item.Thinking,
+                      Effort       => Item.Effort,
+                      Output_Room  => Positive'Max (1, Request.Max_Tokens),
+                      Output_Given => Item.Max_Tokens_Set),
+                     Model_Runner.Templates.Controls_Of (L.Template (Prepared).all), Fitted, Condition);
+               end if;
+               if E.Is_Error (Condition) then
+                  Conv.Close (Messages);
+                  Fail (Condition);
+                  return;
+               end if;
+               Request.Sampling := Fitted.Sampling;
+               Request.Max_Tokens := Fitted.Output_Limit;
+               Agent_Thinking := Fitted.Thinking;
+               Agent_Effort := Fitted.Effort;
+               Agent_Settings := US.To_Unbounded_String (Ip.Line_Of (Fitted));
+            end;
+         end if;
+
          --  A JSON schema, if one was named, becomes the shape the
          --  final answer must take: --json-schema means the whole
          --  output on a plain run, and the answer of an agent run.
@@ -1121,7 +1200,8 @@ begin
             Delegate_Runner.Leases.Open (Sub_Ready);
             Delegate_Runner.Ready := Sub_Ready;
             Delegate_Runner.Max_Depth := Item.Delegate_Depth;
-            Delegate_Runner.Thinking := Item.Thinking;
+            Delegate_Runner.Thinking := Agent_Thinking;
+            Delegate_Runner.Effort := Agent_Effort;
             Delegate_Runner.Watcher := Watcher'Unchecked_Access;
             if Sub_Ready >= 1 and then Item.Delegate_Depth >= 1 then
                Built_Runner.Use_Delegator
@@ -1504,7 +1584,8 @@ begin
                     Model_Runner.CLI.Pictures.Picture_Marker (Seer),
                   Video_Marker =>
                     Model_Runner.CLI.Pictures.Video_Marker (Seer),
-                  Literal => Content_Text'Access);
+                  Literal => Content_Text'Access,
+                  Effort => Item.Effort);
 
                if E.Is_Error (Condition) then
                   Conv.Close (Messages);
@@ -1532,7 +1613,8 @@ begin
                       Model_Runner.CLI.Pictures.Picture_Marker (Seer),
                     Video_Marker =>
                       Model_Runner.CLI.Pictures.Video_Marker (Seer),
-                    Literal => Content_Text'Access);
+                    Literal => Content_Text'Access,
+                    Effort => Item.Effort);
                Conv.Close (Messages);
 
                --  Said here because here is where it happens. Generation is

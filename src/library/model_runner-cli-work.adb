@@ -21,6 +21,7 @@ with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Execution;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Orchestration;
@@ -290,6 +291,13 @@ package body Model_Runner.CLI.Work is
          Add (Ada.Strings.Fixed.Trim (Natural'Image (Self.Context), Ada.Strings.Both));
       end if;
 
+      --  What its first call is set by, as the harness resolved it: fitted
+      --  there to the model it loads.
+      if Ada.Directories.Exists (Model_Runner.Framework.Inference_Policy.Policy_Beside (Prompt_Path)) then
+         Add ("--policy-file");
+         Add (Model_Runner.Framework.Inference_Policy.Policy_Beside (Prompt_Path));
+      end if;
+
       --  What it did, for the harness to account: its tokens and its calls.
       Add ("--trace-file");
       Add (Prompt_Path & ".trace");
@@ -348,12 +356,18 @@ package body Model_Runner.CLI.Work is
          Usage : Unbounded_String :=
            To_Unbounded_String ("prompt_tokens " & Count_Of ("prompt_tokens") & ASCII.LF
                                 & "output_tokens " & Count_Of ("generated_tokens") & ASCII.LF);
+         --  And what its calls were set to, as it fitted the policy.
+         Settled : Boolean;
+         Settings : constant String := Model_Runner.Tools.Builtin.Text_Argument (Trace, "settings", Settled);
          Mark  : constant String := "{" & '"' & "t_ms" & '"' & ":";
          Call  : constant String := '"' & "event" & '"' & ":" & '"' & "call" & '"';
          Given_Back : constant String := '"' & "event" & '"' & ":" & '"' & "result" & '"';
          From  : Natural := Trace'First;
       begin
          if Trace /= "" then
+            if Settled and then Settings /= "" then
+               Append (Usage, "settings " & Settings & ASCII.LF);
+            end if;
             --  Each event is one object, up to the next event's start.
             loop
                declare

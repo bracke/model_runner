@@ -496,7 +496,8 @@ package body Model_Runner.CLI.Interactive is
             Thinking => Item.Thinking, Tools => Tools,
             Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
             Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer),
-            Literal => Content_Text'Access);
+            Literal => Content_Text'Access,
+            Effort => Item.Effort);
          if E.Is_Ok (Outcome) then
             Rendered := new String'(Buffer.all (1 .. Last));
          end if;
@@ -1216,7 +1217,8 @@ package body Model_Runner.CLI.Interactive is
               Thinking => Item.Thinking, Tools => Tools,
               Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
               Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer),
-              Literal => Content_Text'Access);
+              Literal => Content_Text'Access,
+              Effort => Item.Effort);
 
          Gen.Release (Last_Result);
          Tidied.Answer_Only (Item.Hide_Reasoning);

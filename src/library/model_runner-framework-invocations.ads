@@ -174,6 +174,33 @@ package Model_Runner.Framework.Invocations is
       Number    : Natural := 0;
       Ended     : String := "");
 
+   --  Record what a generation an invocation is about to make is set to --
+   --  its sampling, its reasoning, its reply's length and where each came
+   --  from -- as its next settings.NNNN entry: one before each generation
+   --  whose settings were resolved, in the order made.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The invocation, started and not ended.
+   --  @param Line The settings, on one line.
+   --  @param Status Framework_Not_Found when there is no such invocation,
+   --    Framework_Transition_Invalid when it has ended: what an ended one
+   --    was set to is history, not changed.
+   procedure Note_Settings
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Line   : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The settings an invocation's generations were made with, as
+   --  Note_Settings kept them.
+   --
+   --  @param Item The store.
+   --  @param Id The invocation.
+   --  @return Them, in the order made; empty for none.
+   function Settings_Of (Item : Stores.Store; Id : String) return Name_Lists.Vector;
+
    --  The calls an invocation recorded as refused, as their entries name
    --  them: the tool, the start of its arguments, and what refused it.
    --

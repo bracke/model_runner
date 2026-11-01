@@ -91,5 +91,6 @@ begin
       Parts        => Parts,
       Max_Calls    => Bound ("max_tool_calls", 0),
       Max_Steps    => Bound ("max_steps", 24),
-      Seconds      => Time_Allowed (Item, Task_Id));
+      Seconds      => Time_Allowed (Item, Task_Id),
+      Inference    => Inference_Policy.Select_For (Item, Task_Id));
 end Plan_For;

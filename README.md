@@ -322,6 +322,41 @@ governs it, with every override and conflict, what it may do, where it
 writes, what bounds it and which gates it must pass; what governs it is put
 in front of the model too.
 
+How each model call `/work` makes is set -- its temperature and probability
+filters, whether and how much it reasons, how long its reply may be -- is the
+project's inference policy. `scalar inference.mode` is `fixed` unless said
+otherwise: every call is set as the session is, its command line first,
+then the model file's own settings. `profile` sets every call by one
+profile, `scalar inference.default`; `adaptive` sets a task's calls by its
+kind (`scalar inference.task.KIND`, which `standard-development` maps:
+implementation to coding, bugfix to debugging, test to testing, analysis to
+analysis), a helper's by its role (`inference.role.ROLE`), and each call by
+what the harness saw lead to it: one after checks failed is
+`failure_recovery` (the debugging profile), one asked only for the report
+`result_reporting` (reporting), each mappable with
+`inference.activity.ACTIVITY` -- `task` keeps the task's own. A task no
+mapping reaches is set as in fixed mode. The built-in profiles are analysis,
+architecture, coding, testing, debugging, exploration, reporting and
+verification -- temperatures from 0 to 0.5 and reasoning low to high, first
+values for a model's benchmark to confirm; `scalar
+inference.profile.NAME.FIELD` changes one (`temperature`, `top_k`, `top_p`,
+`min_p`, `reasoning`, `thinking`, `max_tokens`) or makes one of its own. A
+task's own `inference=profile=NAME temperature=0.1 ...` stands in any mode.
+Each setting comes from the first that says it -- the session's command
+line, the task, the project's profile fields, the profile, the defaults --
+and then from what the model's template reads: a reasoning level goes to a
+template that takes one (`reasoning_effort`, as gpt-oss's) and to one that
+only takes whether to think as on for high and off for low, its default for
+medium, said as a fallback; a level the task or project named that the model
+cannot take stops the task before it moves, while one a profile chose is
+dropped and said. A reply never gets more room than the session keeps for
+it, and nothing here reaches the task's budgets, permissions or checks. Each
+generation's settings, with where each came from, are kept on its
+invocation as it is made -- `/task audit` lists them -- and a model run as a
+process of its own is handed the policy beside its prompt (`run
+--policy-file`) to fit to its own template. `run --reasoning-effort
+low|medium|high` names a level for a run outside `/work`.
+
 A project that lists its components (`set components = parser, lexer`) has
 tasks name one of them or none. A profile's check may carry options after
 its label -- `tests[timeout=120, retry=1, severity=warning, keep=summary]?:

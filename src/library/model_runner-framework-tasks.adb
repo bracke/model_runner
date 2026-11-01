@@ -5,6 +5,7 @@ with Ada.Strings.Maps;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Identifiers;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Permissions;
@@ -62,11 +63,14 @@ package body Model_Runner.Framework.Tasks is
    Deriver         : constant String := "task-derivation";
 
    --  The fields every task may have, whatever its kind.
-   Core : constant array (1 .. 10) of access constant String :=
+   Core : constant array (1 .. 11) of access constant String :=
      [new String'("title"), new String'("kind"), new String'("component"),
       new String'("requirements"), new String'("depends_on"),
       new String'("priority"), new String'("acceptance"),
-      new String'("parent"), new String'("notes"), new String'("permissions")];
+      new String'("parent"), new String'("notes"), new String'("permissions"),
+      --  How its model calls are set, where the task says: profile=NAME and
+      --  a profile's fields (Inference_Policy.Parse).
+      new String'("inference")];
 
    function Is_Core (Name : String) return Boolean
    is (for some Field of Core => Field.all = Name);
@@ -435,6 +439,20 @@ package body Model_Runner.Framework.Tasks is
       Kind   : constant String := (if Space = 0 then Schema else Schema (Schema'First .. Space - 1));
       Rest   : constant String := (if Space = 0 then "" else Trim (Schema (Space + 1 .. Schema'Last)));
    begin
+      if Name = "inference" and then Value /= "" then
+         declare
+            Settings : Inference_Policy.Overrides;
+            Named    : Unbounded_String;
+            Said     : constant String := Inference_Policy.Parse (Value, Settings, Named);
+         begin
+            return (if Said /= "" then Said
+                    elsif Named /= Null_Unbounded_String
+                      and then not Inference_Policy.Is_Profile (Config (Item), To_String (Named))
+                    then "there is no inference profile " & To_String (Named) & "; the built-in ones are analysis,"
+                         & " architecture, coding, testing, debugging, exploration, reporting and verification"
+                    else "");
+         end;
+      end if;
       if Is_Core (Name) or else Value = "" then
          return "";
       elsif Schema = "" then

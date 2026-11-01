@@ -256,6 +256,17 @@ package body Model_Runner.Framework.Work is
        then Natural'Value (Text) else Default);
 
    --  A scalar of the configuration.
+   --  An open agent's policy let go with it: kept in step with Open.
+   procedure Drop_Policy (Host : in out Child_Host) is
+   begin
+      if Natural (Host.Policies.Length) > Natural (Host.Open.Length) then
+         Host.Policies.Delete_Last;
+      end if;
+      if Natural (Host.Retried.Length) > Natural (Host.Open.Length) then
+         Host.Retried.Delete_Last;
+      end if;
+   end Drop_Policy;
+
    function Scalar (Item : Stores.Store; Name : String) return String is
       Config : Records.Item;
    begin
@@ -1989,6 +2000,50 @@ package body Model_Runner.Framework.Work is
       end if;
    end Keep_Unkept;
 
+   -------------------
+   -- Selection_Now --
+   -------------------
+
+   function Selection_Now (Host : Child_Host) return Inference_Policy.Selection
+   is (if Host.Policies.Is_Empty then (others => <>) else Host.Policies.Last_Element);
+
+   ---------------------
+   -- Policy_For_Call --
+   ---------------------
+
+   procedure Policy_For_Call
+     (Host    : in out Child_Host;
+      Doing   : Inference_Policy.Activity;
+      Invoked : Inference_Policy.Invocation_Settings;
+      Model   : Inference_Policy.Reasoning_Controls;
+      Policy  : out Inference_Policy.Effective;
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      use type Inference_Policy.Activity;
+      --  A helper run again for one that failed is the failure's mending.
+      Doing_Now : constant Inference_Policy.Activity :=
+        (if Doing = Inference_Policy.Task_Work and then not Host.Retried.Is_Empty
+           and then Host.Retried.Last_Element
+         then Inference_Policy.Failure_Recovery else Doing);
+      Change : Stores.Transaction;
+      Kept   : E.Error_Info;
+   begin
+      Inference_Policy.Resolve (Host.Item.all, Selection_Now (Host), Doing_Now, Invoked, Model, Policy, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      --  Kept on the call it sets, before it is made: what the work was set
+      --  to is read back from the state, not from the run.
+      if not Host.Calls.Is_Empty and then Host.Calls.Last_Element /= "" then
+         Invocations.Note_Settings
+           (Host.Item.all, Change, Host.Calls.Last_Element, Inference_Policy.Line_Of (Policy), Kept);
+         if E.Is_Ok (Kept) then
+            Stores.Commit (Host.Item.all, Change, Kept);
+         end if;
+         Keep_Unkept (Host, Kept);
+      end if;
+   end Policy_For_Call;
+
    function Unkept (Host : Child_Host) return Model_Runner.Errors.Error_Info is (Host.Unkept);
 
    function Authority_Changed (Item : Stores.Store; Manifest_Id : String) return String is
@@ -2215,6 +2270,7 @@ package body Model_Runner.Framework.Work is
          Host.Open.Delete_Last;
          Host.Calls.Delete_Last;
          Host.Opened.Delete_Last;
+         Drop_Policy (Host);
       end loop;
       Stores.Commit (Host.Item.all, Change, Status);
       Keep_Unkept (Host, Status);

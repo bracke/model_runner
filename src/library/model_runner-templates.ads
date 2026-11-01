@@ -365,6 +365,45 @@ package Model_Runner.Templates is
    --  different and a boolean cannot hold them.
    type Thinking_Choice is (Thinking_Unstated, Thinking_On, Thinking_Off);
 
+   --  How much a model that reasons is asked to, where its template takes a
+   --  level and not only whether: gpt-oss's reasoning_effort. Apart from
+   --  Thinking_Choice -- whether to reason at all -- and unstated in the
+   --  same way: a caller who names none leaves the template its default,
+   --  or the level Thinking_Choice implies. Minimal is a level some models
+   --  are trained with; no template this renders takes it (Takes_Effort).
+   type Reasoning_Effort is (Effort_Unstated, Effort_Minimal, Effort_Low, Effort_Medium, Effort_High);
+
+   --  A level as a template is given it: minimal, low, medium or high; ""
+   --  for none stated.
+   --
+   --  @param Level The level.
+   --  @return Its word.
+   function Effort_Word (Level : Reasoning_Effort) return String;
+
+   --  The reasoning controls a compiled template reads, as rendering finds
+   --  them -- the names it asks after, not the model's file name: whether
+   --  it is told to think or not (enable_thinking), and how much
+   --  (reasoning_effort). Known is false for a template not compiled.
+   type Reasoning_Controls is record
+      Known    : Boolean := False;
+      Thinking : Boolean := False;
+      Effort   : Boolean := False;
+   end record;
+
+   --  The controls a template reads.
+   --
+   --  @param Item Compiled template.
+   --  @return Its controls; Known false where it is not compiled.
+   function Controls_Of (Item : Compiled) return Reasoning_Controls;
+
+   --  Whether a template that reads a reasoning level takes this one: low,
+   --  medium and high, the levels gpt-oss's template is written for.
+   --
+   --  @param Level The level.
+   --  @return True where it renders it as asked.
+   function Takes_Effort (Level : Reasoning_Effort) return Boolean
+   is (Level in Effort_Low .. Effort_High);
+
    --  Render a conversation.
    --
    --  @param Item Compiled template.
@@ -374,6 +413,9 @@ package Model_Runner.Templates is
    --  @param Add_Generation_Prompt Value of add_generation_prompt.
    --  @param Thinking Value of enable_thinking, or that the caller said
    --    nothing about it.
+   --  @param Effort Value of reasoning_effort, where the template reads it:
+   --    unstated leaves it to Thinking -- high where on, low where off --
+   --    and to the template's own default where both are unstated.
    --  @param Target Buffer receiving the rendered prompt.
    --  @param Last Number of bytes written; 0 on failure.
    --  @param Status Success, Template_Output_Too_Large,
@@ -405,7 +447,8 @@ package Model_Runner.Templates is
         := null;
       Image_Marker          : String := "";
       Video_Marker          : String := "";
-      Literal               : access function (Text : String) return String := null);
+      Literal               : access function (Text : String) return String := null;
+      Effort                : Reasoning_Effort := Effort_Unstated);
 
    --  How many bytes at the end of a rendering with the generation prompt
    --  the same conversation rendered without it does not share: the
@@ -420,6 +463,7 @@ package Model_Runner.Templates is
    --  @param End_Token Text substituted for eos_token.
    --  @param Rendered The rendering with the generation prompt.
    --  @param Thinking As Render was given.
+   --  @param Effort As Render was given.
    --  @param Tools As Render was given.
    --  @param Image_Marker As Render was given.
    --  @param Video_Marker As Render was given.
@@ -436,7 +480,8 @@ package Model_Runner.Templates is
         := null;
       Image_Marker    : String := "";
       Video_Marker    : String := "";
-      Literal         : access function (Text : String) return String := null) return Natural;
+      Literal         : access function (Text : String) return String := null;
+      Effort          : Reasoning_Effort := Effort_Unstated) return Natural;
 
    --  Report whether a template reads the tools a caller may offer.
    --

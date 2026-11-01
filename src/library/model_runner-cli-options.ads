@@ -319,6 +319,16 @@ package Model_Runner.CLI.Options is
       Thinking : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
 
+      --  How much it was asked to reason, where its template takes a level
+      --  (--reasoning-effort); unstated leaves it to Thinking.
+      Effort : Model_Runner.Templates.Reasoning_Effort :=
+        Model_Runner.Templates.Effort_Unstated;
+
+      --  The inference policy a harness resolved for this run, where it
+      --  runs an agent as a process of its own (--policy-file): the file
+      --  Framework.Inference_Policy.Policy_Beside names.
+      Policy_File : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+
       --  Whether the reply is shown without its reasoning: a think block's
       --  text, or a harmony reply's messages before its final one.
       Hide_Reasoning : Boolean := False;

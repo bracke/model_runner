@@ -135,6 +135,8 @@ package body Model_Runner.Agent is
         Model_Runner.Tools.Tool_Call_JSON;
       Thinking   : Model_Runner.Templates.Thinking_Choice :=
         Model_Runner.Templates.Thinking_Unstated;
+      Effort     : Model_Runner.Templates.Reasoning_Effort :=
+        Model_Runner.Templates.Effort_Unstated;
       Hide_Reasoning : Boolean := False;
       Watch      : Observer_Reference := null;
       Approve    : Approver_Reference := null;
@@ -568,7 +570,8 @@ package body Model_Runner.Agent is
             Thinking => Thinking,
             Tools    => (if Have_Tools then Offered'Unrestricted_Access
                          else null),
-            Literal => Content_Text'Access);
+            Literal => Content_Text'Access,
+            Effort  => Effort);
          if E.Is_Ok (Status) then
             Rendered := new String'(Buffer.all (1 .. Last));
          end if;
@@ -670,7 +673,8 @@ package body Model_Runner.Agent is
                  Thinking => Thinking,
                  Tools    => (if Have_Tools then Offered'Unrestricted_Access
                               else null),
-                 Literal => Content_Text'Access);
+                 Literal => Content_Text'Access,
+                 Effort  => Effort);
 
             --  Each step asks for the reply's whole room afresh: what the
             --  last step's thought budget or cap left in the request is not

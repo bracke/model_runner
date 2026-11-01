@@ -364,9 +364,22 @@ package body Agent_Trial is
    --  context retrieved as it was before excerpts, where the trial asks.
    Whole_Context : Boolean := False;
 
+   --  How the trial's calls are set: as the session is, or by a policy
+   --  -- adaptive, the kinds the trial's tasks have mapped to profiles as
+   --  standard-development maps them, or profile, every call by one.
+   Inference_Mode : Unbounded_String;
+
+   function Inference_Words return String is
+     (if Inference_Mode = Null_Unbounded_String or else To_String (Inference_Mode) = "fixed" then ""
+      elsif To_String (Inference_Mode) = "adaptive"
+      then " scalar.inference.mode=adaptive scalar.inference.task.implementation=coding"
+           & " scalar.inference.task.analysis=analysis"
+      else " scalar.inference.mode=profile scalar.inference.default=" & To_String (Inference_Mode));
+
    function Knowledge_Words (Knowledge : Boolean) return String is
      ((if Knowledge then "" else " scalar.knowledge.observations=off")
-      & (if Whole_Context then " scalar.context.retrieval=whole" else ""));
+      & (if Whole_Context then " scalar.context.retrieval=whole" else "")
+      & Inference_Words);
 
    --  The style rules and warnings as errors, and every unit compiled
    --  each time: an edit within the second of the last build is not taken
@@ -529,7 +542,8 @@ package body Agent_Trial is
       Max_Seconds : Natural := 0;
       Context_Size : Natural := 0;
       Accept_Lessons : Boolean := False;
-      Whole_Files    : Boolean := False)
+      Whole_Files    : Boolean := False;
+      Inference      : String := "fixed")
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -668,6 +682,7 @@ package body Agent_Trial is
             & (if Apart then "workspace" else "project") & (if Knowledge then "" else ", knowledge off")
             & (if Whole_Context then ", whole files" else "")
             & (if Carry then ", carried" else "") & (if Accept_Lessons then ", lessons accepted" else "")
+            & (if Inference = "fixed" then "" else ", inference " & Inference)
             & HT & Ending & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed & HT
@@ -708,6 +723,7 @@ package body Agent_Trial is
       end if;
       Seconds_Bound := Max_Seconds;
       Whole_Context := Whole_Files;
+      Inference_Mode := To_Unbounded_String (Inference);
       for Round in 1 .. Repeats loop
          exit when Halted;
          for Which in Tasks'Range loop

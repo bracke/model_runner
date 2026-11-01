@@ -52,6 +52,10 @@ package Agent_Trial is
    --    every task's context as a decision rather than an observation.
    --  @param Whole_Files Whether the project retrieves its context as it
    --    did before excerpts (--retrieval whole): the large task's measure.
+   --  @param Inference How its calls are set (--inference): fixed, as the
+   --    session is; adaptive, by the kinds' profiles and what each call is
+   --    for; or a profile's name, every call by it -- the measure of an
+   --    inference policy against fixed settings.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -65,6 +69,7 @@ package Agent_Trial is
       Max_Seconds : Natural := 0;
       Context_Size : Natural := 0;
       Accept_Lessons : Boolean := False;
-      Whole_Files    : Boolean := False);
+      Whole_Files    : Boolean := False;
+      Inference      : String := "fixed");
 
 end Agent_Trial;

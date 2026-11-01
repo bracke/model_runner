@@ -22,6 +22,8 @@ with Model_Runner.Bytes;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
 with Model_Runner.Stops;
+with Model_Runner.Templates;
+with Model_Runner.Sampling;
 with Tiny_Model;
 with Model_Runner.Cancellation;
 with Model_Runner.Clocks;
@@ -50,6 +52,7 @@ with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Indexes;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Code_Queries;
@@ -19044,6 +19047,569 @@ package body Tests.Framework_Cases is
    end Children_Work_Within_Their_Parent;
 
    ---------------------------------------------------------------------------
+   --  Inference policies.
+   ---------------------------------------------------------------------------
+
+   package Ip renames Model_Runner.Framework.Inference_Policy;
+   package Tm renames Model_Runner.Templates;
+
+   use type Ip.Source;
+   use type Ip.Activity;
+   use type Ip.Policy_Mode;
+   use type Ip.Overrides;
+   use type Ip.Source_Map;
+   use type Model_Runner.Sampling.Configuration;
+   use type Tm.Thinking_Choice;
+   use type Tm.Reasoning_Effort;
+   use type Model_Runner.Sampling.Real;
+
+   --  Controls a template reads: whether to think, how much, or none.
+   Thinking_Only : constant Tm.Reasoning_Controls := (Known => True, Thinking => True, Effort => False);
+   Effort_Levels : constant Tm.Reasoning_Controls := (Known => True, Thinking => True, Effort => True);
+   No_Controls   : constant Tm.Reasoning_Controls := (Known => True, Thinking => False, Effort => False);
+
+   --  What a probing agent's calls were set to, as the host set them.
+   Probe_Root, Probe_Recovery, Probe_Child, Probe_Retry : Ip.Effective;
+   Probe_Status : E.Error_Info;
+
+   --  A session as a test asks: nothing named, a reply's room of 2048.
+   Plain_Session : constant Ip.Invocation_Settings := (Output_Room => 2048, others => <>);
+
+   type Policy_Probe is new Wk.Parenting_Runner with record
+      Controls : Tm.Reasoning_Controls := Thinking_Only;
+   end record;
+
+   overriding procedure Run
+     (Self        : Policy_Probe;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Policy_Probe;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding function Profile (Self : Policy_Probe) return Cx.Model_Profile
+   is ((Id => To_Unbounded_String ("probe"), Context_Limit => 4096, Controls => Self.Controls, others => <>));
+
+   overriding procedure Run
+     (Self        : Policy_Probe;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Self, Prompt_Path, Project);
+   begin
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: probed");
+      Status := E.Success;
+   end Run;
+
+   overriding procedure Run_Parenting
+     (Self        : Policy_Probe;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Prompt_Path);
+      Id      : Unbounded_String;
+      Context : Unbounded_String;
+      Budget  : Natural;
+      Told    : Unbounded_String;
+      Retry   : Boolean;
+   begin
+      Status := E.Success;
+      Children.Policy_For_Call (Ip.Task_Work, Plain_Session, Self.Controls, Probe_Root, Probe_Status);
+      if E.Is_Ok (Probe_Status) then
+         Children.Policy_For_Call (Ip.Failure_Recovery, Plain_Session, Self.Controls, Probe_Recovery, Probe_Status);
+      end if;
+      --  A reviewer, which fails and is run once more.
+      if E.Is_Ok (Probe_Status) then
+         Children.Open_Child ("reviewer", "required", "look", "", Id, Context, Budget, Probe_Status);
+      end if;
+      if E.Is_Ok (Probe_Status) then
+         Children.Policy_For_Call (Ip.Task_Work, Plain_Session, Self.Controls, Probe_Child, Probe_Status);
+         Children.Close_Child ("status: failed" & LF & "summary: could not look", 10, E.Success, Told, Retry);
+         if Retry then
+            Children.Open_Child ("reviewer", "required", "look", To_String (Id), Id, Context, Budget, Probe_Status);
+            if E.Is_Ok (Probe_Status) then
+               Children.Policy_For_Call (Ip.Task_Work, Plain_Session, Self.Controls, Probe_Retry, Probe_Status);
+               Children.Close_Child ("status: done" & LF & "summary: looked" & LF & "findings: fine", 10,
+                                     E.Success, Told, Retry);
+            end if;
+         end if;
+      end if;
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/probe.txt", "probed");
+      Answer := To_Unbounded_String ("status: done" & LF & "summary: probed" & LF & "changed_files: src/probe.txt");
+   end Run_Parenting;
+
+   --  How a call is set: precedence one setting at a time, the model's
+   --  controls over all, the reply held to its room, and nothing changed
+   --  in fixed mode -- decided from a configuration in hand, no model and
+   --  no store.
+   procedure Inference_Policy_Resolves_Each_Setting
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Config  : R.Item := R.Create ("config", 1, "config", 1);
+      Base    : Model_Runner.Sampling.Configuration;
+      Asked   : Ip.Request;
+      Got     : Ip.Effective;
+      Status  : E.Error_Info;
+      Read    : Ip.Overrides;
+      Named   : Unbounded_String;
+
+      function Chosen (Profile : String; Mode : Ip.Policy_Mode := Ip.Adaptive) return Ip.Selection
+      is ((Mode => Mode, Profile => To_Unbounded_String (Profile), others => <>));
+
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      --  What a task's field says reads back as it was said, and what does
+      --  not read is said.
+      Assert (Ip.Parse ("profile=coding temperature=0.1 top_k=20 reasoning=high max_tokens=512", Read, Named) = ""
+              and then To_String (Named) = "coding" and then Read.Has_Temperature and then Read.Top_K = 20
+              and then Read.Effort = Tm.Effort_High and then Read.Output_Limit = 512,
+              "an inference field did not read");
+      Assert (Ip.Image (Read) = "temperature=0.1 top_k=20 reasoning=high max_tokens=512",
+              "an inference field did not read back as it was said: " & Ip.Image (Read));
+      Assert (Ip.Parse ("temperature=9", Read, Named) /= "" and then Ip.Parse ("top_p=0", Read, Named) /= ""
+              and then Ip.Parse ("reasoning=extreme", Read, Named) /= ""
+              and then Ip.Parse ("colour=blue", Read, Named) /= ""
+              and then Ip.Parse ("temperature=-1", Read, Named) /= "",
+              "an inference field out of its range was taken");
+
+      --  Fixed: every call as the session is -- the sampler as given, the
+      --  reply its room, nothing asked of the template.
+      Base.Temperature := 0.7;
+      Base.Top_K := 33;
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("", Ip.Fixed), Ip.Task_Work),
+              (Base => Base, Output_Room => 3000, others => <>), Thinking_Only, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Sampling = Base and then Got.Output_Limit = 3000
+              and then Got.Thinking = Tm.Thinking_Unstated and then Got.Effort = Tm.Effort_Unstated
+              and then (for all One in Ip.Setting => Got.Sources (One) = Ip.Model_Default),
+              "fixed mode changed what a call is set to: " & Ip.Line_Of (Got));
+
+      --  A profile's own values, a temperature the session named over it.
+      Asked := Ip.Merge_With (Config, Chosen ("coding"), Ip.Task_Work);
+      Assert (To_String (Asked.Profile) = "coding" and then Asked.Sources (Ip.Temperature) = Ip.Profile_Default
+              and then Asked.Settings.Effort = Tm.Effort_Medium,
+              "the coding profile's values were not asked");
+      Ip.Fit (Asked, (Base => Base, Given => [Model_Runner.Sampling.Temp => True, others => False],
+                      Output_Room => 3000, others => <>), Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Sampling.Temperature = 0.7
+              and then Got.Sources (Ip.Temperature) = Ip.Invocation
+              and then Got.Effort = Tm.Effort_Medium and then Got.Sources (Ip.Effort) = Ip.Profile_Default
+              and then Got.Sampling.Top_K = 33,
+              "a temperature the session named did not stand over the profile's: " & Ip.Line_Of (Got));
+
+      --  The project's field over the built-in, the task's over both.
+      R.Set (Config, "scalar.inference.profile.coding.temperature", "0.3");
+      R.Set (Config, "scalar.inference.profile.coding.top_k", "20");
+      Asked := Ip.Merge_With
+        (Config, (Chosen ("coding") with delta Task_Settings =>
+                    (Ip.No_Overrides with delta Has_Temperature => True, Temperature => 0.05)),
+         Ip.Task_Work);
+      Ip.Fit (Asked, (Base => Base, Output_Room => 3000, others => <>), Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Sampling.Temperature = 0.05
+              and then Got.Sources (Ip.Temperature) = Ip.Task_Setting
+              and then Got.Sampling.Top_K = 20 and then Got.Sources (Ip.Top_K) = Ip.Project,
+              "the task's and the project's settings did not stand in their order: " & Ip.Line_Of (Got));
+
+      --  What a call is for picks its profile: recovery debugs, reporting
+      --  reports, unless the configuration maps it, or the task named its own.
+      Assert (To_String (Ip.Merge_With (Config, Chosen ("coding"), Ip.Failure_Recovery).Profile) = "debugging"
+              and then To_String (Ip.Merge_With (Config, Chosen ("coding"), Ip.Result_Reporting).Profile) = "reporting",
+              "an activity did not pick its profile");
+      R.Set (Config, "scalar.inference.activity.failure_recovery", "task");
+      Assert (To_String (Ip.Merge_With (Config, Chosen ("coding"), Ip.Failure_Recovery).Profile) = "coding"
+              and then To_String (Ip.Merge_With
+                                    (Config, (Chosen ("coding") with delta Task_Named => True),
+                                     Ip.Result_Reporting).Profile) = "coding"
+              and then To_String (Ip.Merge_With (Config, Chosen (""), Ip.Result_Reporting).Profile) = "",
+              "an activity's mapping, a task's own profile or an unmapped task was not kept to");
+      R.Set (Config, "scalar.inference.activity.failure_recovery", "");
+
+      --  Reasoning given the control the template reads.
+      Asked := Ip.Merge_With (Config, Chosen ("debugging"), Ip.Task_Work);
+      Ip.Fit (Asked, Plain_Session, Thinking_Only, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_On and then Got.Effort = Tm.Effort_Unstated
+              and then Got.Sources (Ip.Thinking) = Ip.Capability and then Has (To_String (Got.Fallback), "thinking on"),
+              "high reasoning was not thinking on for a template that takes only that: " & Ip.Line_Of (Got));
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("reporting"), Ip.Task_Work), Plain_Session, Thinking_Only, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_Off and then Got.Sampling.Temperature = 0.0,
+              "low reasoning was not thinking off: " & Ip.Line_Of (Got));
+      --  Greedy: the filters it never reads are said unused.
+      Assert (Has (Ip.Line_Of (Got), "top_k=unused (greedy)"),
+              "a greedy call was said to be filtered: " & Ip.Line_Of (Got));
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("coding"), Ip.Task_Work), Plain_Session, Thinking_Only, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_Unstated,
+              "medium reasoning did not leave a thinking template its default");
+      Ip.Fit (Asked, Plain_Session, Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Effort = Tm.Effort_High and then Got.Thinking = Tm.Thinking_Unstated,
+              "a template that takes a level was not given it");
+      Ip.Fit (Asked, Plain_Session, No_Controls, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Effort = Tm.Effort_Unstated and then Got.Fallback /= Null_Unbounded_String,
+              "a level a profile chose was not dropped, said, for a template with no control");
+      --  Not known -- a model run apart -- it is asked as it stands, for
+      --  the process that loads the model to fit.
+      Ip.Fit (Asked, Plain_Session, (others => False), Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Effort = Tm.Effort_High,
+              "a level was changed for a model whose controls are not known");
+
+      --  Named by the task or the project, it is refused, not changed.
+      R.Set (Config, "scalar.inference.profile.coding.reasoning", "minimal");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("coding"), Ip.Task_Work), Plain_Session, Effort_Levels, Got, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "a level the template does not take, named by the project, was not refused");
+      R.Set (Config, "scalar.inference.profile.coding.reasoning", "");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("analysis"), Ip.Task_Work), Plain_Session, Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status), "the analysis profile did not fit a template that takes levels");
+      Ip.Fit (Ip.Merge_With
+                (Config, (Chosen ("") with delta Task_Settings =>
+                            (Ip.No_Overrides with delta Effort => Tm.Effort_High)), Ip.Task_Work),
+              Plain_Session, Thinking_Only, Got, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "a level the task named was changed for a template that takes only whether to think");
+      Ip.Fit ((others => <>), (Plain_Session with delta Effort => Tm.Effort_Low), No_Controls, Got, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "a level the session named was taken by a template with no reasoning control");
+      Ip.Fit ((others => <>), (Plain_Session with delta Effort => Tm.Effort_Minimal), Effort_Levels, Got, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "minimal, named, was not refused by a template that takes low, medium or high");
+
+      --  A profile's minimal goes to a levelled template as low, said.
+      R.Set (Config, "scalar.inference.profile.terse.reasoning", "minimal");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("terse"), Ip.Task_Work), Plain_Session, Effort_Levels, Got, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid,
+              "a project's own profile's minimal was not refused as the project's");
+
+      --  The reply never more than its room; the session's --max-tokens over all.
+      R.Set (Config, "scalar.inference.profile.terse.reasoning", "");
+      R.Set (Config, "scalar.inference.profile.terse.max_tokens", "9000");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("terse"), Ip.Task_Work), Plain_Session, Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Output_Limit = 2048 and then Got.Sources (Ip.Output_Limit) = Ip.Capability,
+              "a reply was given more room than the session keeps: " & Ip.Line_Of (Got));
+      R.Set (Config, "scalar.inference.profile.terse.max_tokens", "500");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("terse"), Ip.Task_Work), Plain_Session, Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Output_Limit = 500 and then Got.Sources (Ip.Output_Limit) = Ip.Project,
+              "a profile's shorter reply was not taken");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("terse"), Ip.Task_Work),
+              (Plain_Session with delta Output_Given => True), Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Output_Limit = 2048 and then Got.Sources (Ip.Output_Limit) = Ip.Invocation,
+              "a reply length the session named did not stand");
+
+      --  A sampling the sampler would refuse is refused.
+      R.Set (Config, "scalar.inference.profile.terse.top_p", "1.0");
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("terse"), Ip.Task_Work), Plain_Session, Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status), "a profile's sampling the sampler takes was refused");
+
+      --  Same inputs, same answer.
+      declare
+         Again : Ip.Effective;
+         Once  : constant Ip.Request := Ip.Merge_With (Config, Chosen ("debugging"), Ip.Failure_Recovery);
+      begin
+         Ip.Fit (Once, Plain_Session, Thinking_Only, Got, Status);
+         Ip.Fit (Ip.Merge_With (Config, Chosen ("debugging"), Ip.Failure_Recovery), Plain_Session, Thinking_Only,
+                 Again, Status);
+         Assert (Ip.Line_Of (Got) = Ip.Line_Of (Again), "the same call was set two ways");
+      end;
+
+      --  A request read back from its file is the request.
+      declare
+         Back : Ip.Request;
+         Sent : constant Ip.Request :=
+           Ip.Merge_With (Config, (Chosen ("coding") with delta Revision => 7), Ip.Result_Reporting);
+      begin
+         Assert (Ip.Read_Request (Ip.Image_Of (Sent), Back) = ""
+                 and then Back.Settings = Sent.Settings and then Back.Sources = Sent.Sources
+                 and then Back.Profile = Sent.Profile and then Back.Doing = Ip.Result_Reporting
+                 and then Back.Chosen.Revision = 7,
+                 "a request did not read back from its file: " & Ip.Image_Of (Sent));
+         declare
+            Wrong : Ip.Request;
+            Said  : constant String := Ip.Read_Request ("set temperature=hot profile", Wrong);
+         begin
+            Assert (Said /= "" and then Wrong.Settings = Ip.No_Overrides,
+                    "a policy file that does not read was taken");
+         end;
+      end;
+
+      --  The settings, each as it is given and as a whole.
+      Assert (Ip.Setting_Problem ("scalar.inference.mode", "sometimes") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.activity.lunch", "coding") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.profile.coding.colour", "blue") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.profile.coding.top_k", "many") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.nonesuch", "1") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.mode", "adaptive") = ""
+              and then Ip.Setting_Problem ("scalar.inference.activity.failure_recovery", "task") = "",
+              "an inference setting was read wrong as given");
+      declare
+         Whole : R.Item := R.Create ("config", 1, "config", 1);
+      begin
+         R.Set (Whole, "scalar.inference.mode", "profile");
+         Assert (Ip.Configuration_Problem (Whole) /= "", "profile mode with no default was taken");
+         R.Set (Whole, "scalar.inference.default", "nonesuch");
+         Assert (Ip.Configuration_Problem (Whole) /= "", "a default naming no profile was taken");
+         R.Set (Whole, "scalar.inference.default", "coding");
+         R.Set (Whole, "scalar.inference.task.nokind", "coding");
+         Assert (Ip.Configuration_Problem (Whole) /= "", "a mapping for a kind there is not was taken");
+         R.Set (Whole, "scalar.inference.task.nokind", "");
+         R.Set (Whole, "scalar.inference.role.reviewer", "mine");
+         Assert (Ip.Configuration_Problem (Whole) /= "", "a mapping to a profile there is not was taken");
+         R.Set (Whole, "scalar.inference.profile.mine.temperature", "0.6");
+         Assert (Ip.Configuration_Problem (Whole) = "",
+                 "a mapping to a profile made by its own fields was refused: " & Ip.Configuration_Problem (Whole));
+      end;
+   end Inference_Policy_Resolves_Each_Setting;
+
+   --  A project's policy reaches /work: the plan carries the selection,
+   --  each call the root and its helpers make is set by its kind, role and
+   --  activity and kept on its own invocation, a helper run again recovers,
+   --  a task's field is checked as it is given, a setting its model cannot
+   --  take is refused before the task moves, and what was initialized is
+   --  not changed by a template changed since.
+   procedure Inference_Policies_Reach_The_Work
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store  : aliased S.Store;
+      Status : E.Error_Info;
+      Change : S.Transaction;
+      Done   : Wk.Report;
+      Id     : Unbounded_String;
+      Settings : constant String :=
+        "set execution.allowed = test" & LF
+        & "profile checks = exists: test -f src/probe.txt" & LF
+        & "scalar verification.default = checks" & LF
+        & "scalar inference.mode = adaptive" & LF
+        & "scalar inference.task.analysis = analysis" & LF
+        & "scalar inference.role.reviewer = verification" & LF
+        & "scalar inference.profile.analysis.top_k = 20" & LF;
+
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+
+      function Made (Title : String; Inference : String := "") return String is
+         Made_Id : Unbounded_String;
+      begin
+         Tk.Create (Store, Change, Fields (Title, "analysis", (if Inference = "" then "" else "inference"), Inference),
+                    "user", "", Made_Id, Status);
+         if E.Is_Ok (Status) then
+            S.Commit (Store, Change, Status);
+            Tk.Move (Store, Change, To_String (Made_Id), "accepted", "", Status => Status);
+            S.Commit (Store, Change, Status);
+         end if;
+         return To_String (Made_Id);
+      end Made;
+   begin
+      Task_Project (Store, "inference", Settings);
+
+      --  A task's field is held to what it may say.
+      declare
+         Refused : constant String := Made ("Unknown profile", "profile=nonesuch");
+         pragma Unreferenced (Refused);
+      begin
+         Assert (E.Is_Error (Status), "a task naming a profile there is not was made");
+      end;
+      declare
+         Refused : constant String := Made ("Hot", "temperature=9");
+         pragma Unreferenced (Refused);
+      begin
+         Assert (E.Is_Error (Status), "a task with a temperature out of range was made");
+      end;
+
+      --  The plan carries the selection; the agent is not told it.
+      Id := To_Unbounded_String (Made ("Probe"));
+      declare
+         Plan : constant Wk.Execution_Plan :=
+           Wk.Plan_For (Store, To_String (Id), Pm.Effective (Store, To_String (Id), ""), Apart => False);
+      begin
+         Assert (Plan.Inference.Mode = Ip.Adaptive and then To_String (Plan.Inference.Profile) = "analysis"
+                 and then not Plan.Inference.Task_Named and then Plan.Inference.Revision > 0,
+                 "the plan did not carry the task's selection");
+         Assert (not Has (Wk.Rendered (Plan), "analysis") and then not Has (Wk.Rendered (Plan), "temperature"),
+                 "the agent was told its inference settings rather than given them");
+      end;
+
+      --  Root, recovery, helper and its retry, each set and kept.
+      Probe_Status := E.Success;
+      Wk.Execute (Store, To_String (Id), Policy_Probe'(Controls => Thinking_Only), Policy_Probe'(others => <>).Profile,
+                  Done, Status);
+      Assert (E.Is_Ok (Status) and then E.Is_Ok (Probe_Status),
+              "probing work failed: " & Code_Of (Status) & " " & Code_Of (Probe_Status));
+      Assert (To_String (Probe_Root.Asked.Profile) = "analysis" and then Probe_Root.Sampling.Temperature = 0.2
+              and then Probe_Root.Sampling.Top_K = 20 and then Probe_Root.Sources (Ip.Top_K) = Ip.Project
+              and then Probe_Root.Thinking = Tm.Thinking_On and then Probe_Root.Output_Limit = 2048,
+              "the root's call was not set by its kind's profile: " & Ip.Line_Of (Probe_Root));
+      Assert (Probe_Recovery.Asked.Doing = Ip.Failure_Recovery
+              and then To_String (Probe_Recovery.Asked.Profile) = "debugging",
+              "a recovery call was not set by the debugging profile: " & Ip.Line_Of (Probe_Recovery));
+      Assert (To_String (Probe_Child.Asked.Profile) = "verification",
+              "a helper was not set by its role's profile: " & Ip.Line_Of (Probe_Child));
+      Assert (Probe_Retry.Asked.Doing = Ip.Failure_Recovery
+              and then To_String (Probe_Retry.Asked.Profile) = "debugging",
+              "a helper run again did not recover: " & Ip.Line_Of (Probe_Retry));
+      declare
+         Root_Kept : constant F.Name_Lists.Vector := Iv.Settings_Of (Store, To_String (Done.Invocation_Id));
+         Audit     : constant F.Name_Lists.Vector := Wk.Audit (Store, To_String (Id));
+         Children  : Natural := 0;
+      begin
+         Assert (Natural (Root_Kept.Length) = 2
+                 and then Has (Root_Kept.First_Element, "activity=task_work profile=analysis")
+                 and then Has (Root_Kept.First_Element, "top_k=20 (project)")
+                 and then Has (Root_Kept.Last_Element, "activity=failure_recovery profile=debugging"),
+              "the root's calls were not kept on its invocation as set");
+         --  The helpers' on their own invocations, apart from the root's.
+         for Name of S.Names (Store, F.Invocations_Area) loop
+            if Name /= To_String (Done.Invocation_Id)
+              and then not Iv.Settings_Of (Store, Name).Is_Empty
+            then
+               Children := Children + 1;
+               Assert (Natural (Iv.Settings_Of (Store, Name).Length) = 1,
+                       "a helper's invocation kept another's calls");
+            end if;
+         end loop;
+         Assert (Children = 2, "each helper's call was not kept on its own invocation:" & Children'Image);
+         Assert ((for some Line of Audit => Has (Line, "inference policy: adaptive, profile analysis"))
+                 and then (for some Line of Audit => Has (Line, "call 2 set to: activity=failure_recovery")),
+                 "the audit did not say what the calls were set to");
+      end;
+
+      --  Ended, an invocation's settings are history.
+      declare
+         Late : E.Error_Info;
+      begin
+         Iv.Note_Settings (Store, Change, To_String (Done.Invocation_Id), "activity=late", Late);
+         Assert (Late.Code = E.Framework_Transition_Invalid, "an ended invocation's settings were changed");
+         Change := S.No_Changes;
+      end;
+
+      --  A level the task named that its model takes no control for: a
+      --  setup to put right, the task left as it was.
+      Id := To_Unbounded_String (Made ("Levelled", "reasoning=high"));
+      Assert (E.Is_Ok (Status), "a task with a reasoning level was not made");
+      Wk.Execute (Store, To_String (Id), Policy_Probe'(Controls => No_Controls),
+                  Policy_Probe'(Controls => No_Controls).Profile, Done, Status);
+      Assert (Status.Code = E.Framework_Input_Invalid and then Tk.State_Of (Store, To_String (Id)) = "accepted",
+              "a reasoning level the model cannot take did not stop the task before it moved: " & Code_Of (Status));
+
+      --  The task's own profile stands over its kind's; the role's mapping
+      --  does not reach a task that named its own.
+      Id := To_Unbounded_String (Made ("Own", "profile=exploration"));
+      Wk.Execute (Store, To_String (Id), Policy_Probe'(Controls => Effort_Levels),
+                  Policy_Probe'(Controls => Effort_Levels).Profile, Done, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Probe_Root.Asked.Profile) = "exploration"
+              and then Probe_Root.Sampling.Temperature = 0.5 and then Probe_Root.Effort = Tm.Effort_Medium
+              and then To_String (Probe_Child.Asked.Profile) = "exploration"
+              and then To_String (Probe_Recovery.Asked.Profile) = "exploration",
+              "a task's own profile did not stand: " & Ip.Line_Of (Probe_Root));
+
+      --  Reconfigured while selected, a profile's fields are read as the
+      --  revision the run was selected at said them.
+      declare
+         Chosen  : constant Ip.Selection := Ip.Select_For (Store, Made ("Frozen"));
+         Changes : Cf.Value_Maps.Map;
+         Planned : Cf.Change_Plan;
+         Revision : Natural;
+      begin
+         Changes.Include ("scalar.inference.profile.analysis.top_k", "30");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Assert (E.Is_Ok (Status), "a profile's field was not reconfigured: " & Code_Of (Status));
+         Assert (Ip.Merge (Store, Chosen, Ip.Task_Work).Settings.Top_K = 20
+                 and then Ip.Merge (Store, Ip.Select_For (Store, Made ("Later")), Ip.Task_Work).Settings.Top_K = 30,
+                 "a run's profile was read at another revision than it was selected at");
+         --  And a change that does not read is refused, as any setting.
+         for Wrong of F.Name_Lists.Vector'(["scalar.inference.mode=sometimes",
+                                             "scalar.inference.task.analysis=nonesuch",
+                                             "scalar.inference.task.nokind=coding",
+                                             "scalar.inference.profile.coding.top_p=2"])
+         loop
+            Changes.Clear;
+            Changes.Include (Wrong (Wrong'First .. Ada.Strings.Fixed.Index (Wrong, "=") - 1),
+                             Wrong (Ada.Strings.Fixed.Index (Wrong, "=") + 1 .. Wrong'Last));
+            Cf.Plan_Change (Store, Changes, Planned, Status);
+            Assert (E.Is_Error (Status), "a configuration change that does not read was planned: " & Wrong);
+         end loop;
+      end;
+      S.Close (Store);
+
+      --  Fixed -- the project says nothing -- every call is the session's.
+      Task_Project (Store, "inference-fixed",
+                    "set execution.allowed = test" & LF & "profile checks = exists: test -f src/probe.txt" & LF
+                    & "scalar verification.default = checks" & LF);
+      Id := To_Unbounded_String (Made ("Fixed"));
+      Wk.Execute (Store, To_String (Id), Policy_Probe'(Controls => Effort_Levels),
+                  Policy_Probe'(Controls => Effort_Levels).Profile, Done, Status);
+      declare
+         Default_Sampling : Model_Runner.Sampling.Configuration;
+      begin
+         Assert (E.Is_Ok (Status) and then Probe_Root.Sampling = Default_Sampling
+                 and then Probe_Recovery.Sampling = Default_Sampling
+                 and then Probe_Root.Thinking = Tm.Thinking_Unstated
+                 and then Probe_Root.Effort = Tm.Effort_Unstated
+                 and then To_String (Probe_Recovery.Asked.Profile) = "",
+                 "a project that says nothing of inference did not keep its calls as the session's: "
+                 & Ip.Line_Of (Probe_Recovery));
+      end;
+      S.Close (Store);
+   end Inference_Policies_Reach_The_Work;
+
+   --  The session's own model on /work: each round's call set before it
+   --  is generated, by what led to it -- the work, then the report alone
+   --  once the report could not be taken -- and kept on the invocation as
+   --  applied.
+   procedure Session_Calls_Follow_The_Policy
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Store   : aliased S.Store;
+      Status  : E.Error_Info;
+      Change  : S.Transaction;
+      Id      : Unbounded_String;
+      Done    : Wk.Report;
+      Replies : aliased Session_Script;
+      Shown   : Unbounded_String;
+
+      function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+   begin
+      Task_Project (Store, "inference-session",
+                    "scalar inference.mode = adaptive" & LF & "scalar inference.task.analysis = analysis" & LF);
+      Tk.Create (Store, Change, Fields ("Look", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      --  A look, a report with no summary, handed back; then one that reads.
+      Replies.Replies (1) :=
+        To_Unbounded_String ("<tool_call>{""name"": ""list_directory"", ""arguments"": {""path"": "".""}}</tool_call>");
+      Replies.Replies (2) := To_Unbounded_String ("status: done");
+      Replies.Replies (3) := To_Unbounded_String ("summary: nothing to change" & LF & "status: done");
+      On_Session (Store, To_String (Id), Replies, Shown, Done);
+      declare
+         Kept : constant F.Name_Lists.Vector := Iv.Settings_Of (Store, To_String (Done.Invocation_Id));
+      begin
+         Assert (Natural (Kept.Length) = 2,
+                 "each round's call was not set and kept:" & Kept.Length'Image & " " & To_String (Done.Reason)
+                 & (if Kept.Is_Empty then "" else " / " & Kept.Last_Element));
+         Assert (Has (Kept.First_Element, "activity=task_work profile=analysis")
+                 and then Has (Kept.First_Element, "temperature=0.2 (profile)"),
+                 "the work's call was not set by its kind's profile: " & Kept.First_Element);
+         Assert (Has (Kept.Last_Element, "activity=result_reporting profile=reporting")
+                 and then Has (Kept.Last_Element, "temperature=0.0 (profile)")
+                 and then Has (Kept.Last_Element, "top_k=unused (greedy)"),
+                 "the call asked for the report alone was not set by the reporting profile: " & Kept.Last_Element);
+      end;
+      S.Close (Store);
+   end Session_Calls_Follow_The_Policy;
+
+   ---------------------------------------------------------------------------
    --  Orchestration.
    ---------------------------------------------------------------------------
 
@@ -22354,6 +22920,15 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Children_Work_Within_Their_Parent'Access,
          "a working agent's children are made, run and answered for by the harness");
+      Register_Routine
+        (T, Inference_Policy_Resolves_Each_Setting'Access,
+         "a model call's settings are resolved one at a time, within what its model takes");
+      Register_Routine
+        (T, Inference_Policies_Reach_The_Work'Access,
+         "a project's inference policy sets each call /work and its helpers make, and keeps it");
+      Register_Routine
+        (T, Session_Calls_Follow_The_Policy'Access,
+         "the session's model on /work has each round's call set by what led to it");
       Register_Routine
         (T, Writes_Stay_In_Bounds'Access,
          "an agent writing where it may not fails its task");

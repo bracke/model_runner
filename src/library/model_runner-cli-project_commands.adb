@@ -34,6 +34,7 @@ with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Execution;
 with Model_Runner.CLI.Held_Output;
 with Model_Runner.Framework.Git;
+with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Invocations;
 with Model_Runner.Framework.Orchestration;
@@ -652,6 +653,13 @@ package body Model_Runner.CLI.Project_Commands is
       --  The work as the harness saw it happen, the last round's.
       Recorded : Unbounded_String;
 
+      --  What the next round's call is for, as the last round ended: the
+      --  work, a mending after checks failed, or the report alone.
+      Doing    : Model_Runner.Framework.Inference_Policy.Activity :=
+        Model_Runner.Framework.Inference_Policy.Task_Work;
+      --  And what it is set to: the session's own where there is no task.
+      Policy   : Model_Runner.Framework.Inference_Policy.Effective;
+
       --  The template's own shape of call, and where that is the JSON
       --  envelope, the bare or fenced object too: models asked for a call
       --  often write it without the envelope, the 14B ones as well.
@@ -729,6 +737,27 @@ package body Model_Runner.CLI.Project_Commands is
             Outcome.Reason := Model_Runner.Agent.Token_Limit;
             exit;
          end if;
+         --  Set before its generation, by what it is for -- never during
+         --  one -- and kept on its invocation: a task's work by its policy,
+         --  within what the session was started with.
+         if Host /= null then
+            Wk.Policy_For_Call
+              (Host.all, Doing,
+               (Base         => Opt.Sampling_For (Self.Item.all, Self.Prepared.all),
+                Given        => Self.Item.Sampling_Given,
+                Thinking     => Self.Item.Thinking,
+                Effort       => Self.Item.Effort,
+                Output_Room  => Positive'Max (1, Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all))),
+                Output_Given => Self.Item.Max_Tokens_Set),
+               Model_Runner.Templates.Controls_Of (L.Template (Self.Prepared.all).all),
+               Policy, Status);
+            exit when E.Is_Error (Status);
+            Request.Sampling := Policy.Sampling;
+            Request.Max_Tokens := Policy.Output_Limit;
+         else
+            Policy.Thinking := Self.Item.Thinking;
+            Policy.Effort := Self.Item.Effort;
+         end if;
          --  One memory of the calls across the rounds: a second round
          --  knows what the first answered and which revisions it saw.
          Model_Runner.Agent.Run
@@ -748,7 +777,8 @@ package body Model_Runner.CLI.Project_Commands is
             Max_Seconds => (if Host = null then 0.0 else Host.Time_Left),
             Cancel      => Self.Cancel,
             Tool_Syntax => Syntax,
-            Thinking    => Self.Item.Thinking,
+            Thinking    => Policy.Thinking,
+            Effort      => Policy.Effort,
             Hide_Reasoning => Self.Item.Hide_Reasoning,
             Approve     => Guard'Unchecked_Access,
             Watch       => Watcher'Unchecked_Access,
@@ -829,6 +859,7 @@ package body Model_Runner.CLI.Project_Commands is
             case Wk.Next_Step (State) is
                when Wk.Ask_To_Fix =>
                   Asked_To_Fix := True;
+                  Doing := Model_Runner.Framework.Inference_Policy.Failure_Recovery;
                   Conv.Append
                     (Messages, Conv.User_Role,
                      "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
@@ -843,6 +874,7 @@ package body Model_Runner.CLI.Project_Commands is
                      Host.Run_Checks (Host.Task_Profile, Report, Ran);
                      exit when E.Is_Error (Ran) or else not Host.Checks_Failing;
                      Asked_To_Fix := True;
+                     Doing := Model_Runner.Framework.Inference_Policy.Failure_Recovery;
                      Conv.Append
                        (Messages, Conv.User_Role,
                         "You reported status: done without running the checks. They were run for you, and"
@@ -852,6 +884,7 @@ package body Model_Runner.CLI.Project_Commands is
                   end;
                when Wk.Ask_To_Mend =>
                   Asked_To_Mend := True;
+                  Doing := Model_Runner.Framework.Inference_Policy.Result_Reporting;
                   Conv.Append
                     (Messages, Conv.User_Role,
                      "Your report could not be taken: " & Wk.Report_Refusal (Root, To_String (State.Answer))
@@ -859,12 +892,14 @@ package body Model_Runner.CLI.Project_Commands is
                      & " changed_files:, each on a line of its own.", Status);
                when Wk.Ask_To_Report =>
                   Asked_To_Report := True;
+                  Doing := Model_Runner.Framework.Inference_Policy.Result_Reporting;
                   Conv.Append
                     (Messages, Conv.User_Role,
                      "That call was made already and its file is written; repeating it changes nothing."
                      & " If the task is done, finish now with the report lines: status: done, summary:,"
                      & " changed_files:.", Status);
                when Wk.Ask_To_Call =>
+                  Doing := Model_Runner.Framework.Inference_Policy.Task_Work;
                   Conv.Append
                     (Messages, Conv.User_Role,
                      "You have not called a tool, so no file has changed. If the task"
@@ -1788,7 +1823,8 @@ package body Model_Runner.CLI.Project_Commands is
          Resource_Class => To_Unbounded_String ("local"),
          Profile_Reserve => 0,
          --  This session's model runs the work: its answer's room is kept.
-         Session_Reserve => Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all)));
+         Session_Reserve => Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all)),
+         Controls        => Model_Runner.Templates.Controls_Of (L.Template (Self.Prepared.all).all));
    end Profile;
 
    package Rs renames Model_Runner.Framework.Results;

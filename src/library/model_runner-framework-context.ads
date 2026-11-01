@@ -6,6 +6,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
 with Model_Runner.Framework.Stores;
+with Model_Runner.Templates;
 
 --  What a model is told, worked out from the project state and nothing else.
 --
@@ -48,6 +49,10 @@ package Model_Runner.Framework.Context is
       --  What a session's model needs kept for its answer, where it runs
       --  the work: nothing asked of a kind goes below it. 0 elsewhere.
       Session_Reserve : Natural := 0;
+
+      --  The reasoning controls its template reads, where the model is
+      --  loaded to say; not known for one run as a process of its own.
+      Controls : Model_Runner.Templates.Reasoning_Controls;
    end record;
 
    --  How much an item matters, most first.

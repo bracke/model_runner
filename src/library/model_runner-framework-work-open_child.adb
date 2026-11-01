@@ -68,6 +68,10 @@ begin
    end if;
    Host.Open.Append (To_String (Child_Id));
    Host.Opened.Append (Ada.Calendar.Clock);
+   --  Its calls set by its role's profile, where the project maps one, and
+   --  its parent's otherwise; recovery where it is run for one that failed.
+   Host.Policies.Append (Inference_Policy.For_Child (Host.Item.all, Selection_Now (Host), Named));
+   Host.Retried.Append (Retry_Of /= "");
 
    --  A context of its own -- the task it helps with and what it is
    --  asked, nothing of the conversation it was asked from -- with its
@@ -155,7 +159,8 @@ begin
             Parent         => (if Host.Calls.Is_Empty then "" else Host.Calls.Last_Element),
             Parent_Call    =>
               (if Host.Calls.Is_Empty then 0
-               else Invocations.Calls_Made (Host.Item.all, Host.Calls.Last_Element)));
+               else Invocations.Calls_Made (Host.Item.all, Host.Calls.Last_Element)),
+            Resolved       => Inference_Policy.Selection_Lines (Selection_Now (Host)));
          if E.Is_Ok (Read) then
             Agents.Record_Holding
               (Host.Item.all, Change, To_String (Child_Id), "", To_String (Called), Read);
@@ -188,6 +193,7 @@ begin
          end;
          Host.Open.Delete_Last;
          Host.Opened.Delete_Last;
+         Drop_Policy (Host);
          Child_Id := Null_Unbounded_String;
          Budget := 0;
          Status := Read;
