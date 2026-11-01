@@ -377,6 +377,12 @@ package body Agent_Trial is
            & " scalar.inference.task.analysis=analysis"
            & (if To_String (Inference_Mode) = "adaptive" then ""
               else " scalar.inference.adapts=" & To_String (Inference_Mode))
+      --  Every call as fixed sets it but for its thinking, which is off: a
+      --  profile of that one field, taken in profile mode by every activity
+      --  and every child alike.
+      elsif To_String (Inference_Mode) = "thinking-off"
+      then " scalar.inference.mode=profile scalar.inference.default=nothink"
+           & " scalar.inference.profile.nothink.thinking=off"
       else " scalar.inference.mode=profile scalar.inference.default=" & To_String (Inference_Mode));
 
    function Knowledge_Words (Knowledge : Boolean) return String is
