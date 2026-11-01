@@ -73,12 +73,26 @@ begin
    --  the documents profile where it writes documents alone, and by its
    --  parent's otherwise; recovery where it is run for one that failed --
    --  set as its parent then, thinking being what a retry may need --
-   --  analysis where its role checks.
+   --  analysis where it may write nothing: by what its role is granted,
+   --  not by the words a model named it with.
    Host.Policies.Append
      (Inference_Policy.For_Child
         (Host.Item.all, Selection_Now (Host), Named, Documents_Only => Documents_Only and then Retry_Of = ""));
-   Host.Doing.Append
-     (if Retry_Of /= "" then Inference_Policy.Failure_Recovery else Inference_Policy.Activity_Of_Role (Named));
+   declare
+      Held   : Agents.Agent;
+      Got    : E.Error_Info;
+      Writes : Boolean := True;
+   begin
+      Agents.Read (Host.Item.all, To_String (Child_Id), Held, Got);
+      if E.Is_Ok (Got) then
+         Writes := Holds_Now (Host, Held, Permissions.Write_Source)
+                   or else Holds_Now (Host, Held, Permissions.Write_Specs);
+      end if;
+      Host.Doing.Append
+        (if Retry_Of /= "" then Inference_Policy.Failure_Recovery
+         elsif Writes then Inference_Policy.Task_Work
+         else Inference_Policy.Verification_Analysis);
+   end;
 
    --  A context of its own -- the task it helps with and what it is
    --  asked, nothing of the conversation it was asked from -- with its

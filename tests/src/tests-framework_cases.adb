@@ -19069,7 +19069,7 @@ package body Tests.Framework_Cases is
    No_Controls   : constant Tm.Reasoning_Controls := (Known => True, Thinking => False, Effort => False);
 
    --  What a probing agent's calls were set to, as the host set them.
-   Probe_Root, Probe_Recovery, Probe_Child, Probe_Retry : Ip.Effective;
+   Probe_Root, Probe_Recovery, Probe_Child, Probe_Retry, Probe_Checker : Ip.Effective;
    --  The selection the host held while the reviewer was open.
    Probe_Selected : Ip.Selection;
    Probe_Status : E.Error_Info;
@@ -19147,6 +19147,15 @@ package body Tests.Framework_Cases is
                Children.Close_Child ("status: done" & LF & "summary: looked" & LF & "findings: fine", 10,
                                      E.Success, Told, Retry);
             end if;
+         end if;
+      end if;
+      --  One named as if it checked, that may write: its words do not set it.
+      if E.Is_Ok (Probe_Status) then
+         Children.Open_Child ("checker", "required", "look", "", Id, Context, Budget, Probe_Status);
+         if E.Is_Ok (Probe_Status) then
+            Children.Policy_For_Call (Ip.Task_Work, Plain_Session, Self.Controls, Probe_Checker, Probe_Status);
+            Children.Close_Child ("status: done" & LF & "summary: looked" & LF & "findings: fine", 10,
+                                  E.Success, Told, Retry);
          end if;
       end if;
       Dirs.Create_Path (Project & "/src");
@@ -19283,6 +19292,33 @@ package body Tests.Framework_Cases is
               and then To_String (Ip.Merge_With (Config, Chosen (""), Ip.Result_Reporting).Profile) = "",
               "an activity's mapping, a task's own profile or an unmapped task was not kept to");
       R.Set (Config, "scalar.inference.activity.failure_recovery", "");
+
+      --  The same reply's room, thought in by the level asked: a quarter
+      --  for low, half for medium or none, three quarters for high -- to a
+      --  template that takes only whether to think as to one that takes
+      --  levels.
+      declare
+         Names  : constant array (1 .. 4) of Unbounded_String :=
+           [To_Unbounded_String ("reporting"), To_Unbounded_String ("coding"),
+            To_Unbounded_String ("debugging"), To_Unbounded_String ("")];
+         Limits : array (1 .. 4) of Natural;
+         Each   : Natural := 0;
+      begin
+         for Name of Names loop
+            Each := Each + 1;
+            Ip.Fit (Ip.Merge_With (Config, Chosen (To_String (Name)), Ip.Task_Work), Plain_Session, Thinking_Only,
+                    Got, Status);
+            Assert (E.Is_Ok (Status) and then Got.Output_Limit = 2048, "a profile's reply room was not kept");
+            Limits (Each) := Got.Think_Limit;
+         end loop;
+         Assert (Limits = [512, 1024, 1536, 1024],
+                 "a level did not set how much of the reply is thought in:" & Limits (1)'Image & Limits (2)'Image
+                 & Limits (3)'Image & Limits (4)'Image);
+         Ip.Fit (Ip.Merge_With (Config, Chosen ("debugging"), Ip.Task_Work), Plain_Session, Effort_Levels,
+                 Got, Status);
+         Assert (Got.Think_Limit = 1536 and then Ada.Strings.Fixed.Index (Ip.Line_Of (Got), "think_limit=1536") > 0,
+                 "high reasoning did not think in three quarters of the reply: " & Ip.Line_Of (Got));
+      end;
 
       --  One half of a profile taken: its reasoning, the sampling the
       --  session's; or its sampling, the reasoning left. A task's own
@@ -19444,17 +19480,6 @@ package body Tests.Framework_Cases is
               and then not Ip.Is_Document ("md"),
               "a document was not told from code by its extension");
 
-      --  A helper's role says what its own work is for.
-      Assert (Ip.Activity_Of_Role ("reviewer") = Ip.Verification_Analysis
-              and then Ip.Activity_Of_Role ("tester") = Ip.Verification_Analysis
-              and then Ip.Activity_Of_Role ("verifier") = Ip.Verification_Analysis
-              and then Ip.Activity_Of_Role ("code reviewer") = Ip.Verification_Analysis
-              and then Ip.Activity_Of_Role ("qa tester") = Ip.Verification_Analysis
-              and then Ip.Activity_Of_Role ("test writer") = Ip.Task_Work
-              and then Ip.Activity_Of_Role ("helper") = Ip.Task_Work
-              and then Ip.Activity_Of_Role ("") = Ip.Task_Work,
-              "a helper's role did not say what its work is for");
-
       --  The settings, each as it is given and as a whole.
       Assert (Ip.Setting_Problem ("scalar.inference.mode", "sometimes") /= ""
               and then Ip.Setting_Problem ("scalar.inference.activity.lunch", "coding") /= ""
@@ -19507,7 +19532,9 @@ package body Tests.Framework_Cases is
         & "scalar inference.mode = adaptive" & LF
         & "scalar inference.task.analysis = analysis" & LF
         & "scalar inference.role.reviewer = verification" & LF
-        & "scalar inference.profile.analysis.top_k = 20" & LF;
+        & "scalar inference.profile.analysis.top_k = 20" & LF
+        & "map permission.role.reviewer.write_source = off" & LF
+        & "map permission.role.reviewer.write_specs = off" & LF;
 
       function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
 
@@ -19580,6 +19607,8 @@ package body Tests.Framework_Cases is
       Assert (To_String (Probe_Child.Asked.Profile) = "verification"
               and then Probe_Child.Asked.Doing = Ip.Verification_Analysis,
               "a reviewing helper was not set by its role's profile, as analysis: " & Ip.Line_Of (Probe_Child));
+      Assert (Probe_Checker.Asked.Doing = Ip.Task_Work,
+              "a helper that may write was taken for analysis by its role's words: " & Ip.Line_Of (Probe_Checker));
       Assert (Probe_Retry.Asked.Doing = Ip.Failure_Recovery
               and then To_String (Probe_Retry.Asked.Profile) = "debugging",
               "a helper run again did not recover: " & Ip.Line_Of (Probe_Retry));
@@ -19603,7 +19632,7 @@ package body Tests.Framework_Cases is
                        "a helper's invocation kept another's calls");
             end if;
          end loop;
-         Assert (Children = 2, "each helper's call was not kept on its own invocation:" & Children'Image);
+         Assert (Children = 3, "each helper's call was not kept on its own invocation:" & Children'Image);
          Assert ((for some Line of Audit => Has (Line, "inference policy: adaptive, profile analysis"))
                  and then (for some Line of Audit => Has (Line, "round 2 set to: activity=failure_recovery")),
                  "the audit did not say what the calls were set to");
@@ -19767,6 +19796,31 @@ package body Tests.Framework_Cases is
                  and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Unset")), "writer",
                                                    Documents_Only => True).Profile) = "",
                  "inference.helpers=none did not set a helper writing documents as its parent");
+      end;
+
+      --  A run selected before there was a configuration reads the current
+      --  one: one that will not read stops it, one not there is none.
+      declare
+         Config : R.Item;
+         Asked  : Ip.Request;
+         Read   : E.Error_Info;
+      begin
+         Cf.Read (Store, Config, Read);
+         R.Set (Config, "scalar.inference.mode", "adaptive-ish");
+         R.Set_Revision (Config, R.Revision (Config) + 1);
+         S.Put (Change, F.Config_Area, "resolved", Config);
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the configuration was not damaged: " & Code_Of (Status));
+         Ip.Configuration_At (Store, 0, Config, Read);
+         Assert (Read.Code = E.Framework_Integrity_Failed, "a damaged configuration was read: " & Code_Of (Read));
+         Ip.Merge (Store, (others => <>), Ip.Task_Work, Asked, Read);
+         Assert (Read.Code = E.Framework_Integrity_Failed, "a call was set by a damaged configuration");
+         S.Remove (Change, F.Config_Area, "resolved");
+         S.Commit (Store, Change, Status);
+         Assert (E.Is_Ok (Status), "the configuration was not removed: " & Code_Of (Status));
+         Ip.Configuration_At (Store, 0, Config, Read);
+         Assert (E.Is_Ok (Read) and then R.Field_Count (Config) = 0,
+                 "no configuration was not read as none: " & Code_Of (Read));
       end;
       S.Close (Store);
    end Inference_Policies_Reach_The_Work;

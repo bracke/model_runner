@@ -787,11 +787,12 @@ package body Model_Runner.CLI.Project_Commands is
             --  reasoned at length filled the context and the task failed.
             Compact     => True,
             Carry       => Rounds_Memory'Unchecked_Access,
-            --  Half the reply to think in: past that the thought is closed
-            --  for it, and the reply's whole room is there again to act in.
+            --  Part of the reply to think in, by the level its policy set --
+            --  half where none is: past that the thought is closed for it,
+            --  and the reply's whole room is there again to act in.
             --  qwen3-8b thought for minutes a call and ran out of the work's
             --  time after seven.
-            Think_Budget => Request.Max_Tokens / 2,
+            Think_Budget => (if Host /= null then Policy.Think_Limit else Request.Max_Tokens / 2),
             Script      => Self.Script,
             --  Where the task's time is its model's: so many tokens at the
             --  speed this session generates at.

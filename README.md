@@ -340,8 +340,9 @@ implementation to coding, bugfix to debugging, test to testing, analysis to
 analysis), a helper's by its role (`inference.role.ROLE`), and each call by
 what the harness saw lead to it: one after checks failed is
 `failure_recovery` (the debugging profile), one asked only for the report
-`result_reporting` (reporting), a helper's whose role verifies, reviews,
-tests or checks `verification_analysis` (verification), each mappable with
+`result_reporting` (reporting), a helper's whose role may write neither
+source nor specifications `verification_analysis` (verification) -- by what
+it is granted, not what it is called -- each mappable with
 `inference.activity.ACTIVITY` -- `task` keeps the task's own. A task no
 mapping reaches is set as in fixed mode. The built-in profiles are analysis,
 architecture, coding, testing, debugging, exploration, reporting and

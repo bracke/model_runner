@@ -229,15 +229,6 @@ package Model_Runner.Framework.Inference_Policy is
    --  @return Whether it names a document.
    function Is_Document (Path : String) return Boolean;
 
-   --  What a helper's own work is for, by the role its parent named: one
-   --  whose role says it verifies, reviews, tests or checks, anywhere in it,
-   --  analyses what is verified; one that writes or authors -- tests too --
-   --  and any other works on the task.
-   --
-   --  @param Role The helper's role, small letters.
-   --  @return Verification_Analysis or Task_Work.
-   function Activity_Of_Role (Role : String) return Activity;
-
    --  What a selection asks of one call, before the model and the session
    --  are weighed: each setting with where it came from. What the session
    --  itself was told and what the model can take are applied by Fit.
@@ -309,6 +300,11 @@ package Model_Runner.Framework.Inference_Policy is
       Thinking     : Thinking_Choice := Model_Runner.Templates.Thinking_Unstated;
       Effort       : Reasoning_Effort := Model_Runner.Templates.Effort_Unstated;
       Output_Limit : Positive := 1024;
+      --  How much of the reply it may think in before its thought is
+      --  closed, by the level asked: a quarter for low, half unstated or
+      --  medium, three quarters for high. Closed, the reply's whole room is
+      --  there again to act in, so a long thought starves no answer.
+      Think_Limit  : Positive := 512;
       Sources      : Source_Map := [others => Model_Default];
       --  What the model's controls changed of what was asked, in words; ""
       --  where it took everything as asked.
@@ -356,6 +352,12 @@ package Model_Runner.Framework.Inference_Policy is
    --  for the run's own selection and for each role the project maps a
    --  profile to -- a setting its model takes no control for is refused
    --  then, not at the first recovery or the first helper of that role.
+   --  It checks the configuration against the model, with a session that
+   --  named nothing: what a refusal rests on -- a level the task or the
+   --  project named, a template's controls -- is the same whatever the
+   --  session was told. It proves no call's settings; each is resolved
+   --  again with its session's own (Work.Policy_For_Call), and not made
+   --  where that fails.
    --
    --  @param Item The store.
    --  @param Chosen The run's selection.

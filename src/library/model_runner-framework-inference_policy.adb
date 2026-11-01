@@ -639,21 +639,6 @@ package body Model_Runner.Framework.Inference_Policy is
       return Ends (".md") or else Ends (".txt") or else Ends (".rst") or else Ends (".adoc");
    end Is_Document;
 
-   ----------------------
-   -- Activity_Of_Role --
-   ----------------------
-
-   --  Its words anywhere in it -- a model names roles as it likes: code
-   --  reviewer, qa tester -- but one that writes tests works on the task.
-   function Activity_Of_Role (Role : String) return Activity is
-      function Has (Part : String) return Boolean is (Ada.Strings.Fixed.Index (Role, Part) > 0);
-   begin
-      return (if Has ("writ") or else Has ("author") then Task_Work
-              elsif Has ("verif") or else Has ("review") or else Has ("test") or else Has ("check")
-              then Verification_Analysis
-              else Task_Work);
-   end Activity_Of_Role;
-
    ----------------
    -- Merge_With --
    ----------------
@@ -774,6 +759,7 @@ package body Model_Runner.Framework.Inference_Policy is
    is
       package Sm renames Model_Runner.Sampling;
       Wanted : Overrides renames Asked.Settings;
+      Level_Asked : Reasoning_Effort := Tm.Effort_Unstated;
 
       --  A setting the task or the project named, not one a profile chose.
       function Named (Which : Setting) return Boolean
@@ -847,6 +833,10 @@ package body Model_Runner.Framework.Inference_Policy is
          Result.Effort := Tm.Effort_Unstated;
          Result.Sources (Effort) := Capability;
       end if;
+
+      --  The level as it stands before the template is read: a template
+      --  that takes only whether to think still thinks as long as asked.
+      Level_Asked := Result.Effort;
 
       --  What the model's template reads: a model not loaded yet -- run as
       --  a process of its own -- is fitted there, with its own.
@@ -926,6 +916,11 @@ package body Model_Runner.Framework.Inference_Policy is
       else
          Result.Output_Limit := Invoked.Output_Room;
       end if;
+      Result.Think_Limit :=
+        Positive'Max (1, (case Level_Asked is
+                             when Tm.Effort_Minimal | Tm.Effort_Low     => Result.Output_Limit / 4,
+                             when Tm.Effort_Unstated | Tm.Effort_Medium => Result.Output_Limit / 2,
+                             when Tm.Effort_High                        => Result.Output_Limit * 3 / 4));
 
       Sm.Validate (Result.Sampling, Status);
    end Fit;
@@ -1042,6 +1037,7 @@ package body Model_Runner.Framework.Inference_Policy is
         & " " & With_Source (Effort, (if Policy.Effort = Tm.Effort_Unstated then "unstated"
                                       else Tm.Effort_Word (Policy.Effort)))
         & " " & With_Source (Output_Limit, Image (Policy.Output_Limit))
+        & " think_limit=" & Image (Policy.Think_Limit)
         & (if Policy.Fallback = Null_Unbounded_String then ""
            else " fallback=" & To_String (Policy.Fallback));
    end Line_Of;
