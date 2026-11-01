@@ -179,9 +179,11 @@ package Model_Runner.Platform is
       Keep    : String := "";
       Settled : Duration := 0.0);
 
-   --  Directory searched for a model named without a path.
+   --  The model store: searched first for a model named without a path,
+   --  where a download is written, and what models remove takes from.
    --
-   --  MODEL_RUNNER_MODELS overrides it. Otherwise it is
+   --  MODEL_RUNNER_MODELS overrides it, then the settings file's
+   --  models-dir. Otherwise it is ~/models where that folder is, else
    --  <XDG_DATA_HOME>/model_runner/models where that variable is set, and
    --  <HOME>/.local/share/model_runner/models where only HOME is. Empty
    --  when neither the override nor a home directory is known, which is
@@ -190,13 +192,24 @@ package Model_Runner.Platform is
    --  @return The directory, or an empty string when none is known.
    function Models_Directory return String;
 
+   --  The other folder of models, searched after the store: the data
+   --  home's models where ~/models is the store -- what was downloaded
+   --  before ~/models was made -- and ~/models where the store is named
+   --  elsewhere. A model there is found by its bare name, listed and
+   --  offered as the store's are, but nothing is downloaded into it or
+   --  removed from it.
+   --
+   --  @return The directory; empty where there is none, or it is the
+   --    store itself.
+   function Other_Models_Directory return String;
+
    --  Resolve a model name a caller typed to the file to open.
    --
    --  A name that exists as given is returned unchanged, so an absolute
    --  path, a relative path, and a name in the current directory are read
    --  exactly as before. A bare name that the current directory does not
-   --  hold is looked for in Models_Directory; found there, that path is
-   --  returned. When neither has it the name is returned unchanged, so the
+   --  hold is looked for in Models_Directory, then Other_Models_Directory;
+   --  found there, that path is returned. When neither has it the name is returned unchanged, so the
    --  failure that follows names what the caller typed.
    --
    --  @param Named The model path or name as given.

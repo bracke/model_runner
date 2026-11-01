@@ -26,6 +26,7 @@ with Hostkit.Terminal_Control.Differences;
 
 with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
+with Model_Runner.Config;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Mapping;
@@ -941,6 +942,88 @@ package body Tests.Platform_Cases is
                                "the search path was not the environment's");
       AUnit.Assertions.Assert (P.Resolve_Model_Path ("no/such/model.gguf") = "no/such/model.gguf",
                                "a model path nowhere was not left as typed");
+      --  ~/models is the store where it is, the data home's models searched
+      --  after it -- the store's own first -- and with no ~/models the data
+      --  home's is the store, nothing after it; a store named elsewhere has
+      --  ~/models after it. Asked only where the settings file names no
+      --  store, which would stand over all three.
+      if Model_Runner.Config.Value ("models-dir") = "" then
+         declare
+            Root  : constant String := Ada.Directories.Full_Name ("obj/models-home");
+            Kept  : constant String := Root & "/models";
+            Data  : constant String := Root & "/data/model_runner/models";
+            Named : constant String := Root & "/named";
+            type Names is array (1 .. 3) of Unbounded_String;
+            Saved : constant Names :=
+              [To_Unbounded_String ("HOME"), To_Unbounded_String ("XDG_DATA_HOME"),
+               To_Unbounded_String ("MODEL_RUNNER_MODELS")];
+            Had   : array (Saved'Range) of Boolean;
+            Was   : Names;
+
+            procedure Touch (Path : String) is
+               File : Ada.Text_IO.File_Type;
+            begin
+               Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+               Ada.Text_IO.Close (File);
+            end Touch;
+
+            Store_Kept, Other_Kept, Found_Kept, Found_Bare : Unbounded_String;
+            Found_Old, Found_Both, Store_Data, Other_Data  : Unbounded_String;
+            Store_Named, Other_Named                       : Unbounded_String;
+         begin
+            for Index in Saved'Range loop
+               Had (Index) := Env.Exists (To_String (Saved (Index)));
+               Was (Index) := To_Unbounded_String (if Had (Index) then Env.Value (To_String (Saved (Index))) else "");
+            end loop;
+            if Ada.Directories.Exists (Root) then
+               Ada.Directories.Delete_Tree (Root);
+            end if;
+            Ada.Directories.Create_Path (Kept);
+            Ada.Directories.Create_Path (Data);
+            Ada.Directories.Create_Path (Named);
+            Touch (Kept & "/kept.gguf");
+            Touch (Kept & "/both.gguf");
+            Touch (Data & "/both.gguf");
+            Touch (Data & "/old.gguf");
+            Env.Set ("HOME", Root);
+            Env.Set ("XDG_DATA_HOME", Root & "/data");
+            Env.Clear ("MODEL_RUNNER_MODELS");
+            Store_Kept := To_Unbounded_String (P.Models_Directory);
+            Other_Kept := To_Unbounded_String (P.Other_Models_Directory);
+            Found_Kept := To_Unbounded_String (P.Resolve_Model_Path ("kept.gguf"));
+            Found_Bare := To_Unbounded_String (P.Resolve_Model_Path ("kept"));
+            Found_Old  := To_Unbounded_String (P.Resolve_Model_Path ("old.gguf"));
+            Found_Both := To_Unbounded_String (P.Resolve_Model_Path ("both.gguf"));
+            Env.Set ("MODEL_RUNNER_MODELS", Named);
+            Store_Named := To_Unbounded_String (P.Models_Directory);
+            Other_Named := To_Unbounded_String (P.Other_Models_Directory);
+            Env.Clear ("MODEL_RUNNER_MODELS");
+            Ada.Directories.Delete_Tree (Kept);
+            Store_Data := To_Unbounded_String (P.Models_Directory);
+            Other_Data := To_Unbounded_String (P.Other_Models_Directory);
+            for Index in Saved'Range loop
+               if Had (Index) then
+                  Env.Set (To_String (Saved (Index)), To_String (Was (Index)));
+               else
+                  Env.Clear (To_String (Saved (Index)));
+               end if;
+            end loop;
+            Ada.Directories.Delete_Tree (Root);
+            AUnit.Assertions.Assert (To_String (Store_Kept) = Kept and then To_String (Other_Kept) = Data,
+                                     "~/models was not the store, the data home's after it: "
+                                     & To_String (Store_Kept) & " " & To_String (Other_Kept));
+            AUnit.Assertions.Assert (To_String (Found_Kept) = Kept & "/kept.gguf"
+                                     and then To_String (Found_Bare) = Kept & "/kept.gguf"
+                                     and then To_String (Found_Old) = Data & "/old.gguf"
+                                     and then To_String (Found_Both) = Kept & "/both.gguf",
+                                     "a model was not found by its name in the store, then the other folder: "
+                                     & To_String (Found_Old) & " " & To_String (Found_Both));
+            AUnit.Assertions.Assert (To_String (Store_Named) = Named and then To_String (Other_Named) = Kept,
+                                     "a store named elsewhere did not have ~/models after it");
+            AUnit.Assertions.Assert (To_String (Store_Data) = Data and then To_String (Other_Data) = "",
+                                     "with no ~/models the data home's was not the store alone");
+         end;
+      end if;
       AUnit.Assertions.Assert (P.Models_File ("a.gguf") = ""
                                or else Ada.Strings.Fixed.Index (P.Models_File ("a.gguf"), "/a.gguf") > 0,
                                "a downloaded model was not placed by its name");

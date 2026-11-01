@@ -78,7 +78,14 @@ rest -- are a session's: `model_runner MODEL`, then
 `/help project` lists them.
 
 A model is a path, a file in the models directory, an alias from the
-settings file, or a Hugging Face reference offered for download.
+settings file, or a Hugging Face reference offered for download. The models
+directory is `~/models` where that folder is, else
+`~/.local/share/model_runner/models` (`$XDG_DATA_HOME` where set); `models-dir`
+in the settings file or `MODEL_RUNNER_MODELS` names another. Downloads go
+there and `models remove` takes from it. A bare name it does not hold is
+looked for in the other of the two folders too -- the data home's when
+`~/models` is the store, so what was downloaded before still runs by name
+-- and `models`, the chooser and completion show its files by their path.
 
 Run `model_runner help run` for the full option list. Options are validated
 with the same typed path as environment variables, repeated options are a usage

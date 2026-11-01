@@ -60,6 +60,25 @@ package Model_Runner.Drafts is
       Share      : Positive := Default_Share;
       Least      : Long_Long_Integer := Default_Least) return String;
 
+   --  The largest file that can draft for a model, as Find takes it, from
+   --  the model store, the other folder of models and the model's own
+   --  folder -- a folder kept by hand is where the small one of a family
+   --  usually is. Run and the speed tool look for a draft through this,
+   --  so the two find the same one.
+   --
+   --  @param Model_Path The model's file.
+   --  @param Model The model's parsed container.
+   --  @param Words The model's vocabulary.
+   --  @param Store The model store.
+   --  @param Other_Store The other folder of models, or empty.
+   --  @return The draft's path, or an empty string when there is none.
+   function Find_Around
+     (Model_Path  : String;
+      Model       : Model_Runner.GGUF.Containers.Container;
+      Words       : Model_Runner.Tokenizer.Vocabulary;
+      Store       : String;
+      Other_Store : String) return String;
+
    --  What a model's own sidecar names as its draft, where it has one.
    --
    --  Find takes the largest file that can draft, which says nothing
@@ -72,8 +91,9 @@ package Model_Runner.Drafts is
    --  @param Model_Path The model's file.
    --  @param Store The model store, where a bare name is looked for after
    --    the model's folder.
+   --  @param Other_Store The other folder of models, looked in after it.
    --  @return The draft's path where the sidecar names a file that is
    --    there, or an empty string.
-   function Paired (Model_Path : String; Store : String) return String;
+   function Paired (Model_Path : String; Store : String; Other_Store : String := "") return String;
 
 end Model_Runner.Drafts;

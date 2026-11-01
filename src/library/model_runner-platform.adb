@@ -677,8 +677,56 @@ package body Model_Runner.Platform is
    -- Models_Directory --
    -----------------------
 
-   function Models_Directory return String
-   is (Data_Directory ("MODEL_RUNNER_MODELS", "models-dir", "models"));
+   --  The folder of models kept by hand, where the home has one.
+   function Home_Models return String is
+      use type Ada.Directories.File_Kind;
+      Home : constant String := Hostkit.Fs.Home_Directory;
+   begin
+      if Home /= "" and then Ada.Directories.Exists (Hostkit.Fs.Join (Home, "models"))
+        and then Ada.Directories.Kind (Hostkit.Fs.Join (Home, "models")) = Ada.Directories.Directory
+      then
+         return Hostkit.Fs.Join (Home, "models");
+      end if;
+      return "";
+   exception
+      when others =>
+         return "";
+   end Home_Models;
+
+   --  The data home's models, as the store was before ~/models was taken.
+   function Data_Models return String is (Data_Directory ("", "", "models"));
+
+   function Models_Directory return String is
+      Named : constant String := Environment_Value ("MODEL_RUNNER_MODELS");
+      Set   : constant String := Model_Runner.Config.Value ("models-dir");
+   begin
+      return (if Named /= "" then Named
+              elsif Set /= "" then Set
+              elsif Home_Models /= "" then Home_Models
+              else Data_Models);
+   end Models_Directory;
+
+   ----------------------------
+   -- Other_Models_Directory --
+   ----------------------------
+
+   function Other_Models_Directory return String is
+      use type Ada.Directories.File_Kind;
+      Store : constant String := Models_Directory;
+      Other : constant String := (if Store /= "" and then Store = Home_Models then Data_Models else Home_Models);
+   begin
+      if Other = "" or else not Ada.Directories.Exists (Other)
+        or else Ada.Directories.Kind (Other) /= Ada.Directories.Directory
+        or else (Store /= "" and then Ada.Directories.Exists (Store)
+                 and then Ada.Directories.Full_Name (Store) = Ada.Directories.Full_Name (Other))
+      then
+         return "";
+      end if;
+      return Other;
+   exception
+      when others =>
+         return "";
+   end Other_Models_Directory;
 
    -------------------------
    -- Sessions_Directory --
@@ -698,13 +746,21 @@ package body Model_Runner.Platform is
            and then Hostkit.Fs.Home_Directory /= ""
          then Hostkit.Fs.Join (Hostkit.Fs.Home_Directory, Named (Named'First + 2 .. Named'Last))
          else Named);
-      Found    : constant String := Resolve_In (Expanded, Models_Directory);
+      --  In the store, then in the other folder of models.
+      function Look (Name : String) return String is
+         In_Store : constant String := Resolve_In (Name, Models_Directory);
+      begin
+         return (if Ada.Directories.Exists (In_Store) or else Other_Models_Directory = "" then In_Store
+                 else Resolve_In (Name, Other_Models_Directory));
+      end Look;
+
+      Found    : constant String := Look (Expanded);
    begin
       --  A model named without its .gguf, as the models are listed.
       if not Ada.Directories.Exists (Found) and then Expanded'Length > 0
-        and then Ada.Directories.Exists (Resolve_In (Expanded & ".gguf", Models_Directory))
+        and then Ada.Directories.Exists (Look (Expanded & ".gguf"))
       then
-         return Resolve_In (Expanded & ".gguf", Models_Directory);
+         return Look (Expanded & ".gguf");
       end if;
       return Found;
    exception

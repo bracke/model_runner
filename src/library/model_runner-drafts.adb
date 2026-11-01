@@ -133,11 +133,35 @@ package body Model_Runner.Drafts is
          return "";
    end Find;
 
+   -----------------
+   -- Find_Around --
+   -----------------
+
+   function Find_Around
+     (Model_Path  : String;
+      Model       : Model_Runner.GGUF.Containers.Container;
+      Words       : Model_Runner.Tokenizer.Vocabulary;
+      Store       : String;
+      Other_Store : String) return String
+   is
+      Beside : constant String := Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Model_Path));
+
+      function Bytes (Path : String) return Long_Long_Integer
+      is (if Path = "" then 0 else Long_Long_Integer (Ada.Directories.Size (Path)));
+
+      --  The larger of two, the first where they are alike.
+      function Larger (First, Second : String) return String
+      is (if Bytes (Second) > Bytes (First) then Second else First);
+   begin
+      return Larger (Larger (Find (Store, Model_Path, Model, Words), Find (Other_Store, Model_Path, Model, Words)),
+                     Find (Beside, Model_Path, Model, Words));
+   end Find_Around;
+
    ------------
    -- Paired --
    ------------
 
-   function Paired (Model_Path : String; Store : String) return String is
+   function Paired (Model_Path : String; Store : String; Other_Store : String := "") return String is
       use Ada.Streams;
 
       Sidecar : constant String := Model_Path & ".draft";
@@ -183,6 +207,9 @@ package body Model_Runner.Drafts is
              elsif Store /= ""
                and then Here (Ada.Directories.Compose (Store, Named))
              then Ada.Directories.Compose (Store, Named)
+             elsif Other_Store /= ""
+               and then Here (Ada.Directories.Compose (Other_Store, Named))
+             then Ada.Directories.Compose (Other_Store, Named)
              else "");
       begin
          for Index in Text'Range loop

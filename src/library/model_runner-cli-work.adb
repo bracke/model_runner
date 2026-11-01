@@ -202,18 +202,21 @@ package body Model_Runner.CLI.Work is
             Found  : Ada.Directories.Directory_Entry_Type;
             Count  : Natural := 0;
          begin
-            if Model_Runner.Platform.Models_Directory /= ""
-              and then Ada.Directories.Exists (Model_Runner.Platform.Models_Directory)
-            then
-               Ada.Directories.Start_Search (Search, Model_Runner.Platform.Models_Directory, "*.gguf");
-               while Ada.Directories.More_Entries (Search) and then Count < 8 loop
-                  Ada.Directories.Get_Next_Entry (Search, Found);
-                  Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
-                                  & Ada.Directories.Simple_Name (Found));
-                  Count := Count + 1;
-               end loop;
-               Ada.Directories.End_Search (Search);
-            end if;
+            --  The store's, then the other folder's.
+            for Folder of Model_Runner.Framework.Name_Lists.Vector'
+              ([Model_Runner.Platform.Models_Directory, Model_Runner.Platform.Other_Models_Directory])
+            loop
+               if Folder /= "" and then Ada.Directories.Exists (Folder) then
+                  Ada.Directories.Start_Search (Search, Folder, "*.gguf");
+                  while Ada.Directories.More_Entries (Search) and then Count < 8 loop
+                     Ada.Directories.Get_Next_Entry (Search, Found);
+                     Append (Listed, (if Listed = Null_Unbounded_String then "" else ", ")
+                                     & Ada.Directories.Simple_Name (Found));
+                     Count := Count + 1;
+                  end loop;
+                  Ada.Directories.End_Search (Search);
+               end if;
+            end loop;
             E.Add_Text (Status, "detail", "there is no such model file here or among the models"
                         & (if Listed = Null_Unbounded_String then ""
                            else " -- they are " & To_String (Listed)));

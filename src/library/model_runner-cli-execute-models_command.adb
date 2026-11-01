@@ -5,6 +5,7 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
+with Hostkit.Fs;
 with Model_Runner.Hub;
 with Model_Runner.Hub.Store;
 with Model_Runner.Platform;
@@ -37,6 +38,19 @@ package body Model_Runner.CLI.Execute.Models_Command is
    --  The models found, by the name shown and the whole path: five hundred
    --  of each, a quarter of a megabyte apiece, held on the heap rather
    --  than in the frame that lists them.
+   --  The other folder of models as its files are labelled: its path, the
+   --  home shown as ~, ahead of each name.
+   function Other_Label return String is
+      Other : constant String := Model_Runner.Platform.Other_Models_Directory;
+      Home  : constant String := Hostkit.Fs.Home_Directory;
+   begin
+      return (if Home /= "" and then Other'Length > Home'Length
+                and then Other (Other'First .. Other'First + Home'Length - 1) = Home
+                and then Other (Other'First + Home'Length) = '/'
+              then "~" & Other (Other'First + Home'Length .. Other'Last)
+              else Other) & "/";
+   end Other_Label;
+
    type Name_Array is array (1 .. 500) of Model_Runner.Text.Bounded;
    package Name_Rooms is new Model_Runner.Heap_Buffers.Holders (Name_Array);
 
@@ -174,6 +188,10 @@ package body Model_Runner.CLI.Execute.Models_Command is
       --  under a folder of its own, and a file another repository's name
       --  took is kept under owner/repo/.
       Scan (Dir, "", 3);
+      --  And the other folder's, by where they are.
+      if Model_Runner.Platform.Other_Models_Directory /= "" then
+         Scan (Model_Runner.Platform.Other_Models_Directory, Other_Label, 3);
+      end if;
 
       --  Suggestions the settings file adds, before the built-in starters
       --  so a machine's own list leads. Each is `suggest.NAME = reference`,
@@ -452,14 +470,14 @@ package body Model_Runner.CLI.Execute.Models_Command is
    begin
       Status := E.Exit_Success;
 
-      if Dir = "" or else not Exists (Dir) then
+      if (Dir = "" or else not Exists (Dir)) and then Model_Runner.Platform.Other_Models_Directory = "" then
          Pres.Put_Note
            (Screen, "cli.models.empty",
             [Loc.Named ("detail", (if Dir = "" then "-" else Dir))]);
          return;
       end if;
 
-      --  Remove a named model.
+      --  Remove a named model: the store's only, never one kept by hand.
       if Item.Models_Remove then
          declare
             Name  : constant String := T.To_String (Item.Model_Path);
@@ -597,7 +615,13 @@ package body Model_Runner.CLI.Execute.Models_Command is
       begin
          --  A shard set in a folder of its own, and a file another
          --  repository's name took kept under owner/repo/: three levels.
-         Scan (Dir, "", 3);
+         if Dir /= "" and then Exists (Dir) then
+            Scan (Dir, "", 3);
+         end if;
+         --  And the other folder's, by where they are.
+         if Model_Runner.Platform.Other_Models_Directory /= "" then
+            Scan (Model_Runner.Platform.Other_Models_Directory, Other_Label, 3);
+         end if;
 
          if Shown = 0 then
             Pres.Put_Note

@@ -214,40 +214,21 @@ begin
           (Model_Runner.Drafts.Paired
              (Model_Runner.Platform.Resolve_Model_Path
                 (Resolve_Alias (T.To_String (Item.Model_Path))),
-              Model_Runner.Platform.Models_Directory));
+              Model_Runner.Platform.Models_Directory, Model_Runner.Platform.Other_Models_Directory));
    end if;
 
    if T.Is_Empty (Auto_Draft)
      and then Model_Runner.Draft_Policy.Seeks_Store_Draft
                 (Prepared, Session, Asked_Drafting (Item))
    then
-      --  In the store, and beside the model: a folder of models kept
-      --  by hand is where the small one of a family usually is.
-      declare
-         Model_File : constant String :=
-           Model_Runner.Platform.Resolve_Model_Path
-             (Resolve_Alias (T.To_String (Item.Model_Path)));
-         Beside : constant String :=
-           Ada.Directories.Containing_Directory
-             (Ada.Directories.Full_Name (Model_File));
-         In_Store : constant String :=
-           Model_Runner.Drafts.Find
-             (Model_Runner.Platform.Models_Directory, Model_File,
-              Container, L.Vocabulary (Prepared).all);
-         Near : constant String :=
-           Model_Runner.Drafts.Find
-             (Beside, Model_File, Container,
-              L.Vocabulary (Prepared).all);
-
-         function Bytes (Path : String) return Long_Long_Integer
-         is (if Path = "" then 0
-             else Long_Long_Integer (Ada.Directories.Size (Path)));
-      begin
-         Auto_Draft :=
-           T.To_Bounded
-             (if Bytes (Near) > Bytes (In_Store) then Near
-              else In_Store);
-      end;
+      --  In both folders of models, and beside the model: a folder of
+      --  models kept by hand is where the small one of a family usually is.
+      Auto_Draft :=
+        T.To_Bounded
+          (Model_Runner.Drafts.Find_Around
+             (Model_Runner.Platform.Resolve_Model_Path (Resolve_Alias (T.To_String (Item.Model_Path))),
+              Container, L.Vocabulary (Prepared).all,
+              Model_Runner.Platform.Models_Directory, Model_Runner.Platform.Other_Models_Directory));
    end if;
 
    --  A draft model beside a grammar or a schema where the run samples,

@@ -2,6 +2,7 @@ with Ada.Calendar;
 with Ada.Directories;
 with Ada.Text_IO;
 with Interfaces;
+with Hostkit.Fs;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Limits;
 with Model_Runner.Platform;
@@ -170,16 +171,19 @@ package body Model_Runner.CLI.Execute.Acquisition is
       --  file has the name (Hub.Store.Place).
       Locals : Model_Runner.Hub.Store.Local_Names := [others => T.Empty];
 
-      function Local (Index : Positive) return String
-      is (Model_Runner.Platform.Models_File (T.To_String (Locals (Index))));
+      --  A file in a folder of models, the store unless another is named.
+      function Local (Index : Positive; Folder : String := Dir) return String
+      is (if Folder = "" then "" else Hostkit.Fs.Join (Folder, T.To_String (Locals (Index))));
 
-      function Destination return String is (Local (1));
+      function Destination (Folder : String := Dir) return String is (Local (1, Folder));
+
+      type Folders is array (1 .. 2) of Model_Runner.Text.Bounded;
 
       --  Every file there and whole.
-      function All_Whole return Boolean is
+      function All_Whole (Folder : String := Dir) return Boolean is
       begin
          for I in 1 .. Count loop
-            if not Model_Complete (Files (I), Local (I)) then
+            if not Model_Complete (Files (I), Local (I, Folder)) then
                return False;
             end if;
          end loop;
@@ -191,20 +195,25 @@ package body Model_Runner.CLI.Execute.Acquisition is
 
       --  A reference fetched before and whole on disk is opened as it is,
       --  from what the manifest says it was fetched as -- without asking
-      --  the hub, so a model downloaded once runs offline.
-      if Dir /= "" then
-         declare
-            Found : Boolean;
-         begin
-            Model_Runner.Hub.Store.Find (Dir, Named, Repo, Files, Locals, Count, Found);
-            if Found and then All_Whole then
-               Where   := Model_Runner.Text.To_Bounded (Destination);
-               Fetched := True;
-               return;
-            end if;
-            Count := 0;
-         end;
-      end if;
+      --  the hub, so a model downloaded once runs offline. The other
+      --  folder's too: what was fetched into the store before ~/models was
+      --  made is not fetched again into it.
+      for Folder of Folders'([T.To_Bounded (Dir), T.To_Bounded (Model_Runner.Platform.Other_Models_Directory)])
+      loop
+         if not T.Is_Empty (Folder) then
+            declare
+               Found : Boolean;
+            begin
+               Model_Runner.Hub.Store.Find (T.To_String (Folder), Named, Repo, Files, Locals, Count, Found);
+               if Found and then All_Whole (T.To_String (Folder)) then
+                  Where   := Model_Runner.Text.To_Bounded (Destination (T.To_String (Folder)));
+                  Fetched := True;
+                  return;
+               end if;
+               Count := 0;
+            end;
+         end if;
+      end loop;
 
       --  A reference names its quant; a bare repository lets the machine's
       --  memory choose one -- two thirds of it, the room a model may take.

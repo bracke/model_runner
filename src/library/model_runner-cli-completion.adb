@@ -500,23 +500,27 @@ package body Model_Runner.CLI.Completion is
                   end loop;
                else
                   --  A model by its name among the models, as model= takes it.
-                  declare
-                     Where  : constant String := Model_Runner.Platform.Models_Directory;
-                     Search : Ada.Directories.Search_Type;
-                     Found  : Ada.Directories.Directory_Entry_Type;
-                  begin
-                     if Where /= "" and then Ada.Directories.Exists (Where) then
-                        Ada.Directories.Start_Search (Search, Where, "*.gguf");
-                        while Ada.Directories.More_Entries (Search) loop
-                           Ada.Directories.Get_Next_Entry (Search, Found);
-                           Values.Append (Ada.Directories.Simple_Name (Found));
-                        end loop;
-                        Ada.Directories.End_Search (Search);
-                     end if;
-                  exception
-                     when others =>
-                        null;
-                  end;
+                  --  The store's, then the other folder's.
+                  for Folder of Names.Vector'([Model_Runner.Platform.Models_Directory,
+                                               Model_Runner.Platform.Other_Models_Directory])
+                  loop
+                     declare
+                        Search : Ada.Directories.Search_Type;
+                        Found  : Ada.Directories.Directory_Entry_Type;
+                     begin
+                        if Folder /= "" and then Ada.Directories.Exists (Folder) then
+                           Ada.Directories.Start_Search (Search, Folder, "*.gguf");
+                           while Ada.Directories.More_Entries (Search) loop
+                              Ada.Directories.Get_Next_Entry (Search, Found);
+                              Values.Append (Ada.Directories.Simple_Name (Found));
+                           end loop;
+                           Ada.Directories.End_Search (Search);
+                        end if;
+                     exception
+                        when others =>
+                           null;
+                     end;
+                  end loop;
                end if;
                for Value of Values loop
                   if not Listed.Contains (Value) then

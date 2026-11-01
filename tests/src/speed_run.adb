@@ -406,7 +406,8 @@ package body Speed_Run is
          --  is.
          if Draft = "" and then Draft_Policy.Seeks_Paired_Draft (Engine, Asked) then
             Found_Draft := Ada.Strings.Unbounded.To_Unbounded_String
-              (Model_Runner.Drafts.Paired (Path, Model_Runner.Platform.Models_Directory));
+              (Model_Runner.Drafts.Paired
+                 (Path, Model_Runner.Platform.Models_Directory, Model_Runner.Platform.Other_Models_Directory));
          end if;
          if Draft = "" and then Ada.Strings.Unbounded.Length (Found_Draft) = 0 then
             declare
@@ -418,22 +419,10 @@ package body Speed_Run is
                if E.Is_Ok (Local)
                  and then Draft_Policy.Seeks_Store_Draft (Engine, Probe, Asked)
                then
-                  declare
-                     Beside   : constant String :=
-                       Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Path));
-                     In_Store : constant String :=
-                       Model_Runner.Drafts.Find
-                         (Model_Runner.Platform.Models_Directory, Path, Container,
-                          L.Vocabulary (Engine).all);
-                     Near     : constant String :=
-                       Model_Runner.Drafts.Find
-                         (Beside, Path, Container, L.Vocabulary (Engine).all);
-                     function Bytes (Name : String) return Long_Long_Integer
-                     is (if Name = "" then 0 else Long_Long_Integer (Ada.Directories.Size (Name)));
-                  begin
-                     Found_Draft := Ada.Strings.Unbounded.To_Unbounded_String
-                       (if Bytes (Near) > Bytes (In_Store) then Near else In_Store);
-                  end;
+                  Found_Draft := Ada.Strings.Unbounded.To_Unbounded_String
+                    (Model_Runner.Drafts.Find_Around
+                       (Path, Container, L.Vocabulary (Engine).all,
+                        Model_Runner.Platform.Models_Directory, Model_Runner.Platform.Other_Models_Directory));
                end if;
                if E.Is_Ok (Local) then
                   L.Close (Probe);
