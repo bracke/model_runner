@@ -145,11 +145,12 @@ package body Agent_Trial is
       --  delegate task writes prose, and whether a helper does real work
       --  as its settings have it -- thinking or not -- is measured here.
       --  Named only.
+      --  The edit's own change, as the checks test it: a change to Times
+      --  instead could not pass, the checks failing on Add until it is made.
       T ("delegate-edit", "implementation",
-         "Hand this change to a helper with the delegate tool, its outputs [""src/calc.adb""]: in src/calc.adb"
-         & " make Times work for a negative B too -- Times (A, B) for B < 0 returns -Times (A, -B). Change only"
-         & " Times, and do not edit src/calc.adb yourself. When the helper has finished, run the checks and"
-         & " report.", Tested => True, Named_Only => True)];
+         "Hand this change to a helper with the delegate tool, its outputs [""src/calc.adb""]: " & Edit_Notes
+         & " Do not edit src/calc.adb yourself. When the helper has finished, run the checks and report.",
+         Tested => True, Named_Only => True)];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.

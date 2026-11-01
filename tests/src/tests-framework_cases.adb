@@ -19070,6 +19070,8 @@ package body Tests.Framework_Cases is
 
    --  What a probing agent's calls were set to, as the host set them.
    Probe_Root, Probe_Recovery, Probe_Child, Probe_Retry : Ip.Effective;
+   --  The selection the host held while the reviewer was open.
+   Probe_Selected : Ip.Selection;
    Probe_Status : E.Error_Info;
 
    --  A session as a test asks: nothing named, a reply's room of 2048.
@@ -19135,6 +19137,7 @@ package body Tests.Framework_Cases is
          Children.Open_Child ("reviewer", "required", "look", "", Id, Context, Budget, Probe_Status);
       end if;
       if E.Is_Ok (Probe_Status) then
+         Probe_Selected := Children.Selection_Now;
          Children.Policy_For_Call (Ip.Task_Work, Plain_Session, Self.Controls, Probe_Child, Probe_Status);
          Children.Close_Child ("status: failed" & LF & "summary: could not look", 10, E.Success, Told, Retry);
          if Retry then
@@ -19378,6 +19381,22 @@ package body Tests.Framework_Cases is
          end;
       end;
 
+      --  The words a record keeps, the profiles there are, and the file a
+      --  runner apart is handed.
+      Assert (Ip.Activity_Word (Ip.Failure_Recovery) = "failure_recovery"
+              and then Ip.Mode_Word (Ip.Adaptive) = "adaptive" and then Ip.Source_Word (Ip.Project) = "project"
+              and then Tm.Effort_Word (Tm.Effort_High) = "high"
+              and then Tm.Takes_Effort (Tm.Effort_Low) and then not Tm.Takes_Effort (Tm.Effort_Minimal),
+              "a policy's word was not as a record keeps it");
+      Assert (Natural (Ip.Built_In_Names.Length) = 8 and then Ip.Built_In_Names.Contains ("reporting")
+              and then Ip.Is_Profile (Config, "coding") and then not Ip.Is_Profile (Config, "nonesuch")
+              and then Ip.Is_Profile_Field ("top_k") and then not Ip.Is_Profile_Field ("colour"),
+              "the profiles or their fields were not as built in");
+      Assert (Has (Ip.Selection_Lines (Chosen ("coding")), "inference_mode=adaptive")
+              and then Has (Ip.Selection_Lines (Chosen ("coding")), "inference_profile=coding")
+              and then Ip.Policy_Beside ("prompt.txt") = "prompt.txt.policy",
+              "a selection's lines or the policy file's place were not as said");
+
       --  A helper's role says what its own work is for.
       Assert (Ip.Activity_Of_Role ("reviewer") = Ip.Verification_Analysis
               and then Ip.Activity_Of_Role ("tester") = Ip.Verification_Analysis
@@ -19497,6 +19516,8 @@ package body Tests.Framework_Cases is
       Assert (Probe_Recovery.Asked.Doing = Ip.Failure_Recovery
               and then To_String (Probe_Recovery.Asked.Profile) = "debugging",
               "a recovery call was not set by the debugging profile: " & Ip.Line_Of (Probe_Recovery));
+      Assert (To_String (Probe_Selected.Profile) = "verification",
+              "the host did not hold the open reviewer's selection: " & To_String (Probe_Selected.Profile));
       Assert (To_String (Probe_Child.Asked.Profile) = "verification"
               and then Probe_Child.Asked.Doing = Ip.Verification_Analysis,
               "a reviewing helper was not set by its role's profile, as analysis: " & Ip.Line_Of (Probe_Child));
