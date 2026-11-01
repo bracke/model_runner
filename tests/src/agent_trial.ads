@@ -54,8 +54,9 @@ package Agent_Trial is
    --    did before excerpts (--retrieval whole): the large task's measure.
    --  @param Inference How its calls are set (--inference): fixed, as the
    --    session is; adaptive, by the kinds' profiles and what each call is
-   --    for; or a profile's name, every call by it -- the measure of an
-   --    inference policy against fixed settings.
+   --    for; reasoning or temperature, adaptive with only that half of each
+   --    profile taken; or a profile's name, every call by it -- the measure
+   --    of an inference policy against fixed settings.
    procedure Run
      (Model     : String;
       Program   : String;

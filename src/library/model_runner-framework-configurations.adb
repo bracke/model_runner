@@ -1483,7 +1483,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 53) of access constant String :=
+   Known_Settings : constant array (1 .. 54) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.child_retries"),
@@ -1507,6 +1507,7 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.execution.process_slots"),
       new String'("scalar.execution.shell"),
       new String'("scalar.execution.timeout"),
+      new String'("scalar.inference.adapts"),
       new String'("scalar.inference.default"),
       new String'("scalar.inference.mode"),
       new String'("scalar.init.confirm"),
@@ -1609,6 +1610,8 @@ package body Model_Runner.Framework.Configurations is
          return "fixed: every model call is set as the session is";
       elsif Name = "scalar.inference.default" then
          return "none: profile mode needs one named";
+      elsif Name = "scalar.inference.adapts" then
+         return "both: a profile's sampling and its reasoning";
       end if;
       return "";
    end Default_Of;
@@ -2398,6 +2401,9 @@ package body Model_Runner.Framework.Configurations is
            & " the call is for (inference.activity.ACTIVITY)";
       elsif Name = "scalar.inference.default" then
          return "the inference profile every model call is set by in profile mode";
+      elsif Name = "scalar.inference.adapts" then
+         return "which of a profile's fields are taken: both; reasoning, the sampling left as the session has it;"
+           & " or temperature, the reasoning left";
       elsif Starts (Name, "scalar.inference.task.") then
          return "the inference profile tasks of kind " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";

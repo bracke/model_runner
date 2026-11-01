@@ -340,7 +340,11 @@ architecture, coding, testing, debugging, exploration, reporting and
 verification -- temperatures from 0 to 0.5 and reasoning low to high, first
 values for a model's benchmark to confirm; `scalar
 inference.profile.NAME.FIELD` changes one (`temperature`, `top_k`, `top_p`,
-`min_p`, `reasoning`, `thinking`, `max_tokens`) or makes one of its own. A
+`min_p`, `reasoning`, `thinking`, `max_tokens`) or makes one of its own, and
+`scalar inference.adapts` takes `both` halves of a profile, only its
+`reasoning`, or only its `temperature` and filters -- what tells apart which
+half a task's outcome owes (`tests agent-trial --inference
+fixed|adaptive|reasoning|temperature`). A
 task's own `inference=profile=NAME temperature=0.1 ...` stands in any mode.
 Each setting comes from the first that says it -- the session's command
 line, the task, the project's profile fields, the profile, the defaults --

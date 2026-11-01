@@ -366,14 +366,17 @@ package body Agent_Trial is
 
    --  How the trial's calls are set: as the session is, or by a policy
    --  -- adaptive, the kinds the trial's tasks have mapped to profiles as
-   --  standard-development maps them, or profile, every call by one.
+   --  standard-development maps them; reasoning or temperature, adaptive
+   --  taking only that half of each profile; or profile, every call by one.
    Inference_Mode : Unbounded_String;
 
    function Inference_Words return String is
      (if Inference_Mode = Null_Unbounded_String or else To_String (Inference_Mode) = "fixed" then ""
-      elsif To_String (Inference_Mode) = "adaptive"
+      elsif To_String (Inference_Mode) in "adaptive" | "reasoning" | "temperature"
       then " scalar.inference.mode=adaptive scalar.inference.task.implementation=coding"
            & " scalar.inference.task.analysis=analysis"
+           & (if To_String (Inference_Mode) = "adaptive" then ""
+              else " scalar.inference.adapts=" & To_String (Inference_Mode))
       else " scalar.inference.mode=profile scalar.inference.default=" & To_String (Inference_Mode));
 
    function Knowledge_Words (Knowledge : Boolean) return String is

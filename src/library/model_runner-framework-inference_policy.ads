@@ -25,7 +25,11 @@ with Model_Runner.Templates;
 --  built-in ones are analysis, architecture, coding, testing, debugging,
 --  exploration, reporting and verification; scalar
 --  inference.profile.NAME.FIELD changes a field of one, or makes a profile
---  of its own where NAME is none of them. A task's own inference field --
+--  of its own where NAME is none of them. scalar inference.adapts says
+--  which of a profile's fields are taken: both, the default; reasoning --
+--  whether and how much to reason, the sampling left as the session has
+--  it; or temperature -- the sampling, the reasoning left. It is what tells
+--  apart which half of a profile a task's outcome owes. A task's own inference field --
 --  profile=NAME and fields as a profile has them -- is the task's say, and
 --  stands in any mode.
 --

@@ -421,6 +421,9 @@ package body Model_Runner.Framework.Inference_Policy is
       elsif Rest = "mode" then
          return (if Value in "fixed" | "profile" | "adaptive" then ""
                  else "scalar.inference.mode is fixed, profile or adaptive, not " & Value);
+      elsif Rest = "adapts" then
+         return (if Value in "both" | "reasoning" | "temperature" then ""
+                 else "scalar.inference.adapts is both, reasoning or temperature, not " & Value);
       elsif Rest = "default" then
          return Named_Profile;
       elsif Starts (Rest, "task.") and then Rest'Length > 5 then
@@ -455,8 +458,8 @@ package body Model_Runner.Framework.Inference_Policy is
             return Parse (Tail (Dot + 1 .. Tail'Last) & "=" & Value, Got, Said);
          end;
       end if;
-      return "nothing reads " & Name & "; the inference settings are scalar.inference.mode, default, task.KIND,"
-        & " role.ROLE, activity.ACTIVITY and profile.NAME.FIELD";
+      return "nothing reads " & Name & "; the inference settings are scalar.inference.mode, default, adapts,"
+        & " task.KIND, role.ROLE, activity.ACTIVITY and profile.NAME.FIELD";
    end Setting_Problem;
 
    ---------------------------
@@ -624,11 +627,21 @@ package body Model_Runner.Framework.Inference_Policy is
          Found   : Boolean;
          Builtin : constant Overrides := (if Named = "" then No_Overrides else Built_In (Named, Found));
          Own     : constant Overrides := (if Named = "" then No_Overrides else Project_Fields (Config, Named));
+         Adapts  : constant String := Records.Get (Config, Prefix & "adapts");
+
+         --  Whether a profile's field is taken, by which half it is of.
+         function Taken (Which : Setting) return Boolean
+         is (case Which is
+                when Temperature | Top_K | Top_P | Min_P => Adapts /= "reasoning",
+                when Thinking | Effort                    => Adapts /= "temperature",
+                when Output_Limit                         => True);
       begin
          for Which in Setting loop
             if Has (Chosen.Task_Settings, Which) then
                Take (Result.Settings, Chosen.Task_Settings, Which);
                Result.Sources (Which) := Task_Setting;
+            elsif not Taken (Which) then
+               null;
             elsif Has (Own, Which) then
                Take (Result.Settings, Own, Which);
                Result.Sources (Which) := Project;

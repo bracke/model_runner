@@ -19237,6 +19237,28 @@ package body Tests.Framework_Cases is
               "an activity's mapping, a task's own profile or an unmapped task was not kept to");
       R.Set (Config, "scalar.inference.activity.failure_recovery", "");
 
+      --  One half of a profile taken: its reasoning, the sampling the
+      --  session's; or its sampling, the reasoning left. A task's own
+      --  field stands either way.
+      R.Set (Config, "scalar.inference.adapts", "reasoning");
+      Asked := Ip.Merge_With (Config, Chosen ("debugging"), Ip.Task_Work);
+      Assert (not Asked.Settings.Has_Temperature and then Asked.Settings.Effort = Tm.Effort_High
+              and then Asked.Sources (Ip.Temperature) = Ip.Model_Default,
+              "reasoning alone took the profile's temperature");
+      R.Set (Config, "scalar.inference.adapts", "temperature");
+      Asked := Ip.Merge_With
+        (Config, (Chosen ("debugging") with delta Task_Settings =>
+                    (Ip.No_Overrides with delta Effort => Tm.Effort_Low)), Ip.Task_Work);
+      Assert (Asked.Settings.Has_Temperature and then Asked.Settings.Temperature = 0.2
+              and then Asked.Settings.Effort = Tm.Effort_Low and then Asked.Sources (Ip.Effort) = Ip.Task_Setting,
+              "temperature alone took the profile's reasoning, or dropped the task's");
+      Asked := Ip.Merge_With (Config, Chosen ("debugging"), Ip.Task_Work);
+      Assert (Asked.Settings.Effort = Tm.Effort_Unstated, "temperature alone took the profile's reasoning");
+      R.Set (Config, "scalar.inference.adapts", "");
+      Assert (Ip.Setting_Problem ("scalar.inference.adapts", "half") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.adapts", "reasoning") = "",
+              "scalar.inference.adapts was read wrong");
+
       --  Reasoning given the control the template reads.
       Asked := Ip.Merge_With (Config, Chosen ("debugging"), Ip.Task_Work);
       Ip.Fit (Asked, Plain_Session, Thinking_Only, Got, Status);
