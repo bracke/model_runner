@@ -100,7 +100,7 @@ package body Agent_Trial is
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 9) of Trial_Task :=
+   Tasks : constant array (1 .. 10) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -140,7 +140,16 @@ package body Agent_Trial is
          "Find the function that decides whether a request to send to a number of recipients is let through,"
          & " turned away for now, turned away for good, or held for a person to approve. Report its file, its"
          & " name and the line it is declared on. Change no file.",
-         Named_Only => True, Tree => "notifications", Expect => "notifications-abuse_control")];
+         Named_Only => True, Tree => "notifications", Expect => "notifications-abuse_control"),
+      --  A change to code handed to a helper, its checks the root's: the
+      --  delegate task writes prose, and whether a helper does real work
+      --  as its settings have it -- thinking or not -- is measured here.
+      --  Named only.
+      T ("delegate-edit", "implementation",
+         "Hand this change to a helper with the delegate tool, its outputs [""src/calc.adb""]: in src/calc.adb"
+         & " make Times work for a negative B too -- Times (A, B) for B < 0 returns -Times (A, -B). Change only"
+         & " Times, and do not edit src/calc.adb yourself. When the helper has finished, run the checks and"
+         & " report.", Tested => True, Named_Only => True)];
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
@@ -731,8 +740,17 @@ package body Agent_Trial is
       Clean := True;
       --  A name no task has runs nothing: said, not an empty trial.
       if not (for some One of Tasks => Chosen (Only, To_String (One.Name))) then
-         Ada.Text_IO.Put_Line
-           ("agent-trial: no task is called " & Only & "; they are edit, find and delegate, a comma apart");
+         declare
+            --  Every task's name, as it is asked by -- the list said once
+            --  named three of nine.
+            Names : Unbounded_String;
+         begin
+            for One of Tasks loop
+               Append (Names, (if Length (Names) = 0 then "" else ", ") & One.Name);
+            end loop;
+            Ada.Text_IO.Put_Line
+              ("agent-trial: no task is called " & Only & "; they are " & To_String (Names) & ", a comma apart");
+         end;
          Clean := False;
          Discard_Copy;
          return;
