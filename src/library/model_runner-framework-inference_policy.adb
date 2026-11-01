@@ -714,29 +714,51 @@ package body Model_Runner.Framework.Inference_Policy is
       return Result;
    end Merge_With;
 
+   ----------------------
+   -- Configuration_At --
+   ----------------------
+
+   procedure Configuration_At
+     (Item     : Stores.Store;
+      Revision : Natural;
+      Config   : out Records.Item;
+      Status   : out Model_Runner.Errors.Error_Info)
+   is
+      None : Records.Item;
+   begin
+      --  A revision the run was selected at is that one or nothing: a call
+      --  set by another than the one its record names was never asked for.
+      if Revision > 0 then
+         Configurations.Revision_At (Item, Revision, Config, Status);
+         return;
+      end if;
+      Configurations.Read (Item, Config, Status);
+      if Configurations.Unreadable (Status) then
+         return;
+      end if;
+      if E.Is_Error (Status) then
+         Config := None;
+         Status := E.Success;
+      end if;
+   end Configuration_At;
+
    -----------
    -- Merge --
    -----------
 
-   function Merge (Item : Stores.Store; Chosen : Selection; Doing : Activity) return Request is
+   procedure Merge
+     (Item   : Stores.Store;
+      Chosen : Selection;
+      Doing  : Activity;
+      Result : out Request;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
       Config : Records.Item;
-      Read   : E.Error_Info;
    begin
       --  The configuration at the revision the run was selected at: what a
       --  profile said then, whatever was reconfigured since.
-      if Chosen.Revision > 0 then
-         Configurations.Revision_At (Item, Chosen.Revision, Config, Read);
-      else
-         Configurations.Read (Item, Config, Read);
-      end if;
-      if E.Is_Error (Read) then
-         declare
-            None : Records.Item;
-         begin
-            return Merge_With (None, Chosen, Doing);
-         end;
-      end if;
-      return Merge_With (Config, Chosen, Doing);
+      Configuration_At (Item, Chosen.Revision, Config, Status);
+      Result := Merge_With (Config, Chosen, Doing);
    end Merge;
 
    ---------
@@ -919,9 +941,16 @@ package body Model_Runner.Framework.Inference_Policy is
       Invoked : Invocation_Settings;
       Model   : Reasoning_Controls;
       Result  : out Effective;
-      Status  : out Model_Runner.Errors.Error_Info) is
+      Status  : out Model_Runner.Errors.Error_Info)
+   is
+      Asked : Request;
    begin
-      Fit (Merge (Item, Chosen, Doing), Invoked, Model, Result, Status);
+      Merge (Item, Chosen, Doing, Asked, Status);
+      if E.Is_Error (Status) then
+         Result := (others => <>);
+         return;
+      end if;
+      Fit (Asked, Invoked, Model, Result, Status);
    end Resolve;
 
    ----------------------
@@ -935,7 +964,6 @@ package body Model_Runner.Framework.Inference_Policy is
       Status : out Model_Runner.Errors.Error_Info)
    is
       Config : Records.Item;
-      Read   : E.Error_Info;
       Tried  : Effective;
 
       procedure Each_Activity (Of_Run : Selection) is
@@ -955,12 +983,8 @@ package body Model_Runner.Framework.Inference_Policy is
       if E.Is_Error (Status) or else Chosen.Mode /= Adaptive then
          return;
       end if;
-      if Chosen.Revision > 0 then
-         Configurations.Revision_At (Item, Chosen.Revision, Config, Read);
-      else
-         Configurations.Read (Item, Config, Read);
-      end if;
-      if E.Is_Error (Read) then
+      Configuration_At (Item, Chosen.Revision, Config, Status);
+      if E.Is_Error (Status) then
          return;
       end if;
       for Index in 1 .. Records.Field_Count (Config) loop

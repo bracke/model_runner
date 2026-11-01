@@ -19154,6 +19154,46 @@ package body Tests.Framework_Cases is
       Answer := To_Unbounded_String ("status: done" & LF & "summary: probed" & LF & "changed_files: src/probe.txt");
    end Run_Parenting;
 
+   --  A probe whose invocation has ended before its call is set: what
+   --  the call is set to cannot be kept on it, so the call is not made.
+   type Unkept_Probe is new Policy_Probe with null record;
+
+   Unkept_Store : access S.Store;
+   Unkept_Task  : Unbounded_String;
+
+   overriding procedure Run_Parenting
+     (Self        : Unkept_Probe;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
+   overriding procedure Run_Parenting
+     (Self        : Unkept_Probe;
+      Prompt_Path : String;
+      Project     : String;
+      Children    : in out Wk.Child_Host'Class;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+      pragma Unreferenced (Prompt_Path, Project);
+      Change : S.Transaction;
+      Ended  : E.Error_Info;
+   begin
+      Iv.Finish (Unkept_Store.all, Change, Iv.Last_For (Unkept_Store.all, To_String (Unkept_Task)), Iv.Failed,
+                 (others => 0), "", "ended for the test", Ended);
+      if E.Is_Ok (Ended) then
+         S.Commit (Unkept_Store.all, Change, Ended);
+      end if;
+      Probe_Status := Ended;
+      if E.Is_Ok (Ended) then
+         Children.Policy_For_Call (Ip.Task_Work, Plain_Session, Self.Controls, Probe_Root, Probe_Status);
+      end if;
+      Answer := Null_Unbounded_String;
+      Status := Probe_Status;
+   end Run_Parenting;
+
    --  How a call is set: precedence one setting at a time, the model's
    --  controls over all, the reply held to its room, and nothing changed
    --  in fixed mode -- decided from a configuration in hand, no model and
@@ -19471,6 +19511,15 @@ package body Tests.Framework_Cases is
 
       function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
 
+      function Merged (Chosen : Ip.Selection; Doing : Ip.Activity) return Ip.Request is
+         Asked : Ip.Request;
+         Read  : E.Error_Info;
+      begin
+         Ip.Merge (Store, Chosen, Doing, Asked, Read);
+         Assert (E.Is_Ok (Read), "a run's configuration was not read: " & Code_Of (Read));
+         return Asked;
+      end Merged;
+
       function Made (Title : String; Inference : String := "") return String is
          Made_Id : Unbounded_String;
       begin
@@ -19569,6 +19618,17 @@ package body Tests.Framework_Cases is
          Change := S.No_Changes;
       end;
 
+      --  And a call whose settings cannot be kept is not made.
+      Id := To_Unbounded_String (Made ("Unkept"));
+      Unkept_Store := Store'Unchecked_Access;
+      Unkept_Task := Id;
+      Probe_Status := E.Success;
+      Wk.Execute (Store, To_String (Id), Unkept_Probe'(Controls => Thinking_Only),
+                  Unkept_Probe'(Controls => Thinking_Only).Profile, Done, Status);
+      Assert (Probe_Status.Code = E.Framework_Transition_Invalid,
+              "a call was set although its settings were not kept: " & Code_Of (Probe_Status));
+      Unkept_Store := null;
+
       --  A level the task named that its model takes no control for: a
       --  setup to put right, the task left as it was.
       Id := To_Unbounded_String (Made ("Levelled", "reasoning=high"));
@@ -19603,9 +19663,23 @@ package body Tests.Framework_Cases is
          Cf.Plan_Change (Store, Changes, Planned, Status);
          Cf.Reconfigure (Store, Planned, Revision, Status);
          Assert (E.Is_Ok (Status), "a profile's field was not reconfigured: " & Code_Of (Status));
-         Assert (Ip.Merge (Store, Chosen, Ip.Task_Work).Settings.Top_K = 20
-                 and then Ip.Merge (Store, Ip.Select_For (Store, Made ("Later")), Ip.Task_Work).Settings.Top_K = 30,
+         Assert (Merged (Chosen, Ip.Task_Work).Settings.Top_K = 20
+                 and then Merged (Ip.Select_For (Store, Made ("Later")), Ip.Task_Work).Settings.Top_K = 30,
                  "a run's profile was read at another revision than it was selected at");
+         --  One whose revision cannot be read is not set by another.
+         declare
+            Lost  : constant Ip.Selection := (Chosen with delta Revision => 999_999);
+            Asked : Ip.Request;
+            Got   : Ip.Effective;
+            Read  : E.Error_Info;
+         begin
+            Ip.Merge (Store, Lost, Ip.Task_Work, Asked, Read);
+            Assert (Read.Code = E.Framework_Not_Found, "a lost revision was read as another: " & Code_Of (Read));
+            Ip.Resolve (Store, Lost, Ip.Task_Work, Plain_Session, Thinking_Only, Got, Read);
+            Assert (Read.Code = E.Framework_Not_Found, "a call was set without its revision: " & Code_Of (Read));
+            Ip.Check_Every_Call (Store, Lost, Thinking_Only, Read);
+            Assert (E.Is_Error (Read), "a run without its revision was let start");
+         end;
          --  So is a role's mapping, for a helper opened after the change.
          Assert (To_String (Ip.For_Child (Store, Chosen, "reviewer").Profile) = "verification"
                  and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Later still")), "reviewer")
@@ -19675,7 +19749,7 @@ package body Tests.Framework_Cases is
       declare
          Fixed     : constant Ip.Selection := Ip.Select_For (Store, Made ("Written"));
          Writing   : constant Ip.Selection := Ip.For_Child (Store, Fixed, "writer", Documents_Only => True);
-         Asked     : constant Ip.Request := Ip.Merge (Store, Writing, Ip.Task_Work);
+         Asked     : constant Ip.Request := Merged (Writing, Ip.Task_Work);
          Changes   : Cf.Value_Maps.Map;
          Planned   : Cf.Change_Plan;
          Revision  : Natural;

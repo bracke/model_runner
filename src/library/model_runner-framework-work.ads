@@ -676,8 +676,8 @@ package Model_Runner.Framework.Work is
    --  @param Model The controls the model's template reads.
    --  @param Policy The call's settings; the session's own where Status
    --    fails.
-   --  @param Status As Inference_Policy.Fit says; the call is then not to
-   --    be made.
+   --  @param Status As Inference_Policy.Resolve says, or what keeping the
+   --    settings on the call failed with; the call is then not to be made.
    procedure Policy_For_Call
      (Host    : in out Child_Host;
       Doing   : Inference_Policy.Activity;

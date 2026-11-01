@@ -866,11 +866,15 @@ begin
                   --  And what its first call is to be set by, for a runner
                   --  that runs it as a process of its own to fit to its model.
                   if E.Is_Ok (Status) then
-                     Files.Write_Text
-                       (Inference_Policy.Policy_Beside (Prompt),
-                        Inference_Policy.Image_Of
-                          (Inference_Policy.Merge (Item, Frozen.Inference, Inference_Policy.Task_Work)),
-                        Status);
+                     declare
+                        Asked : Inference_Policy.Request;
+                     begin
+                        Inference_Policy.Merge (Item, Frozen.Inference, Inference_Policy.Task_Work, Asked, Status);
+                        if E.Is_Ok (Status) then
+                           Files.Write_Text
+                             (Inference_Policy.Policy_Beside (Prompt), Inference_Policy.Image_Of (Asked), Status);
+                        end if;
+                     end;
                   end if;
                   --  Kept, as anything it may not write is, to be put back.
                   --  Only where what it may do was written: a failure there is

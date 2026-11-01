@@ -255,8 +255,30 @@ package Model_Runner.Framework.Inference_Policy is
    --  @param Item The store.
    --  @param Chosen The run's selection.
    --  @param Doing What the call is for.
-   --  @return The request.
-   function Merge (Item : Stores.Store; Chosen : Selection; Doing : Activity) return Request;
+   --  @param Result The request.
+   --  @param Status Failed where the configuration the run was selected
+   --    at, or the current one for a run selected before there was one,
+   --    cannot be read: never another in its place. None at all is none.
+   procedure Merge
+     (Item   : Stores.Store;
+      Chosen : Selection;
+      Doing  : Activity;
+      Result : out Request;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The configuration a run's calls are set by: at the revision it was
+   --  selected at, or the current one where it was selected before there
+   --  was one -- an empty one where there is none.
+   --
+   --  @param Item The store.
+   --  @param Revision The run's revision, or 0.
+   --  @param Config The configuration.
+   --  @param Status Failed where the one asked for cannot be read.
+   procedure Configuration_At
+     (Item     : Stores.Store;
+      Revision : Natural;
+      Config   : out Records.Item;
+      Status   : out Model_Runner.Errors.Error_Info);
 
    --  The same, from a configuration in hand: what Merge reads, apart.
    --

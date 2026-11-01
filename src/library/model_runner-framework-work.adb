@@ -2033,7 +2033,9 @@ package body Model_Runner.Framework.Work is
          return;
       end if;
       --  Kept on the call it sets, before it is made: what the work was set
-      --  to is read back from the state, not from the run.
+      --  to is read back from the state, not from the run -- and a call
+      --  whose settings could not be kept is not made, for its record
+      --  would say another's.
       if not Host.Calls.Is_Empty and then Host.Calls.Last_Element /= "" then
          Invocations.Note_Settings
            (Host.Item.all, Change, Host.Calls.Last_Element, Inference_Policy.Line_Of (Policy), Kept);
@@ -2041,6 +2043,9 @@ package body Model_Runner.Framework.Work is
             Stores.Commit (Host.Item.all, Change, Kept);
          end if;
          Keep_Unkept (Host, Kept);
+         if E.Is_Error (Kept) then
+            Status := Kept;
+         end if;
       end if;
    end Policy_For_Call;
 
