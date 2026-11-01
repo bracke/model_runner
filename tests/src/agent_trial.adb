@@ -779,6 +779,15 @@ package body Agent_Trial is
                        Root & "-stall-"
                        & Ada.Strings.Fixed.Translate
                            (Local (Began), Ada.Strings.Maps.To_Mapping (" :", "_-"));
+                     --  Where a run that did not complete is moved to, named
+                     --  as its stall file is: the next run of the task makes
+                     --  Root afresh, and one failure of 2026-11-01 was read
+                     --  only from what was left of the screen before it did.
+                     Failed_Name : constant String :=
+                       Root & "-failed-"
+                       & Ada.Strings.Fixed.Translate
+                           (Local (Began), Ada.Strings.Maps.To_Mapping (" :", "_-"));
+                     Kept_In : Unbounded_String := To_Unbounded_String (Root);
                      Stalls  : Natural := 0;
                      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
                      Last    : Ada.Streams.Stream_Element_Offset;
@@ -1354,6 +1363,9 @@ package body Agent_Trial is
                                  else "other");
                            begin
                               Answered := To_Unbounded_String (Answer);
+                              if Ada.Strings.Fixed.Index (Ending, "complete") /= 1 then
+                                 Kept_In := To_Unbounded_String (Failed_Name);
+                              end if;
                               Append (Rows (Which),
                                       "  run" & Integer'Image (Round) & ": " & Ending
                                       & [1 .. Natural'Max (1, 12 - Ending'Length) => ' ']
@@ -1375,7 +1387,7 @@ package body Agent_Trial is
                               & (if Length (Used) = 0 then "" else " (" & To_String (Used) & ")")
                               & LF & "  " & (if Length (Figures) = 0 then "(no work figures)" else To_String (Figures))
                               & LF & "  changed: " & (if Length (Said) = 0 then "nothing" else To_String (Said))
-                              & LF & "  session kept in " & Root
+                              & LF & "  session kept in " & To_String (Kept_In)
                               & (if Length (Display_Faults) = 0 then ""
                                  else LF & To_String (Display_Faults)));
                         end;
@@ -1401,6 +1413,9 @@ package body Agent_Trial is
                            Ada.Text_IO.Close (File);
                         end if;
                      end;
+                     if To_String (Kept_In) /= Root then
+                        Ada.Directories.Rename (Root, To_String (Kept_In));
+                     end if;
                   end;
                end if;
             end;
