@@ -1886,6 +1886,9 @@ package Model_Runner.Platform.Device.Products is
    --    into a buffer kept back for the next of its size, rather than kept
    --    -- as an expert stack is where the device does not hold the
    --    experts: nothing resident is given back to make room for it.
+   --  @param Exact True keeps the product off the tile kernel, as
+   --    Add_Product's does: its activations read in binary32, for an
+   --    activation no normalization holds within half precision's range.
    procedure Add_Chained_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -1901,7 +1904,8 @@ package Model_Runner.Platform.Device.Products is
       Rounded   : Boolean := False;
       Region_Rows : Natural := 0;
       Region_At   : Natural := 0;
-      Streamed    : Boolean := False);
+      Streamed    : Boolean := False;
+      Exact       : Boolean := False);
 
    --  Name a step that combines the two results before it.
    --

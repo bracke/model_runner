@@ -283,7 +283,7 @@ package Conformance is
 
    --  How many architectures the sweep crosses: the most parts it can be
    --  split into, one an architecture.
-   Architecture_Count : constant := 31;
+   Architecture_Count : constant := 32;
 
    --  Whether this run was asked for the quantized arithmetic, from the
    --  command line and from nothing else.

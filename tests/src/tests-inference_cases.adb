@@ -4277,7 +4277,7 @@ package body Tests.Inference_Cases is
             Rounded : Boolean := False;
             Expert_Width : Natural := 0;
          end record;
-         Rows : constant array (1 .. 17) of Case_Row :=
+         Rows : constant array (1 .. 18) of Case_Row :=
            [(Tiny_Model.Llama, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
             (Tiny_Model.Qwen2, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
             (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 0, 0, False, 0),
@@ -4313,7 +4313,11 @@ package body Tests.Inference_Cases is
             --  where a missing walk answered 4.87 and a walk by slot reading
             --  its scales from the bytes 5.7.
             (Tiny_Model.Qwen3, Tiny_Model.Q4_K, 0, 1, 64, 2, True, 512),
-            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 64, 2, True, 0)];
+            (Tiny_Model.Qwen3, Tiny_Model.Q8_0, 0, 1, 64, 2, True, 0),
+            --  And Mamba at the widths of a format of 256-element blocks:
+            --  an inner activation of 512, which its batch got wrong on the
+            --  device while the narrow fixtures' sixteen read right.
+            (Tiny_Model.Mamba, Tiny_Model.Q4_K, 0, 1, 0, 0, False, 0)];
       begin
          for Row of Rows loop
             declare

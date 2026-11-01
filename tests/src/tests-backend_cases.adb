@@ -1451,7 +1451,7 @@ package body Tests.Backend_Cases is
       --  alone: their walk loads sixteen bytes a lane where a row is a
       --  whole number of eights on sixteen bytes, and reads any other row
       --  an element at a time -- a vision patch row of 588 is one.
-      Shapes : constant array (1 .. 23) of Shape :=
+      Shapes : constant array (1 .. 25) of Shape :=
         [(Tall => 12, Batch => 10, Tiled => False, others => <>),
          (Tall => 64, Batch => 40, Tiled => True, others => <>),
          (Tall => 13, Batch => 1, Tiled => False, others => <>),
@@ -1478,7 +1478,11 @@ package body Tests.Backend_Cases is
          (Tall => 13, Batch => 1, Tiled => False, Across => 587,
           Halves => True),
          (Tall => 13, Batch => 1, Tiled => False, Across => 2050,
-          Halves => True)];
+          Halves => True),
+         (Tall => 10, Batch => 41, Tiled => True, Across => 512,
+          others => <>),
+         (Tall => 256, Batch => 41, Tiled => True, Across => 512,
+          others => <>)];
 
       --  How far the device and the processor may differ.
       --

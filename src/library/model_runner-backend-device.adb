@@ -6939,13 +6939,19 @@ package body Model_Runner.Backend.Device is
 
       if Added then
          At_Out := Wanted;
+         --  Mamba's projection back reads the scan's answer as it comes,
+         --  with no normalization to hold it -- Mamba2's gate normalizes
+         --  first -- and the tile reads its activation as halves: on the
+         --  fixtures of 256-element formats the scan reached 8.2e5, past
+         --  half precision's 65504, and every batch the tile took answered
+         --  a quarter of a unit wrong. Read in binary32 instead.
          Products.Add_Chained_Product
            (Steps, Block.Out_Proj.Base, Block.Out_Proj.Span,
             Block.Out_Proj.Offset, Out_P,
             Natural (Block.Out_Proj.Rows),
             Natural (Block.Out_Proj.Columns), Added,
             Key => At_Offset (Block.Out_Proj.Base, Block.Out_Proj.Offset),
-            From_Step => S_Last, Kept => not Whole_Layer);
+            From_Step => S_Last, Kept => not Whole_Layer, Exact => One);
          Room (Natural (Block.Out_Proj.Rows));
       end if;
       if Added and then Whole_Layer then

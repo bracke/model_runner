@@ -12979,7 +12979,8 @@ package body Model_Runner.Platform.Device.Products is
       Rounded   : Boolean := False;
       Region_Rows : Natural := 0;
       Region_At   : Natural := 0;
-      Streamed    : Boolean := False)
+      Streamed    : Boolean := False;
+      Exact       : Boolean := False)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -13006,7 +13007,7 @@ package body Model_Runner.Platform.Device.Products is
          Kept => Kept, Rounded => Rounded,
          Blends => False, Unit => 0, Attends => False,
          Region_Rows => Region_Rows, Region_At => Region_At,
-         Streams => Streamed,
+         Streams => Streamed, Exact => Exact,
          others => <>);
       Added := True;
    end Add_Chained_Product;

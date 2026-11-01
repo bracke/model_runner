@@ -1465,32 +1465,32 @@ mapping query heads onto them. A mistake in cache indexing or head grouping
 therefore cannot be common to both.
 
 ```
-conformance: sequences 56775, logits compared 1872344,
-             worst absolute 7.66649309849043E-05,
-             worst relative 5.51705186852182E-02,
-             rounded logits compared 166360,
-             rounded worst absolute 1.67488891391300E-01,
-             rounded worst relative 1.99454809702416E+00,
-             cached logits compared 71696,
-             cached worst absolute 2.68876483092638E-02,
-             cached worst relative 1.56983883123592E+00,
-             tiled logits compared 225976,
-             tiled worst absolute 2.03674660256541E-02,
-             tiled worst relative 1.99589296353605E+00,
-             quantized logits compared 1296,
-             quantized worst absolute 9.86907042250004E-02,
+conformance: sequences 227688, logits compared 6056520,
+             worst absolute 1.73819554385446E-04,
+             worst relative 4.14812777523767E-01,
+             rounded logits compared 510552,
+             rounded worst absolute 3.16040618944414E-01,
+             rounded worst relative 1.99884800440839E+00,
+             cached logits compared 236848,
+             cached worst absolute 2.65511191236011E-02,
+             cached worst relative 1.98273081491582E+00,
+             tiled logits compared 624536,
+             tiled worst absolute 9.43972670333419E-02,
+             tiled worst relative 1.99050021763666E+00,
+             quantized logits compared 2160,
+             quantized worst absolute 2.18175093729983E-01,
              quantized worst relative 1.92312577295959E+00,
-             byte logits compared 132920,
-             byte worst absolute 3.02784067592779E-01,
-             byte worst relative 1.99904656218687E+00,
-             nibble logits compared 73032,
-             nibble worst absolute 2.90289949633689E-02,
-             nibble worst relative 1.41904710438192E-02,
-             mixed logits compared 11632,
-             mixed worst absolute 2.12969536432794E-05,
-             mixed worst relative 1.00962159320007E-03,
+             byte logits compared 423320,
+             byte worst absolute 3.26659620511126E-01,
+             byte worst relative 1.99611782818568E+00,
+             nibble logits compared 238680,
+             nibble worst absolute 2.90292333819480E-02,
+             nibble worst relative 1.22329356129550E-02,
+             mixed logits compared 47232,
+             mixed worst absolute 3.03050851817588E-05,
+             mixed worst relative 2.41367419233350E-02,
              outside tolerance 0, unlearned 0, refused 0,
-             not applicable 6379, wanted 63154
+             not applicable 11423, wanted 238331
 ```
 
 The last three are the count's own accounting: what the loops asked for,
@@ -1526,14 +1526,14 @@ the sweep ran none of that kind -- which is what a mode that quietly fell
 back to another path would look like, and is the reason the counts are
 published rather than only the worst differences.
 
-The run above crossed 14 architectures, in 16 formats and 6 shapes,
-of which 2072 ran on a device -- which is the same claim the paragraph below makes in
+The run above crossed 32 architectures, in 28 formats and 6 shapes,
+of which 7795 ran on a device -- which is the same claim the paragraph below makes in
 words, and is checked against the run rather than kept by hand.
 
-Fourteen architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
-`gpt2`, `bert`, `nomic-bert`, `jina-bert-v2` and `qwen35`, each of which has also been read from a file somebody else published -- in each of the six shapes a supported model comes in: dense, sliding-window, a mixture of
+Thirty-two architectures -- `llama`, `qwen2`, `qwen3`, `gemma`, `gemma2`, `gemma3`, `phi3`, `falcon`, `phi2`,
+`gpt2`, `bert`, `nomic-bert`, `jina-bert-v2`, `qwen35`, `granite`, `olmo2`, `glm4`, `starcoder2`, `stablelm`, `gptneox`, `internlm2`, `baichuan`, `mpt`, `chatglm`, `command-r`, `mamba`, `mamba2`, `rwkv6`, `jamba`, `deepseek2`, `lfm3` and `qwen2vl` -- each in those of the six shapes a supported model comes in: dense, sliding-window, a mixture of
 experts, a stretched rotation, heads wider than the embedding implies with
-keys and values different widths again, and a window and a stretch at once -- the shape a Gemma 3 of the 4B and up comes in, which stretches the rotation for the layers that see everything and turns its windowed layers as trained, and which the sweep did not have until a published 4B showed the engine stretching every layer. Eleven of the fourteen are compared on the
+keys and values different widths again, and a window and a stretch at once -- the shape a Gemma 3 of the 4B and up comes in, which stretches the rotation for the layers that see everything and turns its windowed layers as trained, and which the sweep did not have until a published 4B showed the engine stretching every layer. Twenty-nine of the thirty-two are compared on the
 last position's logits and in every shape they can hold; the three that
 produce states rather than a distribution are compared on
 what the model made of every position, which is the only answer they have and a
@@ -1554,29 +1554,32 @@ missing. The processor and the binary64 backends, every evaluation path -- a tok
 time, a whole prompt in one pass, and a prompt handed over in several --
 serial and across a worker pool, every repacking mode -- the panel layout
 among them, so the kernels that read it are crossed with every architecture
-and shape the sweep has -- and every one of the sixteen weight formats the
+and shape the sweep has -- and every one of the twenty-eight weight formats the
 engine decodes: binary32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q2_K,
-Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS and MXFP4. The fixture writes each of
+Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ2_XXS, IQ2_XS, IQ2_S,
+IQ3_XXS, IQ1_S, IQ1_M, TQ1_0, TQ2_0, Q1_0, Q2_0, MXFP4 and NVFP4. The fixture writes each of
 them and the reference reads each of them, both worked out from the layouts
 rather than by calling the engine, so a packing mistake cannot be common to
 the two sides. Tolerance is 1e-3 relative with a 1e-4 absolute floor, and nothing is
-outside it.
+outside it -- which this run first was not: Mamba's batch on the device, at
+the 256-element formats' widths, answered as much as nine units away, its
+scan's answer past half precision's range reaching the tile kernel's
+half-precision operand; Mamba's projection back now reads it in binary32.
 
 The device backend is compared separately rather than crossed with the rest,
-and it is compared in every one of the sixteen formats: the shader has a
+and it is compared in every one of the twenty-eight formats: the shader has a
 branch for each, so each is a transcription of a bit layout that could be
 wrong on its own.
 That is what this crossing is for. A shift by the wrong amount, a sub-block
 scale read from the wrong byte or a level table off by one produces an answer
 that is merely wrong, and nothing downstream can tell a slightly wrong weight
-from a right one. It runs each of the three architectures in each of the
-sixteen formats, through both evaluation paths, against the same independent
+from a right one. It runs each of the thirty-two architectures in each of the
+twenty-eight formats, through both evaluation paths, against the same independent
 implementation; on a machine with no device it runs nothing and says so by
 the count. Its arithmetic is
 where the worst relative figure above comes from -- the shader accumulates a
 row in binary32 where the processor's kernels accumulate in binary64 and
-round once -- and it is a relative figure on a logit near zero: the worst
-absolute difference is 2.2e-05, which is under the absolute floor.
+round once -- and it is a relative figure on a logit near zero.
 
 The reference runs once for each fixture and sequence rather than once for
 each comparison. It reads the file and the tokens and nothing else -- it does

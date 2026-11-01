@@ -206,6 +206,24 @@ package body Conformance is
       --  through every call.
       Current_Kind : Tiny_Model.Fixture_Architecture := Tiny_Model.Llama;
 
+      --  And its format and shape, said in words, for the first
+      --  disagreement to name with the rest of its combination: the device
+      --  passes build their own fixtures, a tiled one and a mixture, which
+      --  are named so.
+      Current_Fixture : String (1 .. 80) := [others => ' '];
+      Fixture_Last    : Natural := 0;
+
+      --  Whether the fixture in hand has had its first disagreement named.
+      Fixture_Named   : Boolean := False;
+
+      procedure Name_Fixture (Text : String) is
+         Kept : constant Natural := Natural'Min (Text'Length, Current_Fixture'Length);
+      begin
+         Current_Fixture (1 .. Kept) := Text (Text'First .. Text'First + Kept - 1);
+         Fixture_Last := Kept;
+         Fixture_Named := False;
+      end Name_Fixture;
+
       --  How wide this fixture's states are, learned when the reference
       --  loads it. Zero until then.
       Current_Width : Natural := 0;
@@ -265,13 +283,10 @@ package body Conformance is
       --  Gemma is crossed rather than compared once, because its three
       --  differences touch every part of a pass: the gain on every
       --  normalization, the scale on the embedding, and the gate in every
-      --  feed-forward block. A single comparison would exercise them, and
-      --  crossing them with the formats and the paths is what says they
-      --  survive a quantized weight and a batched evaluation.
-      --  Gemma is crossed rather than compared once, because its three
-      --  differences touch every part of a pass: the gain on every
-      --  normalization, the scale on the embedding, and the gate in every
-      --  feed-forward block, dense or mixed.
+      --  feed-forward block, dense or mixed. A single comparison would
+      --  exercise them, and crossing them with the formats and the paths
+      --  is what says they survive a quantized weight and a batched
+      --  evaluation.
       --  Bert is crossed like the rest, and what is compared for it is
       --  every position's state rather than the last position's logits --
       --  the only answer it has, and a stronger one: a logit is the last
@@ -284,6 +299,10 @@ package body Conformance is
       --  them: the rule over a state, the convolution ahead of it and the
       --  gate beside each attention head are all written out in the
       --  reference now, from the architecture's description.
+      --  And Qwen2-VL's text model, Qwen2 with its rotation's pairs dealt
+      --  among time, row and column in runs: a text token turns as the
+      --  plain rotation does, which the crossing holds it to on every
+      --  format and path.
       Crossed : constant array (1 .. Architecture_Count) of Tiny_Model.Fixture_Architecture :=
         [Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3,
          Tiny_Model.Gemma, Tiny_Model.Gemma2, Tiny_Model.Gemma3,
@@ -295,7 +314,7 @@ package body Conformance is
          Tiny_Model.Baichuan, Tiny_Model.Mpt, Tiny_Model.Chatglm,
          Tiny_Model.Command_R, Tiny_Model.Mamba, Tiny_Model.Mamba2,
          Tiny_Model.Rwkv6, Tiny_Model.Jamba, Tiny_Model.Deepseek2,
-         Tiny_Model.Lfm3];
+         Tiny_Model.Lfm3, Tiny_Model.Qwen2_VL];
 
       --  Compare one sequence, evaluated by the named backend, against the
       --  independent implementation.
@@ -605,6 +624,23 @@ package body Conformance is
          if Current_Kind = Tiny_Model.Deepseek2
            and then (L."=" (Cache, L.Eighth)
                      or else L."=" (Values, L.Value_Eighth))
+         then
+            Result.Not_Applicable := Result.Not_Applicable + 1;
+            return;
+         end if;
+
+         --  And the nibble cache on the device, which keeps the latent --
+         --  the absorbed attention is the device's default -- rounded to
+         --  sixteen levels before any head is made from it, where the
+         --  reference rounds the heads made, as the processor keeps them.
+         --  Two roundings of different things, a whole level apart on these
+         --  fixtures' rows of four: 0.366 against the nibble arm's 0.1. The
+         --  byte storage's are within it; this one is counted, not run.
+         if Current_Kind = Tiny_Model.Deepseek2
+           and then Model_Runner.Backend."="
+                      (Backend, Model_Runner.Backend.Backend_Device)
+           and then (L."=" (Cache, L.Fourth)
+                     or else L."=" (Values, L.Value_Fourth))
          then
             Result.Not_Applicable := Result.Not_Applicable + 1;
             return;
@@ -1041,7 +1077,7 @@ package body Conformance is
                         if Bad then
                            Result.Failures := Result.Failures + 1;
 
-                           --  The first one, named. The totals say how far
+                           --  The first of each fixture, named. The totals say how far
                            --  apart the two implementations got and how
                            --  often, which is what a gate needs and is not
                            --  what somebody looking for the cause needs:
@@ -1055,12 +1091,15 @@ package body Conformance is
                            --  the output names the combination, and the one
                            --  it named was a repacked model whose segment
                            --  table nothing had moved.
-                           if Result.Failures = 1 then
+                           if not Fixture_Named then
+                              Fixture_Named := True;
                               Ada.Text_IO.Put_Line
                                 (Ada.Text_IO.Standard_Error,
                                  "first disagreement: architecture "
                                  & Tiny_Model.Fixture_Architecture'Image
                                      (Current_Kind)
+                                 & ", fixture "
+                                 & Current_Fixture (1 .. Fixture_Last)
                                  & ", backend "
                                  & Model_Runner.Backend.Backend_Name (Backend)
                                  & ", repack " & L.Repack_Mode'Image (Repack)
@@ -1210,6 +1249,8 @@ package body Conformance is
                      Tiny_Model.Build_Shaped
                        (Image, Format, Crossed (Which_Arch), Shape);
                      Current_Kind := Crossed (Which_Arch);
+                     Name_Fixture (Tiny_Model.Weight_Format'Image (Format)
+                                   & " " & Model_Shape'Image (Shape));
 
                      --  A new fixture, so the expectations belonging to the
                      --  last one are gone.
@@ -1346,6 +1387,25 @@ package body Conformance is
                         if Crossed (Which_Arch) = Tiny_Model.Qwen35
                           and then Format = Tiny_Model.IQ3_XXS
                           and then Repack = L.To_BF16
+                        then
+                           goto Next_Repack;
+                        end if;
+
+                        --  And not on Mamba in the one-bit grid format, nor
+                        --  on Mamba2 in the two three-bit ones: a selective
+                        --  scan carries its state as the delta rule does,
+                        --  and the grid's values rounded again carry as far
+                        --  -- Mamba IQ1_S 0.314, Mamba2 IQ3_S 0.337 and
+                        --  IQ3_XXS 0.322 against the lossy 0.3, the
+                        --  reference's own brain-float arm each time as far
+                        --  out as the engine's. Every other format clears it.
+                        if (Crossed (Which_Arch) = Tiny_Model.Mamba
+                            and then Format = Tiny_Model.IQ1_S
+                            and then Repack = L.To_BF16)
+                          or else (Crossed (Which_Arch) = Tiny_Model.Mamba2
+                                   and then Format in Tiny_Model.IQ3_S
+                                                    | Tiny_Model.IQ3_XXS
+                                   and then Repack = L.To_BF16)
                         then
                            goto Next_Repack;
                         end if;
@@ -1612,6 +1672,8 @@ package body Conformance is
                        (Image, Format, Kind => Crossed (Which_Arch),
                         Room => 64);
                      Current_Kind := Crossed (Which_Arch);
+                     Name_Fixture (Tiny_Model.Weight_Format'Image (Format)
+                                   & " tiled");
                      Result.Built := Result.Built
                        + (Ada.Calendar.Clock - Since);
                      Forget;
@@ -1752,6 +1814,9 @@ package body Conformance is
                      Kind => Crossed (Which_Arch), Room => 64,
                      Experts => 4, Experts_Used => 2);
                   Current_Kind := Crossed (Which_Arch);
+                  Name_Fixture (Tiny_Model.Weight_Format'Image
+                                  (Device_Formats (Device_Formats'First))
+                                & " tiled mixture");
                   Result.Built := Result.Built
                     + (Ada.Calendar.Clock - Since);
                   Forget;
