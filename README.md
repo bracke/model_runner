@@ -394,7 +394,9 @@ the edit loops. A helper without it is a third faster where it fetches and
 writes prose (delegate 54 s a run against adaptive's 88), and no faster
 where it edits code (`delegate-edit`, three rounds: 525 s against 457, its
 calls doubled) -- so `inference.helpers` sets only a helper whose outputs
-are documents, and one that writes code thinks as its parent does. The
+are documents, and one that writes code thinks as its parent does. So split,
+three alternated rounds took delegate from 272 s to 178 and left
+delegate-edit's helper thinking, all twelve runs complete. The
 sampling filters measured alike: top-k 40, top-p 0.95, min-p 0.05 took
 611 s over two rounds; min-p alone 1,101, top-p alone 867,
 none 1,078.
