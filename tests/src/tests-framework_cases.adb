@@ -19398,6 +19398,12 @@ package body Tests.Framework_Cases is
               and then Ip.Policy_Beside ("prompt.txt") = "prompt.txt.policy",
               "a selection's lines or the policy file's place were not as said");
 
+      --  A document is told by its extension; anything else may be code.
+      Assert (Ip.Is_Document ("docs/calc.md") and then Ip.Is_Document ("NOTES.TXT")
+              and then Ip.Is_Document ("guide.rst") and then not Ip.Is_Document ("src/calc.adb")
+              and then not Ip.Is_Document ("md"),
+              "a document was not told from code by its extension");
+
       --  A helper's role says what its own work is for.
       Assert (Ip.Activity_Of_Role ("reviewer") = Ip.Verification_Analysis
               and then Ip.Activity_Of_Role ("tester") = Ip.Verification_Analysis
@@ -19605,10 +19611,13 @@ package body Tests.Framework_Cases is
                  and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Later still")), "reviewer")
                                        .Profile) = "exploration",
                  "a helper's role was mapped at another revision than its run was selected at");
-         --  A role no mapping names takes the one for every helper; its own
-         --  mapping stands over it.
-         Assert (To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Helped")), "investigator").Profile)
-                   = "testing"
+         --  A role no mapping names takes the one for helpers writing only
+         --  documents, where it writes only those; one that writes code keeps
+         --  its parent's; a role's own mapping stands over both.
+         Assert (To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Helped")), "investigator",
+                                          Documents_Only => True).Profile) = "testing"
+                 and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Coded")), "investigator")
+                                       .Profile) = "analysis"
                  and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Reviewed")), "reviewer")
                                        .Profile) = "exploration"
                  and then To_String (Ip.For_Child (Store, Chosen, "investigator").Profile) = "analysis",

@@ -338,8 +338,9 @@ profile, `scalar inference.default`; `adaptive` sets a task's calls by its
 kind (`scalar inference.task.KIND`, which `standard-development` maps:
 implementation to coding, bugfix to debugging, test to testing, analysis to
 analysis), a helper's by its role (`inference.role.ROLE`, else
-`inference.helpers` for every helper -- a model names its helpers' roles as
-it likes), and each call by
+`inference.helpers` for one whose outputs are documents alone -- `.md`,
+`.txt`, `.rst`, `.adoc`; a model names its helpers' roles as it likes, but
+says what each must write), and each call by
 what the harness saw lead to it: one after checks failed is
 `failure_recovery` (the debugging profile), one asked only for the report
 `result_reporting` (reporting), a helper's whose role verifies, reviews,
@@ -392,9 +393,10 @@ stay unproven and fixed the default. Thinking pays for itself: without it
 the edit loops. A helper without it is a third faster where it fetches and
 writes prose (delegate 54 s a run against adaptive's 88), and no faster
 where it edits code (`delegate-edit`, three rounds: 525 s against 457, its
-calls doubled) -- so `inference.helpers` is for a project whose helpers
-look things up. The sampling filters measured alike: top-k 40, top-p 0.95,
-min-p 0.05 took 611 s over two rounds; min-p alone 1,101, top-p alone 867,
+calls doubled) -- so `inference.helpers` sets only a helper whose outputs
+are documents, and one that writes code thinks as its parent does. The
+sampling filters measured alike: top-k 40, top-p 0.95, min-p 0.05 took
+611 s over two rounds; min-p alone 1,101, top-p alone 867,
 none 1,078.
 
 A project that lists its components (`set components = parser, lexer`) has

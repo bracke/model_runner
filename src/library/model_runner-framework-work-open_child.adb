@@ -9,7 +9,8 @@ procedure Open_Child
    Context  : out Ada.Strings.Unbounded.Unbounded_String;
    Budget   : out Natural;
    Status   : out Model_Runner.Errors.Error_Info;
-   Left     : Natural := Natural'Last)
+   Left     : Natural := Natural'Last;
+   Documents_Only : Boolean := False)
 is
    Change  : Stores.Transaction;
    Parent  : constant String := Current (Host);
@@ -71,7 +72,7 @@ begin
    --  Its calls set by its role's profile, where the project maps one, and
    --  its parent's otherwise; recovery where it is run for one that failed,
    --  analysis where its role checks.
-   Host.Policies.Append (Inference_Policy.For_Child (Host.Item.all, Selection_Now (Host), Named));
+   Host.Policies.Append (Inference_Policy.For_Child (Host.Item.all, Selection_Now (Host), Named, Documents_Only));
    Host.Doing.Append
      (if Retry_Of /= "" then Inference_Policy.Failure_Recovery else Inference_Policy.Activity_Of_Role (Named));
 

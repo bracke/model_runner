@@ -1154,7 +1154,12 @@ package body Model_Runner.CLI.Project_Commands is
               --  step, before its calls, the same left was halved for a
               --  retry as for the first, and together they went past it.
               Left => (if Tr.Context_Of (Self).Tokens_Left = Natural'Last then Natural'Last
-                       else Tr.Context_Of (Self).Tokens_Left - Natural'Min (Tr.Context_Of (Self).Tokens_Left, Spent)));
+                       else Tr.Context_Of (Self).Tokens_Left - Natural'Min (Tr.Context_Of (Self).Tokens_Left, Spent)),
+               --  A helper that writes documents alone may be set apart from
+               --  one that writes code (inference.helpers).
+               Documents_Only => not Named_Outputs.Is_Empty
+                                 and then (for all Path of Named_Outputs =>
+                                             Model_Runner.Framework.Inference_Policy.Is_Document (Path)));
             --  Run once more and not made: the helper that ran failed, and
             --  that is the call's ending -- a refusal, it read as one no
             --  helper may be made for, after "failed, and was run once more".

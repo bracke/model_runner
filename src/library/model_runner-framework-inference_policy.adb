@@ -1,3 +1,4 @@
+with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Configurations;
@@ -581,7 +582,9 @@ package body Model_Runner.Framework.Inference_Policy is
    -- For_Child --
    ---------------
 
-   function For_Child (Item : Stores.Store; Parent : Selection; Role : String) return Selection is
+   function For_Child
+     (Item : Stores.Store; Parent : Selection; Role : String; Documents_Only : Boolean := False) return Selection
+   is
       Config : Records.Item;
       Read   : E.Error_Info;
    begin
@@ -598,17 +601,32 @@ package body Model_Runner.Framework.Inference_Policy is
       if E.Is_Error (Read) then
          return Parent;
       end if;
-      --  Its role's own mapping, else the one for every helper: a model
-      --  names its helpers' roles as it likes -- investigator, documentation
-      --  writer -- and a mapping by name catches only the names it lists.
+      --  Its role's own mapping, else the one for helpers that write only
+      --  documents: a model names its helpers' roles as it likes --
+      --  investigator, documentation writer -- and a mapping by name catches
+      --  only the names it lists, where what it must write is said.
       declare
          Mapped : constant String :=
            (if Records.Get (Config, Prefix & "role." & Role) /= "" then Records.Get (Config, Prefix & "role." & Role)
-            else Records.Get (Config, Prefix & "helpers"));
+            elsif Documents_Only then Records.Get (Config, Prefix & "helpers")
+            else "");
       begin
          return (if Mapped = "" then Parent else (Parent with delta Profile => To_Unbounded_String (Mapped)));
       end;
    end For_Child;
+
+   -----------------
+   -- Is_Document --
+   -----------------
+
+   function Is_Document (Path : String) return Boolean is
+      Lower : constant String := Ada.Characters.Handling.To_Lower (Path);
+
+      function Ends (Tail : String) return Boolean
+      is (Lower'Length > Tail'Length and then Lower (Lower'Last - Tail'Length + 1 .. Lower'Last) = Tail);
+   begin
+      return Ends (".md") or else Ends (".txt") or else Ends (".rst") or else Ends (".adoc");
+   end Is_Document;
 
    ----------------------
    -- Activity_Of_Role --
@@ -930,7 +948,7 @@ package body Model_Runner.Framework.Inference_Policy is
          return;
       end if;
       if Records.Get (Config, Prefix & "helpers") /= "" then
-         Each_Activity (For_Child (Item, Chosen, ""));
+         Each_Activity (For_Child (Item, Chosen, "", Documents_Only => True));
          if E.Is_Error (Status) then
             return;
          end if;

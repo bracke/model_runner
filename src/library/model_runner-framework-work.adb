@@ -2227,7 +2227,8 @@ package body Model_Runner.Framework.Work is
       Context  : out Ada.Strings.Unbounded.Unbounded_String;
       Budget   : out Natural;
       Status   : out Model_Runner.Errors.Error_Info;
-      Left     : Natural := Natural'Last)
+      Left     : Natural := Natural'Last;
+      Documents_Only : Boolean := False)
    is separate;
 
    -----------------

@@ -393,9 +393,9 @@ package body Agent_Trial is
       elsif To_String (Inference_Mode) = "thinking-off"
       then " scalar.inference.mode=profile scalar.inference.default=nothink"
            & " scalar.inference.profile.nothink.thinking=off"
-      --  As adaptive, but every helper without thinking -- one run again
-      --  for a helper that failed recovers as the debugging profile has it:
-      --  adaptive's arm with that one difference.
+      --  As adaptive, but a helper writing only documents without thinking
+      --  -- one run again for a helper that failed recovers as the debugging
+      --  profile has it: adaptive's arm with that one difference.
       elsif To_String (Inference_Mode) = "helpers-off"
       then " scalar.inference.mode=adaptive scalar.inference.task.implementation=coding"
            & " scalar.inference.task.analysis=analysis scalar.inference.helpers=nothink"

@@ -204,15 +204,29 @@ package Model_Runner.Framework.Inference_Policy is
    function Select_For (Item : Stores.Store; Task_Id : String) return Selection;
 
    --  The selection for a helper of an agent, in adaptive mode: its role's
-   --  profile where the project maps it, else the profile every helper is
-   --  set by (inference.helpers), else its parent's; the task's own field,
-   --  as its parent's.
+   --  profile where the project maps it, else -- for a helper that writes
+   --  documents alone -- the profile such helpers are set by
+   --  (inference.helpers), else its parent's; the task's own field, as its
+   --  parent's. A helper that writes code keeps its parent's: one that
+   --  edited code without thinking measured no faster and made twice the
+   --  calls, where one writing prose was a third faster.
    --
    --  @param Item The store.
    --  @param Parent The parent's selection.
    --  @param Role The helper's role, as its parent named it.
+   --  @param Documents_Only Whether every output it must write is a document
+   --    (Is_Document), and it names one at least.
    --  @return Its selection.
-   function For_Child (Item : Stores.Store; Parent : Selection; Role : String) return Selection;
+   function For_Child
+     (Item : Stores.Store; Parent : Selection; Role : String; Documents_Only : Boolean := False) return Selection;
+
+   --  Whether a path is a document's, by its extension: .md, .txt, .rst or
+   --  .adoc, as any case writes them. Anything else may be code, and is
+   --  taken for it.
+   --
+   --  @param Path The path.
+   --  @return Whether it names a document.
+   function Is_Document (Path : String) return Boolean;
 
    --  What a helper's own work is for, by the role its parent named: one
    --  whose role says it verifies, reviews, tests or checks, anywhere in it,

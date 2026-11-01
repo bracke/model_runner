@@ -156,6 +156,8 @@ package Model_Runner.Framework.Work is
    --  @param Left What the parent's own run has left to spend now: what it
    --    generated is charged to its record only when it ends, and a child
    --    given half the record's rest took what the parent spent meanwhile.
+   --  @param Documents_Only Whether every output the helper must write is
+   --    a document, which inference.helpers may set apart.
    procedure Open_Child
      (Host     : in out Child_Host;
       Role     : String;
@@ -166,7 +168,8 @@ package Model_Runner.Framework.Work is
       Context  : out Ada.Strings.Unbounded.Unbounded_String;
       Budget   : out Natural;
       Status   : out Model_Runner.Errors.Error_Info;
-      Left     : Natural := Natural'Last);
+      Left     : Natural := Natural'Last;
+      Documents_Only : Boolean := False);
 
    --  Take the innermost open child's answer: hold it to the child result
    --  contract, keep it, charge what it used and record how it ended.

@@ -2411,8 +2411,9 @@ package body Model_Runner.Framework.Configurations is
          return "the inference profile tasks of kind " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";
       elsif Name = "scalar.inference.helpers" then
-         return "the inference profile every helper is set by in adaptive mode, where no"
-           & " inference.role.ROLE maps its role";
+         return "the inference profile a helper that writes only documents (.md, .txt, .rst, .adoc) is set by"
+           & " in adaptive mode, where no inference.role.ROLE maps its role; one that writes code keeps its"
+           & " parent's";
       elsif Starts (Name, "scalar.inference.role.") then
          return "the inference profile helpers of role " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";
