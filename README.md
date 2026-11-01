@@ -354,7 +354,7 @@ inference.profile.NAME.FIELD` changes one (`temperature`, `top_k`, `top_p`,
 `scalar inference.adapts` takes `both` halves of a profile, only its
 `reasoning`, or only its `temperature` and filters -- what tells apart which
 half a task's outcome owes (`tests agent-trial --inference
-fixed|adaptive|reasoning|temperature`). A
+fixed|adaptive|reasoning|temperature|thinking-off|helpers-off`). A
 task's own `inference=profile=NAME temperature=0.1 ...` stands in any mode.
 Each setting comes from the first that says it -- the session's command
 line, the task, the project's profile fields, the profile, the defaults --
@@ -365,11 +365,37 @@ medium, said as a fallback; a level the task or project named that the model
 cannot take stops the task before it moves, while one a profile chose is
 dropped and said. A reply never gets more room than the session keeps for
 it, and nothing here reaches the task's budgets, permissions or checks. Each
-generation's settings, with where each came from, are kept on its
+round's settings, with where each came from, are kept on its
 invocation as it is made -- `/task audit` lists them -- and a model run as a
 process of its own is handed the policy beside its prompt (`run
 --policy-file`) to fit to its own template. `run --reasoning-effort
 low|medium|high` names a level for a run outside `/work`.
+
+**What was measured, and why fixed stays the default.** On 2026-11-01,
+`tests agent-trial` ran the edit, find and delegate tasks under each arm on
+Mellum2.1-12B-A2.5B-Thinking (three rounds) and qwen3-8b (two); both
+templates take only whether to think, so a reasoning level was measured as
+thinking on or off. In seconds over the three tasks and three rounds, on
+Mellum:
+
+| arm | total | completed |
+|---|---|---|
+| fixed | 803 | 9/9 |
+| adaptive | 913 | 9/9 |
+| reasoning only | 909 | 9/9 |
+| temperature only | 882 | 9/9 |
+| thinking off for every call | -- | 6/9: edit and find loop |
+| adaptive, helpers not thinking | 667 | 9/9 |
+
+No arm beat fixed by more than a run's own spread, so the profiles' values
+stay unproven and fixed the default. Thinking pays for itself: without it
+the edit loops. A helper without it is a third faster where it fetches and
+writes prose (delegate 54 s a run against adaptive's 88), and no faster
+where it edits code (`delegate-edit`, three rounds: 525 s against 457, its
+calls doubled) -- so `inference.helpers` is for a project whose helpers
+look things up. The sampling filters measured alike: top-k 40, top-p 0.95,
+min-p 0.05 took 611 s over two rounds; min-p alone 1,101, top-p alone 867,
+none 1,078.
 
 A project that lists its components (`set components = parser, lexer`) has
 tasks name one of them or none. A profile's check may carry options after

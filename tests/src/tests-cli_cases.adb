@@ -15003,6 +15003,36 @@ package body Tests.CLI_Cases is
                     and then not Ada.Directories.Exists (Store & "/stopped.gguf.part"),
                     "models remove would not take a download that stopped part way");
          end;
+
+         --  The other folder's models are listed by their path, and a part
+         --  left there is not offered: models remove takes the store's alone,
+         --  and a download resumes only into the store.
+         declare
+            Home     : constant String := Ada.Directories.Full_Name ("obj/remove-home");
+            Home_Was : constant String :=
+              (if Ada.Environment_Variables.Exists ("HOME") then Ada.Environment_Variables.Value ("HOME") else "");
+            Log      : constant String := "obj/remove-listing.txt";
+            Errors   : Ada.Text_IO.File_Type;
+            Source   : Fixed_Arguments;
+            Code     : Natural;
+         begin
+            Ada.Directories.Create_Path (Home & "/models");
+            Touch (Home & "/models/handmade.gguf");
+            Touch (Home & "/models/left.gguf.part");
+            Ada.Environment_Variables.Set ("HOME", Home);
+            Add (Source, "models");
+            Ada.Text_IO.Create (Errors, Ada.Text_IO.Out_File, Log);
+            Ada.Text_IO.Set_Error (Errors);
+            Ran (Source, Code);
+            Ada.Text_IO.Set_Error (Ada.Text_IO.Standard_Error);
+            Ada.Text_IO.Close (Errors);
+            Ada.Environment_Variables.Set ("HOME", Home_Was);
+            Ada.Directories.Delete_Tree (Home);
+            Assert (Project_Tools.Text.Contains (Text_Of (Log), "~/models/handmade.gguf")
+                    and then not Project_Tools.Text.Contains (Text_Of (Log), "left.gguf (partial download)"),
+                    "the other folder's models were not listed by their path, or its part was offered: "
+                    & Text_Of (Log));
+         end;
       exception
          when others =>
             if Before = "" then

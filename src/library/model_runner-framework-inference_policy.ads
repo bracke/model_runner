@@ -215,8 +215,9 @@ package Model_Runner.Framework.Inference_Policy is
    function For_Child (Item : Stores.Store; Parent : Selection; Role : String) return Selection;
 
    --  What a helper's own work is for, by the role its parent named: one
-   --  that verifies, reviews, tests or checks analyses what is verified;
-   --  any other works on the task.
+   --  whose role says it verifies, reviews, tests or checks, anywhere in it,
+   --  analyses what is verified; one that writes or authors -- tests too --
+   --  and any other works on the task.
    --
    --  @param Role The helper's role, small letters.
    --  @return Verification_Analysis or Task_Work.

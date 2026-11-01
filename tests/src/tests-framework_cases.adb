@@ -19287,16 +19287,17 @@ package body Tests.Framework_Cases is
       Ip.Fit (Asked, Plain_Session, No_Controls, Got, Status);
       Assert (E.Is_Ok (Status) and then Got.Effort = Tm.Effort_Unstated and then Got.Fallback /= Null_Unbounded_String,
               "a level a profile chose was not dropped, said, for a template with no control");
-      --  Thinking the session set is not undone by a profile's level on a
-      --  template that takes levels: --no-think stays low, --think high.
+      --  Thinking the session set off is not undone by a profile's level
+      --  on a template that takes levels: --no-think stays low. Thinking on
+      --  is any level that thinks, so --think keeps a profile's medium.
       Ip.Fit (Asked, (Plain_Session with delta Thinking => Tm.Thinking_Off), Effort_Levels, Got, Status);
       Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_Off and then Got.Effort = Tm.Effort_Unstated
               and then Has (To_String (Got.Fallback), "reasoning high is left"),
               "a profile's level undid the session's --no-think: " & Ip.Line_Of (Got));
       Ip.Fit (Ip.Merge_With (Config, Chosen ("coding"), Ip.Task_Work),
               (Plain_Session with delta Thinking => Tm.Thinking_On), Effort_Levels, Got, Status);
-      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_On and then Got.Effort = Tm.Effort_Unstated,
-              "a profile's medium lowered the session's --think: " & Ip.Line_Of (Got));
+      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_On and then Got.Effort = Tm.Effort_Medium,
+              "--think dropped a profile's level that thinks: " & Ip.Line_Of (Got));
       --  Not known -- a model run apart -- it is asked as it stands, for
       --  the process that loads the model to fit.
       Ip.Fit (Asked, Plain_Session, (others => False), Got, Status);
@@ -19401,6 +19402,9 @@ package body Tests.Framework_Cases is
       Assert (Ip.Activity_Of_Role ("reviewer") = Ip.Verification_Analysis
               and then Ip.Activity_Of_Role ("tester") = Ip.Verification_Analysis
               and then Ip.Activity_Of_Role ("verifier") = Ip.Verification_Analysis
+              and then Ip.Activity_Of_Role ("code reviewer") = Ip.Verification_Analysis
+              and then Ip.Activity_Of_Role ("qa tester") = Ip.Verification_Analysis
+              and then Ip.Activity_Of_Role ("test writer") = Ip.Task_Work
               and then Ip.Activity_Of_Role ("helper") = Ip.Task_Work
               and then Ip.Activity_Of_Role ("") = Ip.Task_Work,
               "a helper's role did not say what its work is for");

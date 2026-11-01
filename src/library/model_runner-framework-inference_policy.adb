@@ -614,10 +614,16 @@ package body Model_Runner.Framework.Inference_Policy is
    -- Activity_Of_Role --
    ----------------------
 
+   --  Its words anywhere in it -- a model names roles as it likes: code
+   --  reviewer, qa tester -- but one that writes tests works on the task.
    function Activity_Of_Role (Role : String) return Activity is
-     (if Starts (Role, "verif") or else Starts (Role, "review") or else Starts (Role, "test")
-        or else Starts (Role, "check")
-      then Verification_Analysis else Task_Work);
+      function Has (Part : String) return Boolean is (Ada.Strings.Fixed.Index (Role, Part) > 0);
+   begin
+      return (if Has ("writ") or else Has ("author") then Task_Work
+              elsif Has ("verif") or else Has ("review") or else Has ("test") or else Has ("check")
+              then Verification_Analysis
+              else Task_Work);
+   end Activity_Of_Role;
 
    ----------------
    -- Merge_With --
@@ -777,14 +783,16 @@ package body Model_Runner.Framework.Inference_Policy is
          Result.Sources (Effort) := Asked.Sources (Effort);
       end if;
 
-      --  A template that takes how much to think reads thinking on as high
-      --  and off as low: a level from a lower source than the thinking's --
-      --  a profile's, under --no-think -- would undo it, so it is left.
-      if Model.Known and then Model.Effort and then Result.Effort /= Tm.Effort_Unstated
-        and then Result.Thinking /= Tm.Thinking_Unstated and then Result.Sources (Thinking) < Result.Sources (Effort)
+      --  A template that takes how much to think reads thinking off as low:
+      --  a level above it from a lower source than the thinking's -- a
+      --  profile's medium or high, under --no-think -- would undo it, so it
+      --  is left. Thinking on is any level that thinks, and keeps it.
+      if Model.Known and then Model.Effort and then Result.Thinking = Tm.Thinking_Off
+        and then Result.Effort in Tm.Effort_Medium | Tm.Effort_High
+        and then Result.Sources (Thinking) < Result.Sources (Effort)
       then
-         Note ("reasoning " & Tm.Effort_Word (Result.Effort) & " is left: thinking is set by the "
-               & Source_Word (Result.Sources (Thinking)) & ", and the template reads it as high or low");
+         Note ("reasoning " & Tm.Effort_Word (Result.Effort) & " is left: thinking is off by the "
+               & Source_Word (Result.Sources (Thinking)) & ", which the template reads as low");
          Result.Effort := Tm.Effort_Unstated;
          Result.Sources (Effort) := Capability;
       end if;

@@ -235,6 +235,28 @@ package body Model_Runner.CLI.Execute.Acquisition is
          Pres.Put_Note (Screen, "cli.download.no_directory");
          return;
       end if;
+
+      --  Whole in the other folder already, under a name its manifest does
+      --  not hold -- asked by its repository where it was fetched by its
+      --  quant, or fetched before there was a manifest: opened there and
+      --  noted, not fetched again into the store.
+      declare
+         Other : constant String := Model_Runner.Platform.Other_Models_Directory;
+      begin
+         if Other /= "" then
+            for I in 1 .. Count loop
+               Locals (I) := T.To_Bounded
+                 (Model_Runner.Hub.Store.Place (Other, T.To_String (Repo), T.To_String (Files (I).Name)));
+            end loop;
+            if All_Whole (Other) then
+               Model_Runner.Hub.Store.Note (Other, Named, T.To_String (Repo), Files, Locals, Count);
+               Where   := Model_Runner.Text.To_Bounded (Destination (Other));
+               Fetched := True;
+               return;
+            end if;
+         end if;
+      end;
+
       for I in 1 .. Count loop
          Locals (I) := T.To_Bounded
            (Model_Runner.Hub.Store.Place

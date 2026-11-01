@@ -570,9 +570,14 @@ package body Model_Runner.CLI.Execute.Models_Command is
                   elsif Name'Length > 10
                     and then Name (Name'Last - 9 .. Name'Last) = ".gguf.part"
                     and then not Exists (Full_Name (Found) (Full_Name (Found)'First .. Full_Name (Found)'Last - 5))
+                    and then not (Prefix'Length >= Other_Label'Length
+                                  and then Prefix (Prefix'First .. Prefix'First + Other_Label'Length - 1)
+                                           = Other_Label)
                   then
                      --  A download stopped part way, which models remove
-                     --  takes by the model's name.
+                     --  takes by the model's name -- the store's alone: one
+                     --  in the other folder is neither resumed nor removed,
+                     --  so not offered.
                      Pres.Put_Note
                        (Screen, "cli.models.item",
                         [Loc.Named ("name", Prefix & Name (Name'First .. Name'Last - 5) & " (partial download)"),
