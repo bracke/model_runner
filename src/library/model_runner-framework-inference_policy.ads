@@ -203,15 +203,24 @@ package Model_Runner.Framework.Inference_Policy is
    --  @return Its selection; fixed where the configuration cannot be read.
    function Select_For (Item : Stores.Store; Task_Id : String) return Selection;
 
-   --  The selection for a helper of an agent: its role's profile where the
-   --  project maps it, its parent's otherwise; the task's own field, as
-   --  its parent's.
+   --  The selection for a helper of an agent, in adaptive mode: its role's
+   --  profile where the project maps it, else the profile every helper is
+   --  set by (inference.helpers), else its parent's; the task's own field,
+   --  as its parent's.
    --
    --  @param Item The store.
    --  @param Parent The parent's selection.
    --  @param Role The helper's role, as its parent named it.
    --  @return Its selection.
    function For_Child (Item : Stores.Store; Parent : Selection; Role : String) return Selection;
+
+   --  What a helper's own work is for, by the role its parent named: one
+   --  that verifies, reviews, tests or checks analyses what is verified;
+   --  any other works on the task.
+   --
+   --  @param Role The helper's role, small letters.
+   --  @return Verification_Analysis or Task_Work.
+   function Activity_Of_Role (Role : String) return Activity;
 
    --  What a selection asks of one call, before the model and the session
    --  are weighed: each setting with where it came from. What the session
@@ -304,6 +313,21 @@ package Model_Runner.Framework.Inference_Policy is
       Model   : Reasoning_Controls;
       Result  : out Effective;
       Status  : out Model_Runner.Errors.Error_Info);
+
+   --  Resolve every call a run could make before it starts: each activity,
+   --  for the run's own selection and for each role the project maps a
+   --  profile to -- a setting its model takes no control for is refused
+   --  then, not at the first recovery or the first helper of that role.
+   --
+   --  @param Item The store.
+   --  @param Chosen The run's selection.
+   --  @param Model The controls its template reads.
+   --  @param Status As Fit says of the first that fails.
+   procedure Check_Every_Call
+     (Item   : Stores.Store;
+      Chosen : Selection;
+      Model  : Reasoning_Controls;
+      Status : out Model_Runner.Errors.Error_Info);
 
    --  What a selection is, as the record of a run keeps it before any call
    --  is set: mode, profile, the task's own field and the revision, as

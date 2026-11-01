@@ -25,13 +25,14 @@ package body Model_Runner.Framework.Inference_Policy is
    function Image (Value : Natural) return String
    is (Trim (Natural'Image (Value)));
 
-   --  A real as a setting is written: to three places, its trailing
-   --  noughts left off -- 0.2, not 2.00000E-01.
+   --  A real as a setting is written: to six places, its trailing noughts
+   --  left off -- 0.2, not 2.00000E-01. Six, not three: the policy file
+   --  carries it to a runner apart, and min_p=0.0004 reached it as 0.0.
    function Real_Image (Value : Real) return String is
-      Thousandths : constant Natural := Natural (Float'Rounding (Float (Value) * 1000.0));
-      Whole       : constant String := Image (Thousandths / 1000);
-      Part        : constant String := Image (Thousandths mod 1000 + 1000);
-      Last        : Natural := Part'Last;
+      Millionths : constant Natural := Natural (Long_Float'Rounding (Long_Float (Value) * 1_000_000.0));
+      Whole      : constant String := Image (Millionths / 1_000_000);
+      Part       : constant String := Image (Millionths mod 1_000_000 + 1_000_000);
+      Last       : Natural := Part'Last;
    begin
       while Last > Part'First + 1 and then Part (Last) = '0' loop
          Last := Last - 1;
@@ -424,7 +425,7 @@ package body Model_Runner.Framework.Inference_Policy is
       elsif Rest = "adapts" then
          return (if Value in "both" | "reasoning" | "temperature" then ""
                  else "scalar.inference.adapts is both, reasoning or temperature, not " & Value);
-      elsif Rest = "default" then
+      elsif Rest = "default" or else Rest = "helpers" then
          return Named_Profile;
       elsif Starts (Rest, "task.") and then Rest'Length > 5 then
          return Named_Profile;
@@ -459,7 +460,7 @@ package body Model_Runner.Framework.Inference_Policy is
          end;
       end if;
       return "nothing reads " & Name & "; the inference settings are scalar.inference.mode, default, adapts,"
-        & " task.KIND, role.ROLE, activity.ACTIVITY and profile.NAME.FIELD";
+        & " helpers, task.KIND, role.ROLE, activity.ACTIVITY and profile.NAME.FIELD";
    end Setting_Problem;
 
    ---------------------------
@@ -483,8 +484,8 @@ package body Model_Runner.Framework.Inference_Policy is
                null;
             elsif Setting_Problem (Name, Value) /= "" then
                return Name & ": " & Setting_Problem (Name, Value);
-            elsif (Rest = "default" or else Starts (Rest, "task.") or else Starts (Rest, "role.")
-                   or else (Starts (Rest, "activity.") and then Value /= "task"))
+            elsif (Rest = "default" or else Rest = "helpers" or else Starts (Rest, "task.")
+                   or else Starts (Rest, "role.") or else (Starts (Rest, "activity.") and then Value /= "task"))
               and then not Is_Profile (Config, Value)
             then
                return Name & " names the profile " & Value & ", which is not there";
@@ -584,15 +585,39 @@ package body Model_Runner.Framework.Inference_Policy is
       Config : Records.Item;
       Read   : E.Error_Info;
    begin
-      if Parent.Task_Named or else Parent.Mode /= Adaptive or else Role = "" then
+      if Parent.Task_Named or else Parent.Mode /= Adaptive then
          return Parent;
       end if;
-      Configurations.Read (Item, Config, Read);
-      if E.Is_Error (Read) or else Records.Get (Config, Prefix & "role." & Role) = "" then
+      --  The mapping as it stood when the work was selected, as Merge reads
+      --  the profiles: a reconfiguring meanwhile changes neither.
+      if Parent.Revision > 0 then
+         Configurations.Revision_At (Item, Parent.Revision, Config, Read);
+      else
+         Configurations.Read (Item, Config, Read);
+      end if;
+      if E.Is_Error (Read) then
          return Parent;
       end if;
-      return (Parent with delta Profile => To_Unbounded_String (Records.Get (Config, Prefix & "role." & Role)));
+      --  Its role's own mapping, else the one for every helper: a model
+      --  names its helpers' roles as it likes -- investigator, documentation
+      --  writer -- and a mapping by name catches only the names it lists.
+      declare
+         Mapped : constant String :=
+           (if Records.Get (Config, Prefix & "role." & Role) /= "" then Records.Get (Config, Prefix & "role." & Role)
+            else Records.Get (Config, Prefix & "helpers"));
+      begin
+         return (if Mapped = "" then Parent else (Parent with delta Profile => To_Unbounded_String (Mapped)));
+      end;
    end For_Child;
+
+   ----------------------
+   -- Activity_Of_Role --
+   ----------------------
+
+   function Activity_Of_Role (Role : String) return Activity is
+     (if Starts (Role, "verif") or else Starts (Role, "review") or else Starts (Role, "test")
+        or else Starts (Role, "check")
+      then Verification_Analysis else Task_Work);
 
    ----------------
    -- Merge_With --
@@ -752,6 +777,18 @@ package body Model_Runner.Framework.Inference_Policy is
          Result.Sources (Effort) := Asked.Sources (Effort);
       end if;
 
+      --  A template that takes how much to think reads thinking on as high
+      --  and off as low: a level from a lower source than the thinking's --
+      --  a profile's, under --no-think -- would undo it, so it is left.
+      if Model.Known and then Model.Effort and then Result.Effort /= Tm.Effort_Unstated
+        and then Result.Thinking /= Tm.Thinking_Unstated and then Result.Sources (Thinking) < Result.Sources (Effort)
+      then
+         Note ("reasoning " & Tm.Effort_Word (Result.Effort) & " is left: thinking is set by the "
+               & Source_Word (Result.Sources (Thinking)) & ", and the template reads it as high or low");
+         Result.Effort := Tm.Effort_Unstated;
+         Result.Sources (Effort) := Capability;
+      end if;
+
       --  What the model's template reads: a model not loaded yet -- run as
       --  a process of its own -- is fitted there, with its own.
       if Model.Known and then Result.Effort /= Tm.Effort_Unstated then
@@ -849,6 +886,59 @@ package body Model_Runner.Framework.Inference_Policy is
    begin
       Fit (Merge (Item, Chosen, Doing), Invoked, Model, Result, Status);
    end Resolve;
+
+   ----------------------
+   -- Check_Every_Call --
+   ----------------------
+
+   procedure Check_Every_Call
+     (Item   : Stores.Store;
+      Chosen : Selection;
+      Model  : Reasoning_Controls;
+      Status : out Model_Runner.Errors.Error_Info)
+   is
+      Config : Records.Item;
+      Read   : E.Error_Info;
+      Tried  : Effective;
+
+      procedure Each_Activity (Of_Run : Selection) is
+      begin
+         for Doing in Activity loop
+            Resolve (Item, Of_Run, Doing, (others => <>), Model, Tried, Status);
+            exit when E.Is_Error (Status);
+         end loop;
+      end Each_Activity;
+   begin
+      Each_Activity (Chosen);
+      if E.Is_Error (Status) or else Chosen.Mode /= Adaptive or else Chosen.Task_Named then
+         return;
+      end if;
+      if Chosen.Revision > 0 then
+         Configurations.Revision_At (Item, Chosen.Revision, Config, Read);
+      else
+         Configurations.Read (Item, Config, Read);
+      end if;
+      if E.Is_Error (Read) then
+         return;
+      end if;
+      if Records.Get (Config, Prefix & "helpers") /= "" then
+         Each_Activity (For_Child (Item, Chosen, ""));
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Field : constant String := Records.Field_Name (Config, Index);
+            Roles : constant String := Prefix & "role.";
+         begin
+            if Starts (Field, Roles) and then Field'Length > Roles'Length then
+               Each_Activity (For_Child (Item, Chosen, Field (Field'First + Roles'Length .. Field'Last)));
+               exit when E.Is_Error (Status);
+            end if;
+         end;
+      end loop;
+   end Check_Every_Call;
 
    ---------------------
    -- Selection_Lines --

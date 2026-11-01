@@ -95,7 +95,7 @@ package body Tool_Commands is
      & " [--options ""OPTIONS""] [--repeats N]"
      & " [--isolation workspace] [--knowledge off] [--carry on] [--accept on] [--max-seconds N]"
      & " [--context-size N] [--retrieval whole]"
-     & " [--inference fixed|adaptive|reasoning|temperature|thinking-off|PROFILE]";
+     & " [--inference fixed|adaptive|reasoning|temperature|thinking-off|helpers-off|PROFILE]";
    Takes_Speed     : aliased constant String :=
      "--model PATH [--prompt-file PATH] [--prompt-set DIR] [--max-tokens N]"
      & " [--threads N] [--batch-size N] [--repack MODE] [--backend NAME] [--arith MODE]"

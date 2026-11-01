@@ -69,9 +69,11 @@ begin
    Host.Open.Append (To_String (Child_Id));
    Host.Opened.Append (Ada.Calendar.Clock);
    --  Its calls set by its role's profile, where the project maps one, and
-   --  its parent's otherwise; recovery where it is run for one that failed.
+   --  its parent's otherwise; recovery where it is run for one that failed,
+   --  analysis where its role checks.
    Host.Policies.Append (Inference_Policy.For_Child (Host.Item.all, Selection_Now (Host), Named));
-   Host.Retried.Append (Retry_Of /= "");
+   Host.Doing.Append
+     (if Retry_Of /= "" then Inference_Policy.Failure_Recovery else Inference_Policy.Activity_Of_Role (Named));
 
    --  A context of its own -- the task it helps with and what it is
    --  asked, nothing of the conversation it was asked from -- with its

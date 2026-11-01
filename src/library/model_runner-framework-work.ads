@@ -663,8 +663,9 @@ package Model_Runner.Framework.Work is
    --  it was set to on its invocation: the run's selection -- its helper's
    --  own, for a helper -- and what the call is for, settled against what
    --  the session was told and what its model takes. A helper run again
-   --  for one that failed recovers, whatever it is asked. Made before each
-   --  of the agent's generations begins, never during one.
+   --  for one that failed recovers, one whose role checks analyses,
+   --  whatever it is asked. Made before each round the harness gives the
+   --  agent, never during one: a round's steps are all set alike.
    --
    --  @param Host The host.
    --  @param Doing What the call is for.
@@ -1033,7 +1034,8 @@ private
 
    package Selection_Vectors is new Ada.Containers.Vectors (Positive, Inference_Policy.Selection,
                                                              Inference_Policy."=");
-   package Flag_Vectors is new Ada.Containers.Vectors (Positive, Boolean);
+   package Activity_Vectors is new Ada.Containers.Vectors (Positive, Inference_Policy.Activity,
+                                                            Inference_Policy."=");
 
    type Child_Host (Item : not null access Stores.Store) is tagged limited record
       Task_Id : Ada.Strings.Unbounded.Unbounded_String;
@@ -1122,9 +1124,10 @@ private
       Open    : Name_Lists.Vector;
 
       --  What each open agent's calls are set by, in step with Open, and
-      --  whether it is a helper run again for one that failed.
+      --  what its own work is for: a helper run again for one that failed
+      --  mends it, one whose role checks analyses.
       Policies : Selection_Vectors.Vector;
-      Retried  : Flag_Vectors.Vector;
+      Doing    : Activity_Vectors.Vector;
    end record;
 
 end Model_Runner.Framework.Work;

@@ -262,8 +262,8 @@ package body Model_Runner.Framework.Work is
       if Natural (Host.Policies.Length) > Natural (Host.Open.Length) then
          Host.Policies.Delete_Last;
       end if;
-      if Natural (Host.Retried.Length) > Natural (Host.Open.Length) then
-         Host.Retried.Delete_Last;
+      if Natural (Host.Doing.Length) > Natural (Host.Open.Length) then
+         Host.Doing.Delete_Last;
       end if;
    end Drop_Policy;
 
@@ -2020,11 +2020,11 @@ package body Model_Runner.Framework.Work is
       Status  : out Model_Runner.Errors.Error_Info)
    is
       use type Inference_Policy.Activity;
-      --  A helper run again for one that failed is the failure's mending.
+      --  An agent's own work is what it was opened for: a failure's mending
+      --  for a helper run again, an analysis for one whose role checks.
       Doing_Now : constant Inference_Policy.Activity :=
-        (if Doing = Inference_Policy.Task_Work and then not Host.Retried.Is_Empty
-           and then Host.Retried.Last_Element
-         then Inference_Policy.Failure_Recovery else Doing);
+        (if Doing = Inference_Policy.Task_Work and then not Host.Doing.Is_Empty
+         then Host.Doing.Last_Element else Doing);
       Change : Stores.Transaction;
       Kept   : E.Error_Info;
    begin

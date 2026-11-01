@@ -1483,7 +1483,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 54) of access constant String :=
+   Known_Settings : constant array (1 .. 55) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.child_retries"),
@@ -1509,6 +1509,7 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.execution.timeout"),
       new String'("scalar.inference.adapts"),
       new String'("scalar.inference.default"),
+      new String'("scalar.inference.helpers"),
       new String'("scalar.inference.mode"),
       new String'("scalar.init.confirm"),
       new String'("scalar.model.default"),
@@ -1612,6 +1613,8 @@ package body Model_Runner.Framework.Configurations is
          return "none: profile mode needs one named";
       elsif Name = "scalar.inference.adapts" then
          return "both: a profile's sampling and its reasoning";
+      elsif Name = "scalar.inference.helpers" then
+         return "none: a helper no role mapping reaches is set as its parent";
       end if;
       return "";
    end Default_Of;
@@ -2407,6 +2410,9 @@ package body Model_Runner.Framework.Configurations is
       elsif Starts (Name, "scalar.inference.task.") then
          return "the inference profile tasks of kind " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";
+      elsif Name = "scalar.inference.helpers" then
+         return "the inference profile every helper is set by in adaptive mode, where no"
+           & " inference.role.ROLE maps its role";
       elsif Starts (Name, "scalar.inference.role.") then
          return "the inference profile helpers of role " & Name (Name'First + 22 .. Name'Last)
            & " are set by in adaptive mode";

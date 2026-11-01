@@ -337,10 +337,13 @@ then the model file's own settings. `profile` sets every call by one
 profile, `scalar inference.default`; `adaptive` sets a task's calls by its
 kind (`scalar inference.task.KIND`, which `standard-development` maps:
 implementation to coding, bugfix to debugging, test to testing, analysis to
-analysis), a helper's by its role (`inference.role.ROLE`), and each call by
+analysis), a helper's by its role (`inference.role.ROLE`, else
+`inference.helpers` for every helper -- a model names its helpers' roles as
+it likes), and each call by
 what the harness saw lead to it: one after checks failed is
 `failure_recovery` (the debugging profile), one asked only for the report
-`result_reporting` (reporting), each mappable with
+`result_reporting` (reporting), a helper's whose role verifies, reviews,
+tests or checks `verification_analysis` (verification), each mappable with
 `inference.activity.ACTIVITY` -- `task` keeps the task's own. A task no
 mapping reaches is set as in fixed mode. The built-in profiles are analysis,
 architecture, coding, testing, debugging, exploration, reporting and

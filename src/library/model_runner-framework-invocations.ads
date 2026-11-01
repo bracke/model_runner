@@ -176,8 +176,8 @@ package Model_Runner.Framework.Invocations is
 
    --  Record what a generation an invocation is about to make is set to --
    --  its sampling, its reasoning, its reply's length and where each came
-   --  from -- as its next settings.NNNN entry: one before each generation
-   --  whose settings were resolved, in the order made.
+   --  from -- as its next settings.NNNN entry: one before each round whose
+   --  settings were resolved, in the order made.
    --
    --  @param Item The store.
    --  @param Change The transaction.

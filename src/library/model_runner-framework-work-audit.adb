@@ -123,8 +123,8 @@ begin
    Say ("agent", (if Records.Get (State, "runner") /= "" then Records.Get (State, "runner")
                   else Records.Get (Call, "model_profile"))
         & (if Invocation = "" then "" else ", in " & Invocation));
-   --  What its calls were set to, each generation's settings and where
-   --  each came from, and what selected them.
+   --  What its calls were set to, each round's settings and where each
+   --  came from, and what selected them.
    if Invocation /= "" then
       Say ("inference policy",
            (if Records.Get (Call, "resolved.inference_mode") = "" then ""
@@ -136,7 +136,7 @@ begin
       begin
          for Line of Invocations.Settings_Of (Item, Invocation) loop
             Number := Number + 1;
-            Say ("call" & Natural'Image (Number) & " set to", Line);
+            Say ("round" & Natural'Image (Number) & " set to", Line);
          end loop;
       end;
    end if;

@@ -56,7 +56,8 @@ package Agent_Trial is
    --    session is; adaptive, by the kinds' profiles and what each call is
    --    for; reasoning or temperature, adaptive with only that half of each
    --    profile taken; thinking-off, as fixed but with thinking off
-   --    for every call; or a profile's name, every call by it -- the measure
+   --    for every call; helpers-off, as adaptive but with thinking off for
+   --    the helpers; or a profile's name, every call by it -- the measure
    --    of an inference policy against fixed settings.
    procedure Run
      (Model     : String;

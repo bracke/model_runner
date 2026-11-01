@@ -19180,6 +19180,10 @@ package body Tests.Framework_Cases is
               "an inference field did not read");
       Assert (Ip.Image (Read) = "temperature=0.1 top_k=20 reasoning=high max_tokens=512",
               "an inference field did not read back as it was said: " & Ip.Image (Read));
+      --  To six places: the policy file carries it so to a runner apart.
+      Assert (Ip.Parse ("min_p=0.0004 temperature=0.0125", Read, Named) = ""
+              and then Ip.Image (Read) = "temperature=0.0125 min_p=0.0004",
+              "a small setting was rounded as it was written: " & Ip.Image (Read));
       Assert (Ip.Parse ("temperature=9", Read, Named) /= "" and then Ip.Parse ("top_p=0", Read, Named) /= ""
               and then Ip.Parse ("reasoning=extreme", Read, Named) /= ""
               and then Ip.Parse ("colour=blue", Read, Named) /= ""
@@ -19280,6 +19284,16 @@ package body Tests.Framework_Cases is
       Ip.Fit (Asked, Plain_Session, No_Controls, Got, Status);
       Assert (E.Is_Ok (Status) and then Got.Effort = Tm.Effort_Unstated and then Got.Fallback /= Null_Unbounded_String,
               "a level a profile chose was not dropped, said, for a template with no control");
+      --  Thinking the session set is not undone by a profile's level on a
+      --  template that takes levels: --no-think stays low, --think high.
+      Ip.Fit (Asked, (Plain_Session with delta Thinking => Tm.Thinking_Off), Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_Off and then Got.Effort = Tm.Effort_Unstated
+              and then Has (To_String (Got.Fallback), "reasoning high is left"),
+              "a profile's level undid the session's --no-think: " & Ip.Line_Of (Got));
+      Ip.Fit (Ip.Merge_With (Config, Chosen ("coding"), Ip.Task_Work),
+              (Plain_Session with delta Thinking => Tm.Thinking_On), Effort_Levels, Got, Status);
+      Assert (E.Is_Ok (Status) and then Got.Thinking = Tm.Thinking_On and then Got.Effort = Tm.Effort_Unstated,
+              "a profile's medium lowered the session's --think: " & Ip.Line_Of (Got));
       --  Not known -- a model run apart -- it is asked as it stands, for
       --  the process that loads the model to fit.
       Ip.Fit (Asked, Plain_Session, (others => False), Got, Status);
@@ -19364,12 +19378,22 @@ package body Tests.Framework_Cases is
          end;
       end;
 
+      --  A helper's role says what its own work is for.
+      Assert (Ip.Activity_Of_Role ("reviewer") = Ip.Verification_Analysis
+              and then Ip.Activity_Of_Role ("tester") = Ip.Verification_Analysis
+              and then Ip.Activity_Of_Role ("verifier") = Ip.Verification_Analysis
+              and then Ip.Activity_Of_Role ("helper") = Ip.Task_Work
+              and then Ip.Activity_Of_Role ("") = Ip.Task_Work,
+              "a helper's role did not say what its work is for");
+
       --  The settings, each as it is given and as a whole.
       Assert (Ip.Setting_Problem ("scalar.inference.mode", "sometimes") /= ""
               and then Ip.Setting_Problem ("scalar.inference.activity.lunch", "coding") /= ""
               and then Ip.Setting_Problem ("scalar.inference.profile.coding.colour", "blue") /= ""
               and then Ip.Setting_Problem ("scalar.inference.profile.coding.top_k", "many") /= ""
               and then Ip.Setting_Problem ("scalar.inference.nonesuch", "1") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.helpers", "Not A Name") /= ""
+              and then Ip.Setting_Problem ("scalar.inference.helpers", "coding") = ""
               and then Ip.Setting_Problem ("scalar.inference.mode", "adaptive") = ""
               and then Ip.Setting_Problem ("scalar.inference.activity.failure_recovery", "task") = "",
               "an inference setting was read wrong as given");
@@ -19473,8 +19497,9 @@ package body Tests.Framework_Cases is
       Assert (Probe_Recovery.Asked.Doing = Ip.Failure_Recovery
               and then To_String (Probe_Recovery.Asked.Profile) = "debugging",
               "a recovery call was not set by the debugging profile: " & Ip.Line_Of (Probe_Recovery));
-      Assert (To_String (Probe_Child.Asked.Profile) = "verification",
-              "a helper was not set by its role's profile: " & Ip.Line_Of (Probe_Child));
+      Assert (To_String (Probe_Child.Asked.Profile) = "verification"
+              and then Probe_Child.Asked.Doing = Ip.Verification_Analysis,
+              "a reviewing helper was not set by its role's profile, as analysis: " & Ip.Line_Of (Probe_Child));
       Assert (Probe_Retry.Asked.Doing = Ip.Failure_Recovery
               and then To_String (Probe_Retry.Asked.Profile) = "debugging",
               "a helper run again did not recover: " & Ip.Line_Of (Probe_Retry));
@@ -19500,7 +19525,7 @@ package body Tests.Framework_Cases is
          end loop;
          Assert (Children = 2, "each helper's call was not kept on its own invocation:" & Children'Image);
          Assert ((for some Line of Audit => Has (Line, "inference policy: adaptive, profile analysis"))
-                 and then (for some Line of Audit => Has (Line, "call 2 set to: activity=failure_recovery")),
+                 and then (for some Line of Audit => Has (Line, "round 2 set to: activity=failure_recovery")),
                  "the audit did not say what the calls were set to");
       end;
 
@@ -19542,12 +19567,27 @@ package body Tests.Framework_Cases is
          Revision : Natural;
       begin
          Changes.Include ("scalar.inference.profile.analysis.top_k", "30");
+         Changes.Include ("scalar.inference.role.reviewer", "exploration");
+         Changes.Include ("scalar.inference.helpers", "testing");
          Cf.Plan_Change (Store, Changes, Planned, Status);
          Cf.Reconfigure (Store, Planned, Revision, Status);
          Assert (E.Is_Ok (Status), "a profile's field was not reconfigured: " & Code_Of (Status));
          Assert (Ip.Merge (Store, Chosen, Ip.Task_Work).Settings.Top_K = 20
                  and then Ip.Merge (Store, Ip.Select_For (Store, Made ("Later")), Ip.Task_Work).Settings.Top_K = 30,
                  "a run's profile was read at another revision than it was selected at");
+         --  So is a role's mapping, for a helper opened after the change.
+         Assert (To_String (Ip.For_Child (Store, Chosen, "reviewer").Profile) = "verification"
+                 and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Later still")), "reviewer")
+                                       .Profile) = "exploration",
+                 "a helper's role was mapped at another revision than its run was selected at");
+         --  A role no mapping names takes the one for every helper; its own
+         --  mapping stands over it.
+         Assert (To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Helped")), "investigator").Profile)
+                   = "testing"
+                 and then To_String (Ip.For_Child (Store, Ip.Select_For (Store, Made ("Reviewed")), "reviewer")
+                                       .Profile) = "exploration"
+                 and then To_String (Ip.For_Child (Store, Chosen, "investigator").Profile) = "analysis",
+                 "a helper of a role no mapping names was not set by inference.helpers");
          --  And a change that does not read is refused, as any setting.
          for Wrong of F.Name_Lists.Vector'(["scalar.inference.mode=sometimes",
                                              "scalar.inference.task.analysis=nonesuch",
@@ -19560,6 +19600,19 @@ package body Tests.Framework_Cases is
             Cf.Plan_Change (Store, Changes, Planned, Status);
             Assert (E.Is_Error (Status), "a configuration change that does not read was planned: " & Wrong);
          end loop;
+
+         --  A level the project named for recovery that the model cannot
+         --  take stops the task before it moves, not at its first failure.
+         Changes.Clear;
+         Changes.Include ("scalar.inference.profile.debugging.reasoning", "minimal");
+         Cf.Plan_Change (Store, Changes, Planned, Status);
+         Cf.Reconfigure (Store, Planned, Revision, Status);
+         Assert (E.Is_Ok (Status), "the debugging profile's level was not reconfigured: " & Code_Of (Status));
+         Id := To_Unbounded_String (Made ("Recovers later"));
+         Wk.Execute (Store, To_String (Id), Policy_Probe'(Controls => Effort_Levels),
+                     Policy_Probe'(Controls => Effort_Levels).Profile, Done, Status);
+         Assert (Status.Code = E.Framework_Input_Invalid and then Tk.State_Of (Store, To_String (Id)) = "accepted",
+                 "a recovery level the model cannot take did not stop the task before it moved: " & Code_Of (Status));
       end;
       S.Close (Store);
 

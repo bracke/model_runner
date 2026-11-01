@@ -611,15 +611,10 @@ begin
    --  So is a setting the task or the project named that its model takes
    --  no control for, or that makes no sampling: refused before the task
    --  is moved, not found at its first call.
-   declare
-      Tried : Inference_Policy.Effective;
-   begin
-      Inference_Policy.Resolve
-        (Item, Frozen.Inference, Inference_Policy.Task_Work, (others => <>), Model.Controls, Tried, Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
-   end;
+   Inference_Policy.Check_Every_Call (Item, Frozen.Inference, Model.Controls, Status);
+   if E.Is_Error (Status) then
+      return;
+   end if;
 
    --  An agent of its own, holding the task, in a new generation, with
    --  what its task's kind and its role allow.
@@ -922,7 +917,7 @@ begin
          Host.Calls.Append (To_String (Result.Invocation_Id));
          Host.Opened.Append (Ada.Calendar.Clock);
          Host.Policies.Append (Frozen.Inference);
-         Host.Retried.Append (False);
+         Host.Doing.Append (Inference_Policy.Task_Work);
 
          --  Ended elsewhere meanwhile -- cancelled from another process
          --  -- what runs for it is stopped.
