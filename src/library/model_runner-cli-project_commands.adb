@@ -586,6 +586,7 @@ package body Model_Runner.CLI.Project_Commands is
 
       --  Replies whose thought reached its budget and was closed for them.
       Thoughts_Closed : Natural := 0;
+      Thoughts_Looped : Natural := 0;
 
       --  The tokens the work generated, its helpers' among them, and the
       --  most its conversation came to hold: what it cost the model.
@@ -820,6 +821,7 @@ package body Model_Runner.CLI.Project_Commands is
          All_Spent := All_Spent + Outcome.Generated_Tokens + Outcome.Delegated_Tokens;
          Spent_All := All_Spent;
          Runner.Thoughts_Closed := Runner.Thoughts_Closed + Outcome.Thoughts_Closed;
+         Runner.Thoughts_Looped := Runner.Thoughts_Looped + Outcome.Thoughts_Looped;
          Tokens := Tokens + Outcome.Generated_Tokens;
          if Length (Outcome.Work_Record) > 0 then
             Recorded := Outcome.Work_Record;
@@ -1293,6 +1295,8 @@ package body Model_Runner.CLI.Project_Commands is
       & (if Self.Observed = 0 then "" else ", observations kept:" & Natural'Image (Self.Observed))
       & (if Self.Thoughts_Closed = 0 then ""
          else ", thoughts closed at their budget:" & Natural'Image (Self.Thoughts_Closed))
+      & (if Self.Thoughts_Looped = 0 then ""
+         else ", thoughts closed going round:" & Natural'Image (Self.Thoughts_Looped))
       & "; tokens generated:" & Natural'Image (Self.Generated)
       & ", context at most:" & Natural'Image (Self.Context_Most));
 

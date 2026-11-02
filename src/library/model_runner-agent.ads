@@ -143,6 +143,10 @@ package Model_Runner.Agent is
       --  for them.
       Thoughts_Closed : Natural := 0;
 
+      --  How many replies' thoughts came back to the same line too often
+      --  (Output.Repetition) and were closed for them there.
+      Thoughts_Looped : Natural := 0;
+
       --  The diagnostic behind a failing reason, or Success.
       Error : Model_Runner.Errors.Error_Info;
 

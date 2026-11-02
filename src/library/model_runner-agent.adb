@@ -12,6 +12,7 @@ with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Output.Harmony;
+with Model_Runner.Output.Repetition;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Grammar.Rooms;
@@ -250,6 +251,9 @@ package body Model_Runner.Agent is
          then Tidied'Unchecked_Access
          elsif Hide_Reasoning then Unthought'Unchecked_Access
          else Sink);
+      --  And watched on the way for a thought that goes round.
+      Rounds  : aliased Model_Runner.Output.Repetition.Watch (Shown);
+      Watched : constant Model_Runner.Output.Sink_Reference := Rounds'Unchecked_Access;
 
       --  Tokens the run has spent, its own and its children's.
       function Spent return Natural is (Result.Generated_Tokens + Result.Delegated_Tokens);
@@ -709,7 +713,11 @@ package body Model_Runner.Agent is
                  --  no grammar -- calls the grammar would have shaped came
                  --  out unreadable.
                  and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Harmony_Call);
-               Closing  : String renames Thought_Closing;
+               --  A harmony analysis is closed as the model ends one, the
+               --  next message begun for it to name its channel.
+               Closing  : constant String :=
+                 (if Model_Runner.Tools."=" (Read_Syntax, Model_Runner.Tools.Harmony_Call)
+                  then "<|end|><|start|>assistant" else Thought_Closing);
 
                --  A script that keeps to the limit, given as a model gives:
                --  as much of its reply as the generation may take, four
@@ -745,8 +753,35 @@ package body Model_Runner.Agent is
                         return;
                      end;
                   end if;
+                  --  A line at a time, as a model writes it, so a thought that
+                  --  goes round is stopped where a model's would be.
+                  declare
+                     Upto : Natural := Taken'First - 1;
+                  begin
+                     Shown_Closed := False;
+                     while Upto < Taken'Last and then not Shown_Closed loop
+                        declare
+                           Ends : constant Natural :=
+                             Ada.Strings.Fixed.Index (Taken (Upto + 1 .. Taken'Last), [ASCII.LF]);
+                           Last : constant Natural := (if Ends = 0 then Taken'Last else Ends);
+                        begin
+                           Model_Runner.Output.Emit (Watched, Taken (Upto + 1 .. Last), Shown_Closed);
+                           Upto := Last;
+                        end;
+                     end loop;
+                     if Rounds.Looped then
+                        Script_Rest := U.To_Unbounded_String (Rest (Upto + 1 .. Rest'Last));
+                        Last_Result :=
+                          (Reason           => Gen.Output_Closed,
+                           Generated_Tokens => Natural'Max (1, (Upto - Taken'First + 4) / 4),
+                           Text             => new Model_Runner.Bytes.Byte_Array'
+                                                 (Model_Runner.Bytes.To_Bytes (Taken (Taken'First .. Upto))),
+                           Text_Length      => Upto - Taken'First + 1,
+                           others           => <>);
+                        return;
+                     end if;
+                  end;
                   Script_Rest := U.To_Unbounded_String (Rest (Rest'First + Taken'Length .. Rest'Last));
-                  Model_Runner.Output.Emit (Shown, Taken, Shown_Closed);
                   Last_Result :=
                     (Reason           => (if Script.Out_Of_Time then Gen.Time_Limit
                                           elsif Script.Context_Filled then Gen.Context_Full
@@ -789,6 +824,11 @@ package body Model_Runner.Agent is
                --  opened, for the answer-alone filter to start inside it.
                Unthought.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all));
+               Rounds.Start_Reply
+                 (Inside => Thought_Open ("", Rendered.all)
+                            or else Ada.Strings.Fixed.Index
+                                      (Rendered.all (Natural'Max (Rendered'First, Rendered'Last - 40) .. Rendered'Last),
+                                       "<|channel|>analysis", Ada.Strings.Backward) > 0);
                if Script /= null then
                   if U.Length (Script_Again) > 0 then
                      Script_Rest := Script_Again;
@@ -806,7 +846,7 @@ package body Model_Runner.Agent is
                      Item     => Request,
                      Stop_Set => Stop_Set,
                      Rules    => Rules,
-                     Sink     => Shown,
+                     Sink     => Watched,
                      Observer => null,
                      Time     => Time,
                      Seeds    => Seeds,
@@ -821,15 +861,26 @@ package body Model_Runner.Agent is
                --  a call when the budget came, that is asked for after too,
                --  as it stands: asked for the budget's tokens alone, Mellum
                --  closed its thought, began a call and was cut there.
-               if Budgeted and then Last_Result.Reason = Gen.Maximum_Tokens
-                 and then Last_Result.Generated_Tokens < Full
+               --  Stopped where its thought went round, the same: the thought
+               --  closed where it came back to a line for the fourth time, and
+               --  the rest asked for -- gpt-oss went over one wrong idea for
+               --  seventeen minutes, and gave the task up after.
+               if (Budgeted and then Last_Result.Reason = Gen.Maximum_Tokens
+                   and then Last_Result.Generated_Tokens < Full)
+                 or else (Rounds.Looped and then Last_Result.Reason = Gen.Output_Closed)
                then
-                  Was_Open := Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all);
+                  Was_Open := Rounds.Looped or else Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all);
+                  if Rounds.Looped then
+                     Result.Thoughts_Looped := Result.Thoughts_Looped + 1;
+                     Rounds.Start_Reply (Inside => False);
+                  end if;
                   Thought_Before := U.To_Unbounded_String
                     (Gen.Generated_Text (Last_Result) & (if Was_Open then Closing else ""));
                   Thought_Tokens := Last_Result.Generated_Tokens;
-                  if Was_Open then
+                  if Was_Open and then Last_Result.Reason = Gen.Maximum_Tokens then
                      Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
+                  end if;
+                  if Was_Open then
                      --  Shown closed too, as the prompt has it: what the reply
                      --  goes on with is no longer thought, and a call it
                      --  opens is held back as a call -- shown as thought, a
@@ -880,7 +931,7 @@ package body Model_Runner.Agent is
                            --  after a closing it starts one again, but in the
                            --  middle of a call begun it would ask for another.
                            Rules    => (if Was_Open then Rules else null),
-                           Sink     => Shown,
+                           Sink     => Watched,
                            Observer => null,
                            Time     => Time,
                            Seeds    => Seeds,

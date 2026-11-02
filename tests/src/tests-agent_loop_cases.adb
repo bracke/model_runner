@@ -1,5 +1,6 @@
 with Interfaces;
 with Model_Runner.Output;
+with Model_Runner.Output.Repetition;
 with AUnit.Test_Cases;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
@@ -565,6 +566,55 @@ package body Tests.Agent_Loop_Cases is
                  & Ended.Thoughts_Closed'Image & Seen.Results.Length'Image);
          Assert (Has (Ada.Strings.Unbounded.To_String (Screen.Text), Ag.Thought_Closing),
                  "a thought closed for the reply was not shown closed");
+      end;
+
+      --  A thought that comes back to one line a fourth time is closed
+      --  there, shown closed, and the call it goes on to is made.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Screen  : aliased Collecting;
+         Again   : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
+      begin
+         Replies.Replies.Append ("<think>" & ASCII.LF & "Let us see." & ASCII.LF & Again & Again & Again & Again
+                                 & Write ("looped.txt", "y"));
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Reply => 512, Shown => Screen'Unchecked_Access);
+         Assert (Ended.Thoughts_Looped = 1 and then Ended.Thoughts_Closed = 0
+                 and then Ada.Directories.Exists (Dir & "/looped.txt"),
+                 "a thought going round was not closed, or the call after it not made:"
+                 & Ended.Thoughts_Looped'Image & Ended.Thoughts_Closed'Image);
+         Assert (Has (Ada.Strings.Unbounded.To_String (Screen.Text), Ag.Thought_Closing),
+                 "a thought closed going round was not shown closed");
+      end;
+
+      --  What is watched: thought alone -- a think block, or harmony's
+      --  analysis -- whole lines of some length, within one thought.
+      declare
+         package Rp renames Model_Runner.Output.Repetition;
+         Long : constant String := "the same line, long enough to count" & ASCII.LF;
+
+         function Looped (Text : String; Inside : Boolean := False) return Boolean is
+            Watch  : Rp.Watch (null);
+            Closed : Boolean;
+         begin
+            Watch.Start_Reply (Inside);
+            Watch.Write (Text, Closed);
+            return Watch.Looped and then Closed;
+         end Looped;
+      begin
+         Assert (Looped ("<think>" & ASCII.LF & Long & Long & Long & Long)
+                 and then Looped (Long & Long & Long & Long, Inside => True)
+                 and then Looped ("<|channel|>analysis<|message|>" & ASCII.LF & Long & Long & Long & Long)
+                 and then not Looped ("<think>" & ASCII.LF & Long & Long & Long)
+                 and then not Looped (Long & Long & Long & Long)
+                 and then not Looped ("<think>" & ASCII.LF & Long & Long & "</think>" & ASCII.LF & Long & Long)
+                 and then not Looped ("<|channel|>analysis<|message|>x<|end|><|start|>assistant<|channel|>final"
+                                      & "<|message|>" & ASCII.LF & Long & Long & Long & Long)
+                 and then not Looped ("<think>" & ASCII.LF & "end if;" & ASCII.LF & "end if;" & ASCII.LF
+                                      & "end if;" & ASCII.LF & "end if;" & ASCII.LF),
+                 "a thought going round was not told from one that does not, or from what is not thought");
       end;
 
       --  A gate that halts the run at a reply's second call: the first
@@ -1293,6 +1343,66 @@ package body Tests.Agent_Loop_Cases is
          Assert (Ended.Reason = Ag.Answered,
                  "the run did not end on the final channel's answer: "
                  & Ended.Reason'Image);
+         Conv.Close (Messages);
+         Model_Runner.Tools.Close (Offered);
+         L.Close (Session);
+      end;
+
+      --  A harmony analysis that goes round is ended there as the model
+      --  ends one, and the call it goes on to is read and made.
+      declare
+         Under    : Harness (Harmony);
+         Session  : L.Session;
+         Messages : Conv.History;
+         Offered  : Model_Runner.Tools.Definitions;
+         Runner   : Model_Runner.Tools.Builtin.Instance;
+         Stop     : Model_Runner.Stops.Set;
+         Request  : Model_Runner.Generation.Request;
+         Clock    : aliased Model_Runner.Clocks.System_Clock;
+         Seeds    : aliased Model_Runner.Entropy.Host_Source;
+         Status   : E.Error_Info;
+         Replies  : aliased Script;
+         Seen     : aliased Recorder;
+         Ended    : Ag.Outcome;
+         Again    : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
+         L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+         L.Open (Session, Under.Ready, Status => Status);
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "work", Status);
+         Model_Runner.Tools.Read
+           (Offered,
+            Model_Runner.Tools.Registry.Offered
+              ([Model_Runner.Tools.Registry.Write_Files => True, others => False]),
+            Status);
+         Model_Runner.Stops.Open (Stop);
+         Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+         Request.Max_Tokens := 256;
+         Replies.Replies.Append
+           ("<|channel|>analysis<|message|>Think." & ASCII.LF & Again & Again & Again & Again
+            & "<|channel|>commentary to=functions.write_file <|constrain|>json"
+            & "<|message|>{""path"": ""round.txt"", ""content"": ""one""}");
+         Replies.Replies.Append ("<|channel|>final<|message|>written");
+         Replies.Keeps := True;
+         Ag.Run
+           (Source     => Under.Ready,
+            Session    => Session,
+            Messages   => Messages,
+            Offered    => Offered,
+            Executor   => Runner,
+            Generation => Request,
+            Stop_Set   => Stop,
+            Sink       => null,
+            Time       => Clock'Unchecked_Access,
+            Seeds      => Seeds'Unchecked_Access,
+            Max_Steps  => 4,
+            Watch      => Seen'Unchecked_Access,
+            Script     => Replies'Unchecked_Access,
+            Result     => Ended);
+         Assert (Ended.Thoughts_Looped = 1 and then Ada.Directories.Exists (Dir & "/round.txt"),
+                 "a harmony analysis going round was not ended, or the call after it not made:"
+                 & Ended.Thoughts_Looped'Image & " " & Ended.Reason'Image);
          Conv.Close (Messages);
          Model_Runner.Tools.Close (Offered);
          L.Close (Session);
