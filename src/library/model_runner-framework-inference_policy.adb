@@ -558,11 +558,13 @@ package body Model_Runner.Framework.Inference_Policy is
          Mode : constant String := Records.Get (Config, Prefix & "mode");
       begin
          Result.Mode := (if Mode = "adaptive" then Adaptive elsif Mode = "profile" then Profile_Mode else Fixed);
+         Result.Mode_Said := Mode /= "";
       end;
       Tasks.Definition (Item, Task_Id, Defined, Read);
       if E.Is_Error (Read) then
          return Result;
       end if;
+      Result.Kind := To_Unbounded_String (Records.Get (Defined, "kind"));
       declare
          Named : Unbounded_String;
       begin
@@ -583,6 +585,18 @@ package body Model_Runner.Framework.Inference_Policy is
       end;
       return Result;
    end Select_For;
+
+   ------------------
+   -- Measured_For --
+   ------------------
+
+   function Measured_For (Chosen : Selection; Family : String) return Selection
+   is (if not Chosen.Mode_Said and then Chosen.Mode = Fixed and then not Chosen.Task_Named
+         and then Chosen.Profile = Null_Unbounded_String
+         and then To_String (Chosen.Kind) = "implementation"
+         and then Family in "qwen3" | "qwen3moe" | "qwen35" | "qwen35moe" | "mellum"
+       then (Chosen with delta Mode => Adaptive, Profile => To_Unbounded_String ("coding"))
+       else Chosen);
 
    ---------------
    -- For_Child --
@@ -940,7 +954,7 @@ package body Model_Runner.Framework.Inference_Policy is
    is
       Asked : Request;
    begin
-      Merge (Item, Chosen, Doing, Asked, Status);
+      Merge (Item, Measured_For (Chosen, To_String (Invoked.Family)), Doing, Asked, Status);
       if E.Is_Error (Status) then
          Result := (others => <>);
          return;

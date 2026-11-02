@@ -1011,7 +1011,8 @@ begin
                       Thinking     => Item.Thinking,
                       Effort       => Item.Effort,
                       Output_Room  => Positive'Max (1, Request.Max_Tokens),
-                      Output_Given => Item.Max_Tokens_Set),
+                      Output_Given => Item.Max_Tokens_Set,
+                      others       => <>),
                      Model_Runner.Templates.Controls_Of (L.Template (Prepared).all), Fitted, Condition);
                end if;
                if E.Is_Error (Condition) then

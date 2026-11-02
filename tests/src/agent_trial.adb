@@ -381,7 +381,10 @@ package body Agent_Trial is
    Inference_Mode : Unbounded_String;
 
    function Inference_Words return String is
-     (if Inference_Mode = Null_Unbounded_String or else To_String (Inference_Mode) = "fixed" then ""
+     (if Inference_Mode = Null_Unbounded_String then ""
+      --  Named: a family whose measured default is adaptive (qwen3, qwen35,
+      --  mellum) runs fixed only where it is said.
+      elsif To_String (Inference_Mode) = "fixed" then " scalar.inference.mode=fixed"
       elsif To_String (Inference_Mode) in "adaptive" | "reasoning" | "temperature"
       then " scalar.inference.mode=adaptive scalar.inference.task.implementation=coding"
            & " scalar.inference.task.analysis=analysis"

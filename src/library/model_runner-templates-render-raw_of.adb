@@ -221,8 +221,13 @@ begin
       when Term_Raise =>
          --  The template's author refusing this conversation, in
          --  their words. Not a construct this engine lacks: the
-         --  message is the diagnostic.
-         Refuse (Value.Offset, Value.Length, E.Template_Refused);
+         --  message is the diagnostic -- worked out where the template
+         --  builds it (Index_At, the operand kept for it).
+         if Value.Index_At /= 0 then
+            Refuse_Saying (Value_Of (Item.Operands.all (Value.Index_At)));
+         else
+            Refuse (Value.Offset, Value.Length, E.Template_Refused);
+         end if;
          return "";
 
       when Term_Group =>

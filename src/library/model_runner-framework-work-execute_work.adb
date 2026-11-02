@@ -869,7 +869,11 @@ begin
                      declare
                         Asked : Inference_Policy.Request;
                      begin
-                        Inference_Policy.Merge (Item, Frozen.Inference, Inference_Policy.Task_Work, Asked, Status);
+                        --  Its family's measured default too: the runner apart
+                        --  fits what is written, and knows no family.
+                        Inference_Policy.Merge
+                          (Item, Inference_Policy.Measured_For (Frozen.Inference, To_String (Model.Family)),
+                           Inference_Policy.Task_Work, Asked, Status);
                         if E.Is_Ok (Status) then
                            Files.Write_Text
                              (Inference_Policy.Policy_Beside (Prompt), Inference_Policy.Image_Of (Asked), Status);

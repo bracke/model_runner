@@ -183,6 +183,9 @@ is
    Refused     : Boolean := False;
    Refused_At  : Natural := 0;
    Refused_Len : Natural := 0;
+   --  A refusal's words worked out as it was reached, where the template
+   --  built them rather than wrote them.
+   Refused_Said : Ada.Strings.Unbounded.Unbounded_String;
 
    --  The bound a refusal names where it is a bound and not a
    --  construct: the elements a filter walks.
@@ -202,6 +205,16 @@ is
          Refused_Why := Why;
       end if;
    end Refuse;
+
+   procedure Refuse_Saying (Words : String) is
+   begin
+      if not Refused then
+         Refused := True;
+         Refused_Len := 0;
+         Refused_Said := Ada.Strings.Unbounded.To_Unbounded_String (Words);
+         Refused_Why := E.Template_Refused;
+      end if;
+   end Refuse_Saying;
 
    --  Where each open capture began in the output, so that endset can
    --  take back what was written since.
@@ -4256,6 +4269,9 @@ begin
                Item.Source.all
                  (Refused_At + 1 .. Refused_At + Refused_Len),
                E.Param_Identifier);
+         elsif Ada.Strings.Unbounded.Length (Refused_Said) > 0 then
+            E.Add_Text
+              (Status, "construct", Ada.Strings.Unbounded.To_String (Refused_Said), E.Param_Identifier);
          end if;
          return;
       end if;

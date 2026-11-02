@@ -601,6 +601,30 @@ begin
                      else Term_Raise);
                   Result.Offset := Argument.Offset;
                   Result.Length := Argument.Length;
+               elsif Word = "raise_exception" then
+                  --  A message worked out -- 'Unexpected reasoning effort '
+                  --  ~ reasoning_effort ~ '...', as Swift-1.5-Qwen3.8's
+                  --  template writes it -- kept as an operand and said
+                  --  as the refusal when reached: refused as a construct,
+                  --  the template's own words were lost.
+                  declare
+                     Held  : constant String := Text (Tail + 1 .. Shut - 1);
+                     At_It : Natural := Held'First;
+                     Said  : Operand;
+                     Read  : Boolean;
+                     Kept  : Natural := 0;
+                  begin
+                     Read_Operand (Held, At_It, Said, Read);
+                     if Read and then Skip_Spaces (Held, At_It) > Held'Last then
+                        Keep (Said, Kept);
+                     end if;
+                     if Kept = 0 then
+                        Result := Refused (Text (First .. Shut));
+                     else
+                        Result.Kind := Term_Raise;
+                        Result.Index_At := Kept;
+                     end if;
+                  end;
                else
                   Result := Refused (Text (First .. Shut));
                end if;

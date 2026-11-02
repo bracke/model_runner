@@ -53,6 +53,11 @@ package Model_Runner.Framework.Context is
       --  The reasoning controls its template reads, where the model is
       --  loaded to say; not known for one run as a process of its own.
       Controls : Model_Runner.Templates.Reasoning_Controls;
+
+      --  Its architecture, as general.architecture names it, where the
+      --  model is loaded to say; "" otherwise. A family measured faster
+      --  adaptive is set so by it (Inference_Policy.Measured_For).
+      Family : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  How much an item matters, most first.

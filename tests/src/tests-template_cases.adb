@@ -1678,6 +1678,26 @@ package body Tests.Template_Cases is
                  and then Tmpl.Effort_Word (Listed, Tmpl.Effort_High) = "xhigh",
                  "a template listing xhigh, medium and low was given a level it does not take: "
                  & Level (Tmpl.Thinking_Unstated, Tmpl.Effort_High));
+         --  And its refusal, a message it works out, is said in its words.
+         declare
+            Built : Tmpl.Compiled;
+            Room  : String (1 .. 256);
+            Used  : Natural;
+            St    : E.Error_Info;
+         begin
+            Tmpl.Compile
+              (Built, "{%- set e = reasoning_effort|default('xhigh') %}"
+                      & "{%- if e not in ('xhigh', 'low') %}"
+                      & "{{ raise_exception('Unexpected effort ' ~ e ~ '. Use xhigh or low.') }}{% endif %}{{ e }}",
+               Status => Status);
+            Assert (E.Is_Ok (Status), "a refusal worked out did not compile: " & E.Error_Code'Image (Status.Code));
+            Tmpl.Render (Built, Says, "", "", True, Room, Used, St, Effort => Tmpl.Effort_Medium);
+            Assert (E."=" (St.Code, E.Template_Refused)
+                    and then E.Text_Of (St, "construct") = "Unexpected effort medium. Use xhigh or low.",
+                    "a refusal worked out was not said in its words: " & E.Error_Code'Image (St.Code) & " "
+                    & E.Text_Of (St, "construct"));
+            Tmpl.Close (Built);
+         end;
          Conv.Close (Says);
          Tmpl.Close (Listed);
       end;

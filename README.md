@@ -333,7 +333,10 @@ How each model call `/work` makes is set -- its temperature and probability
 filters, whether and how much it reasons, how long its reply may be -- is the
 project's inference policy. `scalar inference.mode` is `fixed` unless said
 otherwise: every call is set as the session is, its command line first,
-then the model file's own settings. `profile` sets every call by one
+then the model file's own settings -- but for an implementation task on a
+model of the qwen3, qwen35, mellum or Qwen mixture (qwen3moe, qwen35moe)
+architecture, which is adaptive unless
+a mode is named (below). `profile` sets every call by one
 profile, `scalar inference.default`; `adaptive` sets a task's calls by its
 kind (`scalar inference.task.KIND`, which `standard-development` maps:
 implementation to coding, bugfix to debugging, test to testing, analysis to
@@ -375,7 +378,7 @@ process of its own is handed the policy beside its prompt (`run
 --policy-file`) to fit to its own template. `run --reasoning-effort
 low|medium|high` names a level for a run outside `/work`.
 
-**What was measured, and why fixed stays the default.** On 2026-11-01,
+**What was measured, and where fixed stays the default.** On 2026-11-01,
 `tests agent-trial` ran the edit, find and delegate tasks under each arm on
 Mellum2.1-12B-A2.5B-Thinking (three rounds) and qwen3-8b (two); both
 templates take only whether to think, so a reasoning level was measured as
@@ -425,6 +428,20 @@ which closing seldom mends. With it, and a `summary:` written ahead of the
 report giving way to the report's own (gpt-oss's finds were refused on
 it), the last trial completed 23 of 27; Mellum after it 18 of 18, its
 medians at or below its earlier runs.
+
+Across the 2026-11-01/02 trials, paired by alternated round, adaptive's
+edit was the faster in 10 pairs of 14 on qwen3-8b, Mellum and
+Swift-1.5-Qwen3.8-27B (medians on 2026-11-02: Mellum 188 -> 127 s, Swift
+379 -> 317 s), and level on finding (6 of 11) and handing work on (6 of
+11); gpt-oss's edits were slower adaptive, its levels reaching its
+template. So an implementation task on those three families' models is
+adaptive where no mode is named, and so are the two Qwen mixture families
+(qwen3moe, qwen35moe), unmeasured -- coding's temperature 0.2 and medium
+effort, debugging for a mending, reporting for the report
+(`Inference_Policy.Measured_For`); naming `scalar inference.mode = fixed`
+keeps it fixed, and every other family and kind of task is fixed as
+before. A run apart (`--policy-file`) is set the same way: the session's
+model's family goes into the file written for it.
 
 A project that lists its components (`set components = parser, lexer`) has
 tasks name one of them or none. A profile's check may carry options after

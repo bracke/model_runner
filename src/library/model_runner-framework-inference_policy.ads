@@ -194,6 +194,11 @@ package Model_Runner.Framework.Inference_Policy is
       Task_Named     : Boolean := False;
       Task_Settings  : Overrides;
       Revision       : Natural := 0;
+      --  Whether the configuration named a mode: none named, a family's
+      --  measured default may stand in for fixed (Measured_For).
+      Mode_Said      : Boolean := False;
+      --  The task's kind.
+      Kind           : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  The selection for a task's run.
@@ -202,6 +207,25 @@ package Model_Runner.Framework.Inference_Policy is
    --  @param Task_Id The task.
    --  @return Its selection; fixed where the configuration cannot be read.
    function Select_For (Item : Stores.Store; Task_Id : String) return Selection;
+
+   --  The model families whose implementation work is adaptive where the
+   --  configuration names no mode, by general.architecture: qwen3
+   --  (qwen3-8b), qwen35 (Swift-1.5-Qwen3.8-27B) and mellum, measured;
+   --  and the mixtures of the two Qwen families, qwen3moe and qwen35moe,
+   --  taken with them unmeasured, at the user's word. Alternated
+   --  rounds of the edit trial, fixed against adaptive, 2026-11-01/02:
+   --  adaptive's edit was the faster in 10 pairs of 14 for these three --
+   --  coding's temperature 0.2 and medium effort, debugging's high for a
+   --  mending -- and level on finding and handing work on. Not gpt-oss,
+   --  whose levels reach its template and made its edits slower.
+   --
+   --  @param Chosen The run's selection.
+   --  @param Family The model's architecture, as general.architecture
+   --    names it; "" for one not known.
+   --  @return Adaptive, the coding profile its work's, where no mode was
+   --    named, the task is an implementation naming no profile, and the
+   --    family is one of these; else Chosen.
+   function Measured_For (Chosen : Selection; Family : String) return Selection;
 
    --  The selection for a helper of an agent: its role's profile where the
    --  project is adaptive and maps it; else, in any mode, for a helper that
@@ -291,6 +315,9 @@ package Model_Runner.Framework.Inference_Policy is
       Effort       : Reasoning_Effort := Model_Runner.Templates.Effort_Unstated;
       Output_Room  : Positive := 1024;
       Output_Given : Boolean := False;
+      --  The model's architecture, as general.architecture names it; ""
+      --  where not known (Measured_For).
+      Family       : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  What one call is set to, and why.

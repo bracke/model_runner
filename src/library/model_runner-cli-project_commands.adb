@@ -749,7 +749,8 @@ package body Model_Runner.CLI.Project_Commands is
                 Thinking     => Self.Item.Thinking,
                 Effort       => Self.Item.Effort,
                 Output_Room  => Positive'Max (1, Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all))),
-                Output_Given => Self.Item.Max_Tokens_Set),
+                Output_Given => Self.Item.Max_Tokens_Set,
+                Family       => To_Unbounded_String (L.Architecture_Name (L.Config (Self.Prepared.all).Kind))),
                Model_Runner.Templates.Controls_Of (L.Template (Self.Prepared.all).all),
                Policy, Status);
             exit when E.Is_Error (Status);
@@ -1834,7 +1835,8 @@ package body Model_Runner.CLI.Project_Commands is
          Profile_Reserve => 0,
          --  This session's model runs the work: its answer's room is kept.
          Session_Reserve => Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all)),
-         Controls        => Model_Runner.Templates.Controls_Of (L.Template (Self.Prepared.all).all));
+         Controls        => Model_Runner.Templates.Controls_Of (L.Template (Self.Prepared.all).all),
+         Family          => To_Unbounded_String (L.Architecture_Name (L.Config (Self.Prepared.all).Kind)));
    end Profile;
 
    package Rs renames Model_Runner.Framework.Results;

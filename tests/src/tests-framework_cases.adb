@@ -19690,6 +19690,43 @@ package body Tests.Framework_Cases is
               and then To_String (Probe_Recovery.Asked.Profile) = "exploration",
               "a task's own profile did not stand: " & Ip.Line_Of (Probe_Root));
 
+      --  A family measured faster adaptive at implementation work -- qwen3,
+      --  qwen35, mellum -- is adaptive there where no mode is named: its
+      --  work coding's, its mending debugging's. Not another family, not
+      --  a mode named, not other work, not a profile already chosen.
+      declare
+         Unsaid : constant Ip.Selection := (Kind => To_Unbounded_String ("implementation"), others => <>);
+         Got    : Ip.Effective;
+         Read   : E.Error_Info;
+      begin
+         Assert (Ip.Measured_For (Unsaid, "mellum").Mode = Ip.Adaptive
+                 and then To_String (Ip.Measured_For (Unsaid, "qwen35").Profile) = "coding"
+                 and then Ip.Measured_For (Unsaid, "qwen3").Mode = Ip.Adaptive
+                 and then Ip.Measured_For (Unsaid, "qwen3moe").Mode = Ip.Adaptive
+                 and then Ip.Measured_For (Unsaid, "qwen35moe").Mode = Ip.Adaptive
+                 and then Ip.Measured_For (Unsaid, "gpt-oss").Mode = Ip.Fixed
+                 and then Ip.Measured_For (Unsaid, "").Mode = Ip.Fixed
+                 and then Ip.Measured_For ((Unsaid with delta Mode_Said => True), "mellum").Mode = Ip.Fixed
+                 and then Ip.Measured_For ((Unsaid with delta Kind => To_Unbounded_String ("analysis")), "mellum")
+                            .Mode = Ip.Fixed
+                 and then To_String (Ip.Measured_For ((Unsaid with delta Profile => To_Unbounded_String ("documents")),
+                                                      "mellum").Profile) = "documents",
+                 "a family's measured default reached what it was not measured for");
+         Ip.Resolve (Store, Unsaid, Ip.Task_Work,
+                     (Plain_Session with delta Family => To_Unbounded_String ("mellum")), Thinking_Only, Got, Read);
+         Assert (E.Is_Ok (Read) and then To_String (Got.Asked.Profile) = "coding"
+                 and then Got.Sampling.Temperature = 0.2,
+                 "a measured family's implementation work was not set as coding: " & Ip.Line_Of (Got));
+         Ip.Resolve (Store, Unsaid, Ip.Failure_Recovery,
+                     (Plain_Session with delta Family => To_Unbounded_String ("qwen3")), Thinking_Only, Got, Read);
+         Assert (E.Is_Ok (Read) and then To_String (Got.Asked.Profile) = "debugging",
+                 "a measured family's mending was not set as debugging: " & Ip.Line_Of (Got));
+         Ip.Resolve (Store, Unsaid, Ip.Task_Work,
+                     (Plain_Session with delta Family => To_Unbounded_String ("gpt-oss")), Thinking_Only, Got, Read);
+         Assert (E.Is_Ok (Read) and then To_String (Got.Asked.Profile) = "",
+                 "another family's implementation work was not left fixed: " & Ip.Line_Of (Got));
+      end;
+
       --  Reconfigured while selected, a profile's fields are read as the
       --  revision the run was selected at said them.
       declare
