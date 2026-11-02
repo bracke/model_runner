@@ -404,6 +404,14 @@ sampling filters measured alike: top-k 40, top-p 0.95, min-p 0.05 took
 611 s over two rounds; min-p alone 1,101, top-p alone 867,
 none 1,078.
 
+gpt-oss-20b, whose template takes levels -- low, medium, high reach it as
+asked -- ran fixed, adaptive and reasoning only three alternated rounds on
+2026-11-02. Medians a run, edit / find / delegate: fixed 86 / 32 / 64 s,
+adaptive 202 / 128 / 55, reasoning only 341 / 71 / 56; fixed completed 9/9,
+adaptive 9/9, reasoning only 7/9 (a find without its summary line, an edit
+that gave up after 1,018 s). Levels make gpt-oss slower and no surer, so
+fixed stays the default there too.
+
 A project that lists its components (`set components = parser, lexer`) has
 tasks name one of them or none. A profile's check may carry options after
 its label -- `tests[timeout=120, retry=1, severity=warning, keep=summary]?:
