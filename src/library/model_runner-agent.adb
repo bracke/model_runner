@@ -402,8 +402,9 @@ package body Model_Runner.Agent is
             Result.Reason := Token_Limit;
          else
             Result.Reason := Generation_Failed;
-            Result.Error := E.Make (E.Conversation_Empty);
-            E.Add_Text (Result.Error, "role", "assistant", E.Param_Identifier);
+            --  Said as what it is: "a assistant message has no content"
+            --  read as a broken conversation, not a model with no answer.
+            Result.Error := E.Make (E.Generation_No_Answer);
          end if;
       end No_Answer;
 

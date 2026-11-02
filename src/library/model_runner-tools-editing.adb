@@ -590,52 +590,53 @@ package body Model_Runner.Tools.Editing is
    -- Declarations_In --
    ---------------------
 
+   type Word_Ref is access constant String;
+   Opening : constant array (1 .. 15) of Word_Ref :=
+     [new String'("procedure "), new String'("function "), new String'("package body "),
+      new String'("package "), new String'("type "), new String'("subtype "),
+      new String'("task body "), new String'("task "), new String'("protected body "),
+      new String'("protected "), new String'("entry "), new String'("def "),
+      new String'("class "), new String'("fn "), new String'("func ")];
+
+   --  The name a line declares, or "".
+   function Declared (Said : String) return String is
+      Bare : constant String :=
+        Ada.Strings.Fixed.Trim (Said, Ada.Strings.Both);
+      Low  : constant String := Ada.Characters.Handling.To_Lower (Bare);
+      Rest : constant String :=
+        (if Low'Length > 11 and then Low (Low'First .. Low'First + 10) = "overriding " then
+            Bare (Bare'First + 11 .. Bare'Last)
+         elsif Low'Length > 4 and then Low (Low'First .. Low'First + 3) = "pub " then
+            Bare (Bare'First + 4 .. Bare'Last)
+         else Bare);
+      Lower : constant String := Ada.Characters.Handling.To_Lower (Rest);
+   begin
+      for Word of Opening loop
+         if Lower'Length > Word'Length
+           and then Lower (Lower'First .. Lower'First + Word'Length - 1) = Word.all
+         then
+            declare
+               From : constant Positive := Rest'First + Word'Length;
+               To   : Natural := From - 1;
+            begin
+               while To < Rest'Last
+                 and then (Ada.Characters.Handling.Is_Alphanumeric (Rest (To + 1))
+                           or else Rest (To + 1) in '_' | '.')
+               loop
+                  To := To + 1;
+               end loop;
+               return Rest (From .. To);
+            end;
+         end if;
+      end loop;
+      return "";
+   end Declared;
+
    function Declarations_In (Text : String; First, Last : Positive) return String is
-      type Word_Ref is access constant String;
-      Opening : constant array (1 .. 15) of Word_Ref :=
-        [new String'("procedure "), new String'("function "), new String'("package body "),
-         new String'("package "), new String'("type "), new String'("subtype "),
-         new String'("task body "), new String'("task "), new String'("protected body "),
-         new String'("protected "), new String'("entry "), new String'("def "),
-         new String'("class "), new String'("fn "), new String'("func ")];
       Found  : U.Unbounded_String;
       Above  : U.Unbounded_String;
       Line   : Positive := 1;
       Start  : Positive := Text'First;
-
-      --  The name a line declares, or "".
-      function Declared (Said : String) return String is
-         Bare : constant String :=
-           Ada.Strings.Fixed.Trim (Said, Ada.Strings.Both);
-         Low  : constant String := Ada.Characters.Handling.To_Lower (Bare);
-         Rest : constant String :=
-           (if Low'Length > 11 and then Low (Low'First .. Low'First + 10) = "overriding " then
-               Bare (Bare'First + 11 .. Bare'Last)
-            elsif Low'Length > 4 and then Low (Low'First .. Low'First + 3) = "pub " then
-               Bare (Bare'First + 4 .. Bare'Last)
-            else Bare);
-         Lower : constant String := Ada.Characters.Handling.To_Lower (Rest);
-      begin
-         for Word of Opening loop
-            if Lower'Length > Word'Length
-              and then Lower (Lower'First .. Lower'First + Word'Length - 1) = Word.all
-            then
-               declare
-                  From : constant Positive := Rest'First + Word'Length;
-                  To   : Natural := From - 1;
-               begin
-                  while To < Rest'Last
-                    and then (Ada.Characters.Handling.Is_Alphanumeric (Rest (To + 1))
-                              or else Rest (To + 1) in '_' | '.')
-                  loop
-                     To := To + 1;
-                  end loop;
-                  return Rest (From .. To);
-               end;
-            end if;
-         end loop;
-         return "";
-      end Declared;
 
       procedure Note (Name : String) is
       begin
@@ -673,6 +674,67 @@ package body Model_Runner.Tools.Editing is
       end;
       return U.To_String (Found);
    end Declarations_In;
+
+   -----------------
+   -- Edited_Span --
+   -----------------
+
+   function Edited_Span (Text : String; First, Last : Positive; Most : Positive := 40) return String is
+      package Line_Lists is new Ada.Containers.Indefinite_Vectors (Positive, String);
+      Lines : Line_Lists.Vector;
+      Start : Positive := Text'First;
+      From  : Natural := 0;
+      Upto  : Natural := 0;
+      Said  : U.Unbounded_String;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            exit when Index > Text'Last and then Start > Text'Last;
+            Lines.Append
+              (if Index - 1 >= Start and then Text (Index - 1) = ASCII.CR
+               then Text (Start .. Index - 2) else Text (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      if Natural (Lines.Length) < Last or else Last - First + 1 > Most then
+         return "";
+      end if;
+      --  The declaration the change is in, and the line that ends it.
+      for Line in reverse 1 .. First loop
+         declare
+            Name : constant String := Declared (Lines (Line));
+            Dot  : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+            Own  : constant String :=
+              Ada.Characters.Handling.To_Lower (if Dot = 0 then Name else Name (Dot + 1 .. Name'Last));
+         begin
+            if Name /= "" then
+               for Ends in Last .. Natural'Min (Natural (Lines.Length), Line + Most - 1) loop
+                  declare
+                     Bare : constant String :=
+                       Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (Lines (Ends), Ada.Strings.Both));
+                  begin
+                     if Bare = "end " & Own & ";" then
+                        From := Line;
+                        Upto := Ends;
+                        exit;
+                     end if;
+                  end;
+               end loop;
+               exit;
+            end if;
+         end;
+      end loop;
+      --  Else the change, three lines each side.
+      if From = 0 then
+         From := Natural'Max (1, First - 3);
+         Upto := Natural'Min (Natural (Lines.Length), Last + 3);
+      end if;
+      for Line in From .. Upto loop
+         U.Append (Said, ASCII.LF & Ada.Strings.Fixed.Trim (Natural'Image (Line), Ada.Strings.Left)
+                   & ": " & Lines (Line));
+      end loop;
+      return U.To_String (Said);
+   end Edited_Span;
 
    --  Where a passage that is not in a file would be: the file's lines from
    --  where a line of it stands, as read_file numbers them, as many as the
@@ -1265,7 +1327,11 @@ package body Model_Runner.Tools.Editing is
                                          & Ada.Strings.Fixed.Trim (Natural'Image (Lead), Ada.Strings.Left)
                                          & " spaces), each kept where it stood from the first"
                         else "")
-                     & "; revision now " & Revision (After) & Kept_Note (Put)),
+                     & "; revision now " & Revision (After) & Kept_Note (Put)
+                     & (declare
+                          Span : constant String := Edited_Span (After, From, Upto);
+                        begin
+                          (if Span = "" then "" else "; it now reads:" & Span))),
                   Changed => True,
                   Durable => Put.Durable,
                   Permissions_Kept => Put.Permissions_Kept,

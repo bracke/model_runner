@@ -335,6 +335,10 @@ package Model_Runner.Errors is
       --  marker is a prompt the model would read wrongly.
       Generation_Picture_Count_Mismatch,
 
+      --  The model gave no answer: its replies ended in their reasoning,
+      --  with no call and no answer, and the notes to go on were spent.
+      Generation_No_Answer,
+
       --  Sampling.
       Sampling_Invalid_Configuration,
       Sampling_Vocabulary_Mismatch,

@@ -254,6 +254,7 @@ ordinal is never reused, not because they might appear.
 | `MR-GEN-0007` | `error.generation.batch_too_large` | recovery_none | 2 | reserved |
 | `MR-GEN-0008` | `error.generation.empty_prompt` | recovery_none | 2 | raised |
 | `MR-GEN-0009` | `error.generation.picture_count_mismatch` | recovery_user_correctable | 8 | raised |
+| `MR-GEN-0010` | `error.generation.no_answer` | recovery_none | 8 | raised |
 
 ## SAMPLE
 

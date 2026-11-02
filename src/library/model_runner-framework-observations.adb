@@ -556,8 +556,12 @@ package body Model_Runner.Framework.Observations is
             if not Identifiers.Is_Valid (Given)
               or else not (Starts (Given, "RES-") or else Starts (Given, "VER-"))
             then
+               --  Said with where such names come from, and that none may
+               --  be given: qwen3-8b put the source line as evidence, was
+               --  told only what evidence is, and sent it again four times.
                Refuse (Status, "evidence", Given,
-                       "evidence is a result (RES-) or a verification (VER-) the project keeps");
+                       "evidence names a result (RES-...) or a verification (VER-...) the project keeps --"
+                       & " run_checks says the one it made -- not text; where there is none, leave evidence out");
                return;
             elsif not Stores.Exists (Item, (if Starts (Given, "RES-") then Results_Area else Verification_Area),
                                      Given)

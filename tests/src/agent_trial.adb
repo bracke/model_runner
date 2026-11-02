@@ -821,6 +821,8 @@ package body Agent_Trial is
                            (Local (Began), Ada.Strings.Maps.To_Mapping (" :", "_-"));
                      Kept_In : Unbounded_String := To_Unbounded_String (Root);
                      Stalls  : Natural := 0;
+                     --  Whether a stall -- every thread asleep -- was said.
+                     Said_Stall : Boolean := False;
                      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
                      Last    : Ada.Streams.Stream_Element_Offset;
 
@@ -846,6 +848,11 @@ package body Agent_Trial is
                         Out_File : Ada.Text_IO.File_Type;
                         Search   : Search_Type;
                         Item     : Directory_Entry_Type;
+                        Dump     : constant String :=
+                          Stall_Name
+                          & (if Stalls = 0 then ""
+                             else "-" & Ada.Strings.Fixed.Trim (Natural'Image (Stalls + 1), Ada.Strings.Both))
+                          & ".txt";
 
                         function First_Line (Path : String) return String is
                            F : Ada.Text_IO.File_Type;
@@ -863,22 +870,12 @@ package body Agent_Trial is
                         end First_Line;
                      begin
                         Stalls := Stalls + 1;
-                        if Stalls = 1 then
-                           Append (Display_Faults,
-                                   "  display: the session showed nothing for five minutes;"
-                                   & " its threads' waits are in " & Stall_Name & ".txt" & ASCII.LF);
-                        end if;
                         if not Exists (Tasks_At) then
                            return;
                         end if;
                         --  Beside the project, not in it: written in it, it was a
                         --  file the work had changed, and the task failed for it.
-                        Ada.Text_IO.Create
-                          (Out_File, Ada.Text_IO.Out_File,
-                           Stall_Name
-                           & (if Stalls = 1 then ""
-                              else "-" & Ada.Strings.Fixed.Trim (Natural'Image (Stalls), Ada.Strings.Both))
-                           & ".txt");
+                        Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Dump);
                         --  What ran, since when, and how long it has shown
                         --  nothing.
                         Ada.Text_IO.Put_Line
@@ -921,6 +918,16 @@ package body Agent_Trial is
                                then "busy:" & Natural'Image (Running) & " threads running -- work, not a stall"
                                else "asleep: no thread running -- a stall"));
                            Ada.Text_IO.Put (Out_File, To_String (Lines));
+                           --  Said as a fault only where nothing ran: a thread
+                           --  running is a model at work -- gpt-oss thinking
+                           --  for minutes at high effort was said to stall,
+                           --  its dump saying it was busy.
+                           if Running = 0 and then not Said_Stall then
+                              Said_Stall := True;
+                              Append (Display_Faults,
+                                      "  display: the session showed nothing for five minutes, every thread"
+                                      & " asleep; its threads' waits are in " & Dump & ASCII.LF);
+                           end if;
                         end;
                         declare
                            Fds_At : constant String := Containing_Directory (Tasks_At) & "/fd";

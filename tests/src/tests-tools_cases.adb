@@ -781,6 +781,14 @@ package body Tests.Tools_Cases is
                  and then Has (Done, "line 4") and then Has (Done, "in Add"),
                  "an edit of one passage was not made, or not said where: "
                  & Ada.Strings.Unbounded.To_String (Done.Text));
+         --  And the declaration it landed in, whole, as it now reads: what
+         --  stands around the change is seen with it -- qwen3-8b put its
+         --  right guard inside the else of its wrong one, told only where.
+         Assert (Has (Done, "it now reads:" & ASCII.LF & "2:    function Add (A, B : Integer) return Integer is"
+                            & ASCII.LF & "3:    begin" & ASCII.LF & "4:       return B + A;" & ASCII.LF
+                            & "5:    end Add;")
+                 and then not Has (Done, "6:"),
+                 "an edit did not show the declaration it landed in: " & Ada.Strings.Unbounded.To_String (Done.Text));
          --  The file has moved on from what was read: refused, untouched.
          declare
             Late : constant Ed.Said := Ed.Edit (Path, "return B + A;", "return 0;", Read);

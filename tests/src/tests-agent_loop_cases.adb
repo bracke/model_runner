@@ -836,8 +836,9 @@ package body Tests.Agent_Loop_Cases is
          end loop;
          Replies.Keeps := True;
          Run (Replies, Seen, Ended, Budget => 32);
-         Assert (Ended.Reason = Ag.Generation_Failed,
-                 "replies of thought alone, with no limit reached, ended as " & Ag.Stop_Reason'Image (Ended.Reason));
+         Assert (Ended.Reason = Ag.Generation_Failed and then E."=" (Ended.Error.Code, E.Generation_No_Answer),
+                 "replies of thought alone, with no limit reached, ended as " & Ag.Stop_Reason'Image (Ended.Reason)
+                 & " " & E.Error_Code'Image (Ended.Error.Code));
       end;
 
       --  A whole call after a block that would not read runs too, and the
