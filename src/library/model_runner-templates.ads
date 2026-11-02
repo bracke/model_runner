@@ -380,6 +380,16 @@ package Model_Runner.Templates is
    --  @return Its word.
    function Effort_Word (Level : Reasoning_Effort) return String;
 
+   --  A level as this template spells it: Effort_Word, but high given as
+   --  xhigh where the template names xhigh and not high, and minimal as
+   --  low where it names no minimal of its own -- a template that lists
+   --  its levels refuses any other.
+   --
+   --  @param Item Compiled template.
+   --  @param Level The level.
+   --  @return Its word.
+   function Effort_Word (Item : Compiled; Level : Reasoning_Effort) return String;
+
    --  The reasoning controls a compiled template reads, as rendering finds
    --  them -- the names it asks after, not the model's file name: whether
    --  it is told to think or not (enable_thinking), and how much
@@ -1166,6 +1176,12 @@ private
       --  asked for -- gpt-oss reasons whatever it is told, and this is how
       --  much.
       Effort_Slot : Natural := 0;
+
+      --  The level words the template's text names, where it names its own:
+      --  Swift-1.5-Qwen3.8 takes xhigh, medium and low and refuses high.
+      Says_High    : Boolean := False;
+      Says_Xhigh   : Boolean := False;
+      Says_Minimal : Boolean := False;
 
       --  And where the name the tools arrive under lives. Zero says the
       --  template never asks about tools, which is what tells a caller with

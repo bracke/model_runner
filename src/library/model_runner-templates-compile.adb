@@ -1604,6 +1604,17 @@ begin
 
    Mark_Numeric_Names;
 
+   --  The level words it names, quoted either way.
+   declare
+      function Names (Word : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Source, "'" & Word & "'") > 0
+          or else Ada.Strings.Fixed.Index (Source, '"' & Word & '"') > 0);
+   begin
+      Item.Says_High := Names ("high");
+      Item.Says_Xhigh := Names ("xhigh");
+      Item.Says_Minimal := Names ("minimal");
+   end;
+
    Item.Step_Limit := Bounds.Max_Render_Iterations;
    Item.Ready := True;
 exception

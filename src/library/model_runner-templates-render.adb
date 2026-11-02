@@ -4219,10 +4219,10 @@ begin
    --  A level named is the level given; none named, the one whether to
    --  reason at all implies.
    if Item.Effort_Slot /= 0 and then Effort /= Effort_Unstated then
-      Assign_Text (Item.Effort_Slot, Effort_Word (Effort));
+      Assign_Text (Item.Effort_Slot, Effort_Word (Item, Effort));
    elsif Item.Effort_Slot /= 0 and then Thinking /= Thinking_Unstated then
       Assign_Text (Item.Effort_Slot,
-                   (if Thinking = Thinking_On then "high" else "low"));
+                   (if Thinking = Thinking_On then Effort_Word (Item, Effort_High) else "low"));
    end if;
 
    --  A flat instruction list with jumps. Rendering recurses in one

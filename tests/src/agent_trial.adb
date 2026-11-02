@@ -597,7 +597,33 @@ package body Agent_Trial is
               & (if Ada.Directories.Extension (Program) = "" then ""
                  else "." & Ada.Directories.Extension (Program)));
          Ignored : Boolean;
+         use type Ada.Calendar.Time;
       begin
+         --  Copies a trial stopped by a signal left behind -- ten of them,
+         --  1.8 GB, by 2026-11-02 -- gone once older than any trial runs.
+         declare
+            Search : Ada.Directories.Search_Type;
+            Item   : Ada.Directories.Directory_Entry_Type;
+         begin
+            Ada.Directories.Start_Search
+              (Search, Ada.Directories.Containing_Directory (Program), ".agent-trial-program-*",
+               [Ada.Directories.Ordinary_File => True, others => False]);
+            while Ada.Directories.More_Entries (Search) loop
+               Ada.Directories.Get_Next_Entry (Search, Item);
+               if Ada.Calendar.Clock - Ada.Directories.Modification_Time (Item) > 12.0 * 3600.0 then
+                  begin
+                     Ada.Directories.Delete_File (Ada.Directories.Full_Name (Item));
+                  exception
+                     when others =>
+                        null;
+                  end;
+               end if;
+            end loop;
+            Ada.Directories.End_Search (Search);
+         exception
+            when others =>
+               null;
+         end;
          Ada.Directories.Copy_File (Program, Aside);
          Ignored := Hostkit.Metadata.Set_Permissions (Aside, 8#755#);
          return Aside;
@@ -896,8 +922,14 @@ package body Agent_Trial is
                                    Ada.Strings.Fixed.Index (Stat, ") ", Ada.Strings.Backward);
                               begin
                                  if Id /= "." and then Id /= ".." then
-                                    if Closing > 0 and then Closing + 2 <= Stat'Last
-                                      and then Stat (Closing + 2) = 'R'
+                                    --  Running, or waiting on the device: a model on
+                                    --  the GPU sleeps on its fences while it works --
+                                    --  Swift-27B's first edit was said to stall so.
+                                    if (Closing > 0 and then Closing + 2 <= Stat'Last
+                                        and then Stat (Closing + 2) = 'R')
+                                      or else Ada.Strings.Fixed.Index (First_Line (At_Task & "/wchan"), "drm_") > 0
+                                      or else Ada.Strings.Fixed.Index (First_Line (At_Task & "/wchan"), "dma_fence") > 0
+                                      or else Ada.Strings.Fixed.Index (First_Line (At_Task & "/wchan"), "amdgpu") > 0
                                     then
                                        Running := Running + 1;
                                     end if;
@@ -915,7 +947,8 @@ package body Agent_Trial is
                            Ada.Text_IO.Put_Line
                              (Out_File,
                               (if Running > 0
-                               then "busy:" & Natural'Image (Running) & " threads running -- work, not a stall"
+                               then "busy:" & Natural'Image (Running)
+                                    & " threads running or on the device -- work, not a stall"
                                else "asleep: no thread running -- a stall"));
                            Ada.Text_IO.Put (Out_File, To_String (Lines));
                            --  Said as a fault only where nothing ran: a thread

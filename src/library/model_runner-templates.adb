@@ -73,6 +73,9 @@ package body Model_Runner.Templates is
       Item.Name_Used := 0;
       Item.Thinking_Slot := 0;
       Item.Effort_Slot := 0;
+      Item.Says_High := False;
+      Item.Says_Xhigh := False;
+      Item.Says_Minimal := False;
       Item.Tools_Slot := 0;
       Item.Call_Slot := 0;
       Item.Message_Slot := 0;
@@ -115,6 +118,15 @@ package body Model_Runner.Templates is
           when Effort_Low      => "low",
           when Effort_Medium   => "medium",
           when Effort_High     => "high");
+
+   function Effort_Word (Item : Compiled; Level : Reasoning_Effort) return String
+   is (case Level is
+          when Effort_High =>
+            (if Item.Says_Xhigh and then not Item.Says_High then "xhigh" else "high"),
+          when Effort_Minimal =>
+            (if (Item.Says_High or else Item.Says_Xhigh) and then not Item.Says_Minimal then "low"
+             else "minimal"),
+          when others => Effort_Word (Level));
 
    -----------------
    -- Controls_Of --

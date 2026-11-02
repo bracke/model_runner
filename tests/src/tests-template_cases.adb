@@ -1647,6 +1647,41 @@ package body Tests.Template_Cases is
       Conv.Close (Talk);
       Tmpl.Close (Item);
 
+      --  A template that lists its own levels is given them as it spells
+      --  them: Swift-1.5-Qwen3.8 takes xhigh, medium and low, and refused
+      --  the high it was given -- the run failed before its first word.
+      declare
+         Listed : Tmpl.Compiled;
+         Says   : Conv.History;
+
+         function Level (Choice : Tmpl.Thinking_Choice; Asked : Tmpl.Reasoning_Effort) return String is
+            Room : String (1 .. 256);
+            Used : Natural;
+            St   : E.Error_Info;
+         begin
+            Tmpl.Render (Listed, Says, "", "", True, Room, Used, St, Thinking => Choice, Effort => Asked);
+            return (if E.Is_Ok (St) then Room (1 .. Used) else "refused");
+         end Level;
+      begin
+         Tmpl.Compile
+           (Listed, "{%- set e = reasoning_effort|default('xhigh') %}"
+                    & "{%- if e not in ('xhigh', 'medium', 'low') %}{{ raise_exception('no') }}{% endif %}"
+                    & "{{ e }}",
+            Status => Status);
+         Assert (E.Is_Ok (Status), "a template listing its levels did not compile");
+         Conv.Open (Says, Status => Status);
+         Conv.Append (Says, Conv.User_Role, "hi", Status);
+         Assert (Level (Tmpl.Thinking_Unstated, Tmpl.Effort_High) = "xhigh"
+                 and then Level (Tmpl.Thinking_On, Tmpl.Effort_Unstated) = "xhigh"
+                 and then Level (Tmpl.Thinking_Unstated, Tmpl.Effort_Medium) = "medium"
+                 and then Level (Tmpl.Thinking_Unstated, Tmpl.Effort_Minimal) = "low"
+                 and then Tmpl.Effort_Word (Listed, Tmpl.Effort_High) = "xhigh",
+                 "a template listing xhigh, medium and low was given a level it does not take: "
+                 & Level (Tmpl.Thinking_Unstated, Tmpl.Effort_High));
+         Conv.Close (Says);
+         Tmpl.Close (Listed);
+      end;
+
       --  A template that reads only whether to think, and one that reads
       --  neither, by what they ask after -- not by a model's name.
       declare
