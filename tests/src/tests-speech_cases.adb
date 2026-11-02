@@ -1,5 +1,6 @@
 with Ada.Numerics;
 with Ada.Numerics.Long_Elementary_Functions;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Unchecked_Conversion;
 with Interfaces;
@@ -14,6 +15,12 @@ with Model_Runner.Errors;
 with Model_Runner.Fourier;
 with Model_Runner.Numerics;
 with Model_Runner.Tensors;
+with Model_Runner.Cancellation;
+with Model_Runner.Tokenizer;
+with Model_Runner.Whisper;
+with Model_Runner.Whisper.Decoding;
+
+with Whisper_Fixture;
 
 package body Tests.Speech_Cases is
 
@@ -496,6 +503,246 @@ package body Tests.Speech_Cases is
       Ts.Free (Mel);
    end Spectrogram_Of_Silence;
 
+
+   --------------
+   -- Decoding --
+   --------------
+
+   package D renames Model_Runner.Whisper.Decoding;
+
+   subtype Token_Id is Model_Runner.Tokenizer.Token_Id;
+
+   use type Token_Id;
+
+   --  A vocabulary of thirty: text 0 .. 9, the end 10, no-times 11, times
+   --  12 .. 29.
+   Small_Rules : constant D.Rules :=
+     (End_Of_Text => 10, No_Timestamps => 11, Timestamp_Begin => 12, Vocabulary => 30,
+      Suppressed => [1 => 3, others => 0], Suppressed_Count => 1,
+      Begin_Suppressed => [1 => 2, 2 => 10, others => 0], Begin_Suppressed_Count => 2,
+      Timestamps => True, Max_Initial_Timestamp => 4);
+
+   function Flat return N.Real_Array is [0 .. 29 => 0.0];
+
+   function Allowed (Logits : N.Real_Array; Token : Natural) return Boolean is
+     (Logits (N.Element_Count (Token)) > N.Real'First);
+
+   --  The reference's rules, step by step.
+   procedure Decoding_Rules_Are_The_Reference
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Logits : N.Real_Array (0 .. 29);
+   begin
+      --  The first step: a time no later than the fourth, nothing else.
+      Logits := Flat;
+      D.Apply (Small_Rules, [], Logits);
+      for Id in 0 .. 29 loop
+         Assert (Allowed (Logits, Id) = (Id in 12 .. 16), "at the first step, token" & Id'Image
+                 & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+      end loop;
+
+      --  After a time and text: text, the end, or a later time -- the text
+      --  likelier than every time together, which would otherwise win.
+      Logits := Flat;
+      Logits (0 .. 10) := [others => 5.0];
+      D.Apply (Small_Rules, [Token_Id'(15), 4], Logits);
+      for Id in 0 .. 29 loop
+         Assert (Allowed (Logits, Id) = (Id in 0 .. 2 | 4 .. 9 | 10 | 16 .. 29),
+                 "after a time and text, token" & Id'Image & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+      end loop;
+
+      --  After text and a time that closes: the end, or a time no earlier --
+      --  the end likelier than every time together.
+      Logits := Flat;
+      Logits (10) := 5.0;
+      D.Apply (Small_Rules, [Token_Id'(15), 4, 18], Logits);
+      for Id in 0 .. 29 loop
+         Assert (Allowed (Logits, Id) = (Id = 10 or else Id in 18 .. 29),
+                 "after a closing time, token" & Id'Image & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+      end loop;
+
+      --  After two times: text, or the end; no time.
+      Logits := Flat;
+      Logits (5) := 3.0;
+      D.Apply (Small_Rules, [Token_Id'(15), 4, 18, 18], Logits);
+      for Id in 0 .. 29 loop
+         Assert (Allowed (Logits, Id) = (Id in 0 .. 2 | 4 .. 10),
+                 "after a pair of times, token" & Id'Image & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+      end loop;
+
+      --  Times together likelier than the likeliest text: a time.
+      Logits := Flat;
+      Logits (4) := 1.0;
+      D.Apply (Small_Rules, [Token_Id'(15), 4], Logits);
+      Assert (not Allowed (Logits, 4) and then Allowed (Logits, 20),
+              "fourteen times at nought were not preferred to one text token at one");
+
+      --  Without times: only the two suppressions.
+      Logits := Flat;
+      D.Apply ((Small_Rules with delta Timestamps => False), [], Logits);
+      for Id in 0 .. 29 loop
+         Assert (Allowed (Logits, Id) = (Id not in 2 | 3 | 10), "without times, token" & Id'Image
+                 & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+      end loop;
+      Logits := Flat;
+      D.Apply ((Small_Rules with delta Timestamps => False), [Token_Id'(4)], Logits);
+      Assert (Allowed (Logits, 2) and then Allowed (Logits, 10) and then not Allowed (Logits, 3),
+              "a blank and the end are refused past the first step");
+   end Decoding_Rules_Are_The_Reference;
+
+   --  Greedy is the first of the largest; a log probability is the
+   --  log-softmax, minus infinity a token never said; repeated text
+   --  compresses.
+   procedure Picking_And_Measuring
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Logits : constant N.Real_Array := [0 => 1.0, 1 => 3.0, 2 => 3.0, 3 => N.Real'First];
+      Sum    : constant Long_Float := F.Exp (1.0) + 2.0 * F.Exp (3.0);
+   begin
+      Assert (D.Pick (Logits) = 1, "the first of two largest was not picked");
+      Assert (abs (Long_Float (D.Log_Probability (Logits, 1)) - (3.0 - F.Log (Sum))) < 1.0E-12,
+              "a log probability is not the log-softmax");
+      Assert (D.Probability (Logits, 3) = 0.0, "a suppressed token has a probability");
+      Assert (D.Compression_Ratio ("") = 0.0, "an empty text has a ratio");
+      Assert (D.Compression_Ratio ("the the the the the the the the the the the the the the the the the the") > 2.4,
+              "a text repeating itself does not compress past the threshold");
+      Assert (D.Compression_Ratio ("And so my fellow Americans, ask not") < 1.5,
+              "a sentence compresses as though it repeated itself");
+   end Picking_And_Measuring;
+
+   -----------
+   -- Model --
+   -----------
+
+   package W renames Model_Runner.Whisper;
+
+   Fixture_Path : constant String := "obj/whisper-fixture.gguf";
+
+   --  A file that is not the profile's is refused by name, and leaves no
+   --  model behind.
+   procedure Whisper_Files_Are_Held_To_The_Profile
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Whisper_Fixture.Flaw;
+      Model  : W.Model;
+      Status : E.Error_Info;
+      Expected : constant array (Whisper_Fixture.Flaw) of E.Error_Code :=
+        [Whisper_Fixture.None => E.No_Error,
+         Whisper_Fixture.Other_Architecture => E.Arch_Unsupported,
+         Whisper_Fixture.Missing_Tensor => E.Arch_Missing_Tensor,
+         Whisper_Fixture.Misshapen_Tensor => E.Arch_Invalid_Tensor_Shape,
+         others => E.GGUF_Metadata_Out_Of_Range];
+   begin
+      for Defect in Whisper_Fixture.Flaw loop
+         Whisper_Fixture.Write (Fixture_Path, Defect);
+         W.Prepare (Model, Fixture_Path, Status);
+         Assert (Status.Code = Expected (Defect),
+                 Defect'Image & " gave " & Status.Code'Image & " for " & Expected (Defect)'Image);
+         Assert (W.Is_Ready (Model) = (Defect = Whisper_Fixture.None), Defect'Image & " left the model ready or not");
+         W.Close (Model, Status);
+      end loop;
+      W.Prepare (Model, "obj/no-such-whisper.gguf", Status);
+      Assert (E.Is_Error (Status) and then not W.Is_Ready (Model), "a missing file was read");
+   end Whisper_Files_Are_Held_To_The_Profile;
+
+   --  A model does not close under a session; a session does not open on
+   --  a model not ready; a session closed twice is closed.
+   procedure Whisper_Lifecycle
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Model   : aliased W.Model;
+      Session : W.Session;
+      Status  : E.Error_Info;
+      Logits  : N.Real_Array (0 .. 1_767);
+   begin
+      W.Open (Session, Model'Access, null, Status);
+      Assert (Status.Code = E.Lifecycle_Model_Not_Ready, "a session opened on no model");
+      Whisper_Fixture.Write (Fixture_Path);
+      W.Prepare (Model, Fixture_Path, Status);
+      Assert (E.Is_Ok (Status), "the fixture was refused: " & Status.Code'Image);
+      Assert (W.Language_Count (Model) = 2 and then W.Language_Code (Model, 2) = "da"
+              and then W.Knows_Language (Model, "en") and then not W.Knows_Language (Model, "fr"),
+              "the languages were not read");
+      W.Open (Session, Model'Access, null, Status);
+      Assert (E.Is_Ok (Status) and then W.Sessions_Open (Model) = 1, "a session did not open");
+      W.Decode (Session, [1 => 257], Logits, Status);
+      Assert (Status.Code = E.Lifecycle_Invalid_State, "the decoder ran with nothing heard");
+      W.Close (Model, Status);
+      Assert (Status.Code = E.Lifecycle_Session_Active and then W.Is_Ready (Model),
+              "the model closed under its session");
+      W.Close (Session);
+      W.Close (Session);
+      Assert (W.Sessions_Open (Model) = 0, "a session closed twice was counted twice");
+      W.Close (Model, Status);
+      Assert (E.Is_Ok (Status) and then not W.Is_Ready (Model), "the model did not close");
+   end Whisper_Lifecycle;
+
+   --  The fixture hears a second of noise in Danish, and in a language
+   --  it does not have refuses; past its context it refuses; a cancel
+   --  stops it.
+   procedure Whisper_Transcribes_And_Refuses
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use Ada.Strings.Unbounded;
+      Model    : aliased W.Model;
+      Session  : W.Session;
+      Status   : E.Error_Info;
+      Heard    : W.Transcript;
+      Settings : W.Options;
+      Sound    : N.Real_Array (0 .. 15_999);
+      Mel      : Ts.Real_Array_Access := new N.Real_Array'(0 .. 80 * 3_000 - 1 => -0.5);
+      Logits   : N.Real_Array (0 .. 1_767);
+      Stop     : aliased Model_Runner.Cancellation.Token;
+   begin
+      for I in Sound'Range loop
+         Sound (I) := N.Real (0.3 * Noise (Natural (I)));
+      end loop;
+      Whisper_Fixture.Write (Fixture_Path);
+      W.Prepare (Model, Fixture_Path, Status);
+      W.Open (Session, Model'Access, null, Status);
+      Assert (E.Is_Ok (Status), "a session did not open");
+
+      W.Encode (Session, Mel.all, Status);
+      Assert (E.Is_Ok (Status), "the encoder failed: " & Status.Code'Image);
+      W.Decode (Session, [257, 259, 261], Logits, Status);
+      Assert (E.Is_Ok (Status), "the decoder failed: " & Status.Code'Image);
+      for V of Logits loop
+         Assert (V = V and then abs V < 1.0E6, "a logit is not a number");
+      end loop;
+      W.Decode (Session, [1 .. 17 => 257], Logits, Status);
+      Assert (Status.Code = E.Generation_Prompt_Too_Long, "seventeen tokens fit a context of sixteen");
+      W.Encode (Session, Mel (0 .. 99), Status);
+      Ts.Free (Mel);
+      Assert (Status.Code = E.Tensor_Shape_Mismatch, "a short spectrogram was encoded");
+
+      Settings.Language := To_Unbounded_String ("da");
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      Assert (E.Is_Ok (Status), "a second of noise was not heard: " & Status.Code'Image);
+      Assert (To_String (Heard.Language) = "da", "the language given was not kept");
+      Assert (Heard.Figures.Windows = 1, "a second was" & Heard.Figures.Windows'Image & " windows");
+      Assert (not Heard.Segments.Is_Empty, "a window gave no segment");
+
+      Settings.Language := Null_Unbounded_String;
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Heard.Language) in "en" | "da", "no language was detected");
+
+      Settings.Language := To_Unbounded_String ("fr");
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      Assert (Status.Code = E.Generation_Invalid_Request, "a language the model has not was taken");
+
+      Settings.Language := To_Unbounded_String ("da");
+      Stop.Request;
+      W.Transcribe (Session, Sound, Settings, Heard, Status, Cancel => Stop'Unchecked_Access);
+      Assert (Status.Code = E.Generation_Cancelled, "a cancel did not stop it: " & Status.Code'Image);
+      W.Close (Session);
+      W.Close (Model, Status);
+   end Whisper_Transcribes_And_Refuses;
+
    ----------
    -- Name --
    ----------
@@ -536,6 +783,21 @@ package body Tests.Speech_Cases is
       Register_Routine
         (T, Spectrogram_Of_Silence'Access,
          "silence is the floor and a short recording is padded, not read past");
+      Register_Routine
+        (T, Decoding_Rules_Are_The_Reference'Access,
+         "a Whisper step allows what the reference's rules allow");
+      Register_Routine
+        (T, Picking_And_Measuring'Access,
+         "greedy picks the first largest, log probabilities are log-softmax, repeats compress");
+      Register_Routine
+        (T, Whisper_Files_Are_Held_To_The_Profile'Access,
+         "a Whisper file not of the profile is refused by name and leaves no model");
+      Register_Routine
+        (T, Whisper_Lifecycle'Access,
+         "a Whisper model does not close under its session");
+      Register_Routine
+        (T, Whisper_Transcribes_And_Refuses'Access,
+         "a Whisper session hears, detects, refuses past its context and stops when cancelled");
    end Register_Tests;
 
 end Tests.Speech_Cases;

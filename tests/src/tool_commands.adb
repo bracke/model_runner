@@ -16,6 +16,8 @@ package body Tool_Commands is
    Name_Cross          : aliased constant String := "cross";
    Name_See            : aliased constant String := "see";
    Name_Image          : aliased constant String := "image";
+   Name_Whisper_Convert : aliased constant String := "whisper-convert";
+   Name_Hear           : aliased constant String := "hear";
    Name_Records        : aliased constant String := "records";
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
@@ -300,7 +302,19 @@ package body Tool_Commands is
    Opts_Image  : aliased constant String :=
      " --expect --device --model --text-encoder --vae --mmproj --reference --stripe-bytes --device-timeline ";
 
-   Held : constant array (1 .. 37) of Command :=
+   Says_Whisper_Convert  : aliased constant String :=
+     "write OpenAI's Whisper checkpoint, as Hugging Face publishes it, as the GGUF file the "
+     & "speech model reads";
+   Takes_Whisper_Convert : aliased constant String := "--from DIR --out FILE [--type f32|f16]";
+   Opts_Whisper_Convert  : aliased constant String := " --from --out --type ";
+
+   Says_Hear  : aliased constant String :=
+     "transcribe a recording with a Whisper model, and hold its encoder and first logits to the reference's";
+   Takes_Hear : aliased constant String :=
+     "--model PATH --audio FILE [--language CODE] [--reference DIR] [--threads N] [--repeats N]";
+   Opts_Hear  : aliased constant String := " --model --audio --language --reference --threads --repeats ";
+
+   Held : constant array (1 .. 39) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -338,6 +352,9 @@ package body Tool_Commands is
        Opts_See'Access),
       (Name_Image'Access, Takes_Image'Access, Says_Image'Access,
        Opts_Image'Access),
+      (Name_Whisper_Convert'Access, Takes_Whisper_Convert'Access, Says_Whisper_Convert'Access,
+       Opts_Whisper_Convert'Access),
+      (Name_Hear'Access, Takes_Hear'Access, Says_Hear'Access, Opts_Hear'Access),
       (Name_Records'Access, Takes_Records'Access, Says_Records'Access,
        Opts_Records'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,

@@ -98,7 +98,45 @@ Unloading). It is given the session's pool; it never sees the LLM.
 A GGUF file, `general.architecture = whisper`, written by `tests
 whisper-convert` from OpenAI's checkpoint as Hugging Face publishes it
 (`config.json`, `generation_config.json`, `vocab.json`, `merges.txt`,
-`added_tokens.json`, `model.safetensors`).
+`added_tokens.json`, `model.safetensors`):
+
+    cd tests
+    ./bin/tests whisper-convert --from ~/models/whisper/small --out whisper-small-f16.gguf
+
+`--type f32` keeps the matrices binary32; the default, `f16`, halves them.
+Norms, biases, the convolutions and the two position tables stay binary32
+either way. The same checkpoint makes the same bytes (checked: two runs,
+`cmp` equal), and a manifest is written beside the file: profile, tool,
+SHA-256 of the checkpoint's weights and of the file.
+
+**Profile 1.** Keys: `whisper.profile.version`; `whisper.encoder.` and
+`whisper.decoder.` `context_length`, `embedding_length`,
+`feed_forward_length`, `attention.head_count`, `block_count`;
+`whisper.attention.layer_norm_epsilon`; `whisper.audio.` `mel_bins`,
+`sample_rate`, `window_length`, `hop_length`, `chunk_length`;
+`whisper.vocabulary.size`; `whisper.multilingual`; `whisper.languages`
+(codes, in token order) and `whisper.token.first_language`;
+`whisper.token.` `end_of_text`, `start_of_transcript`, `transcribe`,
+`translate`, `start_of_previous`, `start_of_lm`, `no_timestamps`,
+`no_speech`, `timestamp_begin`; `whisper.suppress_tokens` and
+`whisper.begin_suppress_tokens` (from `generation_config.json`); and the
+vocabulary as llama.cpp writes a GPT-2 one (`tokenizer.ggml.model = gpt2`,
+`pre = gpt-2`, tokens, types, merges). Tensors, named as llama.cpp names
+an encoder-decoder's: `enc.conv1`, `enc.conv2` (weight, bias),
+`enc.position_embd.weight`, `enc.blk.N.` `attn_norm`, `attn_q`, `attn_k`
+(no bias), `attn_v`, `attn_out`, `ffn_norm`, `ffn_up`, `ffn_down`,
+`enc.output_norm`; `dec.token_embd.weight` (the output head too: tied),
+`dec.position_embd.weight`, `dec.blk.N.` the same plus `cross_attn_norm`
+and `cross_attn_q`/`_k`/`_v`/`_out`, `dec.output_norm`.
+
+Nothing is guessed from a file name: every dimension is read and every
+tensor's shape held to it. Whisper tiny is 167 tensors, small 479.
+
+Two defects in jsonlib, found converting: reading a member of a large
+object copied the whole node, and building one and refusing a repeated
+name walked every member -- each quadratic, minutes for a 50,000-token
+vocabulary. Fixed there (jsonlib 9ba48f0, 24a1b18); the conversion takes
+1.6 s.
 
 ## 3. Audio
 
@@ -109,7 +147,45 @@ grid of points and their means to 1e-5.
 
 ## 4-7. Encoder, decoder, transcription
 
-To be filled in as built.
+`Model_Runner.Whisper` (model, session, transcription) and
+`Model_Runner.Whisper.Decoding` (the reference's token rules, pure).
+
+What is reused rather than written again: `Kernels.Layer_Norm`,
+`Kernels.Exact_GELU`, `Kernels.Softmax`, `Kernels.Dot`; `Float_Panels` for
+every encoder product -- the convolutions as products over their three
+taps, the projections, and attention's two products (the keys and the
+turned values laid out as weights, read in place by stride); the CPU
+backend's `Dispatch_Batch` and `Dispatch` for the decoder's products,
+which read F16 and F32 weights where they lie; `Tokenizer` for the
+vocabulary. No numerical primitive was missing: what Whisper needed of
+"convolution" is a product over gathered taps, of "cross-attention" an
+attention whose keys were made once.
+
+The encoder runs once a window and its output stays in the session; each
+decoder block's keys and values of it are made then, once a window; the
+decoder's own keys and values are a cache of the text context's rows.
+
+Transcription is the reference's `transcribe()` with greedy decoding:
+language detected from the first window's 3,000 frames as they are (the
+padding's own frames after a short recording), each window after that
+padded with zeros past its content, prompted with the text before it
+(`<|startofprev|>`, the last 223 tokens, times included), times decoded
+with the text, segments cut at consecutive times, the next window
+starting at the last time where the window did not end on a single one.
+The no-speech probability is read at `<|startoftranscript|>`'s position.
+
+**Held to the reference** (`tests hear --reference DIR`, the numpy
+program's dumps for the same recording):
+
+| model | recording | encoder output, worst / largest | first logits, worst / largest | transcript |
+| --- | --- | ---: | ---: | --- |
+| tiny F32 | jfk.wav, 11 s | 8.9e-5 | 6.3e-7 | identical: tokens, text, 0.00-11.00 s, logprob -0.33127, no-speech 0.06912 |
+| tiny F32 | da-long, 45 s, language detected | -- | -- | identical: da, nine segments, their times, the second window at 25.0 s |
+| small F32 | da-short, 14 s | 1.5e-5 | 1.0e-6 | identical: "Den lille pi med svovelstikkerne af H.C. Andersen. Det var så grulig koldt. Det snede og det begyndte at blive mørk aften.", logprob -0.42276 |
+
+What is not done: the reference's temperature fallback (decoding again,
+sampled, when a window repeats itself or is unsure). A window that would
+have been retried is marked uncertain and kept; nothing is sampled.
 
 ## 8. The harness
 

@@ -91,6 +91,8 @@ with Speed_Run;
 with Crossing;
 with Image_Crossing;
 with Tool_Commands;
+with Speech_Hear;
+with Whisper_Convert;
 with Fuzzing;
 with Text_Fuzzing;
 with Tiny_Model;
@@ -500,6 +502,53 @@ begin
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;
+   elsif Command = "hear" then
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+      begin
+         if Option ("--model", "") = "" or else Option ("--audio", "") = "" then
+            Ada.Text_IO.Put_Line ("hear: --model PATH --audio FILE are required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         elsif Speech_Hear.Run
+           (Option ("--model", ""), Option ("--audio", ""), Option ("--language", ""), Option ("--reference", ""),
+            Natural'Value (Option ("--threads", "0")), Positive'Value (Option ("--repeats", "1"))) /= 0
+         then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "whisper-convert" then
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+
+         From : constant String := Option ("--from", "");
+         Into : constant String := Option ("--out", "");
+         Kind : constant String := Option ("--type", "f16");
+      begin
+         if From = "" or else Into = "" or else (Kind /= "f16" and then Kind /= "f32") then
+            Ada.Text_IO.Put_Line ("whisper-convert: --from DIR --out FILE [--type f32|f16]");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         elsif Whisper_Convert.Run (From, Into, Half => Kind = "f16") /= 0 then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
    elsif Command = "see" then
       --  A picture through a vision projector: how long it takes and what
       --  comes out, for a reader checking the encoder against a reference
