@@ -17,7 +17,7 @@ private with Ada.Strings.Unbounded;
 package Model_Runner.Output.Repetition is
 
    --  How often a line may come in one thought before it is a loop.
-   Limit : constant Positive := 4;
+   Limit : constant Positive := 8;
 
    --  The shortest line counted.
    Shortest : constant Positive := 20;
