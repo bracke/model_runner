@@ -393,7 +393,7 @@ Speech into a session's line, and `model_runner transcribe` (docs/plan-speech.md
 | Microphone | Linux, through the sound server (PipeWire or PulseAudio) by libpulse-simple opened by name; macOS and Windows refuse by name |
 | Session | Ctrl-G (or `--speech-shortcut`) records and stops; the transcript put in at the cursor; Escape drops; keys pressed meanwhile kept and acted on after |
 | Processor | Yes: encoder products in binary32 panels, decoder on the processor's products |
-| Device | Not yet: the speech model runs on the processor whatever the conversation's backend |
+| Device | Not supported: the device backend is fed from one task, and speech is heard on its own while the conversation's model may run (docs/plan-speech.md, section 9); speech runs on the processor whatever the conversation's backend |
 | Not implemented | Translation, word timestamps, beam search, the temperature fallback, quantized Whisper weights |
 
 ## Backend

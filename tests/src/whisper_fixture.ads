@@ -18,6 +18,7 @@ package Whisper_Fixture is
       Missing_Tensor,
       Misshapen_Tensor,
       Token_Past_Vocabulary,
+      Vocabulary_Mismatch,
       Too_Many_Blocks);
 
    --  Build the file.

@@ -182,7 +182,7 @@ ordinal is never reused, not because they might appear.
 | `MR-ARCH-0011` | `error.architecture.missing_tensor` | recovery_none | 3 | raised |
 | `MR-ARCH-0012` | `error.architecture.invalid_tensor_shape` | recovery_none | 3 | raised |
 | `MR-ARCH-0013` | `error.architecture.invalid_tensor_format` | recovery_none | 3 | raised |
-| `MR-ARCH-0014` | `error.architecture.vocabulary_mismatch` | recovery_none | 3 | reserved |
+| `MR-ARCH-0014` | `error.architecture.vocabulary_mismatch` | recovery_none | 3 | raised |
 | `MR-ARCH-0015` | `error.architecture.context_too_large` | recovery_none | 3 | raised |
 | `MR-ARCH-0016` | `error.architecture.layer_numbering_gap` | recovery_none | 3 | raised |
 | `MR-ARCH-0017` | `error.architecture.no_output_head` | recovery_unsupported | 4 | raised |
@@ -236,7 +236,7 @@ ordinal is never reused, not because they might appear.
 | `MR-LIFE-0001` | `error.lifecycle.invalid_state` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0002` | `error.lifecycle.model_not_ready` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0003` | `error.lifecycle.session_active` | recovery_terminal | 8 | raised |
-| `MR-LIFE-0004` | `error.lifecycle.session_closed` | recovery_terminal | 8 | reserved |
+| `MR-LIFE-0004` | `error.lifecycle.session_closed` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0005` | `error.lifecycle.session_failed` | recovery_terminal | 8 | reserved |
 | `MR-LIFE-0006` | `error.lifecycle.already_closed` | recovery_terminal | 8 | reserved |
 | `MR-LIFE-0007` | `error.lifecycle.mapping_unavailable` | recovery_terminal | 8 | reserved |

@@ -55,7 +55,8 @@ package body Speech_Hear is
       Worst, Largest : Long_Float := 0.0;
    begin
       for I in Expected'Range loop
-         Worst := Long_Float'Max (Worst, abs (Long_Float (Got (Got'First + (I - Expected'First))) - Long_Float (Expected (I))));
+         Worst := Long_Float'Max
+           (Worst, abs (Long_Float (Got (Got'First + (I - Expected'First))) - Long_Float (Expected (I))));
          Largest := Long_Float'Max (Largest, abs Long_Float (Expected (I)));
       end loop;
       Say (What & ": worst absolute" & Worst'Image & ", relative to the largest" & Long_Float'Image (Worst / Largest)
@@ -192,7 +193,8 @@ package body Speech_Hear is
          Say ("model refused: " & Status.Code'Image & " " & Detail (Status, "tensor") & Detail (Status, "key"));
          return 1;
       end if;
-      Say ("model: " & W.Name (Whisper) & ", prepared in" & Duration'Image (Ada.Calendar."-" (Ada.Calendar.Clock, Started))
+      Say ("model: " & W.Name (Whisper) & ", prepared in"
+           & Duration'Image (Ada.Calendar."-" (Ada.Calendar.Clock, Started))
            & " s; weights" & W.Weight_Bytes (Whisper)'Image & " bytes, a session" & W.Session_Bytes (Whisper)'Image);
       Model_Runner.Audio.Read_Wave (Audio, 3_600, Samples, Status);
       if E.Is_Error (Status) then

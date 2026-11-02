@@ -224,4 +224,17 @@ shortcut's conflicts beyond the editor's own keys and terminal flow control
 
 ## 9. The device
 
-To be filled in as built.
+Audited, and not built. `Backend.Device` is one queue fed from one task --
+its own words: "one task at a time ... makes no attempt to feed it from
+several" -- and keeps process-wide state between the calls of a sequence
+(its cache, its resident weights, the arithmetic switches). The vision
+encoder shares it with a session safely only because both run on the
+session's task. Speech does not: it is heard on its own task while the
+editor waits, and a `/work` agent may be driving the conversation's model on
+the device from yet another task at the same time. Putting Whisper there
+would need a lock around every device sequence the conversation's model
+runs -- the new scheduling layer the specification says not to introduce
+before this audit, and one in the engine's hottest path. So speech runs on
+the processor whatever the conversation's backend, and the support matrix
+says so. What it costs, on small, is the encoder: about 1.4 s a window on
+this machine's eight cores.

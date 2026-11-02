@@ -340,7 +340,8 @@ package body Whisper_Convert is
                   First : Long_Long_Integer := Long_Long_Integer'Last;
                begin
                   for I in 1 .. Count loop
-                     First := Long_Long_Integer'Min (First, J.As_Integer (Generation, J.Element (Generation, Langs, I)));
+                     First := Long_Long_Integer'Min
+                       (First, J.As_Integer (Generation, J.Element (Generation, Langs, I)));
                   end loop;
                   Fixtures.Add_I32 (Build, "whisper.token.first_language", Interfaces.Integer_32 (First));
                   Fixtures.Begin_Array (Build, "whisper.languages", G.Value_String, Count);

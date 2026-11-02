@@ -34,7 +34,7 @@
 --  command drives the whole pipeline and knows what it did, so it never has
 --  to ask whether the vocabulary loaded or which seed the sampler used.
 --  Somebody embedding the engine has no such vantage: Has_Template,
---  Is_Loaded, Unknown_Token, Seed_Used, Is_Closed, String_Count and
+--  Unknown_Token, Seed_Used, Is_Closed, String_Count and
 --  Is_Normal are how they find out.
 --
 --  Adds_End was among them until the embedding command started asking. A

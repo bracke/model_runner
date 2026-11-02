@@ -12,6 +12,9 @@ package body Reserved_Codes is
       --  removed fails to compile here instead of quietly falling off the
       --  list.
       --
+      --  Arch_Vocabulary_Mismatch came off it when Whisper's file was held
+      --  to its vocabulary's size.
+      --
       --  Three came off it when a round arrived -- a round refused a member
       --  that was closed or failed, and refused more members than a batch
       --  may hold -- and the three went back on when that serving path was
@@ -23,7 +26,6 @@ package body Reserved_Codes is
             | E.IO_Seek_Failed
             | E.Template_Unsupported_Role
             | E.Arch_Missing_Metadata
-            | E.Arch_Vocabulary_Mismatch
             | E.Tensor_Rank_Too_High
             | E.Tensor_Invalid_Stride
             | E.Tensor_Read_Only
@@ -39,10 +41,10 @@ package body Reserved_Codes is
             | E.Internal_Not_Implemented
             | E.Internal_Localization_Failed
 
-            --  The three the serving round used to raise, unproduced again
-            --  now it is gone: a session closed or failed under a round, and
-            --  a batch with more members than one may hold.
-            | E.Lifecycle_Session_Closed
+            --  Two of the three the serving round used to raise, unproduced
+            --  again now it is gone: a session failed under a round, and a
+            --  batch with more members than one may hold. The third, a
+            --  session closed, a Whisper session transcribing unopened says.
             | E.Lifecycle_Session_Failed
             | E.Generation_Batch_Too_Large =>
             return True;

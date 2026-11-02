@@ -80,7 +80,6 @@ package body Library_Surface is
       --  what it read, so the operation stays.
       new String'("Hidden_State"),
       new String'("Has_Template"),
-      new String'("Is_Loaded"),
       new String'("Is_Normal"),
       new String'("Seed_Used"),
       new String'("String_Count"),
@@ -121,6 +120,17 @@ package body Library_Surface is
       --  program showing a reader what a projector will make of a picture
       --  asks the same.
       new String'("Image_Size"),
+
+      --  Speech's library side, asked by `tests hear` and the suite rather
+      --  than the command: the transform from its definition, which the
+      --  plan is held to; a Whisper model's languages, whether it hears
+      --  more than English and how many sessions it has open; and its
+      --  encoder's output, held to the reference's.
+      new String'("Forward_Real_Directly"),
+      new String'("Is_Multilingual"),
+      new String'("Language_Count"),
+      new String'("Sessions_Open"),
+      new String'("Copy_Encoded"),
 
       --  Whether a projector makes every picture the same number of rows.
       --  The command gathers a picture's rows and takes what it gets;

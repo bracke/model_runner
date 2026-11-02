@@ -75,6 +75,10 @@ package Model_Runner.Speech is
       Initial_Prompt : Ada.Strings.Unbounded.Unbounded_String;
       --  Workers for the products, or 0 for the machine's default.
       Workers        : Natural := 0;
+      --  Samples recorded in place of the microphone's, at the canonical
+      --  rate, a tenth of a second at a time until they run out: how a test
+      --  records without opening a microphone. Null, the microphone.
+      Played         : access constant Model_Runner.Numerics.Real_Array := null;
    end record;
 
    --  The longest recording a setting may ask: an hour.

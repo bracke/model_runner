@@ -175,7 +175,7 @@ package body Whisper_Fixture is
       Count_Key ("whisper.audio.window_length", 400);
       Count_Key ("whisper.audio.hop_length", 160);
       Count_Key ("whisper.audio.chunk_length", 30);
-      Count_Key ("whisper.vocabulary.size", Vocabulary);
+      Count_Key ("whisper.vocabulary.size", (if Defect = Vocabulary_Mismatch then Vocabulary + 1 else Vocabulary));
       Fixtures.Add_Bool (Item, "whisper.multilingual", True);
       Token_Key ("whisper.token.end_of_text", End_Of_Text);
       Token_Key ("whisper.token.start_of_transcript", Start);

@@ -1077,13 +1077,9 @@ package body Model_Runner.Whisper is
                         Top := Real'Max (Top, Dot);
                      end;
                   end loop;
+                  K.Exponentiate (Item.Scores (Scores .. Scores + Seen - 1), Top);
                   for J in 0 .. Seen - 1 loop
-                     declare
-                        P : constant Real := Real (Elementary.Exp (Wide_Real (Item.Scores (Scores + J) - Top)));
-                     begin
-                        Item.Scores (Scores + J) := P;
-                        Sum := Sum + Wide_Real (P);
-                     end;
+                     Sum := Sum + Wide_Real (Item.Scores (Scores + J));
                   end loop;
                   declare
                      Out_At : constant Element_Count := I * Item.Width + Offset;
@@ -1397,7 +1393,7 @@ package body Model_Runner.Whisper is
       Reset_Since : Natural := 0;
       Rules : Model_Runner.Whisper.Decoding.Rules;
       Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
-      Mels : constant Element_Count := Element_Count (Source.Mels);
+      Mels : constant Element_Count := (if Source = null then 0 else Element_Count (Source.Mels));
 
       function Cancelled return Boolean is
         (Cancel /= null and then Model_Runner.Cancellation.Is_Cancelled (Cancel));

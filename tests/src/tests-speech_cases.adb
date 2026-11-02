@@ -28,6 +28,8 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
 with Model_Runner.Speech;
 with Model_Runner.CLI.Choosers;
+with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Speech_Input;
 
 package body Tests.Speech_Cases is
 
@@ -85,7 +87,9 @@ package body Tests.Speech_Cases is
             for I in Input'Range loop
                Input (I) := N.Wide_Real (Noise (Natural (I) + L));
             end loop;
+            Assert (not Model_Runner.Fourier.Is_Prepared (Plan), "a plan is ready before it is prepared");
             Model_Runner.Fourier.Prepare (Plan);
+            Assert (Model_Runner.Fourier.Is_Prepared (Plan), "a prepared plan says it is not");
             Model_Runner.Fourier.Forward_Real (Plan, Input, Re, Im);
             Model_Runner.Fourier.Forward_Real_Directly (Input, Re_D, Im_D);
             for K in Re'Range loop
@@ -510,7 +514,6 @@ package body Tests.Speech_Cases is
       Ts.Free (Mel);
    end Spectrogram_Of_Silence;
 
-
    --------------
    -- Decoding --
    --------------
@@ -534,6 +537,9 @@ package body Tests.Speech_Cases is
    function Allowed (Logits : N.Real_Array; Token : Natural) return Boolean is
      (Logits (N.Element_Count (Token)) > N.Real'First);
 
+   function Verdict (Logits : N.Real_Array; Token : Natural) return String is
+     (if Allowed (Logits, Token) then " is allowed" else " is not");
+
    --  The reference's rules, step by step.
    procedure Decoding_Rules_Are_The_Reference
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -546,7 +552,7 @@ package body Tests.Speech_Cases is
       D.Apply (Small_Rules, [], Logits);
       for Id in 0 .. 29 loop
          Assert (Allowed (Logits, Id) = (Id in 12 .. 16), "at the first step, token" & Id'Image
-                 & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+                 & Verdict (Logits, Id));
       end loop;
 
       --  After a time and text: text, the end, or a later time -- the text
@@ -556,7 +562,7 @@ package body Tests.Speech_Cases is
       D.Apply (Small_Rules, [Token_Id'(15), 4], Logits);
       for Id in 0 .. 29 loop
          Assert (Allowed (Logits, Id) = (Id in 0 .. 2 | 4 .. 9 | 10 | 16 .. 29),
-                 "after a time and text, token" & Id'Image & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+                 "after a time and text, token" & Id'Image & Verdict (Logits, Id));
       end loop;
 
       --  After text and a time that closes: the end, or a time no earlier --
@@ -566,7 +572,7 @@ package body Tests.Speech_Cases is
       D.Apply (Small_Rules, [Token_Id'(15), 4, 18], Logits);
       for Id in 0 .. 29 loop
          Assert (Allowed (Logits, Id) = (Id = 10 or else Id in 18 .. 29),
-                 "after a closing time, token" & Id'Image & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+                 "after a closing time, token" & Id'Image & Verdict (Logits, Id));
       end loop;
 
       --  After two times: text, or the end; no time.
@@ -575,7 +581,7 @@ package body Tests.Speech_Cases is
       D.Apply (Small_Rules, [Token_Id'(15), 4, 18, 18], Logits);
       for Id in 0 .. 29 loop
          Assert (Allowed (Logits, Id) = (Id in 0 .. 2 | 4 .. 10),
-                 "after a pair of times, token" & Id'Image & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+                 "after a pair of times, token" & Id'Image & Verdict (Logits, Id));
       end loop;
 
       --  Times together likelier than the likeliest text: a time.
@@ -590,7 +596,7 @@ package body Tests.Speech_Cases is
       D.Apply ((Small_Rules with delta Timestamps => False), [], Logits);
       for Id in 0 .. 29 loop
          Assert (Allowed (Logits, Id) = (Id not in 2 | 3 | 10), "without times, token" & Id'Image
-                 & (if Allowed (Logits, Id) then " is allowed" else " is not"));
+                 & Verdict (Logits, Id));
       end loop;
       Logits := Flat;
       D.Apply ((Small_Rules with delta Timestamps => False), [Token_Id'(4)], Logits);
@@ -641,6 +647,7 @@ package body Tests.Speech_Cases is
          Whisper_Fixture.Other_Architecture => E.Arch_Unsupported,
          Whisper_Fixture.Missing_Tensor => E.Arch_Missing_Tensor,
          Whisper_Fixture.Misshapen_Tensor => E.Arch_Invalid_Tensor_Shape,
+         Whisper_Fixture.Vocabulary_Mismatch => E.Arch_Vocabulary_Mismatch,
          others => E.GGUF_Metadata_Out_Of_Range];
    begin
       for Defect in Whisper_Fixture.Flaw loop
@@ -668,10 +675,17 @@ package body Tests.Speech_Cases is
    begin
       W.Open (Session, Model'Access, null, Status);
       Assert (Status.Code = E.Lifecycle_Model_Not_Ready, "a session opened on no model");
+      declare
+         Heard : W.Transcript;
+         Quiet : constant N.Real_Array (0 .. 15_999) := [others => 0.0];
+      begin
+         W.Transcribe (Session, Quiet, (others => <>), Heard, Status);
+         Assert (Status.Code = E.Lifecycle_Session_Closed, "a closed session heard");
+      end;
       Whisper_Fixture.Write (Fixture_Path);
       W.Prepare (Model, Fixture_Path, Status);
       Assert (E.Is_Ok (Status), "the fixture was refused: " & Status.Code'Image);
-      Assert (W.Language_Count (Model) = 2 and then W.Language_Code (Model, 2) = "da"
+      Assert (W.Is_Multilingual (Model) and then W.Language_Count (Model) = 2 and then W.Language_Code (Model, 2) = "da"
               and then W.Knows_Language (Model, "en") and then not W.Knows_Language (Model, "fr"),
               "the languages were not read");
       W.Open (Session, Model'Access, null, Status);
@@ -809,19 +823,43 @@ package body Tests.Speech_Cases is
       package Sp renames Model_Runner.Speech;
       use type Sp.State;
       use type Sp.Recognizer_Access;
-      Off    : Sp.Recognizer_Access := Sp.Create ((others => <>));
-      Absent : Sp.Recognizer_Access :=
-        Sp.Create ((Model_Path => To_Unbounded_String ("obj/no-such-whisper.gguf"),
-                    Source => To_Unbounded_String ("model-runner-test-no-such-source"),
-                    Max_Seconds => 2, others => <>));
+
+      --  A second of noise, played in place of the microphone: no test
+      --  opens one.
+      Sound : aliased constant N.Real_Array :=
+        [for I in N.Element_Count range 0 .. 15_999 => N.Real (0.2 * Noise (Natural (I)))];
+
+      Off, Absent, Heard_Here : Sp.Recognizer_Access;
       Status : E.Error_Info;
       Text   : Unbounded_String;
       Limit  : Boolean;
+
+      procedure Wait (Until_True : access function return Boolean) is
+      begin
+         for Tenth in 1 .. 200 loop
+            exit when Until_True.all;
+            delay 0.05;
+         end loop;
+      end Wait;
+
+      function Absent_Done return Boolean is (Sp.Has_Result (Absent.all));
+      function Ended return Boolean is (Sp.Recording_Ended (Heard_Here.all));
+      function Heard_Done return Boolean is (Sp.Has_Result (Heard_Here.all));
+      function Is_Ready return Boolean is (Sp.Current (Heard_Here.all) = Sp.Ready);
+      function Is_Unloaded return Boolean is (Sp.Current (Heard_Here.all) = Sp.Unloaded);
    begin
+      Whisper_Fixture.Write (Fixture_Path);
+      Off := Sp.Create ((others => <>));
+      Absent := Sp.Create ((Model_Path => To_Unbounded_String ("obj/no-such-whisper.gguf"),
+                            Played => Sound'Unchecked_Access, others => <>));
+      Heard_Here := Sp.Create ((Model_Path => To_Unbounded_String (Fixture_Path), Workers => 1,
+                                Played => Sound'Unchecked_Access, others => <>));
+
       Assert (Sp.Current (Off.all) = Sp.Disabled, "speech with no model is not off");
       Sp.Start (Off.all, Status);
       Assert (Status.Code = E.Lifecycle_Speech_Disabled, "speech with no model began: " & Status.Code'Image);
 
+      --  A model that is not there: refused when heard, and asked again.
       Assert (Sp.Current (Absent.all) = Sp.Unloaded, "a named model is not unloaded before use");
       Sp.Start (Absent.all, Status);
       Assert (E.Is_Ok (Status) and then Sp.Current (Absent.all) = Sp.Recording, "a recording did not begin");
@@ -829,10 +867,7 @@ package body Tests.Speech_Cases is
       Assert (Status.Code = E.Lifecycle_Invalid_State, "a second recording began beside the first");
       Sp.Finish (Absent.all, Status);
       Assert (E.Is_Ok (Status), "a recording did not finish");
-      for Tenth in 1 .. 100 loop
-         exit when Sp.Has_Result (Absent.all);
-         delay 0.1;
-      end loop;
+      Wait (Absent_Done'Access);
       Assert (Sp.Has_Result (Absent.all), "nothing came back in ten seconds");
       Sp.Take (Absent.all, Text, Status, Limit);
       Assert (E.Is_Error (Status) and then Length (Text) = 0,
@@ -844,11 +879,64 @@ package body Tests.Speech_Cases is
       Sp.Cancel (Absent.all);
       Assert (Sp.Current (Absent.all) not in Sp.Recording, "a cancel left it recording");
 
+      --  A model that is there: the second played, heard, the model kept,
+      --  then given back on asking.
+      Sp.Start (Heard_Here.all, Status);
+      Assert (E.Is_Ok (Status), "a recording did not begin");
+      Wait (Ended'Access);
+      Assert (Sp.Recording_Ended (Heard_Here.all), "the played second did not end the recording");
+      Assert (Sp.Recorded_Seconds (Heard_Here.all) = 1.0,
+              "a second was recorded as" & Sp.Recorded_Seconds (Heard_Here.all)'Image);
+      Sp.Finish (Heard_Here.all, Status);
+      Wait (Heard_Done'Access);
+      Sp.Take (Heard_Here.all, Text, Status, Limit);
+      Assert (E.Is_Ok (Status) and then not Limit, "the played second was not heard: " & Status.Code'Image);
+      Wait (Is_Ready'Access);
+      Assert (Sp.Current (Heard_Here.all) = Sp.Ready,
+              "the model was not kept: " & Sp.Image (Sp.Current (Heard_Here.all)));
+      Sp.Unload (Heard_Here.all, Status);
+      Assert (E.Is_Ok (Status), "an idle model was not given back");
+      Wait (Is_Unloaded'Access);
+      Assert (Sp.Current (Heard_Here.all) = Sp.Unloaded, "the model was not given back");
+
       Sp.Shutdown (Off);
       Sp.Shutdown (Absent);
-      Assert (Off = null and then Absent = null, "a recognizer shut down was not given back");
+      Sp.Shutdown (Heard_Here);
+      Assert (Off = null and then Absent = null and then Heard_Here = null,
+              "a recognizer shut down was not given back");
       Sp.Shutdown (Absent);
+   exception
+      --  A recognizer's tasks outlive the test unless it is shut down.
+      when others =>
+         Sp.Shutdown (Off);
+         Sp.Shutdown (Absent);
+         Sp.Shutdown (Heard_Here);
+         raise;
    end Recognizer_Lifecycle;
+
+   --  The session's adapter: with no speech model it is off, says so when
+   --  asked to record, and has nothing under way.
+   procedure Speech_Input_Without_A_Model
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use Ada.Strings.Unbounded;
+      Input  : Model_Runner.CLI.Speech_Input.Input;
+      Asked  : Model_Runner.CLI.Options.Command;
+      Status : E.Error_Info;
+      Text   : Unbounded_String;
+      Limit  : Boolean;
+   begin
+      Model_Runner.CLI.Speech_Input.Open (Input, Asked);
+      Assert (not Model_Runner.CLI.Speech_Input.Is_Enabled (Input), "speech is on with no model named");
+      Input.Begin_Dictation (Status);
+      Assert (Status.Code = E.Lifecycle_Speech_Disabled, "a recording began with no model");
+      Assert (not Input.Ended_Itself and then Input.Is_Done and then Input.Seconds = 0,
+              "speech with no model has something under way");
+      Input.Take (Text, Status, Limit);
+      Assert (Length (Text) = 0 and then Status.Code = E.Lifecycle_Speech_Disabled, "speech with no model heard");
+      Model_Runner.CLI.Speech_Input.Close (Input);
+   end Speech_Input_Without_A_Model;
 
    --  The speech model is refused, never the conversation's shrunk, where
    --  the two do not fit.
@@ -991,7 +1079,10 @@ package body Tests.Speech_Cases is
          "what is heard goes in at the cursor, spaced, one line, never as a command");
       Register_Routine
         (T, Recognizer_Lifecycle'Access,
-         "speech is off without a model, fails by name without one, and refuses two recordings at once");
+         "speech is off without a model, fails by name without one, refuses two at once, gives its model back");
+      Register_Routine
+        (T, Speech_Input_Without_A_Model'Access,
+         "a session with no speech model records nothing and says why");
       Register_Routine
         (T, Speech_Is_Admitted_By_Memory'Access,
          "a speech model is refused where it and the conversation's do not fit");

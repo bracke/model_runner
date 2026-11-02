@@ -2609,7 +2609,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Speech_Keep_Loaded := Name = "--speech-keep-loaded";
+                     Result.Speech_Keep_Loaded := Name (Name'First .. Name'First + 4) /= "--no-";
 
                   elsif Name = "--speech-enabled" or else Name = "--no-speech-enabled" then
                      No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
@@ -2620,7 +2620,7 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
-                     Result.Speech_Enabled := Name = "--speech-enabled";
+                     Result.Speech_Enabled := Name (Name'First .. Name'First + 4) /= "--no-";
 
                   elsif Name = "--speech-timestamps" then
                      No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);

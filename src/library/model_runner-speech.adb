@@ -218,7 +218,23 @@ package body Model_Runner.Speech is
       loop
          Owner.Common.Next_Capture (Work);
          exit when Work = Quit;
-         if Work = Begin_Recording then
+         if Work = Begin_Recording and then Owner.Wanted.Played /= null then
+            --  Played rather than recorded: the same chunks, as fast as
+            --  they are taken.
+            declare
+               Played : N.Real_Array renames Owner.Wanted.Played.all;
+               From   : N.Element_Count := Played'First;
+            begin
+               loop
+                  exit when From > Played'Last;
+                  Owner.Common.Append
+                    (Played (From .. N.Element_Count'Min (Played'Last, From + Values'Length - 1)), Full);
+                  From := From + Values'Length;
+                  exit when Full or else Owner.Common.Stop_Requested;
+               end loop;
+               Owner.Common.Capture_Ended (E.Success, Full);
+            end;
+         elsif Work = Begin_Recording then
             begin
                Hostkit.Microphone.Open (Device, To_String (Owner.Wanted.Source), Result, Reason);
                if Result /= Hostkit.Microphone.Done then
