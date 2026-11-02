@@ -38,6 +38,12 @@ package Model_Runner.Output.Repetition is
    --  @return True once a line came Limit times in one thought.
    function Looped (Self : Watch) return Boolean;
 
+   --  The line that came round, trimmed; empty until one did.
+   --
+   --  @param Self Watch.
+   --  @return The line.
+   function Repeated (Self : Watch) return String;
+
    --  Pass a fragment on, and watch it.
    --
    --  @param Self Watch.
@@ -70,6 +76,7 @@ private
       Line   : Ada.Strings.Unbounded.Unbounded_String;
       Seen   : Counts.Map;
       Round  : Boolean := False;
+      Again  : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Output.Repetition;

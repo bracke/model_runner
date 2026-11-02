@@ -585,8 +585,10 @@ package body Tests.Agent_Loop_Cases is
                  and then Ada.Directories.Exists (Dir & "/looped.txt"),
                  "a thought going round was not closed, or the call after it not made:"
                  & Ended.Thoughts_Looped'Image & Ended.Thoughts_Closed'Image);
-         Assert (Has (Ada.Strings.Unbounded.To_String (Screen.Text), Ag.Thought_Closing),
-                 "a thought closed going round was not shown closed");
+         Assert (Has (Ada.Strings.Unbounded.To_String (Screen.Text), Ag.Thought_Closing)
+                 and then Has (Ada.Strings.Unbounded.To_String (Screen.Text),
+                               "I keep coming back to ""We can use Ada.Numerics.Long_Long_Integer? Not."""),
+                 "a thought closed going round was not shown closed, the line it came back to named");
       end;
 
       --  What is watched: thought alone -- a think block, or harmony's
@@ -1403,6 +1405,72 @@ package body Tests.Agent_Loop_Cases is
          Assert (Ended.Thoughts_Looped = 1 and then Ada.Directories.Exists (Dir & "/round.txt"),
                  "a harmony analysis going round was not ended, or the call after it not made:"
                  & Ended.Thoughts_Looped'Image & " " & Ended.Reason'Image);
+         Conv.Close (Messages);
+         Model_Runner.Tools.Close (Offered);
+         L.Close (Session);
+      end;
+
+      --  An analysis closed going round that goes round again after: the
+      --  reply ends in its reasoning, and the note asking again names the
+      --  line -- told only that it ended in its reasoning, gpt-oss went
+      --  round the same line each time it was asked.
+      declare
+         Under    : Harness (Harmony);
+         Session  : L.Session;
+         Messages : Conv.History;
+         Offered  : Model_Runner.Tools.Definitions;
+         Runner   : Model_Runner.Tools.Builtin.Instance;
+         Stop     : Model_Runner.Stops.Set;
+         Request  : Model_Runner.Generation.Request;
+         Clock    : aliased Model_Runner.Clocks.System_Clock;
+         Seeds    : aliased Model_Runner.Entropy.Host_Source;
+         Status   : E.Error_Info;
+         Replies  : aliased Script;
+         Seen     : aliased Recorder;
+         Ended    : Ag.Outcome;
+         Line     : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not.";
+         Again    : constant String := Line & ASCII.LF;
+      begin
+         Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
+         L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+         L.Open (Session, Under.Ready, Status => Status);
+         Conv.Open (Messages, Status => Status);
+         Conv.Append (Messages, Conv.User_Role, "work", Status);
+         Model_Runner.Tools.Read
+           (Offered,
+            Model_Runner.Tools.Registry.Offered
+              ([Model_Runner.Tools.Registry.Write_Files => True, others => False]),
+            Status);
+         Model_Runner.Stops.Open (Stop);
+         Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+         Request.Max_Tokens := 256;
+         Replies.Replies.Append
+           ("<|channel|>analysis<|message|>Think." & ASCII.LF & Again & Again & Again & Again
+            & "<|channel|>analysis<|message|>Again." & ASCII.LF & Again & Again & Again & Again);
+         Replies.Replies.Append ("<|channel|>final<|message|>gave up");
+         Replies.Keeps := True;
+         Ag.Run
+           (Source     => Under.Ready,
+            Session    => Session,
+            Messages   => Messages,
+            Offered    => Offered,
+            Executor   => Runner,
+            Generation => Request,
+            Stop_Set   => Stop,
+            Sink       => null,
+            Time       => Clock'Unchecked_Access,
+            Seeds      => Seeds'Unchecked_Access,
+            Max_Steps  => 4,
+            Watch      => Seen'Unchecked_Access,
+            Script     => Replies'Unchecked_Access,
+            Result     => Ended);
+         Assert (Ended.Reason = Ag.Answered and then Ended.Thoughts_Looped = 1
+                 and then Conv.Content_At (Messages, Conv.Length (Messages)) = "gave up"
+                 and then (for some Index in 1 .. Conv.Length (Messages) =>
+                             Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index),
+                                                      "Your reasoning went round """ & Line & """") > 0),
+                 "an analysis going round again was not asked again with its line named: "
+                 & Ended.Reason'Image & Ended.Thoughts_Looped'Image);
          Conv.Close (Messages);
          Model_Runner.Tools.Close (Offered);
          L.Close (Session);

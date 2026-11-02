@@ -349,6 +349,21 @@ package body Model_Runner.Agent is
       --  was closed for it; False where the reply had closed it itself.
       Was_Open : Boolean := False;
 
+      --  The line a thought of the reply went round, where one did: named
+      --  in the thought as it is closed, and in the note where the reply
+      --  gave nothing after -- told only that it ended in its reasoning,
+      --  gpt-oss went round the same line again each time it was asked.
+      Went_Round : U.Unbounded_String;
+
+      --  What a reply that ended in its reasoning is told.
+      function Reasoning_Ended return String
+      is (if U.Length (Went_Round) = 0
+          then "Your reply ended after its reasoning, with no tool call and no answer. Go on:"
+               & " make your next tool call, or give your answer."
+          else "Your reasoning went round """ & U.To_String (Went_Round) & """ and ended with no tool"
+               & " call and no answer. Do not go over that again: make your next tool call with what you"
+               & " know, or give your answer.");
+
       --  What a script that keeps to the limit has still to give of its
       --  reply: what a generation it was cut at did not take.
       Script_Rest : U.Unbounded_String;
@@ -719,6 +734,10 @@ package body Model_Runner.Agent is
                  (if Model_Runner.Tools."=" (Read_Syntax, Model_Runner.Tools.Harmony_Call)
                   then "<|end|><|start|>assistant" else Thought_Closing);
 
+               --  Written in a thought closed going round, ahead of its
+               --  closing: the line it came back to, said to lead nowhere.
+               Turned : U.Unbounded_String;
+
                --  A script that keeps to the limit, given as a model gives:
                --  as much of its reply as the generation may take, four
                --  bytes a token, stopped at the limit where it was longer --
@@ -824,6 +843,7 @@ package body Model_Runner.Agent is
                --  opened, for the answer-alone filter to start inside it.
                Unthought.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all));
+               Went_Round := U.Null_Unbounded_String;
                Rounds.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all)
                             or else Ada.Strings.Fixed.Index
@@ -872,10 +892,15 @@ package body Model_Runner.Agent is
                   Was_Open := Rounds.Looped or else Thought_Open (Gen.Generated_Text (Last_Result), Rendered.all);
                   if Rounds.Looped then
                      Result.Thoughts_Looped := Result.Thoughts_Looped + 1;
+                     Went_Round := U.To_Unbounded_String (Rounds.Repeated);
+                     Turned := U.To_Unbounded_String
+                       (ASCII.LF & "I keep coming back to """ & Rounds.Repeated & """. Going over it again"
+                        & " gets me nowhere: I go on with what I have." & ASCII.LF);
                      Rounds.Start_Reply (Inside => False);
                   end if;
                   Thought_Before := U.To_Unbounded_String
-                    (Gen.Generated_Text (Last_Result) & (if Was_Open then Closing else ""));
+                    (Gen.Generated_Text (Last_Result)
+                     & (if Was_Open then U.To_String (Turned) & Closing else ""));
                   Thought_Tokens := Last_Result.Generated_Tokens;
                   if Was_Open and then Last_Result.Reason = Gen.Maximum_Tokens then
                      Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
@@ -888,7 +913,7 @@ package body Model_Runner.Agent is
                      declare
                         Closed : Boolean;
                      begin
-                        Model_Runner.Output.Emit (Shown, Closing, Closed);
+                        Model_Runner.Output.Emit (Shown, U.To_String (Turned) & Closing, Closed);
                      end;
                   end if;
                   declare
@@ -919,7 +944,8 @@ package body Model_Runner.Agent is
                      if Script /= null then
                         Take_Scripted
                           (Given      => Thought_Tokens,
-                           New_Prompt => (if Was_Open then (Closing'Length + 3) / 4 else 0));
+                           New_Prompt =>
+                             (if Was_Open then (U.Length (Turned) + Closing'Length + 3) / 4 else 0));
                      else
                         Gen.Generate
                           (Source   => Source,
@@ -939,6 +965,10 @@ package body Model_Runner.Agent is
                            Bounds   => Bounds,
                            Pictures => Pictures,
                            Outcome  => Last_Result);
+                     end if;
+                     --  Round again after it: the reply ends there.
+                     if Rounds.Looped then
+                        Went_Round := U.To_Unbounded_String (Rounds.Repeated);
                      end if;
                   end;
                end if;
@@ -1113,8 +1143,7 @@ package body Model_Runner.Agent is
                         Cut_Notes_Left := Cut_Notes_Left - 1;
                         Conv.Append
                           (Messages, Conv.User_Role,
-                           "Your reply ended after its reasoning, with no tool call and no answer. Go on:"
-                           & " make your next tool call, or give your answer.", Told);
+                           Reasoning_Ended, Told);
                         if E.Is_Ok (Told) then
                            goto Next_Iteration;
                         end if;
@@ -1322,8 +1351,7 @@ package body Model_Runner.Agent is
                      Cut_Notes_Left := Cut_Notes_Left - 1;
                      Conv.Append
                        (Messages, Conv.User_Role,
-                        "Your reply ended after its reasoning, with no tool call and no answer. Go on:"
-                        & " make your next tool call, or give your answer.", Told);
+                        Reasoning_Ended, Told);
                      if E.Is_Ok (Told) then
                         goto Next_Iteration;
                      end if;

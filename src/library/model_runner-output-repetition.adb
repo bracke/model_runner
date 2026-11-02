@@ -19,9 +19,12 @@ package body Model_Runner.Output.Repetition is
       Self.Line := Null_Unbounded_String;
       Self.Seen.Clear;
       Self.Round := False;
+      Self.Again := Null_Unbounded_String;
    end Start_Reply;
 
    function Looped (Self : Watch) return Boolean is (Self.Round);
+
+   function Repeated (Self : Watch) return String is (To_String (Self.Again));
 
    --  A whole line: a marker in it moves the thought -- the last one it
    --  holds says where the line leaves it -- and a line with none, in a
@@ -56,7 +59,10 @@ package body Model_Runner.Output.Repetition is
          Place := Self.Seen.Find (Kept);
          if Counts.Has_Element (Place) then
             Self.Seen.Replace_Element (Place, Counts.Element (Place) + 1);
-            Self.Round := Self.Round or else Counts.Element (Place) >= Limit;
+            if not Self.Round and then Counts.Element (Place) >= Limit then
+               Self.Round := True;
+               Self.Again := To_Unbounded_String (Kept);
+            end if;
          else
             Self.Seen.Insert (Kept, 1);
          end if;
