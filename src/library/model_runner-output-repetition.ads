@@ -5,9 +5,9 @@
 --  dozens of times through one analysis, and the task ran out of its time
 --  in it. This sink stands between the generation and the screen, passes
 --  everything on, and watches each whole line of a thought: one that comes
---  again Limit times within the same thought closes the sink, which ends
---  the generation there, for the caller to close the thought and ask for
---  the rest. Only thought is watched -- a call's text or an answer may
+--  again Limit times within the same thought, once that has run long,
+--  closes the sink, which ends the generation there, for the caller to
+--  close the thought and ask for the rest. Only thought is watched -- a call's text or an answer may
 --  hold the same line as often as it likes -- and only lines of some
 --  length: a blank, a brace, "end if;" come round in any reasoning.
 private with Ada.Containers.Indefinite_Hashed_Maps;
@@ -22,6 +22,13 @@ package Model_Runner.Output.Repetition is
    --  The shortest line counted.
    Shortest : constant Positive := 20;
 
+   --  How long a thought may be, in bytes, before a line coming round
+   --  closes it. gpt-oss at its lower efforts goes over an option in a few
+   --  alike lines and comes out of it: closed there, its edit failed in
+   --  five runs of six, against none of nine left alone. The loop this
+   --  is for ran nineteen thousand tokens.
+   Free_Length : constant Positive := 8_192;
+
    --  The watch, writing what it is given to Target, which may be null.
    type Watch (Target : Sink_Reference) is limited new Sink with private;
 
@@ -35,7 +42,8 @@ package Model_Runner.Output.Repetition is
    --  Whether the reply's thought went round, closing the watch.
    --
    --  @param Self Watch.
-   --  @return True once a line came Limit times in one thought.
+   --  @return True once a line came Limit times in one thought past
+   --    Free_Length.
    function Looped (Self : Watch) return Boolean;
 
    --  The line that came round, trimmed; empty until one did.
@@ -77,6 +85,7 @@ private
       Seen   : Counts.Map;
       Round  : Boolean := False;
       Again  : Ada.Strings.Unbounded.Unbounded_String;
+      Length : Natural := 0;
    end record;
 
 end Model_Runner.Output.Repetition;

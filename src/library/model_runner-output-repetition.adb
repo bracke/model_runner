@@ -20,6 +20,7 @@ package body Model_Runner.Output.Repetition is
       Self.Seen.Clear;
       Self.Round := False;
       Self.Again := Null_Unbounded_String;
+      Self.Length := 0;
    end Start_Reply;
 
    function Looped (Self : Watch) return Boolean is (Self.Round);
@@ -44,11 +45,13 @@ package body Model_Runner.Output.Repetition is
       if Last_Open > 0 or else Last_Shut > 0 then
          Self.Inside := Last_Open > Last_Shut;
          Self.Seen.Clear;
+         Self.Length := 0;
          return;
       end if;
       if not Self.Inside then
          return;
       end if;
+      Self.Length := Self.Length + Text'Length + 1;
       declare
          Kept : constant String := Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both);
          Place : Counts.Cursor;
@@ -59,7 +62,7 @@ package body Model_Runner.Output.Repetition is
          Place := Self.Seen.Find (Kept);
          if Counts.Has_Element (Place) then
             Self.Seen.Replace_Element (Place, Counts.Element (Place) + 1);
-            if not Self.Round and then Counts.Element (Place) >= Limit then
+            if not Self.Round and then Counts.Element (Place) >= Limit and then Self.Length >= Free_Length then
                Self.Round := True;
                Self.Again := To_Unbounded_String (Kept);
             end if;

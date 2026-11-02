@@ -576,12 +576,14 @@ package body Tests.Agent_Loop_Cases is
          Ended   : Ag.Outcome;
          Screen  : aliased Collecting;
          Again   : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
-         Round   : constant String := Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
+         Round   : constant String :=
+           [1 .. Model_Runner.Output.Repetition.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
       begin
          Replies.Replies.Append ("<think>" & ASCII.LF & "Let us see." & ASCII.LF & Round
                                  & Write ("looped.txt", "y"));
          Replies.Keeps := True;
-         Run (Replies, Seen, Ended, Reply => 512, Shown => Screen'Unchecked_Access);
+         Run (Replies, Seen, Ended, Reply => 4_096, Shown => Screen'Unchecked_Access);
          Assert (Ended.Thoughts_Looped = 1 and then Ended.Thoughts_Closed = 0
                  and then Ada.Directories.Exists (Dir & "/looped.txt"),
                  "a thought going round was not closed, or the call after it not made:"
@@ -593,12 +595,14 @@ package body Tests.Agent_Loop_Cases is
       end;
 
       --  What is watched: thought alone -- a think block, or harmony's
-      --  analysis -- whole lines of some length, within one thought.
+      --  analysis -- whole lines of some length, within one thought that
+      --  has run long.
       declare
          package Rp renames Model_Runner.Output.Repetition;
          Long  : constant String := "the same line, long enough to count" & ASCII.LF;
-         Each  : constant String := Ada.Strings.Fixed."*" (Rp.Limit, Long);
-         Short : constant String := Ada.Strings.Fixed."*" (Rp.Limit - 1, Long);
+         Pad   : constant String := [1 .. Rp.Free_Length => 'a'] & ASCII.LF;
+         Each  : constant String := Pad & Ada.Strings.Fixed."*" (Rp.Limit, Long);
+         Short : constant String := Pad & Ada.Strings.Fixed."*" (Rp.Limit - 1, Long);
 
          function Looped (Text : String; Inside : Boolean := False) return Boolean is
             Watch  : Rp.Watch (null);
@@ -614,6 +618,7 @@ package body Tests.Agent_Loop_Cases is
                  and then Looped ("<|channel|>analysis<|message|>" & ASCII.LF & Each)
                  and then not Looped ("<think>" & ASCII.LF & Short)
                  and then not Looped (Each)
+                 and then not Looped ("<think>" & ASCII.LF & Ada.Strings.Fixed."*" (Rp.Limit * 2, Long))
                  and then not Looped ("<think>" & ASCII.LF & Short
                                       & "</think>" & ASCII.LF & Short)
                  and then not Looped ("<|channel|>analysis<|message|>x<|end|><|start|>assistant<|channel|>final"
@@ -1371,7 +1376,9 @@ package body Tests.Agent_Loop_Cases is
          Seen     : aliased Recorder;
          Ended    : Ag.Outcome;
          Again    : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
-         Round    : constant String := Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
+         Round    : constant String :=
+           [1 .. Model_Runner.Output.Repetition.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
       begin
          Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
          L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
@@ -1385,7 +1392,7 @@ package body Tests.Agent_Loop_Cases is
             Status);
          Model_Runner.Stops.Open (Stop);
          Runner.Set_Base (Ada.Directories.Full_Name (Dir));
-         Request.Max_Tokens := 256;
+         Request.Max_Tokens := 4_096;
          Replies.Replies.Append
            ("<|channel|>analysis<|message|>Think." & ASCII.LF & Round
             & "<|channel|>commentary to=functions.write_file <|constrain|>json"
@@ -1435,7 +1442,9 @@ package body Tests.Agent_Loop_Cases is
          Ended    : Ag.Outcome;
          Line     : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not.";
          Again    : constant String := Line & ASCII.LF;
-         Round    : constant String := Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
+         Round    : constant String :=
+           [1 .. Model_Runner.Output.Repetition.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
       begin
          Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
          L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
@@ -1449,7 +1458,7 @@ package body Tests.Agent_Loop_Cases is
             Status);
          Model_Runner.Stops.Open (Stop);
          Runner.Set_Base (Ada.Directories.Full_Name (Dir));
-         Request.Max_Tokens := 256;
+         Request.Max_Tokens := 4_096;
          Replies.Replies.Append
            ("<|channel|>analysis<|message|>Think." & ASCII.LF & Round
             & "<|channel|>analysis<|message|>Again." & ASCII.LF & Round);
