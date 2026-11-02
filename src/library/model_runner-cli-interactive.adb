@@ -13,6 +13,7 @@ with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
+with Model_Runner.CLI.Speech_Input;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
@@ -387,6 +388,10 @@ package body Model_Runner.CLI.Interactive is
          Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
          Asked_For'Unchecked_Access, Cancel, Worker_Notes'Unchecked_Access);
       Sink     : aliased Pres.Standard_Output_Sink;
+      --  Speech into the line being typed, where a speech model is named:
+      --  its own model, read on first use, beside this one and apart from
+      --  it; stopped however the session ends.
+      Speech   : aliased Model_Runner.CLI.Speech_Input.Input;
       --  And gpt-oss's replies through a filter that shows its reasoning
       --  and answer without the harmony markup.
       Tidied   : aliased Model_Runner.Output.Harmony.Filter
@@ -1524,6 +1529,10 @@ package body Model_Runner.CLI.Interactive is
    begin
       Status := E.Exit_Success;
 
+      --  Speech input, where a speech model is named; nothing is read or
+      --  recorded until the shortcut is pressed.
+      Model_Runner.CLI.Speech_Input.Open (Speech, Item);
+
       --  Conversation mode needs a usable template; raw mode is not offered
       --  interactively because the turn structure would have nowhere to go.
       if not L.Template_Ready (Prepared) then
@@ -1666,7 +1675,11 @@ package body Model_Runner.CLI.Interactive is
                        Model_Runner.CLI.Choosers.Edited_Line
                          (Screen, Pres.Message_Value (Screen, Key) & " ", Ending,
                           Complete => Model_Runner.CLI.Completion.Candidates'Access,
-                          Describe => Model_Runner.CLI.Completion.Described'Access);
+                          Describe => Model_Runner.CLI.Completion.Described'Access,
+                          Dictate  =>
+                            (if Model_Runner.CLI.Speech_Input.Is_Enabled (Speech)
+                             then Speech'Unchecked_Access else null),
+                          Shortcut => Item.Speech_Shortcut);
                      --  Escape and Ctrl-C drop the line, as when a cooked
                      --  terminal passes them on: the key after what was typed.
                      Whole  : constant String :=

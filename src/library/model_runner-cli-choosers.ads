@@ -2,6 +2,7 @@ private with Ada.Containers.Vectors;
 
 with Ada.Strings.Unbounded;
 
+with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Presentation;
 
@@ -182,6 +183,97 @@ package Model_Runner.CLI.Choosers is
    --  @return Whether the answer was yes.
    function Confirmed_Line (Screen : in out Model_Runner.Presentation.Console; Question : String) return Boolean;
 
+   --  Speech into the line being typed: the editor's side of it.
+   --
+   --  The shortcut starts a recording; pressed again it stops, and what was
+   --  said is heard while the editor waits, then put into the line at the
+   --  cursor as one edit -- typed text before and after it kept, a space
+   --  between where there is none -- to be edited and entered as any line
+   --  is. Nothing is entered, run or sent by it: a transcript that begins
+   --  with a slash is not a command until the person makes it one.
+   --
+   --  Escape or Ctrl-C while it records drops the recording; while it is
+   --  heard, stops hearing it. Every other key pressed meanwhile is kept, in
+   --  order, and acted on once the transcript is in -- typed after it, so
+   --  nothing typed is lost and nothing the transcript lands on moves.
+   --
+   --  The calls return at once, the work being elsewhere; what the person
+   --  is shown -- that it records and for how long, that it is heard, why
+   --  it failed -- the editor says, in the reader's language.
+   type Dictation is limited interface;
+
+   --  Begin recording.
+   --
+   --  @param Item The dictation.
+   --  @param Status Success, or why not: speech off, already busy.
+   procedure Begin_Dictation (Item : in out Dictation; Status : out Model_Runner.Errors.Error_Info) is abstract;
+
+   --  How long the recording under way has run.
+   --
+   --  @param Item The dictation.
+   --  @return Whole seconds.
+   function Seconds (Item : Dictation) return Natural is abstract;
+
+   --  Whether the recording stopped of itself: at its longest, or the
+   --  microphone failing.
+   --
+   --  @param Item The dictation.
+   --  @return True once it has.
+   function Ended_Itself (Item : Dictation) return Boolean is abstract;
+
+   --  Stop recording and begin hearing it.
+   --
+   --  @param Item The dictation.
+   procedure End_Dictation (Item : in out Dictation) is abstract;
+
+   --  Drop the recording, or stop hearing it.
+   --
+   --  @param Item The dictation.
+   procedure Abandon (Item : in out Dictation) is abstract;
+
+   --  Whether what was recorded has been heard, or hearing it failed.
+   --
+   --  @param Item The dictation.
+   --  @return True when Take has something to give.
+   function Is_Done (Item : Dictation) return Boolean is abstract;
+
+   --  What was heard.
+   --
+   --  @param Item The dictation.
+   --  @param Text The transcript; empty where nothing was heard or it failed.
+   --  @param Status Success, Generation_Cancelled where it was given up, or
+   --    why it failed.
+   --  @param Limit_Reached Whether the recording stopped at its longest.
+   procedure Take
+     (Item          : in out Dictation;
+      Text          : out Ada.Strings.Unbounded.Unbounded_String;
+      Status        : out Model_Runner.Errors.Error_Info;
+      Limit_Reached : out Boolean) is abstract;
+
+   type Dictation_Access is access all Dictation'Class;
+
+   --  How a transcript goes into a line: the editor's policy, apart so that
+   --  it can be held to.
+   --
+   --  Line ends and tabs in it become spaces, and it is trimmed. A space is
+   --  put before it where the character before the cursor is not one, and
+   --  after it where the character after is a letter or a digit. Where it
+   --  would begin the line with a slash, a space goes before it: a command
+   --  is typed, not dictated. The cursor ends after it.
+   --
+   --  @param Line The line; the transcript is put into it.
+   --  @param Cursor Bytes before the cursor; after the transcript once in.
+   --  @param Spoken The transcript.
+   --  @param Most The longest the line may become, in bytes.
+   --  @param Done False, the line untouched, where the transcript is empty
+   --    once trimmed, is not valid UTF-8, or would make the line too long.
+   procedure Insert_Spoken
+     (Line   : in out Ada.Strings.Unbounded.Unbounded_String;
+      Cursor : in out Natural;
+      Spoken : String;
+      Most   : Natural;
+      Done   : out Boolean);
+
    --  What Tab completes the last word of a line to: each whole word it
    --  may become, given what is typed before the cursor.
    type Completer is access function (Before : String) return Model_Runner.Framework.Name_Lists.Vector;
@@ -210,13 +302,19 @@ package Model_Runner.CLI.Choosers is
    --  @param Complete What Tab completes a word to; null, Tab completes nothing.
    --  @param Describe What a listed word stands for: identifiers listed a
    --    line each with it; null, they are listed bare.
+   --  @param Dictate Speech into the line, or null: the shortcut then does
+   --    nothing.
+   --  @param Shortcut The key that starts and stops a recording: Ctrl-G
+   --    unless said.
    --  @return What was typed.
    function Edited_Line
      (Screen   : Model_Runner.Presentation.Console;
       Prompt   : String;
       Outcome  : out Line_End;
       Complete : Completer := null;
-      Describe : Describer := null) return String;
+      Describe : Describer := null;
+      Dictate  : Dictation_Access := null;
+      Shortcut : Character := Character'Val (7)) return String;
 
    --  Take the line typed last out of what Up and the dimmed suggestion
    --  offer again: a command refused is not one to be offered back.

@@ -908,6 +908,9 @@ package body Model_Runner.Whisper is
       end loop;
    end Run;
 
+   --  Elements of row work below which the pool is not woken.
+   Small_Rows : constant Element_Count := 32_768;
+
    procedure Rows_Through
      (Item   : in out Session;
       Kind   : Row_Task;
@@ -933,7 +936,11 @@ package body Model_Runner.Whisper is
       Work.Bias := Bias;
       Work.Epsilon := Item.Source.Epsilon;
       Work.Scale := Scale;
-      CPU.Dispatch_Shares (Item.Team, Rows, Work'Unchecked_Access, Status, Cost => Rows * Width);
+      --  A few rows -- the decoder's one a token -- are done here: waking
+      --  the pool for microseconds of work cost more than the work, some
+      --  two hundred and fifty times a token.
+      CPU.Dispatch_Shares ((if Rows * Width < Small_Rows then null else Item.Team), Rows, Work'Unchecked_Access,
+                           Status, Cost => Rows * Width);
       if E.Is_Ok (Status) and then Work.Failed then
          Status := E.Make (E.Sampling_Non_Finite_Logit);
       end if;
@@ -942,6 +949,27 @@ package body Model_Runner.Whisper is
    --------------
    -- Products --
    --------------
+
+   --  A weight's rows decoded to binary32, shared over the pool: a whole
+   --  window's weights pass through here, ninety million elements on small,
+   --  and on the calling task alone that was a tenth of the encoder.
+   type Decode_Work is new Model_Runner.Shares.Work with record
+      Weight : T.View;
+      Into   : T.Real_Array_Access;
+      Failed : Boolean := False with Atomic;
+   end record;
+
+   overriding procedure Run (Item : in out Decode_Work; First : Element_Count; Last : Element_Count) is
+      Cols   : constant Element_Count := Item.Weight.Columns;
+      Status : E.Error_Info;
+   begin
+      for R in First .. Last loop
+         T.Dequantize_Row (Item.Weight, R, Item.Into (R * Cols .. (R + 1) * Cols - 1), Status);
+         if E.Is_Error (Status) then
+            Item.Failed := True;
+         end if;
+      end loop;
+   end Run;
 
    --  Target := Count rows of Source times Weight, plus Bias: the weight
    --  decoded to binary32 and laid out in panels, then multiplied over the
@@ -963,10 +991,16 @@ package body Model_Runner.Whisper is
       if E.Is_Error (Status) then
          return;
       end if;
-      for R in 0 .. Rows - 1 loop
-         T.Dequantize_Row (Weight, R, Item.Decoded (R * Cols .. (R + 1) * Cols - 1), Status);
-         exit when E.Is_Error (Status);
-      end loop;
+      declare
+         Work : aliased Decode_Work;
+      begin
+         Work.Weight := Weight;
+         Work.Into := Item.Decoded;
+         CPU.Dispatch_Shares (Item.Team, Rows, Work'Unchecked_Access, Status, Cost => Rows * Cols);
+         if E.Is_Ok (Status) and then Work.Failed then
+            Status := E.Make (E.Tensor_Format_Unsupported);
+         end if;
+      end;
       if E.Is_Ok (Status) then
          FP.Pack (Team, Item.Decoded.all, 0, Rows, Cols, Cols, 1, Item.Weight_Panels, Status);
       end if;

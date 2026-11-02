@@ -189,7 +189,38 @@ have been retried is marked uncertain and kept; nothing is sampled.
 
 ## 8. The harness
 
-To be filled in as built.
+`Model_Runner.Speech` is the auxiliary owner: two tasks of its own (the
+microphone, a tenth of a second a read; the model, loaded on first use while
+the first recording runs), a protected state between them and the terminal,
+the states the specification names. `Hostkit.Microphone` records (moved to
+hostkit, where code that differs by host belongs: libpulse-simple opened by
+name on Linux, refusals elsewhere). `CLI.Speech_Input` adapts it to the
+line editor's `Choosers.Dictation`, and `Choosers.Edited_Line` takes the
+shortcut: recording and hearing are shown dimmed after the line; Escape or
+Ctrl-C give up; every other key is held and replayed once the transcript is
+in, so typing during it neither races the insertion nor is lost (the
+reconciliation the specification asks for, by not letting the two edits
+overlap). `Choosers.Insert_Spoken` is the insertion policy, tested apart.
+`model_runner transcribe FILE.wav` hears a file.
+
+Checked by hand, through a pty and a PulseAudio null sink playing jfk.wav
+into the recorded source: dictation after typed text, keys typed while it
+was heard landing after it, Enter sending it to the conversation's model;
+Escape while recording and while hearing leaving the line as typed.
+
+In the suite: the insertion policy; the recognizer's states, refusals and
+recovery (a source that does not exist, so no microphone is opened); the
+memory admission; and a conversation's logits the same to the bit with a
+Whisper model read, heard with, failed and closed beside it.
+
+Options: `--speech-model`, `--speech-language`, `--speech-device`,
+`--speech-max-seconds`, `--[no-]speech-keep-loaded`,
+`--speech-initial-prompt`, `--[no-]speech-enabled`, `--speech-shortcut`;
+each a settings-file key too. `transcribe` also takes `--speech-timestamps`.
+
+Not done: an undo of the insertion (the editor has none to extend); the
+shortcut's conflicts beyond the editor's own keys and terminal flow control
+(tmux passes Ctrl-G through).
 
 ## 9. The device
 

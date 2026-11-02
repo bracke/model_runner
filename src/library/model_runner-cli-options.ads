@@ -63,6 +63,7 @@ package Model_Runner.CLI.Options is
       Command_Run,
       Command_Embed,
       Command_Image,
+      Command_Transcribe,
       Command_Inspect,
       Command_Models,
       Command_Help,
@@ -556,6 +557,26 @@ package Model_Runner.CLI.Options is
       --  Pan and scan: show a wide or tall picture whole and then in
       --  crops along its longer side, as the reference processor can.
       Pan_And_Scan : Boolean := False;
+
+      --  Speech input: the Whisper file, the language spoken ("" to detect
+      --  it), the microphone's source ("" for the default), the longest
+      --  recording, whether the model stays read between recordings, text
+      --  to prompt it with, whether speech is on where a model is named,
+      --  the key that starts and stops a recording, and whether a
+      --  transcript is shown with its times.
+      Speech_Model_Path     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Speech_Language       : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Speech_Device         : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Speech_Max_Seconds    : Natural := 120;
+      Speech_Max_Seconds_Set : Boolean := False;
+      Speech_Keep_Loaded    : Boolean := True;
+      Speech_Initial_Prompt : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Speech_Enabled        : Boolean := True;
+      Speech_Shortcut       : Character := Character'Val (7);
+      Speech_Timestamps     : Boolean := False;
+
+      --  The recording transcribe hears.
+      Audio_Path            : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Draft_Tokens : Natural := 4;
 
       --  Or propose them out of the context, with no model at all: what

@@ -21,6 +21,13 @@ with Model_Runner.Whisper;
 with Model_Runner.Whisper.Decoding;
 
 with Whisper_Fixture;
+with Tiny_Model;
+with Model_Runner.Byte_Sources.Memory;
+with Model_Runner.GGUF.Containers;
+with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Llama;
+with Model_Runner.Speech;
+with Model_Runner.CLI.Choosers;
 
 package body Tests.Speech_Cases is
 
@@ -743,6 +750,187 @@ package body Tests.Speech_Cases is
       W.Close (Model, Status);
    end Whisper_Transcribes_And_Refuses;
 
+   ---------------
+   -- Insertion --
+   ---------------
+
+   --  What is heard goes in at the cursor as the editor's policy says.
+   procedure Spoken_Text_Goes_In_Where_The_Cursor_Is
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use Ada.Strings.Unbounded;
+      package Ch renames Model_Runner.CLI.Choosers;
+
+      procedure Check (Before : String; At_Cursor : Natural; Spoken : String; After : String;
+                       Cursor_After : Natural; Most : Natural := 1_000) is
+         Line   : Unbounded_String := To_Unbounded_String (Before);
+         Cursor : Natural := At_Cursor;
+         Done   : Boolean;
+      begin
+         Ch.Insert_Spoken (Line, Cursor, Spoken, Most, Done);
+         Assert (To_String (Line) = After, "[" & Before & "] with [" & Spoken & "] became [" & To_String (Line) & "]");
+         Assert (Done = (After /= Before), "[" & Spoken & "] said the wrong thing of whether it went in");
+         Assert (Cursor = Cursor_After, "the cursor stood at" & Cursor'Image & " after [" & Spoken & "]");
+      end Check;
+   begin
+      Check ("", 0, " Hello there.", "Hello there.", 12);
+      Check ("Please summarise:", 17, " And so my fellow", "Please summarise: And so my fellow", 34);
+      Check ("ab ", 3, "cd", "ab cd", 5);
+      Check ("start end", 6, "middle", "start middle end", 12);
+      Check ("start ,end", 6, "middle", "start middle,end", 12);
+      Check ("", 0, "line one" & ASCII.LF & "line" & ASCII.HT & "two", "line one line two", 17);
+      Check ("", 0, " /reset", " /reset", 7);
+      Check ("x", 1, "   ", "x", 1);
+      Check ("x", 1, [Character'Val (16#C3#)], "x", 1);
+      Check ("x", 1, "too long", "x", 1, Most => 5);
+      --  UTF-8 written out: an e with an acute, and an a with a ring.
+      declare
+         E_Acute : constant String := [Character'Val (16#C3#), Character'Val (16#A9#)];
+         A_Ring  : constant String := [Character'Val (16#C3#), Character'Val (16#A5#)];
+      begin
+         Check (E_Acute, 2, "s" & A_Ring, E_Acute & " s" & A_Ring, 6);
+         Check ("x" & E_Acute, 1, "y", "x y " & E_Acute, 3);
+      end;
+   end Spoken_Text_Goes_In_Where_The_Cursor_Is;
+
+   -----------------
+   -- Recognizers --
+   -----------------
+
+   --  Speech with no model is off and says so; one whose model and
+   --  microphone are not there fails, says why, and is ready to be asked
+   --  again; a busy one refuses a second recording; and it stops.
+   procedure Recognizer_Lifecycle
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use Ada.Strings.Unbounded;
+      package Sp renames Model_Runner.Speech;
+      use type Sp.State;
+      use type Sp.Recognizer_Access;
+      Off    : Sp.Recognizer_Access := Sp.Create ((others => <>));
+      Absent : Sp.Recognizer_Access :=
+        Sp.Create ((Model_Path => To_Unbounded_String ("obj/no-such-whisper.gguf"),
+                    Source => To_Unbounded_String ("model-runner-test-no-such-source"),
+                    Max_Seconds => 2, others => <>));
+      Status : E.Error_Info;
+      Text   : Unbounded_String;
+      Limit  : Boolean;
+   begin
+      Assert (Sp.Current (Off.all) = Sp.Disabled, "speech with no model is not off");
+      Sp.Start (Off.all, Status);
+      Assert (Status.Code = E.Lifecycle_Speech_Disabled, "speech with no model began: " & Status.Code'Image);
+
+      Assert (Sp.Current (Absent.all) = Sp.Unloaded, "a named model is not unloaded before use");
+      Sp.Start (Absent.all, Status);
+      Assert (E.Is_Ok (Status) and then Sp.Current (Absent.all) = Sp.Recording, "a recording did not begin");
+      Sp.Start (Absent.all, Status);
+      Assert (Status.Code = E.Lifecycle_Invalid_State, "a second recording began beside the first");
+      Sp.Finish (Absent.all, Status);
+      Assert (E.Is_Ok (Status), "a recording did not finish");
+      for Tenth in 1 .. 100 loop
+         exit when Sp.Has_Result (Absent.all);
+         delay 0.1;
+      end loop;
+      Assert (Sp.Has_Result (Absent.all), "nothing came back in ten seconds");
+      Sp.Take (Absent.all, Text, Status, Limit);
+      Assert (E.Is_Error (Status) and then Length (Text) = 0,
+              "a model not there was heard with: " & Status.Code'Image);
+      Assert (Sp.Current (Absent.all) not in Sp.Recording | Sp.Transcribing,
+              "a failure left it " & Sp.Image (Sp.Current (Absent.all)));
+      Sp.Start (Absent.all, Status);
+      Assert (E.Is_Ok (Status), "it could not be asked again after failing");
+      Sp.Cancel (Absent.all);
+      Assert (Sp.Current (Absent.all) not in Sp.Recording, "a cancel left it recording");
+
+      Sp.Shutdown (Off);
+      Sp.Shutdown (Absent);
+      Assert (Off = null and then Absent = null, "a recognizer shut down was not given back");
+      Sp.Shutdown (Absent);
+   end Recognizer_Lifecycle;
+
+   --  The speech model is refused, never the conversation's shrunk, where
+   --  the two do not fit.
+   procedure Speech_Is_Admitted_By_Memory
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Interfaces.Unsigned_64;
+      Status : E.Error_Info;
+      Gigabyte : constant Interfaces.Unsigned_64 := 1024 * 1024 * 1024;
+   begin
+      Model_Runner.Speech.Admit (Gigabyte, 4 * Gigabyte, Status);
+      Assert (E.Is_Ok (Status), "a gigabyte did not fit in four");
+      Model_Runner.Speech.Admit (Gigabyte, Gigabyte + 1, Status);
+      Assert (Status.Code = E.Memory_Limit_Exceeded, "a gigabyte fit with no room left over");
+      Model_Runner.Speech.Admit (4 * Gigabyte, Gigabyte, Status);
+      Assert (Status.Code = E.Memory_Limit_Exceeded, "four gigabytes fit in one");
+   end Speech_Is_Admitted_By_Memory;
+
+   ------------------
+   -- Coexistence --
+   ------------------
+
+   --  A conversation's session gives the same logits whether or not a
+   --  Whisper model was read, heard with, failed and closed beside it:
+   --  the two share nothing that either writes.
+   procedure Speech_Leaves_The_Conversation_Alone
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package L renames Model_Runner.Llama;
+      package Containers renames Model_Runner.GGUF.Containers;
+      use type N.Real_Array;
+      Image : Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+      declare
+         Held    : aliased constant Model_Runner.Bytes.Byte_Array := Image.all;
+         Source  : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
+         Parsed  : Containers.Container;
+         Model   : aliased L.Model;
+         Alone, Beside : L.Session;
+         Status  : E.Error_Info;
+         Vocabulary : constant N.Element_Count := N.Element_Count (Tiny_Model.Vocabulary);
+         First, Second : N.Real_Array (0 .. Vocabulary - 1);
+         Whisper : aliased W.Model;
+         Hearing : W.Session;
+         Heard   : W.Transcript;
+         Sound   : constant N.Real_Array (0 .. 7_999) := [others => 0.01];
+      begin
+         Containers.Reader.Parse (Parsed, Source, Status => Status);
+         L.Prepare (Model, Parsed, Source, Status => Status);
+         Assert (E.Is_Ok (Status), "the tiny model did not prepare");
+         L.Open (Alone, Model, Status => Status);
+         L.Open (Beside, Model, Status => Status);
+         for Token of Model_Runner.Tokenizer.Token_Array'[1, 4, 5, 6] loop
+            L.Evaluate (Alone, Model, Token, First, Status => Status);
+            L.Evaluate (Beside, Model, Token, Second, Status => Status);
+         end loop;
+
+         --  Whisper beside it: refused, read, heard with, closed.
+         W.Prepare (Whisper, "obj/no-such-whisper.gguf", Status);
+         Assert (E.Is_Error (Status), "a missing speech model was read");
+         Whisper_Fixture.Write (Fixture_Path);
+         W.Prepare (Whisper, Fixture_Path, Status);
+         W.Open (Hearing, Whisper'Access, null, Status);
+         W.Transcribe (Hearing, Sound, (others => <>), Heard, Status);
+         Assert (E.Is_Ok (Status), "the speech model did not hear beside the conversation");
+         W.Close (Hearing);
+         W.Close (Whisper, Status);
+
+         L.Evaluate (Alone, Model, 7, First, Status => Status);
+         L.Evaluate (Beside, Model, 7, Second, Status => Status);
+         Assert (E.Is_Ok (Status) and then L.Is_Ready (Model), "the conversation's model is not as it was");
+         Assert (First = Second, "the conversation's logits moved while speech was heard beside it");
+         L.Close (Alone);
+         L.Close (Beside);
+         L.Close (Model, Status);
+      end;
+      Model_Runner.Bytes.Free (Image);
+   end Speech_Leaves_The_Conversation_Alone;
+
    ----------
    -- Name --
    ----------
@@ -798,6 +986,18 @@ package body Tests.Speech_Cases is
       Register_Routine
         (T, Whisper_Transcribes_And_Refuses'Access,
          "a Whisper session hears, detects, refuses past its context and stops when cancelled");
+      Register_Routine
+        (T, Spoken_Text_Goes_In_Where_The_Cursor_Is'Access,
+         "what is heard goes in at the cursor, spaced, one line, never as a command");
+      Register_Routine
+        (T, Recognizer_Lifecycle'Access,
+         "speech is off without a model, fails by name without one, and refuses two recordings at once");
+      Register_Routine
+        (T, Speech_Is_Admitted_By_Memory'Access,
+         "a speech model is refused where it and the conversation's do not fit");
+      Register_Routine
+        (T, Speech_Leaves_The_Conversation_Alone'Access,
+         "a conversation's logits are the same with a speech model heard beside it");
    end Register_Tests;
 
 end Tests.Speech_Cases;

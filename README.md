@@ -67,6 +67,8 @@ model_runner [MODEL]         a session on a terminal: the model named, the
 model_runner run MODEL       generate text from a model file
 model_runner embed MODEL     reduce a text to one vector
 model_runner image [MODEL]   draw a picture from a prompt (Qwen-Image 2.1)
+model_runner transcribe FILE.wav
+                             write out what a recording says (Whisper)
 model_runner inspect MODEL   report what a model file contains
 model_runner models          list the models on hand, or remove one
 model_runner help [COMMAND]  show help for a command
@@ -970,6 +972,35 @@ clearing or copying all of it whether or not it was in use. Now the count
 bounds what is copied, nothing is cleared that will not be read, and a token
 whose first character no live stack accepts is refused before anything is
 copied at all. `tests benchmark` reports both figures.
+
+### Speech input
+
+A session can be spoken to. Name a Whisper model -- `--speech-model PATH`,
+or `speech-model = PATH` in the settings file -- and in the session Ctrl-G
+records, Ctrl-G again stops, and what was said is put into the line being
+typed, at the cursor, to be edited and sent as any typed line is. Escape
+drops the recording, or stops hearing it. Nothing is sent, and no command
+run, by speaking: a transcript beginning with a slash goes in with a space
+before it.
+
+```
+model_runner qwen3-8b --speech-model ~/models/whisper-small-f16.gguf --speech-language da
+model_runner transcribe meeting.wav --speech-model ~/models/whisper-small-f16.gguf --speech-timestamps
+```
+
+The speech model is its own: read on first use, beside the conversation's
+model and never in its place, with its own workers and memory; refused
+where the two do not fit, never the conversation's shrunk. The microphone
+is the sound server's (PipeWire or PulseAudio, through libpulse-simple; a
+host without it refuses by name); `--speech-device` names another source.
+Recordings stop at `--speech-max-seconds` (120), are kept in memory only,
+and are forgotten once heard.
+
+The Whisper file is a GGUF written from OpenAI's checkpoint as Hugging Face
+publishes it: `cd tests && ./bin/tests whisper-convert --from DIR --out
+whisper-small-f16.gguf`. Transcription is the reference's, greedy: on
+Whisper tiny and small the tokens, times and text of English and Danish
+recordings are the reference's own (docs/plan-speech.md).
 
 ### Embedding
 

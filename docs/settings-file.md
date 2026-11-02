@@ -48,7 +48,13 @@ option takes:
 | `repeat-penalty` | `--repeat-penalty` | `1.0`          |
 | `paged`        | `--paged`/`--no-paged` | `true` / `false` |
 
-A true/false value becomes the option's `--flag` or `--no-flag`. Any option
+A true/false value becomes the option's `--flag` or `--no-flag`.
+
+Speech input is set the same way: `speech-model` (a Whisper GGUF; naming
+one turns speech on), `speech-language` (`auto`, `en`, `da`, ...),
+`speech-device`, `speech-max-seconds`, `speech-keep-loaded`,
+`speech-initial-prompt`, `speech-enabled` (false turns it off where a model
+is named) and `speech-shortcut` (`ctrl-g` unless said). Any option
 the `run` command accepts works this way; a key the command does not take is
 ignored.
 

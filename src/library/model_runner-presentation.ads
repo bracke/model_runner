@@ -313,6 +313,14 @@ package Model_Runner.Presentation is
       Key       : String;
       Arguments : Model_Runner.Localization.Argument_List) return String;
 
+   --  A condition's message, as a report would say it, for a line of
+   --  status rather than a report of its own.
+   --
+   --  @param Item Console to read through.
+   --  @param Condition The condition.
+   --  @return Its rendered text; its message key where no catalog is open.
+   function Described (Item : Console; Condition : Model_Runner.Errors.Error_Info) return String;
+
    --  Which stream a line belongs on.
    --
    --  An answer is what the command was asked for, and belongs on standard

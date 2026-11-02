@@ -243,6 +243,7 @@ ordinal is never reused, not because they might appear.
 | `MR-LIFE-0008` | `error.lifecycle.mapping_required` | recovery_resource_limited | 5 | raised |
 | `MR-LIFE-0009` | `error.lifecycle.cache_unreadable` | recovery_terminal | 8 | raised |
 | `MR-LIFE-0010` | `error.lifecycle.cache_mismatched` | recovery_terminal | 8 | raised |
+| `MR-LIFE-0011` | `error.lifecycle.speech_disabled` | recovery_user_correctable | 8 | raised |
 
 ## GEN
 

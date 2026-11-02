@@ -379,6 +379,23 @@ trained to see the date was being shown July 2024 forever.
 | Editing beside pictures | `--ref-image FILE` (up to four, in order; `--mmproj PATH` for the vision projector, `mmproj-Qwen3VL-8B-Instruct-F16.gguf` unless said), as the reference's Qwen-Image 2.1 edit does: each picture resized to its nearest pixels at the picture drawn's area and its own shape, each side a multiple of 32 (Qwen_Image.Reference_Size); seen by the text encoder through Qwen3-VL's vision tower and deepstack, its rows standing for `<imageN><|vision_start|>`, a row's worth of `<|image_pad|>` and `<|vision_end|>` before the prompt (Prompts.Encode_With_Pictures), the negative read beside the same pictures; encoded by the VAE's encoder as a picture drawn from is; and laid in the denoiser's kept prefix in its pads' place -- its latent pixels through the latent's way in at time nought, at (p, row about nought, column about nought), each seeing everything before its picture and the whole of it, the text after on by the picture's longer side, the picture drawn at the frame they reach (Qwen_Image.Reference, Slot_List). The first sets the size where neither `--size` nor `--init-image` does. Kept whatever the prompt room, a megabyte a latent pixel: a 512 reference 1 GB. Checked against the reference (`tests image --expect tests/fixtures/image-crossing/edit-apple-256.expect`): the prompt's rows within 0.05 of their norm on the processor, its picture's latent at 0.99988, both steps' velocities at 0.99996 on the processor and the device; whole pictures 46-47.5 dB from the reference's at 256 and 512; the suite holds a step beside two pictures to a binary64 computation laid out as the reference lays it. A 512 edit in 20 steps takes 2 min 31 s on the device. Held to looser bounds, both for the reference's sake: its latent of a picture as a reference agrees with this program's only to 0.99988 where the same picture drawn from agrees to 0.9999998, and its first prompt row beside a picture is 0.09 from its own of the prompt alone -- the same token after the same system turn -- where this program's is the same to the bit; that row is 0.04 from the reference's on the processor and 0.10 on the device |
 | Not implemented | Inpainting, LoRA, other diffusion models, guided steps batched |
 
+## Speech recognition
+
+Speech into a session's line, and `model_runner transcribe` (docs/plan-speech.md).
+
+| Feature | State |
+| --- | --- |
+| Whisper | Implemented: tiny to large multilingual and English-only, from a GGUF of the Whisper profile (1) that `tests whisper-convert` writes from OpenAI's checkpoint as Hugging Face publishes it, matrices binary32 or binary16. Every dimension read from the file, every tensor held to it; a file of another architecture or profile, or missing a tensor, refused by name |
+| Recordings | WAV, integer samples of 8 to 32 bits or floats of 32 or 64, any channels (averaged) and rate (to 16 kHz, a windowed sinc); compressed audio refused |
+| Spectrogram | The reference's log-Mel: Slaney filters, 400-sample Hann window, 160 hop, its padding, floor and scale; held to it to 1e-4 |
+| Transcription | The reference's transcribe(): language detected or given, thirty-second windows, times decoded and the next window started at the last, the text before as the prompt, the reference's suppressions and timestamp rules; greedy only -- a window the reference would retry sampled is kept and marked uncertain |
+| Checked against the reference | Encoder output to 1e-4 of its largest value, first logits to 1e-6, and the whole transcript -- tokens, times, text -- on jfk.wav (English, tiny), 45 s of Danish across a window's edge (tiny) and 14 s of Danish (small) |
+| Microphone | Linux, through the sound server (PipeWire or PulseAudio) by libpulse-simple opened by name; macOS and Windows refuse by name |
+| Session | Ctrl-G (or `--speech-shortcut`) records and stops; the transcript put in at the cursor; Escape drops; keys pressed meanwhile kept and acted on after |
+| Processor | Yes: encoder products in binary32 panels, decoder on the processor's products |
+| Device | Not yet: the speech model runs on the processor whatever the conversation's backend |
+| Not implemented | Translation, word timestamps, beam search, the temperature fallback, quantized Whisper weights |
+
 ## Backend
 
 Three, selected with `--backend`. The rows below say which of them each

@@ -881,6 +881,13 @@ package body Model_Runner.Presentation is
       end if;
    end Put_Aside_Marked;
 
+   ---------------
+   -- Described --
+   ---------------
+
+   function Described (Item : Console; Condition : E.Error_Info) return String is
+     (if Item.Catalog = null then E.Message_Key (Condition.Code) else Loc.Describe (Item.Catalog.all, Condition));
+
    ---------------------
    -- Next_Step_Value --
    ---------------------

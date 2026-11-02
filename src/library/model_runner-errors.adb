@@ -256,6 +256,10 @@ package body Model_Runner.Errors is
             --  the message says what to change about it.
             return Recovery_User_Correctable;
 
+         --  A speech model is named on the command line or in the settings.
+         when Lifecycle_Speech_Disabled =>
+            return Recovery_User_Correctable;
+
          --  As many pictures as the prompt marks, which the caller gives.
          when Generation_Picture_Count_Mismatch =>
             return Recovery_User_Correctable;

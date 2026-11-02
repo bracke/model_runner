@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 132) of Registry_Row :=
+   Registry : constant array (1 .. 143) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -168,7 +168,7 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed => True, others => False],
        Text ("yarn_beta_slow")),
       (Text ("--threads"),
-       [Command_Run | Command_Embed | Command_Image | Command_Inspect => True,
+       [Command_Run | Command_Embed | Command_Image | Command_Transcribe | Command_Inspect => True,
         others => False],
        Text ("threads")),
       (Text ("--backend"),
@@ -217,6 +217,28 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("draft_model")),
       (Text ("--mmproj"),
        [Command_Run | Command_Image => True, others => False], Text ("mmproj")),
+      (Text ("--speech-model"),
+       [Command_Run | Command_Transcribe => True, others => False], Text ("speech_model")),
+      (Text ("--speech-language"),
+       [Command_Run | Command_Transcribe => True, others => False], Text ("speech_language")),
+      (Text ("--speech-device"),
+       [Command_Run => True, others => False], Text ("speech_device")),
+      (Text ("--speech-max-seconds"),
+       [Command_Run | Command_Transcribe => True, others => False], Text ("speech_max_seconds")),
+      (Text ("--speech-keep-loaded"),
+       [Command_Run => True, others => False], Text ("speech_keep_loaded")),
+      (Text ("--no-speech-keep-loaded"),
+       [Command_Run => True, others => False], Text ("no_speech_keep_loaded")),
+      (Text ("--speech-initial-prompt"),
+       [Command_Run | Command_Transcribe => True, others => False], Text ("speech_initial_prompt")),
+      (Text ("--speech-enabled"),
+       [Command_Run => True, others => False], Text ("speech_enabled")),
+      (Text ("--no-speech-enabled"),
+       [Command_Run => True, others => False], Text ("no_speech_enabled")),
+      (Text ("--speech-shortcut"),
+       [Command_Run => True, others => False], Text ("speech_shortcut")),
+      (Text ("--speech-timestamps"),
+       [Command_Transcribe => True, others => False], Text ("speech_timestamps")),
       (Text ("--pan-and-scan"),
        [Command_Run => True, others => False], Text ("pan_and_scan")),
       (Text ("--embed-model"),
@@ -294,6 +316,7 @@ package body Model_Runner.CLI.Options is
          when Command_Run     => "run",
          when Command_Embed   => "embed",
          when Command_Image   => "image",
+         when Command_Transcribe => "transcribe",
          when Command_Inspect => "inspect",
          when Command_Models  => "models",
          when Command_Help    => "help",
@@ -924,6 +947,9 @@ package body Model_Runner.CLI.Options is
          Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE, Flag_Turbo,
          Flag_Negative, Flag_Guidance, Flag_Picture_Count, Flag_Init_Image, Flag_Strength,
          Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
+         Flag_Speech_Model, Flag_Speech_Language, Flag_Speech_Device, Flag_Speech_Max_Seconds,
+         Flag_Speech_Keep_Loaded, Flag_Speech_Prompt, Flag_Speech_Enabled, Flag_Speech_Shortcut,
+         Flag_Speech_Timestamps,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
@@ -2520,6 +2546,131 @@ package body Model_Runner.CLI.Options is
                      Result.Projector_Path := Kept (Name, Held.all);
                      Free_Text (Held);
 
+                  elsif Name = "--speech-model" then
+                     Mark (Flag_Speech_Model, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Model_Path := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--speech-language" then
+                     Mark (Flag_Speech_Language, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     --  "auto", or a language's code as Whisper writes
+                     --  it: two or three letters. Whether the model has
+                     --  it is asked of the model.
+                     if Held.all /= "auto"
+                       and then (Held.all'Length not in 2 .. 3
+                                 or else (for some C of Held.all => C not in 'a' .. 'z'))
+                     then
+                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                        Free_Text (Held);
+                        return;
+                     end if;
+                     Result.Speech_Language := Kept (Name, (if Held.all = "auto" then "" else Held.all));
+                     Free_Text (Held);
+
+                  elsif Name = "--speech-device" then
+                     Mark (Flag_Speech_Device, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Device := Kept (Name, (if Held.all = "default" then "" else Held.all));
+                     Free_Text (Held);
+
+                  elsif Name = "--speech-max-seconds" then
+                     Natural_Value (Flag_Speech_Max_Seconds, 1, 3_600, Result.Speech_Max_Seconds, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Max_Seconds_Set := True;
+
+                  elsif Name = "--speech-keep-loaded" or else Name = "--no-speech-keep-loaded" then
+                     No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Speech_Keep_Loaded, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Keep_Loaded := Name = "--speech-keep-loaded";
+
+                  elsif Name = "--speech-enabled" or else Name = "--no-speech-enabled" then
+                     No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Speech_Enabled, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Enabled := Name = "--speech-enabled";
+
+                  elsif Name = "--speech-timestamps" then
+                     No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Speech_Timestamps, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Timestamps := True;
+
+                  elsif Name = "--speech-initial-prompt" then
+                     Mark (Flag_Speech_Prompt, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Initial_Prompt := Kept (Name, Held.all);
+                     Free_Text (Held);
+
+                  elsif Name = "--speech-shortcut" then
+                     Mark (Flag_Speech_Shortcut, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     --  Ctrl and a letter the line editor does not already
+                     --  take: not a, b, c, d, e, f, k, l, n, p, u, w, nor
+                     --  h, i, j, m (backspace, tab, the two line ends), nor
+                     --  q and s, which a terminal may keep for flow control.
+                     if Held.all'Length = 6
+                       and then Held.all (Held.all'First .. Held.all'First + 4) = "ctrl-"
+                       and then Held.all (Held.all'Last) in 'g' | 'o' | 'r' | 't' | 'v' | 'x' | 'y' | 'z'
+                     then
+                        Result.Speech_Shortcut := Character'Val
+                          (Character'Pos (Held.all (Held.all'Last)) - Character'Pos ('a') + 1);
+                     else
+                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                        Free_Text (Held);
+                        return;
+                     end if;
+                     Free_Text (Held);
+
                   elsif Name = "--pan-and-scan" then
                      No_Value (Name, Value_Present,
                                Argument (Value_First .. Argument'Last), Good);
@@ -2988,6 +3139,8 @@ package body Model_Runner.CLI.Options is
                      Result.Kind := Command_Embed;
                   elsif Argument = "image" then
                      Result.Kind := Command_Image;
+                  elsif Argument = "transcribe" then
+                     Result.Kind := Command_Transcribe;
                   elsif Argument = "inspect" then
                      Result.Kind := Command_Inspect;
                   elsif Argument = "models" then
@@ -3022,6 +3175,10 @@ package body Model_Runner.CLI.Options is
                   case Result.Kind is
                      when Command_Run | Command_Embed | Command_Image | Command_Inspect =>
                         Result.Model_Path := Kept ("", Argument);
+                     when Command_Transcribe =>
+                        --  The recording, not a model: the model is
+                        --  --speech-model's.
+                        Result.Audio_Path := Kept ("", Argument);
                      when Command_Help =>
                         --  A topic is a command name. `help inspekt` used
                         --  to print the general help and exit successfully,

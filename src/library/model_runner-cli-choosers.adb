@@ -1109,12 +1109,61 @@ package body Model_Runner.CLI.Choosers is
          end if;
    end Keep_In_History;
 
+   -------------------
+   -- Insert_Spoken --
+   -------------------
+
+   procedure Insert_Spoken
+     (Line   : in out Unbounded_String;
+      Cursor : in out Natural;
+      Spoken : String;
+      Most   : Natural;
+      Done   : out Boolean)
+   is
+      Flat : String := Spoken;
+   begin
+      Done := False;
+      for C of Flat loop
+         if C in ASCII.CR | ASCII.LF | ASCII.HT then
+            C := ' ';
+         end if;
+      end loop;
+      declare
+         Said  : constant String := Ada.Strings.Fixed.Trim (Flat, Ada.Strings.Both);
+         Has_Before : constant Boolean := Cursor > 0;
+         Has_After  : constant Boolean := Cursor < Length (Line);
+         Before : constant Character := (if Has_Before then Element (Line, Cursor) else ' ');
+         After  : constant Character := (if Has_After then Element (Line, Cursor + 1) else ' ');
+         Lead   : constant String :=
+           (if Said = "" then ""
+            elsif Has_Before and then Before /= ' ' then " "
+            --  A command is typed, not dictated.
+            elsif not Has_Before and then Said (Said'First) = '/' then " "
+            else "");
+         Trail  : constant String :=
+           (if Has_After
+              and then (Ada.Characters.Handling.Is_Alphanumeric (After) or else Character'Pos (After) >= 128)
+            then " " else "");
+      begin
+         if Said = "" or else not Model_Runner.UTF8.Is_Valid (Said)
+           or else Length (Line) + Lead'Length + Said'Length + Trail'Length > Most
+         then
+            return;
+         end if;
+         Insert (Line, Cursor + 1, Lead & Said & Trail);
+         Cursor := Cursor + Lead'Length + Said'Length;
+         Done := True;
+      end;
+   end Insert_Spoken;
+
    function Edited_Line
      (Screen   : Model_Runner.Presentation.Console;
       Prompt   : String;
       Outcome  : out Line_End;
       Complete : Completer := null;
-      Describe : Describer := null) return String
+      Describe : Describer := null;
+      Dictate  : Dictation_Access := null;
+      Shortcut : Character := Character'Val (7)) return String
    is
       Guard   : Raw_Guard;
       Text    : Unbounded_String;
@@ -1301,6 +1350,13 @@ package body Model_Runner.CLI.Choosers is
             Ghost := Null_Unbounded_String;
       end Find_Ghost;
 
+      --  What speech is doing, or what it said, shown dimmed after the
+      --  line until the next key.
+      Status : Unbounded_String;
+
+      function Status_Shown return String is
+        (if Status = Null_Unbounded_String then "" else "  " & To_String (Status));
+
       --  The prompt and the line drawn again from the prompt's row, the
       --  cursor put where it is in the line.
       procedure Redraw is
@@ -1308,7 +1364,7 @@ package body Model_Runner.CLI.Choosers is
          Line     : constant String := To_String (Text);
          --  Measured from the prompt on, as one text: a tab in the line
          --  goes to a stop counted from the row's start.
-         Shown_Total : constant Natural := Width (Prompt & Line & To_String (Ghost));
+         Shown_Total : constant Natural := Width (Prompt & Line & To_String (Ghost) & Status_Shown);
          At_Cursor : constant Natural := Width (Prompt & Line (Line'First .. Line'First + Cursor - 1));
          Wrapped  : Boolean := False;
          End_Row  : Natural;
@@ -1320,6 +1376,9 @@ package body Model_Runner.CLI.Choosers is
          --  What Right would take, dimmed after it.
          if Ghost /= Null_Unbounded_String then
             Put (ASCII.ESC & "[2m" & To_String (Ghost) & ASCII.ESC & "[0m");
+         end if;
+         if Status /= Null_Unbounded_String then
+            Put (ASCII.ESC & "[2m" & Status_Shown & ASCII.ESC & "[0m");
          end if;
          --  Ended exactly at the edge with the cursor there: on to the next
          --  row, as the terminal would only once another character came.
@@ -1381,9 +1440,35 @@ package body Model_Runner.CLI.Choosers is
          Cursor := Length (Text);
       end Show_History;
 
-      --  Read one byte, where one comes within a wait in milliseconds.
+      --  Keys pressed while speech was recorded or heard, to be acted on
+      --  as though typed now.
+      Held_Keys : Unbounded_String;
+
+      --  Read one byte from the terminal, where one comes within a wait in
+      --  milliseconds.
+      function Read_Terminal (Wait : Integer; Into : out Character) return Boolean is
+      begin
+         if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
+            return False;
+         end if;
+         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+           or else Last < Buffer'First
+         then
+            return False;
+         end if;
+         Into := Character'Val (Buffer (Buffer'First));
+         return True;
+      end Read_Terminal;
+
+      --  Read one byte, the held keys first, where one comes within a wait
+      --  in milliseconds.
       function Next (Wait : Integer := -1; Into : out Character) return Boolean is
       begin
+         if Held_Keys /= Null_Unbounded_String then
+            Into := Element (Held_Keys, 1);
+            Delete (Held_Keys, 1, 1);
+            return True;
+         end if;
          if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
             return False;
          end if;
@@ -1548,6 +1633,101 @@ package body Model_Runner.CLI.Choosers is
          end if;
       end Complete_Word;
 
+      --  Speech into the line: recorded until the shortcut comes again,
+      --  heard, and put in at the cursor. Escape or Ctrl-C drop it; any
+      --  other key is held, to be acted on once the transcript is in.
+      procedure Dictation_Round is
+         Problem : Model_Runner.Errors.Error_Info;
+         Heard   : Unbounded_String;
+         Limit   : Boolean;
+         Byte    : Character;
+
+         --  The shortcut as a person names it: Ctrl-G.
+         Key_Name : constant String :=
+           "Ctrl-" & Character'Val (Character'Pos (Shortcut) + Character'Pos ('A') - 1);
+
+         function Recording_Line return String is
+           (Pres.Next_Step_Value
+              (Screen, "cli.speech.recording",
+               [Model_Runner.Localization.Named
+                  ("count", Ada.Strings.Fixed.Trim (Natural'Image (Dictate.Seconds), Ada.Strings.Left)),
+                Model_Runner.Localization.Named ("key", Key_Name)]));
+
+         --  A key read while speech works: True where it gives speech up --
+         --  Ctrl-C, or Escape on its own -- else kept, with the rest of an
+         --  escape sequence. The shortcut is dropped while it is heard.
+         function Gives_Up (Key : Character; Hearing : Boolean) return Boolean is
+            Second : Character;
+         begin
+            if Key = ASCII.ETX then
+               return True;
+            elsif Key = ASCII.ESC then
+               if not Read_Terminal (30, Second) then
+                  return True;
+               end if;
+               Append (Held_Keys, [ASCII.ESC, Second]);
+               while Read_Terminal (0, Second) loop
+                  Append (Held_Keys, Second);
+               end loop;
+            elsif not (Hearing and then Key = Shortcut) then
+               Append (Held_Keys, Key);
+            end if;
+            return False;
+         end Gives_Up;
+      begin
+         Dictate.Begin_Dictation (Problem);
+         if Model_Runner.Errors.Is_Error (Problem) then
+            Status := To_Unbounded_String (Pres.Described (Screen, Problem));
+            return;
+         end if;
+         loop
+            Status := To_Unbounded_String (Recording_Line);
+            Redraw;
+            if Dictate.Ended_Itself then
+               Dictate.End_Dictation;
+               exit;
+            end if;
+            if Read_Terminal (200, Byte) then
+               if Byte = Shortcut then
+                  Dictate.End_Dictation;
+                  exit;
+               elsif Gives_Up (Byte, Hearing => False) then
+                  Dictate.Abandon;
+                  Status := Null_Unbounded_String;
+                  return;
+               end if;
+            end if;
+         end loop;
+         Status := To_Unbounded_String (Pres.Message_Value (Screen, "cli.speech.hearing"));
+         loop
+            Redraw;
+            exit when Dictate.Is_Done;
+            if Read_Terminal (100, Byte) and then Gives_Up (Byte, Hearing => True) then
+               Dictate.Abandon;
+            end if;
+         end loop;
+         Dictate.Take (Heard, Problem, Limit);
+         Status := Null_Unbounded_String;
+         if Model_Runner.Errors."=" (Problem.Code, Model_Runner.Errors.Generation_Cancelled) then
+            return;
+         elsif Model_Runner.Errors.Is_Error (Problem) then
+            Status := To_Unbounded_String (Pres.Described (Screen, Problem));
+         elsif Ada.Strings.Fixed.Trim (To_String (Heard), Ada.Strings.Both) = "" then
+            Status := To_Unbounded_String (Pres.Message_Value (Screen, "cli.speech.nothing"));
+         else
+            declare
+               Done : Boolean;
+            begin
+               Insert_Spoken (Text, Cursor, To_String (Heard), Most => 1_048_576, Done => Done);
+               if not Done then
+                  Status := To_Unbounded_String (Pres.Message_Value (Screen, "cli.speech.not_inserted"));
+               elsif Limit then
+                  Status := To_Unbounded_String (Pres.Message_Value (Screen, "cli.speech.limit"));
+               end if;
+            end;
+         end if;
+      end Dictation_Round;
+
       Key : Character;
 
    begin
@@ -1569,200 +1749,205 @@ package body Model_Runner.CLI.Choosers is
             Outcome := Ended;
             exit;
          end if;
-         case Key is
-            when ASCII.CR | ASCII.LF =>
-               Outcome := Entered;
-               exit;
-            when ASCII.ETX =>
-               Outcome := Interrupted;
-               exit;
-            when ASCII.EOT =>
-               if Length (Text) = 0 then
-                  Outcome := Ended;
+         Status := Null_Unbounded_String;
+         if Dictate /= null and then Key = Shortcut and then not Pasting then
+            Dictation_Round;
+         else
+            case Key is
+               when ASCII.CR | ASCII.LF =>
+                  Outcome := Entered;
                   exit;
-               end if;
-               Take (Cursor, On (Cursor));
-            when ASCII.DEL | ASCII.BS =>
-               declare
-                  From : constant Natural := Back (Cursor);
-               begin
-                  Take (From, Cursor);
-                  Cursor := From;
-               end;
-            when ASCII.SOH =>
-               Cursor := 0;
-            when ASCII.ENQ =>
-               Cursor := Length (Text);
-            when ASCII.STX =>
-               Cursor := Back (Cursor);
-            when ASCII.ACK =>
-               if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
-                  Append (Text, Ghost);
-                  Cursor := Length (Text);
-               else
-                  Cursor := On (Cursor);
-               end if;
-            when ASCII.VT =>
-               Take (Cursor, Length (Text));
-            when ASCII.NAK =>
-               Take (0, Cursor);
-               Cursor := 0;
-            when ASCII.ETB =>
-               declare
-                  From : Natural := Cursor;
-               begin
-                  while From > 0 and then Element (Text, From) = ' ' loop
-                     From := From - 1;
-                  end loop;
-                  while From > 0 and then Element (Text, From) /= ' ' loop
-                     From := From - 1;
-                  end loop;
-                  Take (From, Cursor);
-                  Cursor := From;
-               end;
-            when ASCII.FF =>
-               Put (ASCII.ESC & "[H" & ASCII.ESC & "[2J");
-               Drawn_Row := 0;
-            when ASCII.DLE =>
-               if Looking > 1 then
-                  if Looking > Natural (History.Length) then
-                     Typing := Text;
-                  end if;
-                  Looking := Looking - 1;
-                  Show_History (Looking);
-               end if;
-            when ASCII.SO =>
-               if Looking <= Natural (History.Length) then
-                  Looking := Looking + 1;
-                  Show_History (Looking);
-               end if;
-            when ASCII.ESC =>
-               --  Escape alone drops the line; a key's sequence is that key.
-               declare
-                  Second : Character;
-               begin
-                  if not Next (30, Second) then
-                     Outcome := Escaped;
+               when ASCII.ETX =>
+                  Outcome := Interrupted;
+                  exit;
+               when ASCII.EOT =>
+                  if Length (Text) = 0 then
+                     Outcome := Ended;
                      exit;
-                  elsif Second in '[' | 'O' then
-                     declare
-                        Number : Natural := 0;
-                        Final  : Character := ASCII.NUL;
-                        Part   : Character;
-                     begin
-                        while Next (30, Part) loop
-                           if Part in '0' .. '9' then
-                              --  Held, not grown past: a pasted run of digits
-                              --  is no key, and overflowed out of the editor.
-                              if Number <= 9_999 then
-                                 Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
-                              end if;
-                           elsif Part /= ';' then
-                              Final := Part;
-                              exit;
-                           end if;
-                        end loop;
-                        case Final is
-                           when 'A' =>
-                              if Looking > 1 then
-                                 if Looking > Natural (History.Length) then
-                                    Typing := Text;
-                                 end if;
-                                 Looking := Looking - 1;
-                                 Show_History (Looking);
-                              end if;
-                           when 'B' =>
-                              if Looking <= Natural (History.Length) then
-                                 Looking := Looking + 1;
-                                 Show_History (Looking);
-                              end if;
-                           when 'C' =>
-                              --  At the end, with a suggestion: taken -- with
-                              --  Ctrl or Alt, only its next word.
-                              if Number in 13 | 15 and then Cursor = Length (Text)
-                                and then Ghost /= Null_Unbounded_String
-                              then
-                                 declare
-                                    Rest : constant String := To_String (Ghost);
-                                    Upto : Natural := Rest'First;
-                                 begin
-                                    while Upto <= Rest'Last and then Rest (Upto) = ' ' loop
-                                       Upto := Upto + 1;
-                                    end loop;
-                                    while Upto <= Rest'Last and then Rest (Upto) /= ' ' loop
-                                       Upto := Upto + 1;
-                                    end loop;
-                                    Append (Text, Rest (Rest'First .. Upto - 1));
-                                    Cursor := Length (Text);
-                                 end;
-                              elsif Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
-                                 Append (Text, Ghost);
-                                 Cursor := Length (Text);
-                              else
-                                 Cursor := On (Cursor);
-                              end if;
-                           when 'D' =>
-                              Cursor := Back (Cursor);
-                           when 'H' =>
-                              Cursor := 0;
-                           when 'F' =>
-                              if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
-                                 Append (Text, Ghost);
-                              end if;
-                              Cursor := Length (Text);
-                           when '~' =>
-                              if Number in 1 | 7 then
-                                 Cursor := 0;
-                              elsif Number in 4 | 8 then
-                                 Cursor := Length (Text);
-                              elsif Number = 3 then
-                                 Take (Cursor, On (Cursor));
-                              elsif Number = 200 then
-                                 Pasting := True;
-                              elsif Number = 201 then
-                                 Pasting := False;
-                              end if;
-                           when others =>
-                              null;
-                        end case;
-                     end;
-                  elsif Second = 'b' then
-                     while Cursor > 0 and then Element (Text, Cursor) = ' ' loop
-                        Cursor := Cursor - 1;
-                     end loop;
-                     while Cursor > 0 and then Element (Text, Cursor) /= ' ' loop
-                        Cursor := Cursor - 1;
-                     end loop;
-                  elsif Second = 'f' then
-                     while Cursor < Length (Text) and then Element (Text, Cursor + 1) = ' ' loop
-                        Cursor := Cursor + 1;
-                     end loop;
-                     while Cursor < Length (Text) and then Element (Text, Cursor + 1) /= ' ' loop
-                        Cursor := Cursor + 1;
-                     end loop;
                   end if;
-               end;
-            when ASCII.HT =>
-               --  A tab in pasted text is the text's, not a key asking for
-               --  completion -- a pasted block of code completed itself.
-               if Pasting then
-                  Insert (Text, Cursor + 1, [1 => Key]);
-                  Cursor := Cursor + 1;
-               elsif Complete /= null then
-                  Complete_Word;
-               end if;
-            when others =>
-               if Key >= ' ' then
-                  Insert (Text, Cursor + 1, [1 => Key]);
-                  Cursor := Cursor + 1;
-               end if;
-         end case;
+                  Take (Cursor, On (Cursor));
+               when ASCII.DEL | ASCII.BS =>
+                  declare
+                     From : constant Natural := Back (Cursor);
+                  begin
+                     Take (From, Cursor);
+                     Cursor := From;
+                  end;
+               when ASCII.SOH =>
+                  Cursor := 0;
+               when ASCII.ENQ =>
+                  Cursor := Length (Text);
+               when ASCII.STX =>
+                  Cursor := Back (Cursor);
+               when ASCII.ACK =>
+                  if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                     Append (Text, Ghost);
+                     Cursor := Length (Text);
+                  else
+                     Cursor := On (Cursor);
+                  end if;
+               when ASCII.VT =>
+                  Take (Cursor, Length (Text));
+               when ASCII.NAK =>
+                  Take (0, Cursor);
+                  Cursor := 0;
+               when ASCII.ETB =>
+                  declare
+                     From : Natural := Cursor;
+                  begin
+                     while From > 0 and then Element (Text, From) = ' ' loop
+                        From := From - 1;
+                     end loop;
+                     while From > 0 and then Element (Text, From) /= ' ' loop
+                        From := From - 1;
+                     end loop;
+                     Take (From, Cursor);
+                     Cursor := From;
+                  end;
+               when ASCII.FF =>
+                  Put (ASCII.ESC & "[H" & ASCII.ESC & "[2J");
+                  Drawn_Row := 0;
+               when ASCII.DLE =>
+                  if Looking > 1 then
+                     if Looking > Natural (History.Length) then
+                        Typing := Text;
+                     end if;
+                     Looking := Looking - 1;
+                     Show_History (Looking);
+                  end if;
+               when ASCII.SO =>
+                  if Looking <= Natural (History.Length) then
+                     Looking := Looking + 1;
+                     Show_History (Looking);
+                  end if;
+               when ASCII.ESC =>
+                  --  Escape alone drops the line; a key's sequence is that key.
+                  declare
+                     Second : Character;
+                  begin
+                     if not Next (30, Second) then
+                        Outcome := Escaped;
+                        exit;
+                     elsif Second in '[' | 'O' then
+                        declare
+                           Number : Natural := 0;
+                           Final  : Character := ASCII.NUL;
+                           Part   : Character;
+                        begin
+                           while Next (30, Part) loop
+                              if Part in '0' .. '9' then
+                                 --  Held, not grown past: a pasted run of digits
+                                 --  is no key, and overflowed out of the editor.
+                                 if Number <= 9_999 then
+                                    Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
+                                 end if;
+                              elsif Part /= ';' then
+                                 Final := Part;
+                                 exit;
+                              end if;
+                           end loop;
+                           case Final is
+                              when 'A' =>
+                                 if Looking > 1 then
+                                    if Looking > Natural (History.Length) then
+                                       Typing := Text;
+                                    end if;
+                                    Looking := Looking - 1;
+                                    Show_History (Looking);
+                                 end if;
+                              when 'B' =>
+                                 if Looking <= Natural (History.Length) then
+                                    Looking := Looking + 1;
+                                    Show_History (Looking);
+                                 end if;
+                              when 'C' =>
+                                 --  At the end, with a suggestion: taken -- with
+                                 --  Ctrl or Alt, only its next word.
+                                 if Number in 13 | 15 and then Cursor = Length (Text)
+                                   and then Ghost /= Null_Unbounded_String
+                                 then
+                                    declare
+                                       Rest : constant String := To_String (Ghost);
+                                       Upto : Natural := Rest'First;
+                                    begin
+                                       while Upto <= Rest'Last and then Rest (Upto) = ' ' loop
+                                          Upto := Upto + 1;
+                                       end loop;
+                                       while Upto <= Rest'Last and then Rest (Upto) /= ' ' loop
+                                          Upto := Upto + 1;
+                                       end loop;
+                                       Append (Text, Rest (Rest'First .. Upto - 1));
+                                       Cursor := Length (Text);
+                                    end;
+                                 elsif Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                                    Append (Text, Ghost);
+                                    Cursor := Length (Text);
+                                 else
+                                    Cursor := On (Cursor);
+                                 end if;
+                              when 'D' =>
+                                 Cursor := Back (Cursor);
+                              when 'H' =>
+                                 Cursor := 0;
+                              when 'F' =>
+                                 if Cursor = Length (Text) and then Ghost /= Null_Unbounded_String then
+                                    Append (Text, Ghost);
+                                 end if;
+                                 Cursor := Length (Text);
+                              when '~' =>
+                                 if Number in 1 | 7 then
+                                    Cursor := 0;
+                                 elsif Number in 4 | 8 then
+                                    Cursor := Length (Text);
+                                 elsif Number = 3 then
+                                    Take (Cursor, On (Cursor));
+                                 elsif Number = 200 then
+                                    Pasting := True;
+                                 elsif Number = 201 then
+                                    Pasting := False;
+                                 end if;
+                              when others =>
+                                 null;
+                           end case;
+                        end;
+                     elsif Second = 'b' then
+                        while Cursor > 0 and then Element (Text, Cursor) = ' ' loop
+                           Cursor := Cursor - 1;
+                        end loop;
+                        while Cursor > 0 and then Element (Text, Cursor) /= ' ' loop
+                           Cursor := Cursor - 1;
+                        end loop;
+                     elsif Second = 'f' then
+                        while Cursor < Length (Text) and then Element (Text, Cursor + 1) = ' ' loop
+                           Cursor := Cursor + 1;
+                        end loop;
+                        while Cursor < Length (Text) and then Element (Text, Cursor + 1) /= ' ' loop
+                           Cursor := Cursor + 1;
+                        end loop;
+                     end if;
+                  end;
+               when ASCII.HT =>
+                  --  A tab in pasted text is the text's, not a key asking for
+                  --  completion -- a pasted block of code completed itself.
+                  if Pasting then
+                     Insert (Text, Cursor + 1, [1 => Key]);
+                     Cursor := Cursor + 1;
+                  elsif Complete /= null then
+                     Complete_Word;
+                  end if;
+               when others =>
+                  if Key >= ' ' then
+                     Insert (Text, Cursor + 1, [1 => Key]);
+                     Cursor := Cursor + 1;
+                  end if;
+            end case;
+         end if;
          if Key /= ASCII.HT then
             Tabbed := False;
          end if;
-         --  Bytes still coming -- a paste, the rest of a character -- are
-         --  taken before it is drawn again.
-         if not Hostkit.Descriptors.Wait_Readable (Input, 0) then
+         --  Bytes still coming -- a paste, the rest of a character, keys
+         --  held while speech worked -- are taken before it is drawn again.
+         if Held_Keys = Null_Unbounded_String and then not Hostkit.Descriptors.Wait_Readable (Input, 0) then
             Find_Ghost;
             Redraw;
          end if;

@@ -332,6 +332,9 @@ package Model_Runner.Errors is
       Lifecycle_Cache_Unreadable,
       Lifecycle_Cache_Mismatched,
 
+      --  Speech input was asked for with no speech model named.
+      Lifecycle_Speech_Disabled,
+
       --  Generation coordination.
       Generation_Prompt_Too_Long,
       Generation_Context_Exhausted,
