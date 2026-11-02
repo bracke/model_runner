@@ -57,6 +57,9 @@ ordinal is never reused, not because they might appear.
 | `MR-IO-0009` | `error.io.input_too_large` | recovery_user_correctable | 6 | raised |
 | `MR-IO-0010` | `error.io.image_unreadable` | recovery_user_correctable | 6 | raised |
 | `MR-IO-0011` | `error.io.video_unreadable` | recovery_user_correctable | 6 | raised |
+| `MR-IO-0012` | `error.io.audio_unreadable` | recovery_user_correctable | 6 | raised |
+| `MR-IO-0013` | `error.io.audio_too_long` | recovery_user_correctable | 6 | raised |
+| `MR-IO-0014` | `error.io.microphone_unavailable` | recovery_user_correctable | 6 | raised |
 
 ## GGUF
 

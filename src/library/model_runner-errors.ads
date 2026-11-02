@@ -120,6 +120,19 @@ package Model_Runner.Errors is
       --  version this build reads, or the file is not a video they read.
       IO_Video_Unreadable,
 
+      --  A file given as a recording is not one this build reads: not a
+      --  WAV file, or one whose samples are compressed or of a size the
+      --  reader does not take.
+      IO_Audio_Unreadable,
+
+      --  A recording longer than the caller allows, refused before its
+      --  samples are decoded.
+      IO_Audio_Too_Long,
+
+      --  No microphone could be opened: the sound server's library is not
+      --  there, the server refused, or the device named is not one.
+      IO_Microphone_Unavailable,
+
       --  GGUF container.
       GGUF_Truncated,
       GGUF_Invalid_Magic,
