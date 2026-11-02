@@ -334,6 +334,9 @@ package body Model_Runner.Framework.Invocations is
       --  fences its report says nothing else, or is refused and asked
       --  again.
       Outside  : Boolean := False;
+      --  The fields said before the status, each as |name|: a summary that
+      --  leads in to the report is the report's own summary's to replace.
+      Said_Early : Unbounded_String;
    begin
       Result := (others => <>);
       Status := E.Success;
@@ -348,6 +351,7 @@ package body Model_Runner.Framework.Invocations is
          In_Fence := False;
          Current := Null_Unbounded_String;
          Result := (others => <>);
+         Said_Early := Null_Unbounded_String;
          for Line of Every_Line (Read_As) loop
             if Trim (Line)'Length >= 3 and then Trim (Line) (Trim (Line)'First .. Trim (Line)'First + 2) = "```" then
                In_Fence := not In_Fence;
@@ -390,12 +394,32 @@ package body Model_Runner.Framework.Invocations is
                   --  Said again the same, as a closing recap says it: one
                   --  thing meant, and nothing more to read into it.
                   Current := Null_Unbounded_String;
+               elsif Name in "summary" | "verify" and then Result.Values.Contains (Name)
+                 and then Result.Values.Contains ("status")
+                 and then Ada.Strings.Fixed.Index (To_String (Said_Early), "|" & Name & "|") > 0
+               then
+                  --  Said before the status and again in the report after
+                  --  it: the report's is meant, the first led in to it.
+                  --  gpt-oss opened a found answer with a summary, then gave
+                  --  its report whole, and the task failed refused.
+                  declare
+                     Early   : constant String := To_String (Said_Early);
+                     At_Name : constant Natural := Ada.Strings.Fixed.Index (Early, "|" & Name & "|");
+                  begin
+                     Said_Early := To_Unbounded_String
+                       (Early (Early'First .. At_Name - 1) & Early (At_Name + Name'Length + 2 .. Early'Last));
+                  end;
+                  Current := To_Unbounded_String (Name);
+                  Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
                elsif Name in "status" | "summary" | "verify" and then Result.Values.Contains (Name) then
                   --  Said twice, differently: which is meant cannot be told.
                   Refuse (Name, "the answer has " & Name & ": twice; give it once");
                   return;
                elsif Name /= "" and then Rules.Fields.Contains (Name) then
                   Current := To_Unbounded_String (Name);
+                  if not Result.Values.Contains ("status") then
+                     Append (Said_Early, "|" & Name & "|");
+                  end if;
                   Result.Values.Include (Name, Item_Of (Line (Colon + 1 .. Line'Last)));
                elsif Name'Length in 1 .. 32
                  and then (for all C of Name => C in 'a' .. 'z' | '0' .. '9' | '_')

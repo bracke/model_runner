@@ -12,7 +12,6 @@ with Model_Runner.Grammar;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Output.Harmony;
-with Model_Runner.Output.Repetition;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Grammar.Rooms;
@@ -154,6 +153,7 @@ package body Model_Runner.Agent is
       Carry      : Memory_Reference := null;
       Pace_Tokens : Natural := 0;
       Pace        : Pace_Reference := null;
+      Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
       Result     : out Outcome)
    is
       --  The shape the model's calls are read in: the caller's, unless it
@@ -251,9 +251,13 @@ package body Model_Runner.Agent is
          then Tidied'Unchecked_Access
          elsif Hide_Reasoning then Unthought'Unchecked_Access
          else Sink);
-      --  And watched on the way for a thought that goes round.
+      --  And watched on the way for a thought that goes round, by the
+      --  rule its family keeps to.
+      Kept_Rule : constant Model_Runner.Output.Repetition.Rule :=
+        (if Round_Rule /= null then Round_Rule.all else Round_Rule_For (Read_Syntax, Effort));
       Rounds  : aliased Model_Runner.Output.Repetition.Watch (Shown);
-      Watched : constant Model_Runner.Output.Sink_Reference := Rounds'Unchecked_Access;
+      Watched : constant Model_Runner.Output.Sink_Reference :=
+        (if Kept_Rule.Watching then Rounds'Unchecked_Access else Shown);
 
       --  Tokens the run has spent, its own and its children's.
       function Spent return Natural is (Result.Generated_Tokens + Result.Delegated_Tokens);
@@ -844,6 +848,7 @@ package body Model_Runner.Agent is
                Unthought.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all));
                Went_Round := U.Null_Unbounded_String;
+               Rounds.Keep_To (Kept_Rule);
                Rounds.Start_Reply
                  (Inside => Thought_Open ("", Rendered.all)
                             or else Ada.Strings.Fixed.Index

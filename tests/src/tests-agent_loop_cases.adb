@@ -239,7 +239,9 @@ package body Tests.Agent_Loop_Cases is
       Total    : Natural := 0;
       Steps    : Positive := 24;
       Talk     : access Conv.History := null;
-      Syntax   : Model_Runner.Tools.Call_Syntax := Model_Runner.Tools.Tool_Call_JSON)
+      Syntax   : Model_Runner.Tools.Call_Syntax := Model_Runner.Tools.Tool_Call_JSON;
+      Effort   : Model_Runner.Templates.Reasoning_Effort := Model_Runner.Templates.Effort_Unstated;
+      Rounds   : access constant Model_Runner.Output.Repetition.Rule := null)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -291,6 +293,8 @@ package body Tests.Agent_Loop_Cases is
          Tool_Syntax => Syntax,
          Thinking   => (if Budget > 0 then Model_Runner.Templates.Thinking_On else Model_Runner.Templates.Thinking_Off),
          Think_Budget => Budget,
+         Effort     => Effort,
+         Round_Rule => Rounds,
          Compact    => Compact,
          Watch      => Seen'Unchecked_Access,
          Approve    => Approver,
@@ -577,13 +581,14 @@ package body Tests.Agent_Loop_Cases is
          Screen  : aliased Collecting;
          Again   : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
          Round   : constant String :=
-           [1 .. Model_Runner.Output.Repetition.Free_Length => 'a'] & ASCII.LF
-           & Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
+           [1 .. Ag.Harmony_Rounds.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit, Again);
       begin
          Replies.Replies.Append ("<think>" & ASCII.LF & "Let us see." & ASCII.LF & Round
                                  & Write ("looped.txt", "y"));
          Replies.Keeps := True;
-         Run (Replies, Seen, Ended, Reply => 4_096, Shown => Screen'Unchecked_Access);
+         Run (Replies, Seen, Ended, Reply => 4_096, Shown => Screen'Unchecked_Access,
+              Rounds => Ag.Harmony_Rounds'Access);
          Assert (Ended.Thoughts_Looped = 1 and then Ended.Thoughts_Closed = 0
                  and then Ada.Directories.Exists (Dir & "/looped.txt"),
                  "a thought going round was not closed, or the call after it not made:"
@@ -594,20 +599,45 @@ package body Tests.Agent_Loop_Cases is
                  "a thought closed going round was not shown closed, the line it came back to named");
       end;
 
+      --  A family with no rule measured for it, or gpt-oss below high
+      --  effort, is left to come out of a thought going round.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Again   : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
+         Round   : constant String :=
+           [1 .. Ag.Harmony_Rounds.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit, Again);
+      begin
+         Replies.Replies.Append ("<think>" & ASCII.LF & Round & "</think>" & Write ("left.txt", "y"));
+         Replies.Keeps := True;
+         Run (Replies, Seen, Ended, Reply => 4_096, Effort => Model_Runner.Templates.Effort_High);
+         Assert (Ended.Thoughts_Looped = 0 and then Ada.Directories.Exists (Dir & "/left.txt"),
+                 "a thought going round in a family with no rule was closed:" & Ended.Thoughts_Looped'Image);
+         Assert (not Ag.Round_Rule_For (Model_Runner.Tools.Tool_Call_JSON, Model_Runner.Templates.Effort_High).Watching
+                 and then not Ag.Round_Rule_For (Model_Runner.Tools.Harmony_Call,
+                                                 Model_Runner.Templates.Effort_Medium).Watching
+                 and then Ag.Round_Rule_For (Model_Runner.Tools.Harmony_Call,
+                                             Model_Runner.Templates.Effort_High).Watching,
+                 "a family's rule moved another's, or gpt-oss's held below high effort");
+      end;
+
       --  What is watched: thought alone -- a think block, or harmony's
       --  analysis -- whole lines of some length, within one thought that
       --  has run long.
       declare
          package Rp renames Model_Runner.Output.Repetition;
          Long  : constant String := "the same line, long enough to count" & ASCII.LF;
-         Pad   : constant String := [1 .. Rp.Free_Length => 'a'] & ASCII.LF;
-         Each  : constant String := Pad & Ada.Strings.Fixed."*" (Rp.Limit, Long);
-         Short : constant String := Pad & Ada.Strings.Fixed."*" (Rp.Limit - 1, Long);
+         Pad   : constant String := [1 .. Ag.Harmony_Rounds.Free_Length => 'a'] & ASCII.LF;
+         Each  : constant String := Pad & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit, Long);
+         Short : constant String := Pad & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit - 1, Long);
 
          function Looped (Text : String; Inside : Boolean := False) return Boolean is
             Watch  : Rp.Watch (null);
             Closed : Boolean;
          begin
+            Watch.Keep_To (Ag.Harmony_Rounds);
             Watch.Start_Reply (Inside);
             Watch.Write (Text, Closed);
             return Watch.Looped and then Closed;
@@ -618,7 +648,7 @@ package body Tests.Agent_Loop_Cases is
                  and then Looped ("<|channel|>analysis<|message|>" & ASCII.LF & Each)
                  and then not Looped ("<think>" & ASCII.LF & Short)
                  and then not Looped (Each)
-                 and then not Looped ("<think>" & ASCII.LF & Ada.Strings.Fixed."*" (Rp.Limit * 2, Long))
+                 and then not Looped ("<think>" & ASCII.LF & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit * 2, Long))
                  and then not Looped ("<think>" & ASCII.LF & Short
                                       & "</think>" & ASCII.LF & Short)
                  and then not Looped ("<|channel|>analysis<|message|>x<|end|><|start|>assistant<|channel|>final"
@@ -1377,8 +1407,8 @@ package body Tests.Agent_Loop_Cases is
          Ended    : Ag.Outcome;
          Again    : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not." & ASCII.LF;
          Round    : constant String :=
-           [1 .. Model_Runner.Output.Repetition.Free_Length => 'a'] & ASCII.LF
-           & Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
+           [1 .. Ag.Harmony_Rounds.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit, Again);
       begin
          Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
          L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
@@ -1413,6 +1443,7 @@ package body Tests.Agent_Loop_Cases is
             Max_Steps  => 4,
             Watch      => Seen'Unchecked_Access,
             Script     => Replies'Unchecked_Access,
+            Effort     => Model_Runner.Templates.Effort_High,
             Result     => Ended);
          Assert (Ended.Thoughts_Looped = 1 and then Ada.Directories.Exists (Dir & "/round.txt"),
                  "a harmony analysis going round was not ended, or the call after it not made:"
@@ -1443,8 +1474,8 @@ package body Tests.Agent_Loop_Cases is
          Line     : constant String := "We can use Ada.Numerics.Long_Long_Integer? Not.";
          Again    : constant String := Line & ASCII.LF;
          Round    : constant String :=
-           [1 .. Model_Runner.Output.Repetition.Free_Length => 'a'] & ASCII.LF
-           & Ada.Strings.Fixed."*" (Model_Runner.Output.Repetition.Limit, Again);
+           [1 .. Ag.Harmony_Rounds.Free_Length => 'a'] & ASCII.LF
+           & Ada.Strings.Fixed."*" (Ag.Harmony_Rounds.Limit, Again);
       begin
          Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
          L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
@@ -1478,6 +1509,7 @@ package body Tests.Agent_Loop_Cases is
             Max_Steps  => 4,
             Watch      => Seen'Unchecked_Access,
             Script     => Replies'Unchecked_Access,
+            Effort     => Model_Runner.Templates.Effort_High,
             Result     => Ended);
          Assert (Ended.Reason = Ag.Answered and then Ended.Thoughts_Looped = 1
                  and then Conv.Content_At (Messages, Conv.Length (Messages)) = "gave up"

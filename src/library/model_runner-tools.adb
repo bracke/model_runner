@@ -2381,6 +2381,19 @@ package body Model_Runner.Tools is
                      Name_Last := Name_Last + 1;
                   end loop;
 
+                  --  A channel's name run into the recipient's, its marker
+                  --  left out: gpt-oss wrote read_filecommentary, was told
+                  --  no tool goes by that name, and called again.
+                  declare
+                     Glued : constant String := "commentary";
+                  begin
+                     if Name_Last - Name_First + 1 > Glued'Length
+                       and then Reply (Name_Last - Glued'Length + 1 .. Name_Last) = Glued
+                     then
+                        Name_Last := Name_Last - Glued'Length;
+                     end if;
+                  end;
+
                   Body_At := Ada.Strings.Fixed.Index
                     (Reply (Name_Last + 1 .. Reply'Last), Harmony_Message);
 

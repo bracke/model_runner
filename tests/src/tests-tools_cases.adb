@@ -3815,6 +3815,9 @@ package body Tests.Tools_Cases is
             "a call named on the channel was not read");
       Same (Read (Header_Reply), "list_directory({""path"": "".""})",
             "a call named in the header was not read");
+      Same (Read ("<|start|>assistant to=functions.list_directorycommentary json<|message|>{""path"": "".""}"),
+            "list_directory({""path"": "".""})",
+            "a channel's name run into the recipient's, its marker left out, was read as part of the name");
       Same (Read (Answer_Reply), "", "an answer was read as a call");
       Same (Read ("<|channel|>commentary to=functions.list_directory json"),
             "error TOOLS_CALL_MALFORMED",

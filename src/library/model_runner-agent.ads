@@ -9,6 +9,7 @@ with Model_Runner.Generation;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Output;
+with Model_Runner.Output.Repetition;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Tools;
@@ -482,6 +483,8 @@ package Model_Runner.Agent is
    --  @param Hide_Reasoning Whether each reply is streamed without its
    --    reasoning: a think block, or a harmony reply's messages before its
    --    final one -- run --hide-reasoning.
+   --  @param Round_Rule When a thought that goes round is closed; null
+   --    for its family's (Round_Rule_For).
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
    --  @param Approve The gate asked before each fresh call runs, or null to
@@ -563,7 +566,33 @@ package Model_Runner.Agent is
       Carry      : Memory_Reference := null;
       Pace_Tokens : Natural := 0;
       Pace        : Pace_Reference := null;
+      Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
       Result     : out Outcome);
+
+   --  gpt-oss's rule (harmony), at high effort: a line come an eighth time
+   --  in a thought past 8 KB. Closed at any length, at the fourth, its
+   --  edits failed where left alone they were done -- it goes over an
+   --  option in a few alike lines and comes out of it. Past 8 KB, at every
+   --  effort or at high alone, four trials of three alternated rounds came
+   --  within the runs' own spread of each other; high alone is kept as the
+   --  least that closes the loop first seen, nineteen thousand tokens in a
+   --  recovery at high.
+   Harmony_Rounds : aliased constant Model_Runner.Output.Repetition.Rule :=
+     (Watching => True, Limit => 8, Free_Length => 8_192);
+
+   --  The rule a model family's thoughts are kept to: one measured for it,
+   --  else none -- one family's measure moves no other's.
+   --
+   --  @param Syntax The family's call syntax.
+   --  @param Effort The reasoning asked.
+   --  @return The rule.
+   function Round_Rule_For
+     (Syntax : Model_Runner.Tools.Call_Syntax;
+      Effort : Model_Runner.Templates.Reasoning_Effort) return Model_Runner.Output.Repetition.Rule
+   is (if Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Harmony_Call)
+         and then Model_Runner.Templates."=" (Effort, Model_Runner.Templates.Effort_High)
+       then Harmony_Rounds
+       else Model_Runner.Output.Repetition.Unwatched);
 
    --  The fewest tokens a pace's speed is measured from: fewer, and it is
    --  a reply's start-up, not its rate.

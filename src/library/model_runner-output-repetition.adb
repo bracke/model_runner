@@ -13,6 +13,11 @@ package body Model_Runner.Output.Repetition is
      [To_Unbounded_String ("</think>"), To_Unbounded_String ("<|end|>"),
       To_Unbounded_String ("<|channel|>final"), To_Unbounded_String ("<|channel|>commentary")];
 
+   procedure Keep_To (Self : in out Watch; Item : Rule) is
+   begin
+      Self.Kept := Item;
+   end Keep_To;
+
    procedure Start_Reply (Self : in out Watch; Inside : Boolean) is
    begin
       Self.Inside := Inside;
@@ -48,7 +53,7 @@ package body Model_Runner.Output.Repetition is
          Self.Length := 0;
          return;
       end if;
-      if not Self.Inside then
+      if not Self.Inside or else not Self.Kept.Watching then
          return;
       end if;
       Self.Length := Self.Length + Text'Length + 1;
@@ -62,7 +67,9 @@ package body Model_Runner.Output.Repetition is
          Place := Self.Seen.Find (Kept);
          if Counts.Has_Element (Place) then
             Self.Seen.Replace_Element (Place, Counts.Element (Place) + 1);
-            if not Self.Round and then Counts.Element (Place) >= Limit and then Self.Length >= Free_Length then
+            if not Self.Round and then Counts.Element (Place) >= Self.Kept.Limit
+              and then Self.Length >= Self.Kept.Free_Length
+            then
                Self.Round := True;
                Self.Again := To_Unbounded_String (Kept);
             end if;

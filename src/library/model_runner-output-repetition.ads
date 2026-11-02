@@ -5,32 +5,46 @@
 --  dozens of times through one analysis, and the task ran out of its time
 --  in it. This sink stands between the generation and the screen, passes
 --  everything on, and watches each whole line of a thought: one that comes
---  again Limit times within the same thought, once that has run long,
---  closes the sink, which ends the generation there, for the caller to
---  close the thought and ask for the rest. Only thought is watched -- a call's text or an answer may
---  hold the same line as often as it likes -- and only lines of some
---  length: a blank, a brace, "end if;" come round in any reasoning.
+--  again a rule's Limit times within the same thought, once that has run
+--  long, closes the sink, which ends the generation there, for the caller
+--  to close the thought and ask for the rest. Only thought is watched -- a
+--  call's text or an answer may hold the same line as often as it likes --
+--  and only lines of some length: a blank, a brace, "end if;" come round in
+--  any reasoning.
 private with Ada.Containers.Indefinite_Hashed_Maps;
 private with Ada.Strings.Hash;
 private with Ada.Strings.Unbounded;
 
 package Model_Runner.Output.Repetition is
 
-   --  How often a line may come in one thought before it is a loop.
-   Limit : constant Positive := 8;
-
    --  The shortest line counted.
    Shortest : constant Positive := 20;
 
-   --  How long a thought may be, in bytes, before a line coming round
-   --  closes it. gpt-oss at its lower efforts goes over an option in a few
-   --  alike lines and comes out of it: closed there, its edit failed in
-   --  five runs of six, against none of nine left alone. The loop this
-   --  is for ran nineteen thousand tokens.
-   Free_Length : constant Positive := 8_192;
+   --  When a line coming round closes a thought. Models reason in their
+   --  own ways -- a line a model comes back to and out of by itself is
+   --  another's loop -- so a rule is measured for a model family and kept
+   --  to it (Agent.Round_Rule_For); a family not measured has none.
+   type Rule is record
+      --  Whether thoughts are watched at all.
+      Watching    : Boolean := False;
+      --  How often a line may come in one thought before it is a loop.
+      Limit       : Positive := Positive'Last;
+      --  How long a thought may be, in bytes, before a line coming round
+      --  closes it.
+      Free_Length : Natural := 0;
+   end record;
+
+   --  No thought closed.
+   Unwatched : constant Rule := (others => <>);
 
    --  The watch, writing what it is given to Target, which may be null.
    type Watch (Target : Sink_Reference) is limited new Sink with private;
+
+   --  Keep the watch to a rule, for every reply after.
+   --
+   --  @param Self Watch.
+   --  @param Item The rule.
+   procedure Keep_To (Self : in out Watch; Item : Rule);
 
    --  Ready the watch for a reply.
    --
@@ -42,8 +56,8 @@ package Model_Runner.Output.Repetition is
    --  Whether the reply's thought went round, closing the watch.
    --
    --  @param Self Watch.
-   --  @return True once a line came Limit times in one thought past
-   --    Free_Length.
+   --  @return True once a line came the rule's Limit times in one thought
+   --    past its Free_Length.
    function Looped (Self : Watch) return Boolean;
 
    --  The line that came round, trimmed; empty until one did.
@@ -86,6 +100,7 @@ private
       Round  : Boolean := False;
       Again  : Ada.Strings.Unbounded.Unbounded_String;
       Length : Natural := 0;
+      Kept   : Rule;
    end record;
 
 end Model_Runner.Output.Repetition;

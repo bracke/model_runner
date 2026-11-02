@@ -6450,6 +6450,18 @@ package body Tests.Framework_Cases is
               "a status quoted in a fence was taken for the answer's: " & Iv.Claim (Said, "status"));
       Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: x" & LF & "status: failed", Said, Status);
       Assert (Status.Code = E.Framework_Contract_Violation, "an answer saying status twice was taken");
+      --  A summary leading in to the report, then the report's own after
+      --  its status: the report's is meant. One said twice after the
+      --  status still cannot be told.
+      Iv.Hold (Iv.Work_Claim, "summary: one unit uses it" & LF & LF & "status: done" & LF
+               & "summary: Main uses Calc" & LF & "changed_files: none", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "summary") = "Main uses Calc",
+              "a summary leading in to the report was refused, or taken over the report's: "
+              & Code_Of (Status) & " " & Iv.Claim (Said, "summary"));
+      Iv.Hold (Iv.Work_Claim, "summary: a" & LF & "status: done" & LF & "summary: b" & LF & "summary: c",
+               Said, Status);
+      Assert (Status.Code = E.Framework_Contract_Violation,
+              "a report saying its summary twice after its status was taken");
       --  The same said again, as a recap closes, is one status.
       Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: x" & LF & LF & "Status: Done", Said, Status);
       Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "status") = "done",
