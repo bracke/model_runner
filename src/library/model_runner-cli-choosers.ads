@@ -193,7 +193,8 @@ package Model_Runner.CLI.Choosers is
    --  with a slash is not a command until the person makes it one.
    --
    --  Escape or Ctrl-C while it records drops the recording; while it is
-   --  heard, stops hearing it. Every other key pressed meanwhile is kept, in
+   --  heard, stops hearing it. Ctrl-_ takes the last transcript out again,
+   --  the line as it was before it, while nothing else has changed the line. Every other key pressed meanwhile is kept, in
    --  order, and acted on once the transcript is in -- typed after it, so
    --  nothing typed is lost and nothing the transcript lands on moves.
    --

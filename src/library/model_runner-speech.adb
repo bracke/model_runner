@@ -6,6 +6,7 @@ with Hostkit.Microphone;
 with Model_Runner.Audio;
 with Model_Runner.Bytes;
 with Model_Runner.Platform;
+with Model_Runner.Tensors;
 
 package body Model_Runner.Speech is
 
@@ -27,6 +28,10 @@ package body Model_Runner.Speech is
    --  What is kept free past a speech model and its session: the
    --  conversation's model may still grow its cache.
    Margin : constant Interfaces.Unsigned_64 := 512 * 1024 * 1024;
+
+   --  Whether a source names a WAV file to play rather than a microphone.
+   function Is_File (Source : Unbounded_String) return Boolean is
+     (Length (Source) > 5 and then Slice (Source, 1, 5) = "file:");
 
    function Image (Item : State) return String is
      (case Item is
@@ -218,21 +223,48 @@ package body Model_Runner.Speech is
       loop
          Owner.Common.Next_Capture (Work);
          exit when Work = Quit;
-         if Work = Begin_Recording and then Owner.Wanted.Played /= null then
-            --  Played rather than recorded: the same chunks, as fast as
-            --  they are taken.
+         if Work = Begin_Recording and then (Owner.Wanted.Played /= null or else Is_File (Owner.Wanted.Source)) then
+            --  Played rather than recorded -- samples given, as fast as they
+            --  are taken, or a WAV file named as the source, at the pace it
+            --  was recorded -- the same chunks.
             declare
-               Played : N.Real_Array renames Owner.Wanted.Played.all;
-               From   : N.Element_Count := Played'First;
+               Read   : Model_Runner.Tensors.Real_Array_Access;
+               Failed : E.Error_Info := E.Success;
             begin
-               loop
-                  exit when From > Played'Last;
-                  Owner.Common.Append
-                    (Played (From .. N.Element_Count'Min (Played'Last, From + Values'Length - 1)), Full);
-                  From := From + Values'Length;
-                  exit when Full or else Owner.Common.Stop_Requested;
-               end loop;
-               Owner.Common.Capture_Ended (E.Success, Full);
+               if Owner.Wanted.Played = null then
+                  declare
+                     Named : constant String := To_String (Owner.Wanted.Source);
+                  begin
+                     Model_Runner.Audio.Read_Wave
+                       (Named (Named'First + 5 .. Named'Last), Max_Recording_Seconds, Read, Failed);
+                  end;
+               end if;
+               if E.Is_Error (Failed) then
+                  Owner.Common.Capture_Ended (Failed, False);
+               else
+                  declare
+                     Given  : constant access constant N.Real_Array :=
+                       (if Owner.Wanted.Played /= null then Owner.Wanted.Played else Read.all'Access);
+                     Played : N.Real_Array renames Given.all;
+                     From   : N.Element_Count := Played'First;
+                  begin
+                     Full := False;
+                     loop
+                        exit when From > Played'Last;
+                        Owner.Common.Append
+                          (Played (From .. N.Element_Count'Min (Played'Last, From + Values'Length - 1)), Full);
+                        From := From + Values'Length;
+                        exit when Full or else Owner.Common.Stop_Requested;
+                        --  A file named as the source arrives as a
+                        --  microphone's would, a tenth of a second a tenth.
+                        if Owner.Wanted.Played = null then
+                           delay 0.1;
+                        end if;
+                     end loop;
+                     Owner.Common.Capture_Ended (E.Success, Full);
+                  end;
+               end if;
+               Model_Runner.Tensors.Free (Read);
             end;
          elsif Work = Begin_Recording then
             begin

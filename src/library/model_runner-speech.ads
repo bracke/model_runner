@@ -65,7 +65,8 @@ package Model_Runner.Speech is
       Model_Path     : Ada.Strings.Unbounded.Unbounded_String;
       --  The language spoken, as its code; empty, detected.
       Language       : Ada.Strings.Unbounded.Unbounded_String;
-      --  The sound server's source; empty, its default.
+      --  The sound server's source; empty, its default; "file:PATH", a WAV
+      --  file played in place of a microphone, at the pace it was recorded.
       Source         : Ada.Strings.Unbounded.Unbounded_String;
       --  The longest recording; it stops itself there and is heard.
       Max_Seconds    : Positive := 120;

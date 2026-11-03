@@ -1444,6 +1444,13 @@ package body Model_Runner.CLI.Choosers is
       --  as though typed now.
       Held_Keys : Unbounded_String;
 
+      --  The line before the last transcript went in, and the line it
+      --  made: Ctrl-_ puts the first back while the line is still the
+      --  second.
+      Before_Spoken, After_Spoken : Unbounded_String;
+      Cursor_Before_Spoken        : Natural := 0;
+      Undoable                    : Boolean := False;
+
       --  Read one byte from the terminal, where one comes within a wait in
       --  milliseconds.
       function Read_Terminal (Wait : Integer; Into : out Character) return Boolean is
@@ -1717,8 +1724,16 @@ package body Model_Runner.CLI.Choosers is
          else
             declare
                Done : Boolean;
+               Was  : constant Unbounded_String := Text;
+               At_Cursor : constant Natural := Cursor;
             begin
                Insert_Spoken (Text, Cursor, To_String (Heard), Most => 1_048_576, Done => Done);
+               if Done then
+                  Before_Spoken := Was;
+                  Cursor_Before_Spoken := At_Cursor;
+                  After_Spoken := Text;
+                  Undoable := True;
+               end if;
                if not Done then
                   Status := To_Unbounded_String (Pres.Message_Value (Screen, "cli.speech.not_inserted"));
                elsif Limit then
@@ -1752,6 +1767,14 @@ package body Model_Runner.CLI.Choosers is
          Status := Null_Unbounded_String;
          if Dictate /= null and then Key = Shortcut and then not Pasting then
             Dictation_Round;
+         elsif Key = Character'Val (16#1F#) then
+            --  Ctrl-_: the last transcript taken out again, where nothing
+            --  has changed the line since it went in.
+            if Undoable and then Text = After_Spoken then
+               Text := Before_Spoken;
+               Cursor := Cursor_Before_Spoken;
+            end if;
+            Undoable := False;
          else
             case Key is
                when ASCII.CR | ASCII.LF =>

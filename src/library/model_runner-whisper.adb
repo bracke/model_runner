@@ -1639,7 +1639,9 @@ package body Model_Runner.Whisper is
                   Text_Tokens (Index) := Tokens (I);
                end if;
             end loop;
-            return Tk.Decode (Source.Vocabulary, Text_Tokens);
+            --  As the reference decodes, errors replaced: a byte that is
+            --  no part of a character becomes U+FFFD.
+            return Model_Runner.UTF8.Repaired (Tk.Decode (Source.Vocabulary, Text_Tokens));
          end;
       end Text_Of;
 

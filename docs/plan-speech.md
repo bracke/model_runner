@@ -275,9 +275,22 @@ Options: `--speech-model`, `--speech-language`, `--speech-device`,
 `--speech-initial-prompt`, `--[no-]speech-enabled`, `--speech-shortcut`;
 each a settings-file key too. `transcribe` also takes `--speech-timestamps`.
 
-Not done: an undo of the insertion (the editor has none to extend); the
-shortcut's conflicts beyond the editor's own keys and terminal flow control
-(tmux passes Ctrl-G through).
+**Undo**: Ctrl-_ (readline's undo key) puts the line back as it was before
+the last transcript went in, while the line is still as the insertion left
+it.
+
+**In the suite, on a terminal** (`Dictation_In_A_Session`): the program
+run under a pseudo-terminal with the tiny fixture conversation model, the
+Whisper fixture and `--speech-device file:jfk.wav` -- a WAV file played as
+the microphone, at its own pace -- and what was entered read back from the
+history the session keeps: dictation after typed text keeps the text and
+the key pressed while it was heard lands after it; Escape while recording
+leaves the line as typed; Ctrl-_ takes the transcript out. The transcript
+is decoded with errors replaced (U+FFFD), as the reference decodes, so a
+model's broken bytes still make text that goes in.
+
+Not checked: the shortcut against every terminal's own keys past the
+editor's and flow control (tmux passes Ctrl-G through).
 
 ## 9. The device
 

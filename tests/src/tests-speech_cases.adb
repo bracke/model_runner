@@ -1,4 +1,8 @@
+with Ada.Calendar;
+with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Numerics;
+with Ada.Streams;
 with Ada.Numerics.Long_Elementary_Functions;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -6,6 +10,11 @@ with Ada.Unchecked_Conversion;
 with Interfaces;
 
 with AUnit.Assertions;
+
+with Hostkit;
+with Hostkit.Descriptors;
+with Hostkit.Pty;
+with Hostkit.Spawn;
 with AUnit.Test_Cases;
 
 with Model_Runner.Audio;
@@ -1118,6 +1127,172 @@ package body Tests.Speech_Cases is
       Model_Runner.Bytes.Free (Image);
    end Speech_Leaves_The_Conversation_Alone;
 
+   --  The session, run on a terminal as a person runs it, the recording a
+   --  WAV file played as its source: dictation after typed text keeps the
+   --  text and the keys pressed while it was heard land after it; Escape
+   --  drops a recording, the line as typed; Ctrl-_ takes a transcript out
+   --  again. What was entered is read back from the history it keeps.
+   procedure Dictation_In_A_Session
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+
+      Model   : constant String := Ada.Directories.Full_Name ("obj/dictation-model.gguf");
+      Speech  : constant String := Ada.Directories.Full_Name ("obj/dictation-whisper.gguf");
+      Sound   : constant String := Ada.Directories.Full_Name (Fixtures & "jfk.wav");
+      Project : constant String := Ada.Directories.Full_Name ("obj/dictation-project");
+      History : constant String := Project & "/.model_runner/runtime/prompt-history";
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (Ada.Strings.Unbounded.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      --  What the session wrote, kept to be shown where a check fails.
+      Screen : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Read what the session writes for Quiet milliseconds -- not until it
+      --  is quiet: while it records it redraws its status five times a
+      --  second, and a wait for quiet would wait out the recording.
+      procedure Drain (Quiet : Integer := 1500) is
+         use type Ada.Calendar.Time;
+         Until_Then : constant Ada.Calendar.Time := Ada.Calendar.Clock + Duration (Quiet) / 1000.0;
+      begin
+         while Ada.Calendar.Clock < Until_Then
+           and then Hostkit.Descriptors.Wait_Readable
+                      (Pair.From_Child, Integer'Max (1, Integer ((Until_Then - Ada.Calendar.Clock) * 1000.0)))
+         loop
+            exit when Hostkit.Descriptors."/=" (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                                                Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               Ada.Strings.Unbounded.Append (Screen, Character'Val (B));
+            end loop;
+         end loop;
+      end Drain;
+
+      function Tail return String is
+         Whole : constant String := Ada.Strings.Unbounded.To_String (Screen);
+      begin
+         return Whole (Integer'Max (Whole'First, Whole'Last - 1_500) .. Whole'Last);
+      end Tail;
+
+      procedure Send (Text : String; Quiet : Integer := 20) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Text'Length);
+         Used : Ada.Streams.Stream_Element_Offset := 0;
+      begin
+         for C of Text loop
+            Used := Used + 1;
+            Keys (Used) := Character'Pos (C);
+         end loop;
+         Assert (Hostkit.Descriptors."="
+                   (Hostkit.Descriptors.Write (Pair.To_Child, Keys (1 .. Used), Last), Hostkit.Descriptors.Transfer_Ok),
+                 "a key was not sent");
+         Drain (Quiet);
+      end Send;
+
+      Shortcut : constant Character := Character'Val (7);
+      Undo     : constant Character := Character'Val (16#1F#);
+      Held     : Ada.Text_IO.File_Type;
+      Entered  : array (1 .. 3) of Ada.Strings.Unbounded.Unbounded_String;
+      Count    : Natural := 0;
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      Tiny_Model.Write (Model, Room => 64);
+      Whisper_Fixture.Write (Speech);
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Ada.Directories.Create_Path (Project & "/.model_runner/runtime");
+
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (Ada.Strings.Unbounded.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Options.Working_Directory := Ada.Strings.Unbounded.To_Unbounded_String (Project);
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 200)) and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      declare
+         Words : Hostkit.String_Vectors.Vector;
+         procedure Word (Text : String) is
+         begin
+            Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Text));
+         end Word;
+      begin
+         Word (Model);
+         Word ("--backend");
+         Word ("cpu");
+         Word ("--max-tokens");
+         Word ("1");
+         Word ("--speech-model");
+         Word (Speech);
+         Word ("--speech-device");
+         Word ("file:" & Sound);
+         Word ("--speech-language");
+         Word ("en");
+         Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+                 "the session did not start");
+      end;
+      Hostkit.Pty.Close_Device (Pair);
+      Drain (5000);
+
+      --  Typed, dictated, a key pressed while it is heard, entered.
+      Send ("first" & Shortcut, Quiet => 1000);
+      Send ([1 => Shortcut] & "X", Quiet => 8000);
+      Send ([1 => ASCII.CR], Quiet => 1500);
+      --  Typed, a recording dropped, entered.
+      Send ("second" & Shortcut, Quiet => 300);
+      Send ([1 => ASCII.ESC], Quiet => 2000);
+      Send ([1 => ASCII.CR], Quiet => 1500);
+      --  Typed, dictated, taken out again, entered.
+      Send ("third" & Shortcut, Quiet => 1000);
+      Send ([1 => Shortcut], Quiet => 8000);
+      Send ([Undo, ASCII.CR], Quiet => 1500);
+      --  The turn sent, and out.
+      Send ([1 => ASCII.CR], Quiet => 5000);
+      Send ("/exit" & ASCII.CR, Quiet => 3000);
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Hostkit.Pty.Close (Pair);
+
+      Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, History);
+      while not Ada.Text_IO.End_Of_File (Held) and then Count < Entered'Last loop
+         Count := Count + 1;
+         Entered (Count) := Ada.Strings.Unbounded.To_Unbounded_String (Ada.Text_IO.Get_Line (Held));
+      end loop;
+      Ada.Text_IO.Close (Held);
+      Assert (Count = 3, "the session entered" & Count'Image & " lines");
+      declare
+         use Ada.Strings.Unbounded;
+         One : constant String := To_String (Entered (1));
+      begin
+         Assert (One'Length >= 6 and then One (One'First .. One'First + 4) = "first" and then One (One'Last) = 'X',
+                 "dictation lost the typed text or the key pressed while it was heard: [" & One & "]");
+         Assert (To_String (Entered (2)) = "second",
+                 "a dropped recording changed the line: [" & To_String (Entered (2)) & "]; the screen ended: " & Tail);
+         Assert (To_String (Entered (3)) = "third",
+                 "Ctrl-_ did not take the transcript out: [" & To_String (Entered (3)) & "]");
+      end;
+   end Dictation_In_A_Session;
+
    ----------
    -- Name --
    ----------
@@ -1194,6 +1369,9 @@ package body Tests.Speech_Cases is
       Register_Routine
         (T, Speech_Leaves_The_Conversation_Alone'Access,
          "a conversation's logits are the same with a speech model heard beside it");
+      Register_Routine
+        (T, Dictation_In_A_Session'Access,
+         "a session dictates into the line, keeps keys pressed meanwhile, drops on Escape and undoes on Ctrl-_");
    end Register_Tests;
 
 end Tests.Speech_Cases;

@@ -979,7 +979,8 @@ A session can be spoken to. Name a Whisper model -- `--speech-model PATH`,
 or `speech-model = PATH` in the settings file -- and in the session Ctrl-G
 records, Ctrl-G again stops, and what was said is put into the line being
 typed, at the cursor, to be edited and sent as any typed line is. Escape
-drops the recording, or stops hearing it. Nothing is sent, and no command
+drops the recording, or stops hearing it; Ctrl-_ takes the transcript out
+again. Nothing is sent, and no command
 run, by speaking: a transcript beginning with a slash goes in with a space
 before it.
 
@@ -992,7 +993,8 @@ The speech model is its own: read on first use, beside the conversation's
 model and never in its place, with its own workers and memory; refused
 where the two do not fit, never the conversation's shrunk. The microphone
 is the sound server's (PipeWire or PulseAudio, through libpulse-simple; a
-host without it refuses by name); `--speech-device` names another source.
+host without it refuses by name); `--speech-device` names another source,
+or `file:PATH.wav` to play a recording in its place, at its own pace.
 Recordings stop at `--speech-max-seconds` (120), are kept in memory only,
 and are forgotten once heard.
 
