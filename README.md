@@ -992,8 +992,9 @@ model_runner transcribe meeting.wav --speech-model ~/models/whisper-small-f16.gg
 The speech model is its own: read on first use, beside the conversation's
 model and never in its place, with its own workers and memory; refused
 where the two do not fit, never the conversation's shrunk. The microphone
-is the sound server's (PipeWire or PulseAudio, through libpulse-simple; a
-host without it refuses by name); `--speech-device` names another source,
+is the sound server's on Linux (PipeWire or PulseAudio, through
+libpulse-simple; a host without it refuses by name), winmm's on Windows and
+AudioToolbox's on macOS; `--speech-device` names another source,
 or `file:PATH.wav` to play a recording in its place, at its own pace.
 Recordings stop at `--speech-max-seconds` (120), are kept in memory only,
 and are forgotten once heard.
