@@ -1,6 +1,8 @@
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Audio;
+with Model_Runner.Backend;
+with Model_Runner.Backend.Device;
 with Model_Runner.Speech;
 with Model_Runner.Tensors;
 with Model_Runner.Text;
@@ -41,6 +43,7 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       Model_Path : constant String := Model_Runner.Text.To_String (Item.Speech_Model_Path);
       Audio_Path : constant String := Model_Runner.Text.To_String (Item.Audio_Path);
       Whisper    : aliased W.Model;
+      On_Device  : Boolean := False;
       Samples    : Tn.Real_Array_Access;
       Condition  : E.Error_Info;
       Ignored    : E.Error_Info;
@@ -61,6 +64,7 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
             Fail (Condition);
             return;
          end if;
+         W.Use_Device (Session, On_Device, Keep => True);
          Settings.Language := To_Unbounded_String (Model_Runner.Text.To_String (Item.Speech_Language));
          Settings.Translate := Item.Speech_Translate;
          Settings.Word_Timestamps := Item.Speech_Word_Timestamps;
@@ -134,6 +138,14 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
          return;
       end if;
 
+      --  The encoder on the device unless --backend names the processor:
+      --  nothing else here uses it, so its matrices are kept between the
+      --  windows and given back when it closes.
+      if not Item.Backend_Set or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
+         Model_Runner.Backend.Device.Open
+           (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+            Which => Item.Device_Index);
+      end if;
       declare
          Wanted : constant Positive := Selected_Workers (Item);
       begin
@@ -154,6 +166,9 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
          end if;
       end;
       Tn.Free (Samples);
+      if On_Device then
+         Model_Runner.Backend.Device.Close;
+      end if;
       W.Close (Whisper, Ignored);
    end Do_Transcribe;
 

@@ -298,6 +298,23 @@ package Model_Runner.Whisper is
    --  @return Whether it is open.
    function Is_Open (Item : Session) return Boolean;
 
+   --  Whether the encoder's products go to the device where one is open
+   --  (Backend.Device): its matrices uploaded once and kept, its thousands
+   --  of rows multiplied there; a product the device declines is taken on
+   --  the pool. The decoder's few rows stay on the pool either way.
+   --
+   --  The device knows a matrix by where its bytes lie, so a session that
+   --  shares it with a conversation's model gives its matrices back at the
+   --  end of each encode, while it still has the turn: kept past it, a
+   --  model read again at the same place, or another's, would be answered
+   --  with them. One that has the device to itself keeps them, and the
+   --  device's closing gives them back.
+   --
+   --  @param Item The session.
+   --  @param On True to use the device.
+   --  @param Keep True to keep the matrices on the device between encodes.
+   procedure Use_Device (Item : in out Session; On : Boolean; Keep : Boolean := False);
+
    --  Transcribe a recording.
    --
    --  @param Item An open session.
@@ -485,6 +502,15 @@ private
       --  (a * Count + t) * Audio_Context + p.
       Capturing : Boolean := False;
       Captured  : T.Real_Array_Access;
+      --  Whether the encoder's products go to the device; see Use_Device.
+      On_Device : Boolean := False;
+      --  Whether an encode has the device's turn now.
+      Borrowed  : Boolean := False;
+      --  Whether the matrices stay on the device between encodes.
+      Keep_On_Device : Boolean := False;
+      --  Where the encoder's keys and values go in the device's cache:
+      --  past the conversation's, as it stood when the turn was borrowed.
+      Cache_Base : Element_Count := 0;
    end record;
 
 end Model_Runner.Whisper;

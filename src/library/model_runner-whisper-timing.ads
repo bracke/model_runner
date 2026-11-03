@@ -31,7 +31,9 @@ package Model_Runner.Whisper.Timing is
    --
    --  @param Scores Each head's scaled scores: head a, token t, frame f at
    --    (a * Tokens + t) * Stride + f.
-   --  @param Heads, Tokens, Frames The scores' extent, frames those heard.
+   --  @param Heads The heads the scores are of.
+   --  @param Tokens The tokens they are of.
+   --  @param Frames The frames heard.
    --  @param Stride Frames a row of scores holds, past those heard.
    --  @param Into Receives the averaged, filtered, standardized weights,
    --    Tokens by Frames.

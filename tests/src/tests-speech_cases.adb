@@ -19,6 +19,7 @@ with AUnit.Test_Cases;
 
 with Model_Runner.Audio;
 with Model_Runner.Audio.Spectrograms;
+with Model_Runner.Backend.Device;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
 with Model_Runner.Fourier;
@@ -1320,6 +1321,141 @@ package body Tests.Speech_Cases is
       return AUnit.Format ("speech");
    end Name;
 
+   -----------------------------
+   -- The_Device_Turn_Is_Lent --
+   -----------------------------
+
+   --  The device's turn: lent at first, borrowed by one at a time, not
+   --  borrowed once taken back, and taken back only when the borrower has
+   --  given it back.
+   procedure The_Device_Turn_Is_Lent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Device renames Model_Runner.Backend.Device;
+      Got, Again : Boolean;
+
+      task Taker is
+         entry Go;
+         entry Done;
+      end Taker;
+
+      --  Either rendezvous may never come where an assertion fails first,
+      --  and the test must still end.
+      task body Taker is
+      begin
+         select
+            accept Go;
+         or
+            terminate;
+         end select;
+         Device.Take_Turn;
+         select
+            accept Done;
+         or
+            terminate;
+         end select;
+      end Taker;
+   begin
+      Device.Borrow_Turn (Got);
+      Assert (Got, "the turn was not lent outside a session");
+      Device.Borrow_Turn (Again);
+      Assert (not Again, "the turn was borrowed twice at once");
+
+      --  Taken back while borrowed: the taker waits for the borrower.
+      Taker.Go;
+      delay 0.2;
+      select
+         Taker.Done;
+         Assert (False, "the turn was taken back while it was borrowed");
+      else
+         null;
+      end select;
+      Device.Return_Turn;
+      select
+         Taker.Done;
+      or
+         delay 10.0;
+         Assert (False, "the turn was not taken back once it was given back");
+      end select;
+
+      Device.Borrow_Turn (Got);
+      Assert (not Got, "the turn was borrowed after it was taken back");
+      Device.Lend_Turn;
+      Device.Borrow_Turn (Got);
+      Assert (Got, "the turn was not borrowed once lent again");
+      Device.Return_Turn;
+   end The_Device_Turn_Is_Lent;
+
+   ---------------------------------
+   -- Whisper_Hears_On_The_Device --
+   ---------------------------------
+
+   --  The encoder on the device, in shapes its tile and attention take:
+   --  what it heard is the processor's to half precision, its products ran
+   --  there, and its matrices were given back; with the turn not lent it
+   --  runs on the processor and the device is not asked. Passes with
+   --  nothing compared where no device opens.
+   procedure Whisper_Hears_On_The_Device
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Device renames Model_Runner.Backend.Device;
+      Path     : constant String := "obj/whisper-fixture-wide.gguf";
+      Model    : aliased W.Model;
+      Session  : W.Session;
+      Status   : E.Error_Info;
+      Ready    : Boolean;
+      Mel      : Ts.Real_Array_Access := new N.Real_Array (0 .. 80 * 3_000 - 1);
+      Here, There : Ts.Real_Array_Access := new N.Real_Array (0 .. 1_500 * 128 - 1);
+      Worst, Largest : Long_Float := 0.0;
+      Held, Tiled : Natural;
+   begin
+      for I in Mel'Range loop
+         Mel (I) := N.Real (0.5 * Noise (Natural (I)));
+      end loop;
+      Whisper_Fixture.Write (Path, Wide => True);
+      W.Prepare (Model, Path, Status);
+      Assert (E.Is_Ok (Status), "the wide fixture was refused: " & Status.Code'Image);
+      W.Open (Session, Model'Access, null, Status);
+      W.Encode (Session, Mel.all, Status);
+      Assert (E.Is_Ok (Status), "the processor did not encode: " & Status.Code'Image);
+      W.Copy_Encoded (Session, Here.all);
+
+      Device.Open (Ready);
+      if Ready then
+         Held := Device.Resident;
+         Tiled := Device.Tiled_Products + Device.Untiled_Products;
+         W.Use_Device (Session, True);
+         W.Encode (Session, Mel.all, Status);
+         Assert (E.Is_Ok (Status), "the device did not encode: " & Status.Code'Image);
+         W.Copy_Encoded (Session, There.all);
+         Assert (Device.Tiled_Products + Device.Untiled_Products > Tiled, "no product ran on the device");
+         Assert (Device.Resident = Held, "the encoder's matrices were left on the device");
+         for I in Here'Range loop
+            Worst := Long_Float'Max (Worst, abs Long_Float (Here (I) - There (I)));
+            Largest := Long_Float'Max (Largest, abs Long_Float (Here (I)));
+         end loop;
+         Assert (Worst <= 2.0E-2 * Largest, "the device heard otherwise: worst" & Worst'Image & " of" & Largest'Image);
+
+         --  The turn not lent: the processor's, the device not asked.
+         Device.Take_Turn;
+         Tiled := Device.Tiled_Products + Device.Untiled_Products;
+         W.Encode (Session, Mel.all, Status);
+         Device.Lend_Turn;
+         Assert (E.Is_Ok (Status), "the processor did not encode without the turn");
+         Assert (Device.Tiled_Products + Device.Untiled_Products = Tiled, "the device was asked without the turn");
+         W.Copy_Encoded (Session, There.all);
+         Assert (N."=" (There.all, Here.all), "without the turn the encoder was not the processor's");
+         Device.Close;
+      end if;
+      W.Close (Session);
+      W.Close (Model, Status);
+      Ts.Free (Mel);
+      Ts.Free (Here);
+      Ts.Free (There);
+   end Whisper_Hears_On_The_Device;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -1368,6 +1504,12 @@ package body Tests.Speech_Cases is
       Register_Routine
         (T, Whisper_Transcribes_And_Refuses'Access,
          "a Whisper session hears, detects, refuses past its context and stops when cancelled");
+      Register_Routine
+        (T, The_Device_Turn_Is_Lent'Access,
+         "the device's turn is lent, borrowed by one at a time and taken back once given back");
+      Register_Routine
+        (T, Whisper_Hears_On_The_Device'Access,
+         "the encoder on the device hears what the processor does, gives its matrices back and needs the turn");
       Register_Routine
         (T, Word_Timing_Arithmetic'Access,
          "a word's time is warped and filtered as the reference's timing does it");

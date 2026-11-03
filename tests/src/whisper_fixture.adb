@@ -16,8 +16,10 @@ package body Whisper_Fixture is
    use type N.Real;
    use type Interfaces.Unsigned_64;
 
-   Width  : constant := 8;
-   Feed   : constant := 16;
+   --  Eight wide, or a hundred and twenty-eight where Build is asked for
+   --  the device's shapes; set by Build.
+   Width  : Natural := 8;
+   Feed   : Natural := 16;
    Mels   : constant := 80;
    Audio  : constant := 1_500;
    Text   : constant := 16;
@@ -98,7 +100,7 @@ package body Whisper_Fixture is
       return Result;
    end Values;
 
-   procedure Build (Result : out B.Byte_Array_Access; Defect : Flaw := None) is
+   procedure Build (Result : out B.Byte_Array_Access; Defect : Flaw := None; Wide : Boolean := False) is
       Item : Fixtures.Builder;
       Seed : Natural := 0;
 
@@ -113,8 +115,8 @@ package body Whisper_Fixture is
          end loop;
          Seed := Seed + 1;
          if Defect = Misshapen_Tensor and then Name = "enc.blk.0.ffn_up.weight" then
-            Fixtures.Add_Tensor (Item, Name, [Width, Feed + 1], G.Type_F32,
-                                 Fixtures.Encode_F32 (Values (Width * (Feed + 1), Seed)));
+            Fixtures.Add_Tensor (Item, Name, [G.U64 (Width), G.U64 (Feed + 1)], G.Type_F32,
+                                 Fixtures.Encode_F32 (Values (N.Element_Count (Width * (Feed + 1)), Seed)));
             return;
          end if;
          Fixtures.Add_Tensor (Item, Name, Dims, G.Type_F32, Fixtures.Encode_F32 (Values (Count, Seed, Around)));
@@ -122,27 +124,27 @@ package body Whisper_Fixture is
 
       procedure Norm (Name : String) is
       begin
-         Tensor (Name & ".weight", [Width], Around => 1.0);
-         Tensor (Name & ".bias", [Width]);
+         Tensor (Name & ".weight", [G.U64 (Width)], Around => 1.0);
+         Tensor (Name & ".bias", [G.U64 (Width)]);
       end Norm;
 
       procedure Attention (Name : String) is
       begin
-         Tensor (Name & "_q.weight", [Width, Width]);
-         Tensor (Name & "_q.bias", [Width]);
-         Tensor (Name & "_k.weight", [Width, Width]);
-         Tensor (Name & "_v.weight", [Width, Width]);
-         Tensor (Name & "_v.bias", [Width]);
-         Tensor (Name & "_out.weight", [Width, Width]);
-         Tensor (Name & "_out.bias", [Width]);
+         Tensor (Name & "_q.weight", [G.U64 (Width), G.U64 (Width)]);
+         Tensor (Name & "_q.bias", [G.U64 (Width)]);
+         Tensor (Name & "_k.weight", [G.U64 (Width), G.U64 (Width)]);
+         Tensor (Name & "_v.weight", [G.U64 (Width), G.U64 (Width)]);
+         Tensor (Name & "_v.bias", [G.U64 (Width)]);
+         Tensor (Name & "_out.weight", [G.U64 (Width), G.U64 (Width)]);
+         Tensor (Name & "_out.bias", [G.U64 (Width)]);
       end Attention;
 
       procedure Feed_Forward (Name : String) is
       begin
-         Tensor (Name & ".ffn_up.weight", [Width, Feed]);
-         Tensor (Name & ".ffn_up.bias", [Feed]);
-         Tensor (Name & ".ffn_down.weight", [Feed, Width]);
-         Tensor (Name & ".ffn_down.bias", [Width]);
+         Tensor (Name & ".ffn_up.weight", [G.U64 (Width), G.U64 (Feed)]);
+         Tensor (Name & ".ffn_up.bias", [G.U64 (Feed)]);
+         Tensor (Name & ".ffn_down.weight", [G.U64 (Feed), G.U64 (Width)]);
+         Tensor (Name & ".ffn_down.bias", [G.U64 (Width)]);
       end Feed_Forward;
 
       procedure Count_Key (Key : String; Value : Natural) is
@@ -155,6 +157,8 @@ package body Whisper_Fixture is
          Fixtures.Add_I32 (Item, Key, Interfaces.Integer_32 (Value));
       end Token_Key;
    begin
+      Width := (if Wide then 128 else 8);
+      Feed := (if Wide then 512 else 16);
       Fixtures.Reset (Item);
       Fixtures.Add_String (Item, "general.architecture", (if Defect = Other_Architecture then "llama" else "whisper"));
       Fixtures.Add_String (Item, "general.name", "fixture");
@@ -220,18 +224,18 @@ package body Whisper_Fixture is
       Count_Key ("tokenizer.ggml.eos_token_id", End_Of_Text);
       Fixtures.Add_Bool (Item, "tokenizer.ggml.add_bos_token", False);
 
-      Tensor ("enc.conv1.weight", [3, Mels, Width]);
-      Tensor ("enc.conv1.bias", [Width]);
-      Tensor ("enc.conv2.weight", [3, Width, Width]);
-      Tensor ("enc.conv2.bias", [Width]);
-      Tensor ("enc.position_embd.weight", [Width, Audio]);
+      Tensor ("enc.conv1.weight", [3, Mels, G.U64 (Width)]);
+      Tensor ("enc.conv1.bias", [G.U64 (Width)]);
+      Tensor ("enc.conv2.weight", [3, G.U64 (Width), G.U64 (Width)]);
+      Tensor ("enc.conv2.bias", [G.U64 (Width)]);
+      Tensor ("enc.position_embd.weight", [G.U64 (Width), Audio]);
       Norm ("enc.blk.0.attn_norm");
       Attention ("enc.blk.0.attn");
       Norm ("enc.blk.0.ffn_norm");
       Feed_Forward ("enc.blk.0");
       Norm ("enc.output_norm");
-      Tensor ("dec.token_embd.weight", [Width, Vocabulary]);
-      Tensor ("dec.position_embd.weight", [Width, Text]);
+      Tensor ("dec.token_embd.weight", [G.U64 (Width), Vocabulary]);
+      Tensor ("dec.position_embd.weight", [G.U64 (Width), Text]);
       Norm ("dec.blk.0.attn_norm");
       Attention ("dec.blk.0.attn");
       Norm ("dec.blk.0.cross_attn_norm");
@@ -242,12 +246,12 @@ package body Whisper_Fixture is
       Fixtures.Build (Item, Result);
    end Build;
 
-   procedure Write (Path : String; Defect : Flaw := None) is
+   procedure Write (Path : String; Defect : Flaw := None; Wide : Boolean := False) is
       use Ada.Streams.Stream_IO;
       File : File_Type;
       Data : B.Byte_Array_Access;
    begin
-      Build (Data, Defect);
+      Build (Data, Defect, Wide);
       Create (File, Out_File, Path, Form => "shared=no");
       B.Byte_Array'Write (Stream (File), Data.all);
       Close (File);

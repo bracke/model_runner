@@ -5,6 +5,7 @@ with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
 with Model_Runner.Audio.Spectrograms;
+with Model_Runner.Backend.Device;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
@@ -860,6 +861,12 @@ package body Model_Runner.Whisper is
 
    function Is_Open (Item : Session) return Boolean is (Item.Source /= null);
 
+   procedure Use_Device (Item : in out Session; On : Boolean; Keep : Boolean := False) is
+   begin
+      Item.On_Device := On;
+      Item.Keep_On_Device := Keep;
+   end Use_Device;
+
    procedure Open
      (Item   : in out Session;
       Source : not null access Model;
@@ -1063,6 +1070,23 @@ package body Model_Runner.Whisper is
       if E.Is_Error (Status) then
          return;
       end if;
+      --  On the device the weights as the file holds them, where its tile
+      --  takes their shape whole; anything it declines, on the pool.
+      if Item.Borrowed
+        and then Cols mod 128 = 0 and then Rows mod 32 = 0
+      then
+         declare
+            Answer : E.Error_Info;
+         begin
+            Model_Runner.Backend.Device.Dispatch_Batch (Weight, Source, Count, Target, Answer);
+            if E.Is_Ok (Answer) then
+               if Bias /= null then
+                  Rows_Through (Item, Add_Bias, Target, Count, Rows, Status, Bias => Bias);
+               end if;
+               return;
+            end if;
+         end;
+      end if;
       if FP.Is_Packed (Item.Packed (Slot)) then
          FP.Multiply (Team, Item.Packed (Slot), Source.all, 0, Cols, Count, Target.all, 0, Rows);
          if Bias /= null then
@@ -1244,6 +1268,10 @@ package body Model_Runner.Whisper is
    --  a time, both products by panels -- the keys laid out as a weight the
    --  queries multiply, the scores softened row by row, then the values,
    --  turned, as a weight the scores multiply.
+   --  Queries the device's attention takes at once, as the vision
+   --  encoder's do.
+   Device_Queries : constant Element_Count := 512;
+
    procedure Attend_Both_Ways
      (Item   : in out Session;
       Q, Kv, V, Into : T.Real_Array_Access;
@@ -1256,6 +1284,42 @@ package body Model_Runner.Whisper is
       Head   : constant Element_Count := W / Element_Count (Source.Encoder_Heads);
       Scale  : constant Real := Real (1.0 / Elementary.Sqrt (Wide_Real (Head)));
    begin
+      --  On the device, as the vision encoder attends: the keys and values
+      --  put in its cache past the conversation's, every position asking
+      --  of every other, a batch of queries at a time.
+      if Item.Borrowed and then Head mod 16 = 0 then
+         declare
+            Keys_At   : constant Element_Count := Item.Cache_Base;
+            Values_At : constant Element_Count := Keys_At + P * W;
+            Was_Exact : constant Boolean := Model_Runner.Backend.Device.Attends_Exactly;
+            Ok        : Boolean;
+            From      : Element_Count := 0;
+         begin
+            Model_Runner.Backend.Device.Reserve_Cache (Values_At + P * W, Values_At + P * W, Ok);
+            if Ok then
+               Model_Runner.Backend.Device.Put_Cache (Keys_At, Kv (0 .. P * W - 1), Ok);
+            end if;
+            if Ok then
+               Model_Runner.Backend.Device.Put_Cache (Values_At, V (0 .. P * W - 1), Ok);
+            end if;
+            Model_Runner.Backend.Device.Attend_Exactly (False);
+            while Ok and then From < P loop
+               declare
+                  Take : constant Element_Count := Element_Count'Min (Device_Queries, P - From);
+               begin
+                  Model_Runner.Backend.Device.Attend
+                    (Q (From * W .. (From + Take) * W - 1), Source.Encoder_Heads, Natural (Head), Natural (Head), 1,
+                     0, Natural (P - 1), Keys_At, Values_At, Natural (W), Natural (W), Scale, 0.0,
+                     Into (From * W .. (From + Take) * W - 1), Ok, Positions => Natural (Take), Causal => False);
+                  From := From + Take;
+               end;
+            end loop;
+            Model_Runner.Backend.Device.Attend_Exactly (Was_Exact);
+            if Ok then
+               return;
+            end if;
+         end;
+      end if;
       for H in 0 .. Element_Count (Source.Encoder_Heads) - 1 loop
          exit when E.Is_Error (Status);
          FP.Pack (Team, Kv.all, H * Head, P, Head, W, 1, Item.Key_Panels, Status);
@@ -1273,7 +1337,7 @@ package body Model_Runner.Whisper is
    -- Encode --
    ------------
 
-   procedure Encode
+   procedure Encode_Here
      (Item   : in out Session;
       Mel    : Real_Array;
       Status : out E.Error_Info)
@@ -1386,6 +1450,68 @@ package body Model_Runner.Whisper is
          end loop;
       end;
       Item.Has_Encoded := E.Is_Ok (Status);
+   end Encode_Here;
+
+   --  Every matrix the encoder may have put on the device, given back.
+   procedure Forget_Matrices (Source : Model) is
+      procedure Drop (Weight : T.View) is
+      begin
+         if Weight.Rows > 0 then
+            Model_Runner.Backend.Device.Forget (Weight);
+         end if;
+      end Drop;
+   begin
+      Drop (Source.Conv1.Weight);
+      Drop (Source.Conv2.Weight);
+      for Each of Source.Encoder.all loop
+         Drop (Each.Attention.Q.Weight);
+         Drop (Each.Attention.K.Weight);
+         Drop (Each.Attention.V.Weight);
+         Drop (Each.Attention.Output.Weight);
+         Drop (Each.Up.Weight);
+         Drop (Each.Down.Weight);
+      end loop;
+      for Each of Source.Decoder.all loop
+         Drop (Each.Cross.K.Weight);
+         Drop (Each.Cross.V.Weight);
+      end loop;
+   end Forget_Matrices;
+
+   --  On the device where the session asks for it and the turn is lent,
+   --  and the device has room for the model beside the conversation's;
+   --  else on the pool.
+   procedure Encode
+     (Item   : in out Session;
+      Mel    : Real_Array;
+      Status : out E.Error_Info)
+   is
+      use type Interfaces.Unsigned_64;
+   begin
+      Item.Borrowed := False;
+      if Item.On_Device and then Model_Runner.Backend.Device.Is_Ready
+        and then Model_Runner.Backend.Device.Room_Beside >= Interfaces.Unsigned_64 (Weight_Bytes (Item.Source.all))
+      then
+         Model_Runner.Backend.Device.Borrow_Turn (Item.Borrowed);
+         if Item.Borrowed then
+            Item.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
+         end if;
+      end if;
+      Encode_Here (Item, Mel, Status);
+      if Item.Borrowed then
+         if not Item.Keep_On_Device then
+            Forget_Matrices (Item.Source.all);
+         end if;
+         Model_Runner.Backend.Device.Return_Turn;
+         Item.Borrowed := False;
+      end if;
+   exception
+      when others =>
+         if Item.Borrowed then
+            Forget_Matrices (Item.Source.all);
+            Model_Runner.Backend.Device.Return_Turn;
+            Item.Borrowed := False;
+         end if;
+         raise;
    end Encode;
 
    ------------------
@@ -1588,6 +1714,9 @@ package body Model_Runner.Whisper is
       Frames  : Element_Count;
       Content : Element_Count;
       Seek    : Element_Count := 0;
+      --  Whether the language's encode was of the first window as it is
+      --  transcribed, and stands for it.
+      First_Heard : Boolean := False;
       Language : Token_Id := 0;
       --  Every token the windows decoded, the initial prompt's first.
       All_Tokens : Token_Vectors.Vector;
@@ -2091,6 +2220,9 @@ package body Model_Runner.Whisper is
             end loop;
             Encode (Item, Window.all, Status);
             Result.Figures.Encoder_Seconds := Result.Figures.Encoder_Seconds + (Ada.Calendar.Clock - Started_Encoder);
+            --  Thirty seconds or more, and that window is the first one
+            --  transcribed, to the frame: what was heard is kept for it.
+            First_Heard := E.Is_Ok (Status) and then Content >= Window_Frames;
             if E.Is_Ok (Status) then
                Item.Held := 0;
                Feed (Item, [1 => Source.Start_Of_Transcript], Status);
@@ -2136,8 +2268,12 @@ package body Model_Runner.Whisper is
             Ended    : Boolean := False;
             Temperature : Real := 0.0;
          begin
-            Take_Window (Seek, Size);
-            Encode (Item, Window.all, Status);
+            if Seek = 0 and then First_Heard then
+               Item.Held := 0;
+            else
+               Take_Window (Seek, Size);
+               Encode (Item, Window.all, Status);
+            end if;
             Result.Figures.Encoder_Seconds := Result.Figures.Encoder_Seconds + (Ada.Calendar.Clock - Started_Window);
             Started_Window := Ada.Calendar.Clock;
             if E.Is_Error (Status) then

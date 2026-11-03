@@ -7,6 +7,7 @@ with Ada.Text_IO;
 with Model_Runner.Audio;
 with Model_Runner.Audio.Spectrograms;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
 with Model_Runner.Platform;
@@ -80,7 +81,8 @@ package body Speech_Hear is
       Threads : Natural;
       Repeats : Positive;
       Fast_Detect : Boolean := False;
-      Words : Boolean := False) return Natural
+      Words : Boolean := False;
+      Device : Boolean := False) return Natural
    is
       Whisper : aliased W.Model;
       Samples : T.Real_Array_Access;
@@ -100,6 +102,7 @@ package body Speech_Hear is
             Failed := True;
             return;
          end if;
+         W.Use_Device (Session, Device, Keep => True);
 
          if Reference /= "" then
             declare
@@ -210,6 +213,15 @@ package body Speech_Hear is
          return 1;
       end if;
 
+      if Device then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+            Say ("device: " & (if Ready then Model_Runner.Backend.Device.Name else "none opened"));
+         end;
+      end if;
+
       declare
          Wanted : constant Positive :=
            (if Threads > 0 then Threads else Positive (CPU.Default_Workers (Model_Runner.Platform.Core_Count)));
@@ -232,6 +244,9 @@ package body Speech_Hear is
       end;
       T.Free (Samples);
       W.Close (Whisper, Status);
+      if Device then
+         Model_Runner.Backend.Device.Close;
+      end if;
       return (if Failed then 1 else 0);
    end Run;
 

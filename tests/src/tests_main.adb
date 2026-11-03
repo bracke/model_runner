@@ -524,7 +524,9 @@ begin
             Fast_Detect => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
                               Ada.Command_Line.Argument (Index) = "--detect-from-window"),
             Words => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
-                        Ada.Command_Line.Argument (Index) = "--word-timestamps")) /= 0
+                        Ada.Command_Line.Argument (Index) = "--word-timestamps"),
+            Device => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                         Ada.Command_Line.Argument (Index) = "--device")) /= 0
          then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

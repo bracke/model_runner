@@ -615,6 +615,59 @@ package body Model_Runner.Backend.Device is
 
    function Is_Ready return Boolean is (Ready_Now);
 
+   protected Turn is
+      procedure Lend;
+      entry Take;
+      procedure Borrow (Got : out Boolean);
+      procedure Give_Back;
+   private
+      Lent     : Boolean := True;
+      Borrowed : Boolean := False;
+   end Turn;
+
+   protected body Turn is
+      procedure Lend is
+      begin
+         Lent := True;
+      end Lend;
+
+      entry Take when not Borrowed is
+      begin
+         Lent := False;
+      end Take;
+
+      procedure Borrow (Got : out Boolean) is
+      begin
+         Got := Lent and then not Borrowed;
+         Borrowed := Borrowed or else Got;
+      end Borrow;
+
+      procedure Give_Back is
+      begin
+         Borrowed := False;
+      end Give_Back;
+   end Turn;
+
+   procedure Lend_Turn is
+   begin
+      Turn.Lend;
+   end Lend_Turn;
+
+   procedure Take_Turn is
+   begin
+      Turn.Take;
+   end Take_Turn;
+
+   procedure Borrow_Turn (Got : out Boolean) is
+   begin
+      Turn.Borrow (Got);
+   end Borrow_Turn;
+
+   procedure Return_Turn is
+   begin
+      Turn.Give_Back;
+   end Return_Turn;
+
    ----------
    -- Name --
    ----------

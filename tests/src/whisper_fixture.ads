@@ -25,12 +25,16 @@ package Whisper_Fixture is
    --
    --  @param Result Newly allocated bytes; the caller frees them.
    --  @param Defect What to get wrong.
-   procedure Build (Result : out Model_Runner.Bytes.Byte_Array_Access; Defect : Flaw := None);
+   --  @param Wide A hundred and twenty-eight wide, heads of sixty-four and
+   --    a feed-forward of 512: the shapes the device multiplies and
+   --    attends in.
+   procedure Build (Result : out Model_Runner.Bytes.Byte_Array_Access; Defect : Flaw := None; Wide : Boolean := False);
 
    --  Write it to a file.
    --
    --  @param Path The file; replaced.
    --  @param Defect What to get wrong.
-   procedure Write (Path : String; Defect : Flaw := None);
+   --  @param Wide The device's shapes, as Build has them.
+   procedure Write (Path : String; Defect : Flaw := None; Wide : Boolean := False);
 
 end Whisper_Fixture;

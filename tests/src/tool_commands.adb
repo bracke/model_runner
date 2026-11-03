@@ -312,10 +312,11 @@ package body Tool_Commands is
    Says_Hear  : aliased constant String :=
      "transcribe a recording with a Whisper model, and hold its encoder and first logits to the reference's";
    Takes_Hear : aliased constant String :=
-     "--model PATH --audio FILE [--language CODE] [--detect-from-window] [--word-timestamps] [--reference DIR]"
+     "--model PATH --audio FILE [--language CODE] [--detect-from-window] [--word-timestamps] [--device]"
+     & " [--reference DIR]"
      & " [--threads N] [--repeats N]";
    Opts_Hear  : aliased constant String :=
-     " --model --audio --language --detect-from-window --word-timestamps --reference --threads --repeats ";
+     " --model --audio --language --detect-from-window --word-timestamps --device --reference --threads --repeats ";
 
    Says_Speech_Corpus  : aliased constant String :=
      "hear the speech corpus with a Whisper model and score it: word and character error rates by language";

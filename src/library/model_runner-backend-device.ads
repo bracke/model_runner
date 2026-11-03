@@ -169,6 +169,30 @@ package Model_Runner.Backend.Device is
    --  @return True when Dispatch can succeed.
    function Is_Ready return Boolean;
 
+   --  The device's turn, between the conversation's model and a model
+   --  heard beside it. This backend is fed from one task at a time and
+   --  keeps the conversation's state between its calls, so a second user
+   --  takes it only while the first lends it: an interactive session lends
+   --  it while it waits for a line -- when nothing of its own runs -- and
+   --  takes it back before the line is answered, waiting for a borrower
+   --  to give it back. Nothing lends or holds it outside a session, where
+   --  it starts lent.
+
+   --  The conversation's: lend the turn.
+   procedure Lend_Turn;
+
+   --  The conversation's: take the turn back, waiting while it is
+   --  borrowed.
+   procedure Take_Turn;
+
+   --  A borrower's: take the turn where it is lent and nobody has it.
+   --
+   --  @param Got True when the caller has the turn and must give it back.
+   procedure Borrow_Turn (Got : out Boolean);
+
+   --  A borrower's: give the turn back.
+   procedure Return_Turn;
+
    --  What the device is called, for a report.
    --
    --  @return The device's own name, or an empty string when none is open.

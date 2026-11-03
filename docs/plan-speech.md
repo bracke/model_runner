@@ -322,17 +322,56 @@ editor's and flow control (tmux passes Ctrl-G through).
 
 ## 9. The device
 
-Audited, and not built. `Backend.Device` is one queue fed from one task --
-its own words: "one task at a time ... makes no attempt to feed it from
-several" -- and keeps process-wide state between the calls of a sequence
-(its cache, its resident weights, the arithmetic switches). The vision
-encoder shares it with a session safely only because both run on the
-session's task. Speech does not: it is heard on its own task while the
-editor waits, and a `/work` agent may be driving the conversation's model on
-the device from yet another task at the same time. Putting Whisper there
-would need a lock around every device sequence the conversation's model
-runs -- the new scheduling layer the specification says not to introduce
-before this audit, and one in the engine's hottest path. So speech runs on
-the processor whatever the conversation's backend, and the support matrix
-says so. What it costs, on small, is the encoder: about 1.4 s a window on
-this machine's eight cores.
+`Backend.Device` is one queue fed from one task -- its own words: "one task
+at a time ... makes no attempt to feed it from several" -- and keeps
+process-wide state between the calls of a sequence (its cache, its resident
+weights, the arithmetic switches). A second engine of Whisper's own on a
+second context was looked at and is not safe: the products package's body
+keeps unprotected globals (the instance its entry points resolve through,
+the tile choice, the prefetch slots) that two engines on two tasks would
+race on.
+
+What the first audit missed is when speech is heard: while the line editor
+waits, and the editor waits for the transcript (`Is_Done`) before it gives
+the line back, even after Escape. `/work` runs from the session's task too
+-- lines typed meanwhile queue in the terminal. So while dictation runs
+nothing of the conversation's own runs, except the warming evaluation a
+session starts with. That makes the lock a turn, not a scheduler in the
+hot path: `Backend.Device.Lend_Turn` / `Take_Turn` / `Borrow_Turn` /
+`Return_Turn`, a protected flag pair. The session lends the turn while a
+line is waited for, once its model is warm (at the line's start, or when
+warming ends during it), and takes it back before the line is answered --
+waiting for a borrower to give it back. Whisper borrows it per encode where
+the device is open and `Room_Beside` holds its weights, and runs on the
+processor where the turn is not lent: it never waits for the conversation.
+Outside a session the turn starts lent, so `transcribe` and `tests hear
+--device` simply have the device.
+
+On the device go the encoder's products (`Dispatch_Batch`, the file's own
+weights, any shape the tile takes whole: Whisper's widths are multiples of
+128 and its rows of 32; the first convolution's 240 columns stay on the
+processor) and its attention both ways (`Attend` with `Causal => False`,
+the keys and values put in the device's cache past the conversation's,
+as the vision encoder does it). The decoder's few rows stay on the
+processor, where they are a read of the weights and not arithmetic. The
+device knows a matrix by where its bytes lie, so a session's Whisper gives
+its matrices back at the end of each encode while it still has the turn:
+kept past it, a model read again at the same address would be answered
+with stale weights. That costs 0.13 s a dictation on small. `transcribe`
+keeps them and closes the device after.
+
+Measured on this machine, small f16, 11 s of speech: encoder 2.35 s on the
+processor, 1.25 s with the device (two encodes, as the language is
+detected on the padded spectrogram); a session's dictation 0.4 s sooner
+with the conversation on the device. Tiny and small f16 transcribe to the
+same text on both; small Q8_0 differs by two commas on da-long (a near
+tie, the f16 file's own text). Held by `speech : the encoder on the device
+hears what the processor does` (the encoder's output within half
+precision, products on the device, matrices given back, nothing asked of
+the device without the turn) and `speech : the device's turn is lent`.
+
+Also found here: a recording of thirty seconds or more had its first
+window encoded twice, once for the language and once to transcribe, though
+the two windows are the same frames. The language's encode now stands for
+it (`First_Heard`); a shorter recording's language is still read from the
+padded spectrogram by an encode of its own, as the reference reads it.

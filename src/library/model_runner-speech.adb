@@ -351,6 +351,11 @@ package body Model_Runner.Speech is
             end;
             W.Open (Owner.Session, Owner.Model'Access,
                     (if Owner.Team = null then null else Owner.Team.all'Unchecked_Access), Status);
+            --  On the device where the conversation's model put it there
+            --  and lends it while the line is waited for.
+            if E.Is_Ok (Status) then
+               W.Use_Device (Owner.Session, True);
+            end if;
          end if;
          if E.Is_Error (Status) then
             Unload_All;

@@ -21,7 +21,6 @@ package body Unreached_Codes is
          --  the bound itself is checked where it is applied.
             | E.IO_Input_Too_Large
 
-
          --  Reached when a size computation would overflow while reading a
          --  container. The fuzzing campaign is what walks those paths, and
          --  it reports the outcome by class rather than by code.

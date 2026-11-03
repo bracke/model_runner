@@ -393,7 +393,7 @@ Speech into a session's line, and `model_runner transcribe` (docs/plan-speech.md
 | Microphone | Linux, through the sound server (PipeWire or PulseAudio) by libpulse-simple opened by name; a source named is looked for first and refused where the server has none, where PipeWire would record its default instead (`Hostkit.Microphone.Source_Present`); Windows through winmm's waveIn (the default input or one named), macOS through AudioToolbox's input queue (the default input only) -- both built and run by hostkit's CI, not on this machine |
 | Session | Ctrl-G (or `--speech-shortcut`) records and stops; the transcript put in at the cursor; Escape drops; keys pressed meanwhile kept and acted on after |
 | Processor | Yes: encoder products in binary32 panels, decoder on the processor's products |
-| Device | Not supported: the device backend is fed from one task, and speech is heard on its own while the conversation's model may run (docs/plan-speech.md, section 9); speech runs on the processor whatever the conversation's backend |
+| Device | The encoder's products and attention on the device where one is open: `transcribe` opens it unless `--backend cpu`; a session lends it while the line is waited for and Whisper borrows it, or stays on the processor where it is not lent or has no room (docs/plan-speech.md, section 9). The decoder stays on the processor |
 | Word timestamps | `--speech-word-timestamps`: the reference's timing -- the alignment heads' attention, filtered and warped, words cut and clipped as it cuts and clips them; every word's times the reference's on jfk.wav (tiny) and 14 s of Danish (small) |
 | Not implemented | Beam search, quantized formats other than Q8_0 |
 

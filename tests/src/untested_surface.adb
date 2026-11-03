@@ -134,7 +134,6 @@ package body Untested_Surface is
          | "Repack_Names"
          | "Rouse"
          | "Scalar_Size"
-         | "Sequence_Length"
          | "Set_Location"
          | "Severity_Label"
          | "Storage_Bytes"

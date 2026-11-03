@@ -9,6 +9,7 @@ with Ada.Unchecked_Deallocation;
 with Hostkit.Descriptors;
 with Hostkit.Terminal_Control;
 
+with Model_Runner.Backend.Device;
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Completion;
@@ -340,6 +341,19 @@ package body Model_Runner.CLI.Interactive is
    type Toucher_Access is access Page_Toucher;
 
    --  Stops the toucher and waits for it as Run is left, however it is.
+   --  The device's turn lent again however a session ends, as it is
+   --  outside one: a session ended holding it left a later user of the
+   --  device in the same process without it.
+   type Turn_Guard is new Ada.Finalization.Limited_Controlled with null record;
+
+   overriding procedure Finalize (Guard : in out Turn_Guard);
+
+   overriding procedure Finalize (Guard : in out Turn_Guard) is
+      pragma Unreferenced (Guard);
+   begin
+      Model_Runner.Backend.Device.Lend_Turn;
+   end Finalize;
+
    type Toucher_Guard is new Ada.Finalization.Limited_Controlled with record
       Running : Toucher_Access := null;
    end record;
@@ -582,23 +596,45 @@ package body Model_Runner.CLI.Interactive is
       --  own, /work -- and finds it done after the first; the project's
       --  other commands do not: /init waited behind a cold model's reading,
       --  past half a minute where the drive was slow.
+      --  And the device's turn, lent while a line is waited for once the
+      --  model is warm -- at the line's start, or when warming ends while
+      --  it is waited for.
       protected Warming is
          procedure Finish;
          entry Settled;
+         procedure Enter_Line;
+         procedure Leave_Line;
       private
-         Done : Boolean := False;
+         Done    : Boolean := False;
+         At_Line : Boolean := False;
       end Warming;
 
       protected body Warming is
          procedure Finish is
          begin
             Done := True;
+            if At_Line then
+               Model_Runner.Backend.Device.Lend_Turn;
+            end if;
          end Finish;
 
          entry Settled when Done is
          begin
             null;
          end Settled;
+
+         procedure Enter_Line is
+         begin
+            At_Line := True;
+            if Done then
+               Model_Runner.Backend.Device.Lend_Turn;
+            end if;
+         end Enter_Line;
+
+         procedure Leave_Line is
+         begin
+            At_Line := False;
+         end Leave_Line;
       end Warming;
 
       --  Handle one slash command. Returns True when the input was a command.
@@ -1492,6 +1528,8 @@ package body Model_Runner.CLI.Interactive is
       end Submit;
 
       Toucher : Toucher_Guard;
+      Turn    : Turn_Guard;
+      pragma Unreferenced (Turn);
 
       task Warmer;
 
@@ -1662,6 +1700,14 @@ package body Model_Runner.CLI.Interactive is
                                 --  What was typed is dropped: the prompt is
                                 --  the first line's again.
                                 & Pres.Message_Value (Screen, "cli.interactive.prompt") & " ");
+               --  The device lent while the line is waited for, once the
+               --  model is warm: nothing of the conversation's runs then,
+               --  and speech heard meanwhile may borrow it. Held first, as
+               --  it starts lent and the warming may still be running;
+               --  taken back, once any borrower is done, before the line is
+               --  answered.
+               Model_Runner.Backend.Device.Take_Turn;
+               Warming.Enter_Line;
                declare
                   Asked_At : constant Ada.Calendar.Time := Ada.Calendar.Clock;
                   use type Ada.Calendar.Time;
@@ -1750,9 +1796,13 @@ package body Model_Runner.CLI.Interactive is
                   end if;
                end;
                Model_Runner.Platform.Signals.Waiting.Stop_Wait (Wait_Held);
+               Warming.Leave_Line;
+               Model_Runner.Backend.Device.Take_Turn;
             exception
                when Ada.Text_IO.End_Error =>
                   Model_Runner.Platform.Signals.Waiting.Stop_Wait (Wait_Held);
+                  Warming.Leave_Line;
+                  Model_Runner.Backend.Device.Take_Turn;
                   exit Read_Loop;
             end;
 
