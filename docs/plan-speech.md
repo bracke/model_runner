@@ -222,6 +222,24 @@ reference's to the token; every window of the three fixtures is decoded at
 nought and is. Tiny made to hear Danish as English tries every temperature
 and keeps the last, marked uncertain, as the reference keeps it.
 
+**Word timestamps** (`--speech-word-timestamps`, `Options.Word_Timestamps`)
+are the reference's `timing.py` and `add_word_timestamps`: the decoder
+over the start of the transcript, `<|notimestamps|>`, the window's text and
+the end once more, the alignment heads' scaled scores kept
+(`whisper.alignment_heads`, which the converter now writes from
+`generation_config.json`; without it, the upper half of the decoder's
+heads); a softmax over the frames heard, each frame standardized over the
+tokens, a median of seven, the heads averaged (`Whisper.Timing.Weights`);
+the reference's warp (`Timing.Warp`, its ties broken as `dtw_cpu` breaks
+them); tokens cut into words as `split_tokens_on_spaces` cuts them;
+sentence-edge and pause clipping at twice the median; punctuation joined;
+the segments' ends moved to their words'; the next window from the last
+word's end. Held to a numpy transcription of `timing.py`: every word's
+start and end the same to the hundredth on jfk.wav (tiny, 22 words) and the
+Danish clip (small, 23 words). Found on the way: GGUFs converted before the
+key existed read the default heads, so the six files here were converted
+again.
+
 **Translation**: `--speech-translate` puts `<|translate|>` for
 `<|transcribe|>`; small on the Danish fixture writes "It was so crudely
 cold. It snowed and it started to get dark in the evening."

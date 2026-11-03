@@ -10,6 +10,8 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
 with Model_Runner.Shares;
 with Model_Runner.Whisper.Decoding;
+with Model_Runner.Whisper.Timing;
+with Model_Runner.UTF8;
 
 package body Model_Runner.Whisper is
 
@@ -246,6 +248,7 @@ package body Model_Runner.Whisper is
       Item.Language_Total := 0;
       Item.Suppressed_Count := 0;
       Item.Begin_Suppressed_Count := 0;
+      Item.Alignment_Count := 0;
       Item.Title := Null_Unbounded_String;
       Tk.Close (Item.Vocabulary);
       B.Free (Item.Arena);
@@ -489,6 +492,50 @@ package body Model_Runner.Whisper is
       if not Ok then
          return;
       end if;
+      --  The heads word timing reads.
+      if Containers.Has (Item.Container, "whisper.alignment_heads") then
+         declare
+            Length   : Natural;
+            Value    : Long_Long_Integer;
+            Block    : Long_Long_Integer := 0;
+            At_Entry : constant Natural := Containers.Find (Item.Container, "whisper.alignment_heads");
+         begin
+            Containers.Get_Array_Length
+              (Item.Container, "whisper.alignment_heads", Model_Runner.GGUF.Value_Int32, Length, Status);
+            if E.Is_Ok (Status) and then (Length mod 2 /= 0 or else Length / 2 > Max_Alignment_Heads) then
+               Status := E.Make (E.Arch_Invalid_Metadata);
+            end if;
+            for I in 1 .. (if E.Is_Ok (Status) then Length else 0) loop
+               Containers.Get_Integer_Element (Item.Container, "whisper.alignment_heads", I, Value, Status, At_Entry);
+               exit when E.Is_Error (Status);
+               if I mod 2 = 1 then
+                  Block := Value;
+               elsif Block < 0 or else Block >= Long_Long_Integer (Item.Decoder_Blocks)
+                 or else Value < 0 or else Value >= Long_Long_Integer (Item.Decoder_Heads)
+               then
+                  Status := E.Make (E.Arch_Invalid_Metadata);
+                  exit;
+               else
+                  Item.Alignment_Count := Item.Alignment_Count + 1;
+                  Item.Alignment (Item.Alignment_Count) := (Positive (Block + 1), Natural (Value));
+               end if;
+            end loop;
+            if E.Is_Error (Status) then
+               E.Add_Text (Status, "key", "whisper.alignment_heads", E.Param_Identifier);
+               Fail (Status);
+               return;
+            end if;
+         end;
+      else
+         for B in Item.Decoder_Blocks / 2 + 1 .. Item.Decoder_Blocks loop
+            for H in 0 .. Item.Decoder_Heads - 1 loop
+               exit when Item.Alignment_Count = Max_Alignment_Heads;
+               Item.Alignment_Count := Item.Alignment_Count + 1;
+               Item.Alignment (Item.Alignment_Count) := (B, H);
+            end loop;
+         end loop;
+      end if;
+
       --  A transcript's times run to thirty seconds: 1,501 of them.
       if Element_Count (Item.Timestamp_Begin) + 1_501 > Item.Vocabulary_Size then
          Status := E.Make (E.Arch_Invalid_Metadata);
@@ -805,12 +852,13 @@ package body Model_Runner.Whisper is
       T.Free (Item.Dec_Scores);
       T.Free (Item.Last_Row);
       T.Free (Item.Logits);
+      T.Free (Item.Captured);
+      Item.Capturing := False;
       Item.Has_Encoded := False;
       Item.Held := 0;
    end Close;
 
    function Is_Open (Item : Session) return Boolean is (Item.Source /= null);
-
 
    procedure Open
      (Item   : in out Session;
@@ -1166,6 +1214,21 @@ package body Model_Runner.Whisper is
                          S.Dec_Scores.all, Scores, P);
             for I in 0 .. Item.Count - 1 loop
                K.Scale (S.Dec_Scores (Scores + I * P .. Scores + (I + 1) * P - 1), Item.Scale);
+            end loop;
+            --  An alignment head's scores, kept before they are softened.
+            if S.Capturing then
+               for A in 1 .. S.Source.Alignment_Count loop
+                  if S.Source.Alignment (A).Block = Item.Block and then S.Source.Alignment (A).Head = Natural (H) then
+                     declare
+                        Into : constant Element_Count := Element_Count (A - 1) * Item.Count * P;
+                     begin
+                        S.Captured (Into .. Into + Item.Count * P - 1) :=
+                          S.Dec_Scores (Scores .. Scores + Item.Count * P - 1);
+                     end;
+                  end if;
+               end loop;
+            end if;
+            for I in 0 .. Item.Count - 1 loop
                K.Softmax (S.Dec_Scores (Scores + I * P .. Scores + (I + 1) * P - 1), Ok);
                if not Ok then
                   Item.Failed := True;
@@ -1476,6 +1539,38 @@ package body Model_Runner.Whisper is
    function Prompt_Room (Item : Model) return Natural is (Natural (Item.Text_Context) / 2 - 1);
 
    package Token_Vectors is new Ada.Containers.Vectors (Positive, Token_Id);
+   package Count_Vectors is new Ada.Containers.Vectors (Positive, Natural);
+
+   type Cost_Access is access Timing.Cost_Matrix;
+   procedure Free is new Ada.Unchecked_Deallocation (Timing.Cost_Matrix, Cost_Access);
+
+   --  Python's round (X, 2): to the nearest hundredth, a half to even.
+   function Hundredths (X : Real) return Real is
+     (Real (Wide_Real'Unbiased_Rounding (Wide_Real (X) * 100.0) / 100.0));
+
+   --  Python's `Part in Whole` for strings: Part is somewhere in Whole, the
+   --  empty string being everywhere.
+   function Within (Part, Whole : String) return Boolean is
+     (Part = "" or else Ada.Strings.Fixed.Index (Whole, Part) > 0);
+
+   --  string.punctuation, and the reference's marks that join the word
+   --  before or after them.
+   Punctuation : constant String := "!""#$%&'()*+,-./:;<=>?@[\]^_`{|}~";
+   Prepended   : constant String :=
+     """'" & Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#9C#)
+     & Character'Val (16#C2#) & Character'Val (16#BF#) & "([{-";
+   Appended    : constant String :=
+     """'." & Character'Val (16#E3#) & Character'Val (16#80#) & Character'Val (16#82#)
+     & "," & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#8C#)
+     & "!" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#81#)
+     & "?" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#9F#)
+     & ":" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#9A#)
+     & Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#9D#)
+     & ")]}" & Character'Val (16#E3#) & Character'Val (16#80#) & Character'Val (16#81#);
+   Sentence_Ends : constant String :=
+     "." & Character'Val (16#E3#) & Character'Val (16#80#) & Character'Val (16#82#)
+     & "!" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#81#)
+     & "?" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#9F#);
 
    procedure Transcribe
      (Item     : in out Session;
@@ -1547,6 +1642,362 @@ package body Model_Runner.Whisper is
             return Tk.Decode (Source.Vocabulary, Text_Tokens);
          end;
       end Text_Of;
+
+      --  Where the last word before this window ended, as the reference
+      --  keeps it across windows.
+      Last_Speech : Real := 0.0;
+
+      --  The reference's word timing for one window's segments
+      --  (timing.find_alignment and add_word_timestamps): the decoder over
+      --  the start of the transcript, <|notimestamps|>, the window's text
+      --  tokens and the end, the alignment heads' scores kept; the cost
+      --  warped; the tokens cut into words; long words held to twice the
+      --  median; punctuation joined to its word; and the words dealt to the
+      --  segments, whose ends move to their words'.
+      procedure Time_Words
+        (Text_Tokens : Token_Vectors.Vector;
+         Lengths     : Count_Vectors.Vector;
+         First       : Positive;
+         Frames      : Element_Count;
+         Offset      : Real)
+      is
+         Sot_Length : constant Natural := (if Source.Multilingual then 3 else 1);
+         Texts      : constant Natural := Natural (Text_Tokens.Length);
+         Count      : constant Natural := Sot_Length + 1 + Texts + 1;
+         Tokens     : Tk.Token_Array (1 .. Count);
+         P          : constant Element_Count := Source.Audio_Context;
+         W          : constant Element_Count := Source.Width;
+         Heard      : constant Positive := Positive'Max (1, Natural (Frames / 2));
+         Probability : array (1 .. Texts) of Wide_Real := [others => 0.0];
+         --  When each text token was first looked at, in seconds; the
+         --  end's as the last.
+         Jump : array (0 .. Texts) of Real := [others => 0.0];
+
+         type Timed is record
+            Text          : Unbounded_String;
+            Tokens        : Natural := 0;
+            Start, Finish : Real := 0.0;
+            Likely        : Wide_Real := 0.0;
+         end record;
+         package Timed_Vectors is new Ada.Containers.Vectors (Positive, Timed);
+         Words : Timed_Vectors.Vector;
+      begin
+         if Texts = 0 then
+            return;
+         end if;
+         Tokens (1) := Source.Start_Of_Transcript;
+         if Source.Multilingual then
+            Tokens (2) := Language;
+            Tokens (3) := (if Settings.Translate then Source.Translate_Token else Source.Transcribe_Token);
+         end if;
+         Tokens (Sot_Length + 1) := Source.No_Timestamps;
+         for I in 1 .. Texts loop
+            Tokens (Sot_Length + 1 + I) := Text_Tokens (I);
+         end loop;
+         Tokens (Count) := Source.End_Of_Text;
+
+         if Item.Captured = null then
+            T.Allocate (Element_Count (Source.Alignment_Count) * Source.Text_Context * P, Item.Captured);
+            if Item.Captured = null then
+               Status := E.Make (E.Memory_Allocation_Failed);
+               return;
+            end if;
+         end if;
+         Item.Held := 0;
+         Item.Capturing := True;
+         Feed (Item, Tokens, Status);
+         Item.Capturing := False;
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  Each text token's probability where it was said.
+         for Index in 0 .. Texts - 1 loop
+            exit when E.Is_Error (Status);
+            declare
+               Row : constant Element_Count := Element_Count (Sot_Length + Index);
+            begin
+               K.Layer_Norm (Item.Dec_X (Row * W .. (Row + 1) * W - 1), Source.Decoder_Norm.Weight.all,
+                             Source.Decoder_Norm.Bias.all, Source.Epsilon, Item.Last_Row.all);
+               CPU.Dispatch (Item.Team, Source.Token_Table, Item.Last_Row, Item.Logits, Status,
+                             Roles => CPU.Every_Role);
+               Probability (Index + 1) :=
+                 Decoding.Probability (Item.Logits (0 .. Source.Vocabulary_Size - 1), Text_Tokens (Index + 1));
+            end;
+         end loop;
+         if E.Is_Error (Status) then
+            return;
+         end if;
+
+         --  The cost, warped.
+         declare
+            All_Rows : Cost_Access := new Timing.Cost_Matrix (0 .. Count - 1, 0 .. Heard - 1);
+            Cost     : Cost_Access := new Timing.Cost_Matrix (0 .. Texts, 0 .. Heard - 1);
+            Rows_Of, Columns_Of : Timing.Index_List (1 .. Texts + 1 + Heard);
+            Steps : Natural;
+            Next  : Natural := 0;
+         begin
+            Timing.Weights (Item.Captured (0 .. Element_Count (Source.Alignment_Count * Count) * P - 1),
+                            Source.Alignment_Count, Count, Heard, Positive (P), All_Rows.all);
+            for R in 0 .. Texts loop
+               for F in 0 .. Heard - 1 loop
+                  Cost (R, F) := -All_Rows (Sot_Length + R, F);
+               end loop;
+            end loop;
+            Timing.Warp (Cost.all, Rows_Of, Columns_Of, Steps);
+            for K in 1 .. Steps loop
+               if K = 1 or else Rows_Of (K) /= Rows_Of (K - 1) then
+                  if Next <= Texts then
+                     Jump (Next) := Real (Columns_Of (K)) / 50.0;
+                  end if;
+                  Next := Next + 1;
+               end if;
+            end loop;
+            Free (All_Rows);
+            Free (Cost);
+         end;
+
+         --  Cut into words: tokens joined until they are whole characters,
+         --  and pieces joined unless one begins with a space or is
+         --  punctuation; the end of text is a word of its own, and dropped.
+         declare
+            Piece  : Unbounded_String;
+            Pieces : Natural := 0;
+            Bound  : Natural := 0;
+            Likely : Wide_Real := 0.0;
+         begin
+            for I in 1 .. Texts loop
+               Append (Piece, Tk.Decode (Source.Vocabulary, [1 => Text_Tokens (I)]));
+               Pieces := Pieces + 1;
+               Likely := Likely + Probability (I);
+               if Model_Runner.UTF8.Is_Valid (To_String (Piece)) then
+                  declare
+                     Said  : constant String := To_String (Piece);
+                     Start : constant Boolean :=
+                       Words.Is_Empty or else (Said'Length > 0 and then Said (Said'First) = ' ')
+                       or else Within (Ada.Strings.Fixed.Trim (Said, Ada.Strings.Both), Punctuation);
+                  begin
+                     if Start then
+                        Words.Append (Timed'(To_Unbounded_String (Said), Pieces, 0.0, 0.0, Likely));
+                     else
+                        declare
+                           Last : Timed := Words.Last_Element;
+                        begin
+                           Append (Last.Text, Said);
+                           Last.Tokens := Last.Tokens + Pieces;
+                           Last.Likely := Last.Likely + Likely;
+                           Words.Replace_Element (Words.Last_Index, Last);
+                        end;
+                     end if;
+                  end;
+                  Piece := Null_Unbounded_String;
+                  Pieces := 0;
+                  Likely := 0.0;
+               end if;
+            end loop;
+            for I in Words.First_Index .. Words.Last_Index loop
+               declare
+                  Each : Timed := Words (I);
+               begin
+                  Each.Start := Jump (Bound);
+                  Bound := Bound + Each.Tokens;
+                  Each.Finish := Jump (Natural'Min (Bound, Texts));
+                  Each.Likely := Each.Likely / Wide_Real (Natural'Max (1, Each.Tokens));
+                  Words.Replace_Element (I, Each);
+               end;
+            end loop;
+         end;
+
+         --  Long words held to twice the median, at a sentence's edge.
+         declare
+            Durations : array (1 .. Natural (Words.Length)) of Real;
+            Kept      : Natural := 0;
+            Median    : Real := 0.0;
+         begin
+            for Each of Words loop
+               if Each.Finish - Each.Start /= 0.0 then
+                  Kept := Kept + 1;
+                  Durations (Kept) := Each.Finish - Each.Start;
+               end if;
+            end loop;
+            if Kept > 0 then
+               for I in 2 .. Kept loop
+                  declare
+                     V : constant Real := Durations (I);
+                     J : Natural := I - 1;
+                  begin
+                     while J >= 1 and then Durations (J) > V loop
+                        Durations (J + 1) := Durations (J);
+                        J := J - 1;
+                     end loop;
+                     Durations (J + 1) := V;
+                  end;
+               end loop;
+               Median := (if Kept mod 2 = 1 then Durations (Kept / 2 + 1)
+                          else (Durations (Kept / 2) + Durations (Kept / 2 + 1)) / 2.0);
+            end if;
+            Median := Real'Min (0.7, Median);
+            declare
+               Longest : constant Real := Median * 2.0;
+            begin
+               if Kept > 0 then
+                  for I in Words.First_Index + 1 .. Words.Last_Index loop
+                     declare
+                        Each : Timed := Words (I);
+                     begin
+                        if Each.Finish - Each.Start > Longest then
+                           if Within (To_String (Each.Text), Sentence_Ends) then
+                              Each.Finish := Each.Start + Longest;
+                           elsif Within (To_String (Words (I - 1).Text), Sentence_Ends) then
+                              Each.Start := Each.Finish - Longest;
+                           end if;
+                           Words.Replace_Element (I, Each);
+                        end if;
+                     end;
+                  end loop;
+               end if;
+
+               --  Punctuation joined: what opens a word to the word after,
+               --  what closes one to the word before.
+               if Natural (Words.Length) >= 2 then
+                  declare
+                     I : Integer := Words.Last_Index - 1;
+                     J : Integer := Words.Last_Index;
+                  begin
+                     while I >= Words.First_Index loop
+                        declare
+                           Before : Timed := Words (I);
+                           After  : Timed := Words (J);
+                           Said   : constant String := To_String (Before.Text);
+                        begin
+                           if Said'Length > 0 and then Said (Said'First) = ' '
+                             and then Within (Ada.Strings.Fixed.Trim (Said, Ada.Strings.Both), Prepended)
+                           then
+                              After.Text := Before.Text & After.Text;
+                              After.Tokens := Before.Tokens + After.Tokens;
+                              Before.Text := Null_Unbounded_String;
+                              Before.Tokens := 0;
+                              Words.Replace_Element (I, Before);
+                              Words.Replace_Element (J, After);
+                           else
+                              J := I;
+                           end if;
+                        end;
+                        I := I - 1;
+                     end loop;
+                  end;
+                  declare
+                     I : Positive := Words.First_Index;
+                     J : Positive := Words.First_Index + 1;
+                  begin
+                     while J <= Words.Last_Index loop
+                        declare
+                           Before : Timed := Words (I);
+                           After  : Timed := Words (J);
+                           Said   : constant String := To_String (Before.Text);
+                        begin
+                           if not (Said'Length > 0 and then Said (Said'Last) = ' ')
+                             and then Within (To_String (After.Text), Appended)
+                           then
+                              Before.Text := Before.Text & After.Text;
+                              Before.Tokens := Before.Tokens + After.Tokens;
+                              After.Text := Null_Unbounded_String;
+                              After.Tokens := 0;
+                              Words.Replace_Element (I, Before);
+                              Words.Replace_Element (J, After);
+                           else
+                              I := J;
+                           end if;
+                        end;
+                        J := J + 1;
+                     end loop;
+                  end;
+               end if;
+
+               --  Dealt to the segments, a segment's tokens' worth each.
+               declare
+                  Word_Index : Positive := Words.First_Index;
+               begin
+                  for S in 0 .. Natural (Lengths.Length) - 1 loop
+                     declare
+                        Piece : Segment := Result.Segments (First + S);
+                        Saved : Natural := 0;
+                     begin
+                        while Word_Index <= Words.Last_Index and then Saved < Lengths (S + 1) loop
+                           declare
+                              Each : constant Timed := Words (Word_Index);
+                           begin
+                              if Each.Text /= Null_Unbounded_String then
+                                 Piece.Words.Append
+                                   (Word_Timing'(Text          => Each.Text,
+                                                 Start_Seconds => Hundredths (Offset + Each.Start),
+                                                 End_Seconds   => Hundredths (Offset + Each.Finish),
+                                                 Probability   => Real (Each.Likely)));
+                              end if;
+                              Saved := Saved + Each.Tokens;
+                              Word_Index := Word_Index + 1;
+                           end;
+                        end loop;
+                        if not Piece.Words.Is_Empty then
+                           declare
+                              W1 : Word_Timing := Piece.Words.First_Element;
+                           begin
+                              --  The first and second word after a pause no
+                              --  longer than twice the median.
+                              if W1.End_Seconds - Last_Speech > Median * 4.0
+                                and then (W1.End_Seconds - W1.Start_Seconds > Longest
+                                          or else (Natural (Piece.Words.Length) > 1
+                                                   and then Piece.Words (2).End_Seconds - W1.Start_Seconds
+                                                            > Longest * 2.0))
+                              then
+                                 if Natural (Piece.Words.Length) > 1
+                                   and then Piece.Words (2).End_Seconds - Piece.Words (2).Start_Seconds > Longest
+                                 then
+                                    declare
+                                       W2 : Word_Timing := Piece.Words (2);
+                                       Boundary : constant Real :=
+                                         Real'Max (W2.End_Seconds / 2.0, W2.End_Seconds - Longest);
+                                    begin
+                                       W1.End_Seconds := Boundary;
+                                       W2.Start_Seconds := Boundary;
+                                       Piece.Words.Replace_Element (2, W2);
+                                    end;
+                                 end if;
+                                 W1.Start_Seconds := Real'Max (0.0, W1.End_Seconds - Longest);
+                              end if;
+                              --  The segment's own start where the first
+                              --  word is too long; else the word's.
+                              if Piece.Start_Seconds < W1.End_Seconds
+                                and then Piece.Start_Seconds - 0.5 > W1.Start_Seconds
+                              then
+                                 W1.Start_Seconds :=
+                                   Real'Max (0.0, Real'Min (W1.End_Seconds - Median, Piece.Start_Seconds));
+                              else
+                                 Piece.Start_Seconds := W1.Start_Seconds;
+                              end if;
+                              Piece.Words.Replace_Element (1, W1);
+                           end;
+                           declare
+                              Last : Word_Timing := Piece.Words.Last_Element;
+                           begin
+                              if Piece.End_Seconds > Last.Start_Seconds
+                                and then Piece.End_Seconds + 0.5 < Last.End_Seconds
+                              then
+                                 Last.End_Seconds := Real'Max (Last.Start_Seconds + Median, Piece.End_Seconds);
+                              else
+                                 Piece.End_Seconds := Last.End_Seconds;
+                              end if;
+                              Piece.Words.Replace_Element (Piece.Words.Last_Index, Last);
+                           end;
+                           Last_Speech := Piece.End_Seconds;
+                        end if;
+                        Result.Segments.Replace_Element (First + S, Piece);
+                     end;
+                  end loop;
+               end;
+            end;
+         end;
+      end Time_Words;
    begin
       Result := (others => <>);
       Status := E.Success;
@@ -1876,6 +2327,12 @@ package body Model_Runner.Whisper is
 
                function Is_Time (I : Positive) return Boolean is (Sampled (I) >= Source.Timestamp_Begin);
 
+               --  This window's segments, where their words are timed: the
+               --  first's place, each one's text tokens, all of them.
+               First_New     : constant Positive := Natural (Result.Segments.Length) + 1;
+               Window_Text   : Token_Vectors.Vector;
+               Window_Counts : Count_Vectors.Vector;
+
                function Time_Of (Token : Token_Id) return Real is
                  (Real (Token - Source.Timestamp_Begin) * Time_Precision);
 
@@ -1898,11 +2355,21 @@ package body Model_Runner.Whisper is
                      --  prompted with.
                      if Start_At = End_At or else Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both) = "" then
                         Piece.Text := Null_Unbounded_String;
+                        Window_Counts.Append (0);
                      else
                         Piece.Text := To_Unbounded_String (Text);
-                        for I in From .. To loop
-                           All_Tokens.Append (Sampled (I));
-                        end loop;
+                        declare
+                           Texts : Natural := 0;
+                        begin
+                           for I in From .. To loop
+                              All_Tokens.Append (Sampled (I));
+                              if Sampled (I) < Source.End_Of_Text then
+                                 Window_Text.Append (Sampled (I));
+                                 Texts := Texts + 1;
+                              end if;
+                           end loop;
+                           Window_Counts.Append (Texts);
+                        end;
                      end if;
                   end;
                   Result.Segments.Append (Piece);
@@ -1962,6 +2429,32 @@ package body Model_Runner.Whisper is
                            Add_Segment (1, Count, Offset, Offset + Span);
                         end;
                         Seek := Seek + Size;
+                     end if;
+
+                     --  Each word's time; and the next window from where the
+                     --  last word ended, unless the window ended on a time
+                     --  alone.
+                     if Settings.Word_Timestamps then
+                        Time_Words (Window_Text, Window_Counts, First_New, Size, Offset);
+                        if E.Is_Error (Status) then
+                           Release;
+                           return;
+                        end if;
+                        if not Single_Ending and then Natural (Result.Segments.Length) >= First_New then
+                           declare
+                              Last_End : Real := Result.Segments.Last_Element.End_Seconds;
+                           begin
+                              for I in reverse First_New .. Result.Segments.Last_Index loop
+                                 if not Result.Segments (I).Words.Is_Empty then
+                                    Last_End := Result.Segments (I).Words.Last_Element.End_Seconds;
+                                    exit;
+                                 end if;
+                              end loop;
+                              if Last_End > Offset then
+                                 Seek := Element_Count (Wide_Real'Unbiased_Rounding (Wide_Real (Last_End) * 100.0));
+                              end if;
+                           end;
+                        end if;
                      end if;
                   end;
                end if;

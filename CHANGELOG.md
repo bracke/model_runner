@@ -7,6 +7,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Word timestamps.** `transcribe --speech-word-timestamps` (`Options.Word_Timestamps`) gives each word its start and end, as the reference's timing does: the alignment heads' attention -- `whisper.alignment_heads`, written by the converter now -- filtered and warped (`Whisper.Timing`), words cut, clipped and punctuated as it does, the next window from the last word's end; every word's times the reference's on the two fixtures checked.
+
 - **Whisper decodes a refused window again, and translates.** A window that repeats itself or is unsure is decoded again at 0.2, 0.4, ... 1, best of five drawn at each, as the reference's `decode_with_fallback` does (`Options.Temperatures`, `Best_Of`, `Seed`; `Segment.Temperature` says which), from a seeded stream of its own. `--speech-translate` (run, transcribe) writes English whatever is spoken. Dictation reads the language off the window it decodes (`Options.Detect_From_Window`): one encoder pass where there were two, 2.78 -> 1.85 s on 14 s of Danish.
 
 - **Whisper faster, and in Q8_0.** Small hears 14 s in 1.68 s where it took 2.47 (binary16), the decoder 30 -> 10.5 ms a token: its products round activations to bytes where a matrix is quantized, its attention to what was heard runs as two panel products a head on a worker of its own, the keys and values laid out once a window, and a few rows' work is done without waking the pool. `tests whisper-convert --type q8_0` writes the matrices as ggml's Q8_0: 270 MB for small, 1.53 s for the same 14 s, its text close to the reference's rather than the same.

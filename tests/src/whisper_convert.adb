@@ -387,6 +387,24 @@ package body Whisper_Convert is
             begin
                Take_List ("suppress_tokens");
                Take_List ("begin_suppress_tokens");
+               --  The heads word timing reads, [block, head] pairs written
+               --  flat, where the checkpoint names them.
+               declare
+                  Pairs : constant J.Node := J.Member (Generation, Root, "alignment_heads");
+               begin
+                  if J.Is_Present (Pairs) then
+                     Fixtures.Begin_Array
+                       (Build, "whisper.alignment_heads", G.Value_Int32, 2 * J.Length (Generation, Pairs));
+                     for I in 1 .. J.Length (Generation, Pairs) loop
+                        for K in 1 .. 2 loop
+                           Fixtures.Int32_Element
+                             (Build, Interfaces.Integer_32
+                                (J.As_Integer (Generation, J.Element (Generation, J.Element (Generation, Pairs, I), K))));
+                        end loop;
+                     end loop;
+                     Fixtures.End_Array (Build);
+                  end if;
+               end;
             end;
          end;
 

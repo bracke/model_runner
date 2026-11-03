@@ -311,10 +311,10 @@ package body Tool_Commands is
    Says_Hear  : aliased constant String :=
      "transcribe a recording with a Whisper model, and hold its encoder and first logits to the reference's";
    Takes_Hear : aliased constant String :=
-     "--model PATH --audio FILE [--language CODE] [--detect-from-window] [--reference DIR] [--threads N]"
-     & " [--repeats N]";
+     "--model PATH --audio FILE [--language CODE] [--detect-from-window] [--word-timestamps] [--reference DIR]"
+     & " [--threads N] [--repeats N]";
    Opts_Hear  : aliased constant String :=
-     " --model --audio --language --detect-from-window --reference --threads --repeats ";
+     " --model --audio --language --detect-from-window --word-timestamps --reference --threads --repeats ";
 
    Held : constant array (1 .. 39) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

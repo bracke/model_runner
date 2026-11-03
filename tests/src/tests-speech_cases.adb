@@ -19,6 +19,7 @@ with Model_Runner.Cancellation;
 with Model_Runner.Tokenizer;
 with Model_Runner.Whisper;
 with Model_Runner.Whisper.Decoding;
+with Model_Runner.Whisper.Timing;
 
 with Whisper_Fixture;
 with Tiny_Model;
@@ -803,6 +804,16 @@ package body Tests.Speech_Cases is
       end loop;
       Settings.Translate := False;
       Settings.Temperature_Count := 1;
+      Settings.Word_Timestamps := True;
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      Assert (E.Is_Ok (Status), "word timing failed: " & Status.Code'Image);
+      for Piece of Heard.Segments loop
+         for Word of Piece.Words loop
+            Assert (Word.Start_Seconds <= Word.End_Seconds and then Word.Start_Seconds >= 0.0,
+                    "a word ends before it starts");
+         end loop;
+      end loop;
+      Settings.Word_Timestamps := False;
       W.Transcribe (Session, Sound, Settings, Heard, Status);
       for Piece of Heard.Segments loop
          Assert (Piece.Temperature = 0.0, "one temperature of nought sampled");
@@ -819,6 +830,38 @@ package body Tests.Speech_Cases is
       W.Close (Session);
       W.Close (Model, Status);
    end Whisper_Transcribes_And_Refuses;
+
+   ------------
+   -- Timing --
+   ------------
+
+   --  The warp is the reference's: the cheapest path, its ties broken as
+   --  dtw_cpu breaks them; the median is over seven, the ends reflected.
+   procedure Word_Timing_Arithmetic
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tm renames Model_Runner.Whisper.Timing;
+      use type Tm.Index_List;
+      --  Three tokens over six frames, each cheapest on two of its own.
+      Cost : constant Tm.Cost_Matrix (0 .. 2, 0 .. 5) :=
+        [[-1.0, -1.0, 0.0, 0.0, 0.0, 0.0],
+         [0.0, 0.0, -1.0, -1.0, 0.0, 0.0],
+         [0.0, 0.0, 0.0, 0.0, -1.0, -1.0]];
+      Rows_Of, Columns_Of : Tm.Index_List (1 .. 9);
+      Steps : Natural;
+      Line  : Tm.Cost_Matrix (0 .. 0, 0 .. 8) := [[5.0, 1.0, 9.0, 2.0, 7.0, 3.0, 8.0, 4.0, 6.0]];
+   begin
+      Tm.Warp (Cost, Rows_Of, Columns_Of, Steps);
+      --  The reference's dtw on the same cost: down where a tie leaves it.
+      Assert (Steps = 8, "the path took" & Steps'Image & " steps");
+      Assert (Rows_Of (1 .. 8) = [0, 0, 1, 1, 1, 2, 2, 2] and then Columns_Of (1 .. 8) = [0, 1, 1, 2, 3, 3, 4, 5],
+              "the path is not the reference's");
+      Tm.Median_Filter (Line);
+      --  Reflected: 2 9 1 5 1 9 2 7 3 8 4 6 4 8 3 ...
+      Assert (Line (0, 0) = 2.0 and then Line (0, 4) = 4.0 and then Line (0, 8) = 4.0,
+              "the median is not the reference's: " & Line (0, 0)'Image & Line (0, 4)'Image & Line (0, 8)'Image);
+   end Word_Timing_Arithmetic;
 
    ---------------
    -- Insertion --
@@ -1133,6 +1176,9 @@ package body Tests.Speech_Cases is
       Register_Routine
         (T, Whisper_Transcribes_And_Refuses'Access,
          "a Whisper session hears, detects, refuses past its context and stops when cancelled");
+      Register_Routine
+        (T, Word_Timing_Arithmetic'Access,
+         "a word's time is warped and filtered as the reference's timing does it");
       Register_Routine
         (T, Spoken_Text_Goes_In_Where_The_Cursor_Is'Access,
          "what is heard goes in at the cursor, spaced, one line, never as a command");

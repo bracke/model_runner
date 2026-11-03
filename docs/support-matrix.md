@@ -394,7 +394,8 @@ Speech into a session's line, and `model_runner transcribe` (docs/plan-speech.md
 | Session | Ctrl-G (or `--speech-shortcut`) records and stops; the transcript put in at the cursor; Escape drops; keys pressed meanwhile kept and acted on after |
 | Processor | Yes: encoder products in binary32 panels, decoder on the processor's products |
 | Device | Not supported: the device backend is fed from one task, and speech is heard on its own while the conversation's model may run (docs/plan-speech.md, section 9); speech runs on the processor whatever the conversation's backend |
-| Not implemented | Word timestamps, beam search, quantized formats other than Q8_0 |
+| Word timestamps | `--speech-word-timestamps`: the reference's timing -- the alignment heads' attention, filtered and warped, words cut and clipped as it cuts and clips them; every word's times the reference's on jfk.wav (tiny) and 14 s of Danish (small) |
+| Not implemented | Beam search, quantized formats other than Q8_0 |
 
 ## Backend
 

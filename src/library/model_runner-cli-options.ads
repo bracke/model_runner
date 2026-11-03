@@ -575,6 +575,7 @@ package Model_Runner.CLI.Options is
       Speech_Shortcut       : Character := Character'Val (7);
       Speech_Timestamps     : Boolean := False;
       Speech_Translate      : Boolean := False;
+      Speech_Word_Timestamps : Boolean := False;
 
       --  The recording transcribe hears.
       Audio_Path            : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;

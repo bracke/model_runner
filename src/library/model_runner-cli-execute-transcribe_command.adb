@@ -63,6 +63,7 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
          end if;
          Settings.Language := To_Unbounded_String (Model_Runner.Text.To_String (Item.Speech_Language));
          Settings.Translate := Item.Speech_Translate;
+         Settings.Word_Timestamps := Item.Speech_Word_Timestamps;
          Settings.Initial_Prompt := To_Unbounded_String (Model_Runner.Text.To_String (Item.Speech_Initial_Prompt));
          W.Transcribe (Session, Samples.all, Settings, Heard, Condition);
          W.Close (Session);
@@ -70,12 +71,19 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
             Fail (Condition);
             return;
          end if;
-         if Item.Speech_Timestamps then
+         if Item.Speech_Timestamps or else Item.Speech_Word_Timestamps then
             for Piece of Heard.Segments loop
                if not Piece.Silent and then Length (Piece.Text) > 0 then
                   Pres.Put_Line
                     (Screen, "[" & Seconds_Image (Piece.Start_Seconds) & " --> " & Seconds_Image (Piece.End_Seconds)
                      & "]" & (if Piece.Uncertain then " (?)" else "") & To_String (Piece.Text));
+               end if;
+               if not Piece.Silent then
+                  for Word of Piece.Words loop
+                     Pres.Put_Line
+                       (Screen, "  [" & Seconds_Image (Word.Start_Seconds) & " --> " & Seconds_Image (Word.End_Seconds)
+                        & "]" & To_String (Word.Text));
+                  end loop;
                end if;
             end loop;
          else

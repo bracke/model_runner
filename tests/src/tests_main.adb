@@ -521,7 +521,9 @@ begin
            (Option ("--model", ""), Option ("--audio", ""), Option ("--language", ""), Option ("--reference", ""),
             Natural'Value (Option ("--threads", "0")), Positive'Value (Option ("--repeats", "1")),
             Fast_Detect => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
-                              Ada.Command_Line.Argument (Index) = "--detect-from-window")) /= 0
+                              Ada.Command_Line.Argument (Index) = "--detect-from-window"),
+            Words => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                        Ada.Command_Line.Argument (Index) = "--word-timestamps")) /= 0
          then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

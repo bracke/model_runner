@@ -15,11 +15,13 @@ package Speech_Hear is
    --  @param Threads Workers, or 0 for the machine's default.
    --  @param Repeats Times to transcribe, for timing.
    --  @param Fast_Detect Read the language off the first window as decoded.
+   --  @param Words Time each word, and say them.
    --  @return 0 when heard (and, given a reference, within its tolerance).
    function Run
      (Model, Audio, Language, Reference : String;
       Threads : Natural;
       Repeats : Positive;
-      Fast_Detect : Boolean := False) return Natural;
+      Fast_Detect : Boolean := False;
+      Words : Boolean := False) return Natural;
 
 end Speech_Hear;

@@ -201,6 +201,11 @@ package Model_Runner.Whisper is
       Temperatures      : Temperature_List := Reference_Temperatures;
       Temperature_Count : Positive range 1 .. Max_Temperatures := 6;
       Best_Of           : Positive := 5;
+      --  Whether each segment's words are timed, as the reference's
+      --  word_timestamps times them: the alignment heads' attention over the
+      --  window's tokens, warped to its frames. A window then starts where
+      --  its last word ended, unless it ended on a time alone.
+      Word_Timestamps   : Boolean := False;
       --  Where the draws for sampling start.
       Seed              : Interfaces.Unsigned_64 := 0;
       --  The reference's thresholds.
@@ -208,6 +213,17 @@ package Model_Runner.Whisper is
       Log_Prob_Threshold    : Real := -1.0;
       Compression_Threshold : Real := 2.4;
    end record;
+
+   --  One word and when it was said, where word times are asked.
+   type Word_Timing is record
+      Text          : Ada.Strings.Unbounded.Unbounded_String;
+      Start_Seconds : Real := 0.0;
+      End_Seconds   : Real := 0.0;
+      --  Its tokens' probabilities, averaged.
+      Probability   : Real := 0.0;
+   end record;
+
+   package Word_Vectors is new Ada.Containers.Vectors (Positive, Word_Timing);
 
    --  One stretch of the recording and what was said in it.
    type Segment is record
@@ -226,6 +242,8 @@ package Model_Runner.Whisper is
       Temperature : Real := 0.0;
       --  Its window decoded Max_Tokens without ending.
       Cut_Short : Boolean := False;
+      --  Its words and their times, where Word_Timestamps asked.
+      Words : Word_Vectors.Vector;
    end record;
 
    package Segment_Vectors is new Ada.Containers.Vectors (Positive, Segment);
@@ -372,6 +390,16 @@ private
 
    type Token_List is array (1 .. Max_Suppressed) of Model_Runner.Tokenizer.Token_Id;
 
+   --  The most heads word timing reads.
+   Max_Alignment_Heads : constant := 64;
+
+   type Head_Place is record
+      Block : Positive := 1;
+      Head  : Natural := 0;
+   end record;
+
+   type Head_List is array (1 .. Max_Alignment_Heads) of Head_Place;
+
    type Model is limited record
       Ready     : Boolean := False;
       File      : Model_Runner.Byte_Sources.Files.File_Source;
@@ -400,6 +428,10 @@ private
       Language_Total : Natural := 0;
       Suppressed, Begin_Suppressed : Token_List := [others => 0];
       Suppressed_Count, Begin_Suppressed_Count : Natural := 0;
+      --  The heads word timing reads: the file's, or the upper half of the
+      --  decoder's every head where it names none, as the reference has it.
+      Alignment : Head_List;
+      Alignment_Count : Natural := 0;
 
       Conv1, Conv2           : Projection;
       Audio_Positions        : T.Real_Array_Access;
@@ -448,6 +480,11 @@ private
       Dec_X, Dec_H, Dec_Q, Dec_K, Dec_V, Dec_A, Dec_F : T.Real_Array_Access;
       Dec_Scores : T.Real_Array_Access;
       Last_Row, Logits : T.Real_Array_Access;
+      --  The alignment heads' scaled scores over the tokens a pass reads,
+      --  kept while Capturing: head a, token t, position p at
+      --  (a * Count + t) * Audio_Context + p.
+      Capturing : Boolean := False;
+      Captured  : T.Real_Array_Access;
    end record;
 
 end Model_Runner.Whisper;

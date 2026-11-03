@@ -79,7 +79,8 @@ package body Speech_Hear is
      (Model, Audio, Language, Reference : String;
       Threads : Natural;
       Repeats : Positive;
-      Fast_Detect : Boolean := False) return Natural
+      Fast_Detect : Boolean := False;
+      Words : Boolean := False) return Natural
    is
       Whisper : aliased W.Model;
       Samples : T.Real_Array_Access;
@@ -157,6 +158,7 @@ package body Speech_Hear is
 
          Settings.Language := To_Unbounded_String (Language);
          Settings.Detect_From_Window := Fast_Detect;
+         Settings.Word_Timestamps := Words;
          for Round in 1 .. Repeats loop
             declare
                Before : constant Ada.Calendar.Time := Ada.Calendar.Clock;
@@ -184,6 +186,10 @@ package body Speech_Hear is
                     & " no-speech" & Piece.No_Speech_Probability'Image
                     & " ratio" & Piece.Compression_Ratio'Image & " t" & Piece.Temperature'Image
                     & " " & To_String (Piece.Text));
+               for Word of Piece.Words loop
+                  Say ("    " & To_String (Word.Text) & Word.Start_Seconds'Image & Word.End_Seconds'Image
+                       & Word.Probability'Image);
+               end loop;
             end loop;
             Say ("text: " & To_String (Heard.Text));
          end if;
