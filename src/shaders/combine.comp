@@ -133,6 +133,21 @@ float gaussian(float x) {
     return 0.5 * x * (1.0 + tanh(clamp(inner, -60.0, 60.0)));
 }
 
+//  The error function, which GLSL has not: Abramowitz and Stegun's 7.1.26,
+//  within 1.5e-7 of it everywhere, which is binary32's own precision near
+//  one.
+float error_function(float x) {
+    float t = 1.0 / (1.0 + 0.3275911 * abs(x));
+    float poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741
+                 + t * (-1.453152027 + t * 1.061405429))));
+    return sign(x) * (1.0 - poly * exp(-x * x));
+}
+
+//  The Gaussian unit as Whisper states it, x * (1 + erf(x / sqrt 2)) / 2.
+float exact_gaussian(float x) {
+    return 0.5 * x * (1.0 + error_function(x * 0.7071067811865476));
+}
+
 //  x / (1 + exp(-1.702 x)), the quick Gaussian unit, guarded as the
 //  weighted one is; the host computes the same thing the same way.
 float quick_gaussian(float x) {
@@ -177,6 +192,8 @@ void main() {
         made = gaussian(gate);
     } else if (shape.unit == 9) {
         made = quick_gaussian(gate);
+    } else if (shape.unit == 10) {
+        made = exact_gaussian(gate);
     } else if (shape.unit == 3) {
         float alpha = uintBitsToFloat (shape.alpha_bits);
         float limit = uintBitsToFloat (shape.limit_bits);

@@ -520,13 +520,28 @@ private
       --  device, a sequence a block.
       Cross_On_Device, Self_On_Device : Boolean := False;
       --  Each decoder norm's gain then bias, as the device's norm step
-      --  reads one: three a block, then the last.
+      --  reads one: three a block, then the last. Then each block's keys'
+      --  bias, which is nought, and its values', as the device's heads step
+      --  reads the two.
       Norm_Pairs : T.Real_Array_Access;
       --  Whether the conversation read halves of the cache before the turn
       --  was borrowed, to be put back.
       Halves_Were : Boolean := False;
       --  Decoder positions run on the device since the session opened.
       Device_Fed : Natural := 0;
+      --  Whether the device refused a token's biases folded into its
+      --  products, so that they are named apart from then on.
+      Folds_Refused : Boolean := False;
+      --  How many candidates a window may draw together, for which the
+      --  device's cache holds a wide row a position past the rest: each
+      --  candidate's keys and values in its own columns. Nought for none.
+      Wide : Natural := 0;
+      --  A window's candidates drawn together: each one's keys and values
+      --  of its own positions (candidate c, block b at (c - 1) * blocks +
+      --  b), their logits a row each, and a row's query and blend while
+      --  its attention runs.
+      Candidate_K, Candidate_V : T.Group_Room_Access;
+      Candidate_Logits, Candidate_Query, Candidate_Blend : T.Real_Array_Access;
    end record;
 
 end Model_Runner.Whisper;

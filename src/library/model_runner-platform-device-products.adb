@@ -3061,6 +3061,7 @@ package body Model_Runner.Platform.Device.Products is
       Item.Imports := Takes_Host_Memory (On);
       Item.Import_To := Host_Alignment (On);
       Item.Storage := Storage_Limit (On);
+      Item.Aligned := Storage_Alignment (On);
       Item.Tick := Timestamp_Period (On);
       Item.Plain := Plain_Memory_Kinds (On);
       Item.Share := Share_Host;
@@ -13716,7 +13717,8 @@ package body Model_Runner.Platform.Device.Products is
       Count       : Natural := 0;
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0;
-      Cap           : Model_Runner.Numerics.Real := 0.0) is
+      Cap           : Model_Runner.Numerics.Real := 0.0;
+      Fold          : Boolean := False) is
 
       use type Model_Runner.Numerics.Real;
 
@@ -13810,6 +13812,35 @@ package body Model_Runner.Platform.Device.Products is
          Exact => True,
          Attends => False, Blends => False,
          others => <>);
+
+      --  Folded into its product's store, where that product is plain,
+      --  just named, read by nothing else and joined to nothing yet.
+      if Fold
+        and then not Cap_Only and then Cap = 0.0
+        and then not Sliced and then Route_Step = 0 and then Count = 0
+        and then Experts = 1
+        and then Source_Step = Steps.Held - 1
+      then
+         declare
+            That : Step renames Steps.Items (Source_Step);
+         begin
+            if not (That.Kept or else That.Joins or else That.Folded
+                    or else That.Gathers > 0 or else That.Listed
+                    or else That.Norms or else That.Rotates
+                    or else That.Places or else That.Readies
+                    or else That.Attends or else That.Routes
+                    or else That.Mixes or else That.Biases
+                    or else That.Picks or else That.Convolves
+                    or else That.Rules or else That.Rwkvs
+                    or else That.Wkvs or else That.Mambas
+                    or else That.Inverts or else That.Blends)
+            then
+               Steps.Items (Steps.Held).Folded := True;
+               That.Joins := True;
+               That.Joined := Steps.Held;
+            end if;
+         end;
+      end if;
       Added := True;
    end Add_Bias;
 
@@ -14256,7 +14287,7 @@ package body Model_Runner.Platform.Device.Products is
       --  A unit alone reads the one step before it, for both arms: the
       --  kernel reads the first and not the second, and naming the same
       --  step twice is what keeps the two-arm binding as it is.
-      Alone : constant Boolean := Unit in 4 | 5 | 9;
+      Alone : constant Boolean := Unit in 4 | 5 | 9 | 10;
 
       --  The arms: named, or the two before this step -- the one before,
       --  twice, for a unit alone.
@@ -14282,7 +14313,7 @@ package body Model_Runner.Platform.Device.Products is
                  elsif not Alone
                  then Steps.Items (First).Rows /= Steps.Items (Second).Rows
                  else False)
-        or else Unit > 9
+        or else Unit > 10
         or else (Unit = 3
                  and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
                            or else Model_Runner.Numerics."<=" (Limit, 0.0)))
@@ -14603,16 +14634,18 @@ package body Model_Runner.Platform.Device.Products is
         or else (Source_Stride /= 0
                  and then Source_At + Width > Steps.Items (From_Step).Rows)
         or else Head_Size > 256
-        or else Rotary = 0
         or else Rotary mod 2 /= 0
         or else Rotary > Head_Size
-        or else Table = System.Null_Address
+        --  No pair turned -- a model told its positions otherwise, as
+        --  Whisper is -- reads no table; every component then passes
+        --  as the components past the turned ones do.
+        or else (Rotary > 0 and then Table = System.Null_Address)
         --  The table's span is what the rotation step checks too: two
         --  wide numbers a pair a position, and the caller has said how
         --  many. Refused before the step is held, not after: a step
         --  stored and then said not added stayed in the sequence, every
         --  later step a place out.
-        or else Table_Span = 0
+        or else (Rotary > 0 and then Table_Span = 0)
         or else (Into_Cache and then Stride < Width)
         or else (V_Step /= 0
                  and then (not Into_Cache
@@ -14730,7 +14763,8 @@ package body Model_Runner.Platform.Device.Products is
       Packed     : Packed_Cache := Not_Packed;
       Sinks_At   : Natural := 0;
       Pages_At   : Natural := 0;
-      Page_Shift : Natural := 0) is
+      Page_Shift : Natural := 0;
+      Rows_As_Heads : Boolean := False) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -14754,6 +14788,12 @@ package body Model_Runner.Platform.Device.Products is
                                and then Value_Size <= Latent_Value))
         or else Group_Size = 0
         or else Last < First
+        or else (Rows_As_Heads
+                 and then (not Causal or else Window /= 0 or else Group_Size /= 1
+                           or else Model_Runner.Numerics."/=" (Max_Bias, 0.0)
+                           or else Model_Runner.Numerics."/=" (Cap, 0.0)
+                           or else Sinks_At /= 0 or else Pages_At /= 0
+                           or else Packed /= Not_Packed))
       then
          Added := False;
          return;
@@ -14777,7 +14817,7 @@ package body Model_Runner.Platform.Device.Products is
          Group_Size => Group_Size, First => First, Last => Last,
          K_Base => K_Base, V_Base => V_Base, KV_Width => KV_Width,
          V_Width => V_Width, Window => Window, Scale => Scale, Cap => Cap,
-         Causal => Causal, Max_Bias => Max_Bias,
+         Causal => Causal, Max_Bias => Max_Bias, Rows_As_Heads => Rows_As_Heads,
          Packed => Packed, Sinks => Sinks_At,
          Pages_At => Pages_At, Page_Shift => Page_Shift,
          others => <>);
@@ -14981,7 +15021,8 @@ package body Model_Runner.Platform.Device.Products is
       --  The few-position pipeline an attending step takes, or none; see
       --  Few_Kernel.
       function Few_Line (Which : Positive) return Address
-      is (if Steps.Items (Which).Attends
+      is (if Steps.Items (Which).Rows_As_Heads then Null_Handle
+          elsif Steps.Items (Which).Attends
             and then Steps.Items (Which).Packed.K_Bits = 0
             and then Steps.Items (Which).Causal
             and then Steps.Items (Which).Window = 0
@@ -15027,7 +15068,8 @@ package body Model_Runner.Platform.Device.Products is
       --  a word of four.
       function Token_Line (Which : Positive) return Address
       is (if Steps.Items (Which).Attends
-            and then Count in 1 .. Token_Positions_Most
+            and then (Steps.Items (Which).Rows_As_Heads
+                      or else Count in 1 .. Token_Positions_Most)
             and then Steps.Items (Which).Packed.K_Bits = 0
             and then Few_Line (Which) = Null_Handle
             and then Steps.Items (Which).Head_Size = Steps.Items (Which).Value_Size
@@ -15069,8 +15111,19 @@ package body Model_Runner.Platform.Device.Products is
                  (Steps.Items (Which).Head_Size / 64)
           else Null_Handle);
 
+      --  How many positions an attending step attends for, and with how
+      --  many heads: the batch's, or one position of every row's heads.
+      function Attending_Of (Which : Positive) return Natural
+      is (if Steps.Items (Which).Rows_As_Heads then 1 else Count);
+
+      function Heads_Attending_Of (Which : Positive) return Natural
+      is (if Steps.Items (Which).Rows_As_Heads
+          then Steps.Items (Which).Heads * Count
+          else Steps.Items (Which).Heads);
+
       function Latent_Batch (Which : Positive) return Boolean
-      is (Count >= Latent_Rows
+      is (not Steps.Items (Which).Rows_As_Heads
+          and then Count >= Latent_Rows
           and then Item.Latent_Batch_Attend /= Null_Handle
           and then Few_Line (Which) = Item.Latent_Attend);
 
@@ -15852,7 +15905,7 @@ package body Model_Runner.Platform.Device.Products is
                                         and then Item.Copy_Buffer
                                                  /= Null_Handle))
                  or else Item.Heads_Line = Null_Handle
-                 or else This.Turn_Table = System.Null_Address
+                 or else (This.Turns > 0 and then This.Turn_Table = System.Null_Address)
                  or else (This.Base /= System.Null_Address
                           and then Interfaces.Unsigned_64 (This.Span)
                                    < Interfaces.Unsigned_64 (This.At_Byte)
@@ -16306,6 +16359,20 @@ package body Model_Runner.Platform.Device.Products is
          end;
 
          <<Next_Step>>
+      end loop;
+
+      --  A bias folded into its product is read row for row as the
+      --  product's residual, which is right for one position only, and is
+      --  bound at its own offset, which the device has to allow.
+      for Index in 1 .. Steps.Held loop
+         if Steps.Items (Index).Biases and then Steps.Items (Index).Folded
+           and then (Count /= 1
+                     or else Item.Aligned = 0
+                     or else Places (Index).Base mod Item.Aligned /= 0)
+         then
+            Release_All;
+            return;
+         end if;
       end loop;
 
       --  The two that change every call, grown when they have to -- after
@@ -17050,7 +17117,15 @@ package body Model_Runner.Platform.Device.Products is
             --  what the join would have read as its first arm, bound where
             --  the product's store can add it.
             Told (5) :=
+              --  A bias folded into the product: the bias itself, where
+              --  the device keeps it, bound from its first value.
               (if Steps.Items (Index).Joins
+                 and then Steps.Items (Steps.Items (Index).Joined).Biases
+               then (Buffer => Places (Steps.Items (Index).Joined).Buffer,
+                     Offset => Places (Steps.Items (Index).Joined).Base,
+                     Extent => Interfaces.Unsigned_64
+                                 (Steps.Items (Steps.Items (Index).Joined).Each) * 4)
+               elsif Steps.Items (Index).Joins
                then Source_Of
                       (Steps.Items (Index).Joined,
                        Steps.Items (Steps.Items (Index).Joined).Reads)
@@ -17473,6 +17548,7 @@ package body Model_Runner.Platform.Device.Products is
                   --  always has, and the engine picks between them by the
                   --  same test.
                   or else (Steps.Items (Which).Attends
+                           and then not Steps.Items (Which).Rows_As_Heads
                            and then Steps.Items (Which).Packed.K_Bits = 0
                            and then Attends_By_Matrix
                                       (Item, Count,
@@ -17532,7 +17608,7 @@ package body Model_Runner.Platform.Device.Products is
                      if not Many
                        and then Only > 0
                        and then Steps.Items (Only).Blends
-                       and then Steps.Items (Only).Unit in 0 | 1 | 3 | 4 | 5 | 9
+                       and then Steps.Items (Only).Unit in 0 | 1 | 3 | 4 | 5 | 9 | 10
                        and then Halved (Only)
                      then
                         Halved (Which) := True;
@@ -17651,6 +17727,7 @@ package body Model_Runner.Platform.Device.Products is
                   --  device.
                   Joined : constant Natural :=
                     (if This.Joins and then This.Joined /= 0
+                       and then not Steps.Items (This.Joined).Biases
                      then Steps.Items (This.Joined).Reads else 0);
 
                   --  A gather routed on the device reads the routing
@@ -17705,6 +17782,23 @@ package body Model_Runner.Platform.Device.Products is
                            elsif This.Chained and then This.Reads = 0
                            then Index - 1
                            else 0)));
+                  --  What a product reads as its operand, which is what
+                  --  the half-precision copy holds for it or is made from:
+                  --  the step it names, the one before where it is chained
+                  --  and names none, or the activation. Not Source, which
+                  --  is the latest step it reads at all: a product with a
+                  --  join folded into it reads the join's residual too, and
+                  --  where that residual was made after the operand -- a
+                  --  bias added to it between the operand and the product
+                  --  -- the copy was taken to hold the wrong answer and the
+                  --  operand converted again from a binary32 form that a
+                  --  step written only as halves never wrote: Whisper's
+                  --  projection down read nonsense over the tile.
+                  Operand : constant Natural :=
+                    (if This.Reads /= 0 then This.Reads
+                     elsif This.Chained then Index - 1
+                     else 0);
+
                   --  Whether this step writes the front of the
                   --  half-precision buffer: a tiled product converting
                   --  some answer other than the one the copy holds, or a
@@ -17729,7 +17823,7 @@ package body Model_Runner.Platform.Device.Products is
                      then False
                      else Member_Tiled (Index)
                           or else (Tiled (Index)
-                                   and then (Was_From /= Source
+                                   and then (Was_From /= Operand
                                              or else Was_Wide /= This.Columns)));
 
                   Wanted : constant Natural :=
@@ -17742,7 +17836,7 @@ package body Model_Runner.Platform.Device.Products is
                         elsif This.Attends then Natural'Max (Source, Cached)
                         else Source));
                begin
-                  Reading := Source;
+                  Reading := (if Is_Product (Index) then Operand else Source);
                   if Wanted > Fenced then
                      Barrier
                        (Item.Buffer, Pipeline_Stage_Compute,
@@ -17896,6 +17990,13 @@ package body Model_Runner.Platform.Device.Products is
                if This.Attends then
                   --  The attention kernel, and back again afterwards, as
                   --  the combining step does.
+                  --  A batch whose rows attend as heads (Rows_As_Heads)
+                  --  is one position of every row's heads, on the token
+                  --  kernel alone.
+                  if This.Rows_As_Heads and then Token_Line (Index) = Null_Handle then
+                     Release_All;
+                     return;
+                  end if;
                   --  A round takes the kernel whose block is one query. A
                   --  block of more reads a cached key once and dots it into
                   --  every query of the block, and rows of a round do not
@@ -17908,7 +18009,7 @@ package body Model_Runner.Platform.Device.Products is
                       elsif Token_Line (Index) /= Null_Handle
                       then Token_Line (Index)
                       else
-                     Attend_Kernel (Item, Count, This.Head_Size,
+                     Attend_Kernel (Item, Attending_Of (Index), This.Head_Size,
                                     This.Value_Size, This.Group_Size,
                                     Rounding => False,
                                     K_Base => This.K_Base,
@@ -17923,7 +18024,7 @@ package body Model_Runner.Platform.Device.Products is
                        Few_Line (Index) /= Null_Handle and then Barrier /= null;
 
                      Shape : aliased Attention_Constants :=
-                       (Heads      => C.unsigned (This.Heads),
+                       (Heads      => C.unsigned (Heads_Attending_Of (Index)),
                         Head_Size  => C.unsigned (This.Head_Size),
                         Value_Size => C.unsigned (This.Value_Size),
                         Group_Size => C.unsigned (This.Group_Size),
@@ -17946,7 +18047,7 @@ package body Model_Runner.Platform.Device.Products is
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.K_Base)
                              + (if Reads_Copy
-                                     (Item, Count, This.Head_Size,
+                                     (Item, Attending_Of (Index), This.Head_Size,
                                       This.Value_Size, False)
                                 then Copy_At (Item)
                                 else 0)),
@@ -17957,7 +18058,7 @@ package body Model_Runner.Platform.Device.Products is
                           C.unsigned
                             (Interfaces.Unsigned_64 (This.V_Base)
                              + (if Reads_Copy
-                                     (Item, Count, This.Head_Size,
+                                     (Item, Attending_Of (Index), This.Head_Size,
                                       This.Value_Size, False)
                                 then Copy_At (Item)
                                 else 0)
@@ -17974,7 +18075,7 @@ package body Model_Runner.Platform.Device.Products is
                         --  Run's Count is how many positions attend: a
                         --  batch of activations is a batch of positions,
                         --  and a workgroup goes to each head of each.
-                        Positions  => C.unsigned (Count),
+                        Positions  => C.unsigned (Attending_Of (Index)),
                         Window     => C.unsigned (This.Window),
                         --  The flag in the low bit and, above it, how many
                         --  positions the half-precision copy is to hold --
@@ -17987,7 +18088,7 @@ package body Model_Runner.Platform.Device.Products is
                           C.unsigned
                             ((if This.Causal then 1 else 0)
                              + (if Halved (Index)
-                                then 2 * Whole_Tiles (Count) else 0)),
+                                then 2 * Whole_Tiles (Attending_Of (Index)) else 0)),
                         Max_Bias   => C.C_float (This.Max_Bias),
                         Table_At   => 0,
                         Sinks_At   => C.unsigned (This.Sinks),
@@ -17996,7 +18097,7 @@ package body Model_Runner.Platform.Device.Products is
 
                      Across : constant C.unsigned :=
                        Attend_Heads
-                         (Item, This.Heads, This.Group_Size, Count,
+                         (Item, Heads_Attending_Of (Index), This.Group_Size, Attending_Of (Index),
                           This.Head_Size, This.Value_Size,
                           Rounding => False,
                           K_Base => This.K_Base, V_Base => This.V_Base,
@@ -18010,28 +18111,29 @@ package body Model_Runner.Platform.Device.Products is
                        (if Barrier = null then 1
                         elsif Latent_Batch (Index) then 1
                         elsif Few and then Few_Line (Index) = Item.Latent_Attend
-                        then Latent_Slices (This.Last - This.First + 1, Count)
+                        then Latent_Slices (This.Last - This.First + 1, Attending_Of (Index))
                         elsif Few
                         then Few_Slices
-                               (This.Heads / Natural'Max (1, This.Group_Size),
+                               (Heads_Attending_Of (Index) / Natural'Max (1, This.Group_Size),
                                 This.Last - This.First + 1,
                                 Wide => This.Head_Size > Matrix_Wide_Head
                                         or else This.Value_Size
                                                 > Matrix_Wide_Head)
                         else Natural'Min
                                (Attend_Slices
-                                  (Item, Count, This.Head_Size,
+                                  (Item, Attending_Of (Index), This.Head_Size,
                                    This.Value_Size, This.First, This.Last,
                                    Rounding => False),
                                 Merged_Slices
-                                  (This.Heads, (if This.Last >= This.First then This.Last - This.First + 1 else 0))));
+                                  (Heads_Attending_Of (Index),
+                                   (if This.Last >= This.First then This.Last - This.First + 1 else 0))));
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
                            Attention_Bytes, Shape'Address);
                      declare
                         Seated : constant Natural :=
-                          (if Halved (Index) then Whole_Tiles (Count)
-                           else Count);
+                          (if Halved (Index) then Whole_Tiles (Attending_Of (Index))
+                           else Attending_Of (Index));
                         Down   : constant C.unsigned :=
                           Attend_Groups
                             (Item, Seated, This.Head_Size, This.Value_Size,
@@ -18052,9 +18154,9 @@ package body Model_Runner.Platform.Device.Products is
                            Dispatch
                              (Item.Buffer,
                               C.unsigned
-                                (This.Heads
+                                (Heads_Attending_Of (Index)
                                  / Token_Rows (This.Group_Size, This.Head_Size)),
-                              C.unsigned (Count), C.unsigned (Slices));
+                              C.unsigned (Attending_Of (Index)), C.unsigned (Slices));
                         elsif Few then
                            --  A latent's token or few on the compilation that
                            --  splits the key between the subgroups, for a
@@ -18081,14 +18183,14 @@ package body Model_Runner.Platform.Device.Products is
                            Dispatch
                              (Item.Buffer,
                               C.unsigned
-                                (This.Heads
+                                (Heads_Attending_Of (Index)
                                  / Natural'Max (1, This.Group_Size)),
                               C.unsigned (Slices),
                               C.unsigned
                                 (if Latent_Batch (Index)
-                                 then (Count + Latent_Pair - 1) / Latent_Pair
+                                 then (Attending_Of (Index) + Latent_Pair - 1) / Latent_Pair
                                  elsif Few_Line (Index) = Item.Latent_Attend
-                                 then Count else 1));
+                                 then Attending_Of (Index) else 1));
                         elsif Attends_By_Matrix
                              (Item, Seated, This.Head_Size, This.Value_Size)
                         then

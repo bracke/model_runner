@@ -1811,6 +1811,24 @@ package body Model_Runner.Vision is
       end loop;
    end Run;
 
+   --  Where a picture's keys and values were put in the device's cache
+   --  last, and where the cache it reserved ended. Each picture's were put
+   --  past what the cache last held -- the picture before's among it -- so
+   --  every picture grew the cache by its own; now one goes where the last
+   --  went wherever nothing has reserved the cache since.
+   Last_Base, Last_End : Element_Count := 0;
+
+   function Picture_Base return Element_Count is
+     (if Last_End > 0 and then Model_Runner.Backend.Device.Cached_Elements = Last_End then Last_Base
+      else Model_Runner.Backend.Device.Cached_Elements);
+
+   --  What a reservation for a picture at Base left the cache holding.
+   procedure Note_Reserved (Base : Element_Count) is
+   begin
+      Last_Base := Base;
+      Last_End := Model_Runner.Backend.Device.Cached_Elements;
+   end Note_Reserved;
+
    --  Rows one product on the device takes at once: where the device's
    --  own batch is fastest, and the working set its shader was measured
    --  with.
@@ -2580,7 +2598,7 @@ package body Model_Runner.Vision is
       end if;
 
       if Work.Cache_Base = Element_Count'Last then
-         Work.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
+         Work.Cache_Base := Picture_Base;
       end if;
       K_Base := Work.Cache_Base;
       V_Base := K_Base + Patches * Width_P;
@@ -2590,6 +2608,7 @@ package body Model_Runner.Vision is
       if not Ok then
          return;
       end if;
+      Note_Reserved (Work.Cache_Base);
 
       if not Spread then
          Model_Runner.Backend.Device.Put_Cache
@@ -2985,14 +3004,16 @@ package body Model_Runner.Vision is
             T.Allocate (Patches * Width_P, Keys_M);
             T.Allocate (Patches * Width_P, Values_M);
             if Work.Cache_Base = Element_Count'Last then
-               Work.Cache_Base :=
-                 Model_Runner.Backend.Device.Cached_Elements;
+               Work.Cache_Base := Picture_Base;
             end if;
             K_Base := Work.Cache_Base;
             V_Base := K_Base + Patches * Width_P;
             Table_At := V_Base + Patches * Width_P;
             Model_Runner.Backend.Device.Reserve_Cache
               (Table_At + 2 * Patches, Table_At + 2 * Patches, Ok);
+            if Ok then
+               Note_Reserved (Work.Cache_Base);
+            end if;
             Ok := Ok and then Keys_M /= null and then Values_M /= null;
             if Ok and then Segments /= null then
                Model_Runner.Backend.Device.Put_Cache

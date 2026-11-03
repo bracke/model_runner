@@ -839,6 +839,11 @@ package body Model_Runner.Whisper is
       T.Free (Item.Scores);
       T.Free (Item.Decoded);
       T.Free (Item.Norm_Pairs);
+      T.Free (Item.Candidate_K);
+      T.Free (Item.Candidate_V);
+      T.Free (Item.Candidate_Logits);
+      T.Free (Item.Candidate_Query);
+      T.Free (Item.Candidate_Blend);
       FP.Free (Item.Weight_Panels);
       Free_Panels (Item.Packed);
       Free_Panels (Item.Cross_Keys);
@@ -1294,8 +1299,18 @@ package body Model_Runner.Whisper is
    function Scratch_At (Item : Session) return Element_Count is
      (Own_Keys_At (Item, Item.Source.Decoder_Blocks + 1));
 
+   --  Each decoder block's candidates' keys and values, past the
+   --  encoder's scratch: a row of Wide widths a position, candidate c's in
+   --  its c-th.
+   function Wide_Keys_At (Item : Session; Block : Positive) return Element_Count is
+     (Scratch_At (Item) + 2 * Item.Source.Audio_Context * Item.Source.Width
+      + Element_Count (Block - 1) * 2 * Item.Source.Text_Context * Element_Count (Item.Wide) * Item.Source.Width);
+
+   function Wide_Values_At (Item : Session; Block : Positive) return Element_Count is
+     (Wide_Keys_At (Item, Block) + Item.Source.Text_Context * Element_Count (Item.Wide) * Item.Source.Width);
+
    function Cache_End (Item : Session) return Element_Count is
-     (Scratch_At (Item) + 2 * Item.Source.Audio_Context * Item.Source.Width);
+     (Wide_Keys_At (Item, Item.Source.Decoder_Blocks + 1));
 
    procedure Attend_Both_Ways
      (Item   : in out Session;
@@ -1544,13 +1559,21 @@ package body Model_Runner.Whisper is
       end loop;
       Drop (Source.Token_Table);
       if Item.Norm_Pairs /= null then
-         for N_I in 0 .. 3 * Element_Count (Source.Decoder_Blocks) loop
+         for N_I in 0 .. 4 * Element_Count (Source.Decoder_Blocks) loop
             Model_Runner.Backend.Device.Forget
               ((T.Empty_View with delta
                   Base => Item.Norm_Pairs (N_I * 2 * Source.Width)'Address, Offset => 0));
          end loop;
       end if;
    end Forget_Matrices;
+
+   --  Where Whisper's part of the device's cache was put last, by any
+   --  session, and where the cache it reserved ended: taken while the turn
+   --  is held, so by one task at a time. Each turn's part was put past what
+   --  the cache last held -- its own part from the turn before among it --
+   --  so every transcription grew the cache by a part, and the corpus's
+   --  ninth recording copied eight to reserve its own.
+   Last_Base, Last_End : Element_Count := 0;
 
    --  The device's turn taken for what follows, where the session asks for
    --  the device, it is open and lent, and it has room beside the
@@ -1572,13 +1595,29 @@ package body Model_Runner.Whisper is
          return;
       end if;
       Item.Borrowed := True;
-      Item.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
+      --  The part where it was where nothing has reserved the cache since;
+      --  past the conversation's otherwise.
+      Item.Cache_Base :=
+        (if Last_End > 0 and then Model_Runner.Backend.Device.Cached_Elements = Last_End then Last_Base
+         else Model_Runner.Backend.Device.Cached_Elements);
       --  A token reads the half-precision copy of what was heard: its
       --  attention is the bytes it reads, and the copy is half of them.
       --  The conversation's choice is put back with the turn.
       Item.Halves_Were := Model_Runner.Backend.Device.Attends_In_Halves;
       Model_Runner.Backend.Device.Attend_In_Halves (True);
       Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok);
+      --  Without the candidates' rows where there is no room for them: a
+      --  window drawn again draws on the pool then.
+      if not Ok and then Item.Wide > 0 then
+         Item.Wide := 0;
+         Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok);
+      end if;
+      --  The end as the cache records it, which a reservation that grew
+      --  it puts a quarter past what was asked.
+      if Ok then
+         Last_Base := Item.Cache_Base;
+         Last_End := Model_Runner.Backend.Device.Cached_Elements;
+      end if;
       if not Ok then
          Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
          Model_Runner.Backend.Device.Return_Turn;
@@ -1647,12 +1686,14 @@ package body Model_Runner.Whisper is
    --  block's part of the cache and attended to there, and what was heard
    --  attended to where Encode put it. Then the last norm and, for one
    --  token, the logits; for more, the rows come home and the last one's
-   --  logits are the pool's, as Feed makes them. GELU is the device's tanh
-   --  form, within half precision of the reference's erf.
+   --  logits are the pool's, as Feed makes them.
    procedure Feed_On_Device
      (Item   : in out Session;
       Count  : Element_Count;
-      Status : out E.Error_Info)
+      Status : out E.Error_Info;
+      Fold   : Boolean;
+      Drawn  : Boolean := False;
+      At_Position : Element_Count := 0)
    is
       package D renames Model_Runner.Backend.Device;
       package P renames Model_Runner.Platform.Device.Products;
@@ -1668,13 +1709,29 @@ package body Model_Runner.Whisper is
       function Pair_At (Index : Element_Count) return System.Address is
         (Item.Norm_Pairs (Index * 2 * W)'Address);
 
-      --  The step reading Step biased, where the projection has a bias.
-      procedure Biased (Bias : T.Real_Array_Access; Step : in out Natural) is
+      --  Where a block's keys' and values' biases lie, past the norms.
+      function Biases_At (Block : Positive) return Element_Count is
+        ((3 * Element_Count (Source.Decoder_Blocks) + 1 + Element_Count (Block - 1)) * 2 * W);
+
+      --  The session's own positions, a row a width; or, Drawn, the
+      --  candidates' rows, Count widths, row r of the batch candidate r's.
+      Place     : constant Element_Count := (if Drawn then At_Position else Item.Held);
+      Row_Width : constant Element_Count := (if Drawn then Count * W else W);
+
+      function Keys_At (Block : Positive) return Element_Count is
+        (if Drawn then Wide_Keys_At (Item, Block) else Own_Keys_At (Item, Block));
+
+      function Values_At (Block : Positive) return Element_Count is
+        (if Drawn then Wide_Values_At (Item, Block) else Own_Values_At (Item, Block));
+
+      --  The step reading Step biased, where the projection has a bias:
+      --  added in the product's own store where it may be (Fold).
+      procedure Biased (Bias : T.Real_Array_Access; Step : in out Natural; Into_Product : Boolean := False) is
       begin
          if Added and then Bias /= null then
             P.Add_Bias (Steps, Bias.all (Bias.all'First)'Address, Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4,
                         0, 1, Bias.all'Length, Step, 0, Added, Key => Bias.all (Bias.all'First)'Address,
-                        Kept => False);
+                        Kept => False, Fold => Into_Product and then Fold);
             Step := P.Length (Steps);
          end if;
       end Biased;
@@ -1686,7 +1743,7 @@ package body Model_Runner.Whisper is
          if Added then
             D.Add_View_Product (Steps, Layer.Weight, From, Added);
             Step := P.Length (Steps);
-            Biased (Layer.Bias, Step);
+            Biased (Layer.Bias, Step, Into_Product => True);
          end if;
          return Step;
       end Projected;
@@ -1702,7 +1759,7 @@ package body Model_Runner.Whisper is
    begin
       Status := E.Success;
       if Item.Norm_Pairs = null then
-         T.Allocate ((3 * Element_Count (Source.Decoder_Blocks) + 1) * 2 * W, Item.Norm_Pairs);
+         T.Allocate ((4 * Element_Count (Source.Decoder_Blocks) + 1) * 2 * W, Item.Norm_Pairs);
          if Item.Norm_Pairs = null then
             Status := E.Make (E.Memory_Allocation_Failed);
             return;
@@ -1720,6 +1777,19 @@ package body Model_Runner.Whisper is
                Put (3 * Element_Count (L - 1) + 2, Source.Decoder (L).Feed_Norm);
             end loop;
             Put (3 * Element_Count (Source.Decoder_Blocks), Source.Decoder_Norm);
+            for L in 1 .. Source.Decoder_Blocks loop
+               declare
+                  At_Pair : constant Element_Count := Biases_At (L);
+                  Values  : constant T.Real_Array_Access := Source.Decoder (L).Attention.V.Bias;
+               begin
+                  Item.Norm_Pairs (At_Pair .. At_Pair + W - 1) := [others => 0.0];
+                  if Values = null then
+                     Item.Norm_Pairs (At_Pair + W .. At_Pair + 2 * W - 1) := [others => 0.0];
+                  else
+                     Item.Norm_Pairs (At_Pair + W .. At_Pair + 2 * W - 1) := Values.all;
+                  end if;
+               end;
+            end loop;
          end;
       end if;
 
@@ -1730,25 +1800,36 @@ package body Model_Runner.Whisper is
             Norm_1, Query, Key, Value, Mixed, Out_1, Join_1 : Natural := 0;
             Norm_2, Asked, Heard, Out_2, Join_2 : Natural := 0;
             Norm_3, Up, Gelu, Down : Natural := 0;
+            Before_2, Before_3 : Natural := 0;
          begin
             P.Open_Sequence (Steps);
             Added := True;
             Norm_1 := Normed (First, 0);
             Query := Projected (Each.Attention.Q, Norm_1);
-            Key := Projected (Each.Attention.K, Norm_1);
+            --  The keys and values, biased and put in the cache in one
+            --  step, neither turned nor normalized.
             if Added then
-               P.Add_Place (Steps, Natural (W), Natural (W), Own_Keys_At (Item, L) + Item.Held * W, Added,
-                            From_Step => Key);
-            end if;
-            Value := Projected (Each.Attention.V, Norm_1);
-            if Added then
-               P.Add_Place (Steps, Natural (W), Natural (W), Own_Values_At (Item, L) + Item.Held * W, Added,
-                            From_Step => Value);
+               D.Add_View_Product (Steps, Each.Attention.K.Weight, Norm_1, Added);
+               Key := P.Length (Steps);
             end if;
             if Added then
-               P.Add_Attention (Steps, Heads, Natural (Head), Natural (Head), 1, 0, Natural (Item.Held),
-                                Own_Keys_At (Item, L), Own_Values_At (Item, L), Natural (W), Natural (W), Scale, 0.0,
-                                Added, Chained => True, Causal => True, Kept => False, From_Step => Query);
+               D.Add_View_Product (Steps, Each.Attention.V.Weight, Norm_1, Added);
+               Value := P.Length (Steps);
+            end if;
+            if Added then
+               P.Add_Heads (Steps, Key, Heads, Positive (Head), 0, P.Interleaved, System.Null_Address, 0, 0.0, Added,
+                            Weight => Item.Norm_Pairs (Biases_At (L))'Address, Weight_Span => Pair,
+                            Key => Item.Norm_Pairs (Biases_At (L))'Address, Into_Cache => True,
+                            At_First => Keys_At (L) + Place * Row_Width, Stride => Natural (W),
+                            V_Step => Value, V_At_First => Values_At (L) + Place * Row_Width,
+                            V_Stride => Natural (W), Kept => False, Bias_Width => Natural (2 * W),
+                            V_Bias_At => Natural (W));
+            end if;
+            if Added then
+               P.Add_Attention (Steps, Heads, Natural (Head), Natural (Head), 1, 0, Natural (Place),
+                                Keys_At (L), Values_At (L), Natural (Row_Width), Natural (Row_Width), Scale, 0.0,
+                                Added, Chained => True, Causal => True, Kept => False, From_Step => Query,
+                                Rows_As_Heads => Drawn);
                Mixed := P.Length (Steps);
             end if;
             Out_1 := Projected (Each.Attention.Output, Mixed);
@@ -1766,22 +1847,38 @@ package body Model_Runner.Whisper is
                                 Kept => False, From_Step => Asked);
                Heard := P.Length (Steps);
             end if;
-            Out_2 := Projected (Each.Cross.Output, Heard);
+            --  The bias added to the residual rather than to the
+            --  product, so that the join folds into the product's store:
+            --  one dispatch where there were two.
+            Before_2 := Join_1;
+            Biased (Each.Cross.Output.Bias, Before_2);
             if Added then
-               P.Add_Join (Steps, Added, From_Step => Out_2, Residual_Step => Join_1, Kept => False);
+               D.Add_View_Product (Steps, Each.Cross.Output.Weight, Heard, Added);
+               Out_2 := P.Length (Steps);
+            end if;
+            if Added then
+               P.Add_Join (Steps, Added, From_Step => Out_2, Residual_Step => Before_2, Kept => False);
                Join_2 := P.Length (Steps);
             end if;
 
+            --  And the projection down's bias added to its residual.
+            Before_3 := Join_2;
+            Biased (Each.Down.Bias, Before_3);
             Norm_3 := Normed (First + 2, Join_2);
             Up := Projected (Each.Up, Norm_3);
             if Added then
-               --  A unit alone, both its arms named as the one step.
-               P.Add_Combination (Steps, 5, Added, Kept => False, From_Step => Up, Other_Step => Up);
+               --  The Gaussian unit in its error function form, as the
+               --  processor's and the reference's are; alone, both its arms
+               --  named as the one step.
+               P.Add_Combination (Steps, 10, Added, Kept => False, From_Step => Up, Other_Step => Up);
                Gelu := P.Length (Steps);
             end if;
-            Down := Projected (Each.Down, Gelu);
             if Added then
-               P.Add_Join (Steps, Added, From_Step => Down, Residual_Step => Join_2, Kept => False);
+               D.Add_View_Product (Steps, Each.Down.Weight, Gelu, Added);
+               Down := P.Length (Steps);
+            end if;
+            if Added then
+               P.Add_Join (Steps, Added, From_Step => Down, Residual_Step => Before_3, Kept => False);
             end if;
             if not Added then
                Status := E.Make (E.Backend_Capability_Missing);
@@ -1799,15 +1896,19 @@ package body Model_Runner.Whisper is
 
       P.Open_Sequence (Steps);
       Added := True;
-      if Count = 1 then
+      if Count = 1 or else Drawn then
+         --  Every row's logits, one token's or each candidate's.
          declare
             Last : constant Natural := Normed (3 * Element_Count (Source.Decoder_Blocks), 0);
+            Into : constant System.Address :=
+              (if Drawn then Item.Candidate_Logits (0)'Address else Item.Logits (0)'Address);
          begin
             if Added then
                D.Add_View_Product (Steps, Source.Token_Table, Last, Added, Kept => True);
             end if;
             if Added then
-               D.Run_Steps (Steps, Item.Dec_X (0 .. W - 1), 1, Item.Logits (0)'Address, Status, Carry_In => True);
+               D.Run_Steps (Steps, Item.Dec_X (0 .. Count * W - 1), Positive (Count), Into, Status,
+                            Carry_In => True);
             end if;
          end;
       else
@@ -1853,10 +1954,21 @@ package body Model_Runner.Whisper is
       Item.Self_On_Device := False;
    end Bring_Home;
 
+   --  Which candidate each row of a batch of candidates is.
+   type Slot_List is array (Positive range <>) of Positive;
+   No_Slots : constant Slot_List (1 .. 0) := [others => 1];
+
+   --  Tokens through the decoder: the session's next positions, or, with
+   --  Slots, one token a candidate, every one at position At_Position,
+   --  each attending to its own keys and values (Candidate_K, _V), and
+   --  every row's logits made (Candidate_Logits), the session's own
+   --  positions left as they were.
    procedure Feed
-     (Item   : in out Session;
-      Tokens : Tk.Token_Array;
-      Status : out E.Error_Info)
+     (Item        : in out Session;
+      Tokens      : Tk.Token_Array;
+      Status      : out E.Error_Info;
+      Slots       : Slot_List := No_Slots;
+      At_Position : Element_Count := 0)
    is
       Source : constant Model_Access := Item.Source;
       W      : constant Element_Count := Source.Width;
@@ -1871,7 +1983,9 @@ package body Model_Runner.Whisper is
          Status := E.Make (E.Lifecycle_Invalid_State);
          return;
       end if;
-      if Count = 0 or else Item.Held + Count > Source.Text_Context then
+      if Count = 0 or else (if Slots'Length > 0 then At_Position + 1 else Item.Held + Count) > Source.Text_Context
+        or else (Slots'Length > 0 and then Slots'Length /= Tokens'Length)
+      then
          Status := E.Make (E.Generation_Prompt_Too_Long);
          E.Add_Integer (Status, "count", Long_Long_Integer (Item.Held + Count));
          E.Add_Integer (Status, "limit", Long_Long_Integer (Source.Text_Context));
@@ -1888,17 +2002,26 @@ package body Model_Runner.Whisper is
          T.Dequantize_Row (Source.Token_Table, Element_Count (Tokens (Tokens'First + Natural (I))),
                            Item.Dec_X (I * W .. (I + 1) * W - 1), Status);
          exit when E.Is_Error (Status);
-         K.Add (Item.Dec_X (I * W .. (I + 1) * W - 1),
-                Source.Text_Positions ((Item.Held + I) * W .. (Item.Held + I + 1) * W - 1));
+         declare
+            Place : constant Element_Count := (if Slots'Length > 0 then At_Position else Item.Held + I);
+         begin
+            K.Add (Item.Dec_X (I * W .. (I + 1) * W - 1), Source.Text_Positions (Place * W .. (Place + 1) * W - 1));
+         end;
       end loop;
 
       --  On the device where what was heard is there and the positions
       --  before are too; where it declines, the pool goes on from the same
       --  place.
-      if Item.Borrowed and then Item.Cross_On_Device and then not Item.Capturing
+      if Slots'Length = 0 and then Item.Borrowed and then Item.Cross_On_Device and then not Item.Capturing
         and then (Item.Held = 0 or else Item.Self_On_Device)
       then
-         Feed_On_Device (Item, Count, Status);
+         --  A token's biases in its products' stores; where the device
+         --  refuses that, the token again with them named apart.
+         Feed_On_Device (Item, Count, Status, Fold => Count = 1 and then not Item.Folds_Refused);
+         if E.Is_Error (Status) and then Count = 1 and then not Item.Folds_Refused then
+            Item.Folds_Refused := True;
+            Feed_On_Device (Item, Count, Status, Fold => False);
+         end if;
          if E.Is_Ok (Status) then
             Item.Device_Fed := Item.Device_Fed + Natural (Count);
             Item.Held := Item.Held + Count;
@@ -1935,14 +2058,45 @@ package body Model_Runner.Whisper is
             Multiply_Few (Item, Item.Dec_H, Count, Each.Attention.K.Weight, Item.Dec_K, null, Status);
             Multiply_Few (Item, Item.Dec_H, Count, Each.Attention.V.Weight, Item.Dec_V, Each.Attention.V.Bias, Status);
             exit when E.Is_Error (Status);
-            Item.Self_K (L) (Item.Held * W .. (Item.Held + Count) * W - 1) := Item.Dec_K (0 .. Count * W - 1);
-            Item.Self_V (L) (Item.Held * W .. (Item.Held + Count) * W - 1) := Item.Dec_V (0 .. Count * W - 1);
-            Work.Keys := Item.Self_K (L);
-            Work.Values := Item.Self_V (L);
-            Work.Before := Item.Held;
-            Work.Causal := True;
-            CPU.Dispatch_Shares (Item.Team, Heads, Work'Unchecked_Access, Status,
-                                 Cost => Count * (Item.Held + Count) * W);
+            if Slots'Length = 0 then
+               Item.Self_K (L) (Item.Held * W .. (Item.Held + Count) * W - 1) := Item.Dec_K (0 .. Count * W - 1);
+               Item.Self_V (L) (Item.Held * W .. (Item.Held + Count) * W - 1) := Item.Dec_V (0 .. Count * W - 1);
+               Work.Keys := Item.Self_K (L);
+               Work.Values := Item.Self_V (L);
+               Work.Before := Item.Held;
+               Work.Causal := True;
+               CPU.Dispatch_Shares (Item.Team, Heads, Work'Unchecked_Access, Status,
+                                    Cost => Count * (Item.Held + Count) * W);
+            else
+               --  A row a candidate, each to its own positions.
+               for R in 0 .. Count - 1 loop
+                  exit when E.Is_Error (Status);
+                  declare
+                     Room : constant Positive :=
+                       (Slots (Slots'First + Natural (R)) - 1) * Source.Decoder_Blocks + L;
+                     Row  : constant Element_Count := R * W;
+                  begin
+                     Item.Candidate_K (Room) (At_Position * W .. (At_Position + 1) * W - 1) :=
+                       Item.Dec_K (Row .. Row + W - 1);
+                     Item.Candidate_V (Room) (At_Position * W .. (At_Position + 1) * W - 1) :=
+                       Item.Dec_V (Row .. Row + W - 1);
+                     Item.Candidate_Query.all := Item.Dec_Q (Row .. Row + W - 1);
+                     Work.Queries := Item.Candidate_Query;
+                     Work.Output := Item.Candidate_Blend;
+                     Work.Count := 1;
+                     Work.Keys := Item.Candidate_K (Room);
+                     Work.Values := Item.Candidate_V (Room);
+                     Work.Before := At_Position;
+                     Work.Causal := True;
+                     CPU.Dispatch_Shares (Item.Team, Heads, Work'Unchecked_Access, Status,
+                                          Cost => (At_Position + 1) * W);
+                     Item.Dec_A (Row .. Row + W - 1) := Item.Candidate_Blend.all;
+                  end;
+               end loop;
+               Work.Queries := Item.Dec_Q;
+               Work.Output := Item.Dec_A;
+               Work.Count := Count;
+            end if;
             Multiply_Few (Item, Item.Dec_A, Count, Each.Attention.Output.Weight, Item.Dec_H,
                           Each.Attention.Output.Bias, Status);
             Rows_Through (Item, Accumulate, Item.Dec_X, Count, W, Status, Source => Item.Dec_H);
@@ -1977,6 +2131,16 @@ package body Model_Runner.Whisper is
          end;
       end loop;
       if E.Is_Error (Status) then
+         return;
+      end if;
+      if Slots'Length > 0 then
+         --  Every candidate's logits, the table read once for them all.
+         for R in 0 .. Count - 1 loop
+            K.Layer_Norm (Item.Dec_X (R * W .. (R + 1) * W - 1), Source.Decoder_Norm.Weight.all,
+                          Source.Decoder_Norm.Bias.all, Source.Epsilon, Item.Dec_H (R * W .. (R + 1) * W - 1));
+         end loop;
+         CPU.Dispatch_Batch (Item.Team, Source.Token_Table, Item.Dec_H, Count, Item.Candidate_Logits, Status,
+                             Roles => CPU.Every_Role);
          return;
       end if;
       Item.Held := Item.Held + Count;
@@ -2661,17 +2825,12 @@ package body Model_Runner.Whisper is
             --  or the context: the likeliest where the temperature is
             --  nought, else drawn.
             declare
-               procedure Decode_Once
-                 (Temperature : Real;
-                  Into        : in out Token_Vectors.Vector;
-                  Log_Sum     : out Wide_Real;
-                  Finished    : out Boolean)
-               is
+               --  The prompt fed, how likely the window holds no speech
+               --  read off it, the language where asked, then the language
+               --  and the task: the logits are the first token's.
+               procedure Start is
                   Head : Tk.Token_Array (1 .. Natural (Prompt.Length));
                begin
-                  Into.Clear;
-                  Log_Sum := 0.0;
-                  Finished := False;
                   for I in Head'Range loop
                      Head (I) := Prompt (I);
                   end loop;
@@ -2703,6 +2862,49 @@ package body Model_Runner.Whisper is
                      Feed (Item, [Language, (if Settings.Translate then Source.Translate_Token
                                              else Source.Transcribe_Token)], Status);
                   end if;
+               end Start;
+
+               --  The next token of one draw from its logits, as the rules
+               --  allow it, and its log probability where it is not the end.
+               procedure Choose
+                 (Temperature : Real;
+                  Said_So_Far : Token_Vectors.Vector;
+                  Logits      : in out Real_Array;
+                  Next        : out Token_Id;
+                  Log_Sum     : in out Wide_Real)
+               is
+                  Said : Tk.Token_Array (1 .. Natural (Said_So_Far.Length));
+               begin
+                  for I in Said'Range loop
+                     Said (I) := Said_So_Far (I);
+                  end loop;
+                  Decoding.Apply (Rules, Said, Logits);
+                  if Temperature = 0.0 then
+                     Next := Decoding.Pick (Logits);
+                  else
+                     declare
+                        Draw : Wide_Real;
+                     begin
+                        Decoding.Next (Draws, Draw);
+                        Next := Decoding.Sample (Logits, Temperature, Draw);
+                     end;
+                  end if;
+                  if Next /= Source.End_Of_Text then
+                     Log_Sum := Log_Sum + Decoding.Log_Probability (Logits, Next);
+                  end if;
+                  Result.Figures.Tokens := Result.Figures.Tokens + 1;
+               end Choose;
+
+               procedure Decode_Once
+                 (Temperature : Real;
+                  Into        : in out Token_Vectors.Vector;
+                  Log_Sum     : out Wide_Real;
+                  Finished    : out Boolean) is
+               begin
+                  Into.Clear;
+                  Log_Sum := 0.0;
+                  Finished := False;
+                  Start;
                   for Step in 1 .. Settings.Max_Tokens loop
                      exit when E.Is_Error (Status);
                      if Cancelled then
@@ -2710,29 +2912,10 @@ package body Model_Runner.Whisper is
                         exit;
                      end if;
                      declare
-                        Said : Tk.Token_Array (1 .. Natural (Into.Length));
                         Next : Token_Id;
-                        Logits : Real_Array renames Item.Logits (0 .. Source.Vocabulary_Size - 1);
                      begin
-                        for I in Said'Range loop
-                           Said (I) := Into (I);
-                        end loop;
-                        Decoding.Apply (Rules, Said, Logits);
-                        if Temperature = 0.0 then
-                           Next := Decoding.Pick (Logits);
-                        else
-                           declare
-                              Draw : Wide_Real;
-                           begin
-                              Decoding.Next (Draws, Draw);
-                              Next := Decoding.Sample (Logits, Temperature, Draw);
-                           end;
-                        end if;
-                        if Next /= Source.End_Of_Text then
-                           Log_Sum := Log_Sum + Decoding.Log_Probability (Logits, Next);
-                        end if;
+                        Choose (Temperature, Into, Item.Logits (0 .. Source.Vocabulary_Size - 1), Next, Log_Sum);
                         Into.Append (Next);
-                        Result.Figures.Tokens := Result.Figures.Tokens + 1;
                         if Next = Source.End_Of_Text then
                            Finished := True;
                            exit;
@@ -2746,36 +2929,234 @@ package body Model_Runner.Whisper is
                   end if;
                end Decode_Once;
 
-               Candidate : Token_Vectors.Vector;
-               Candidate_Log : Wide_Real;
-               Candidate_Ended : Boolean;
+               --  Best_Of drawn together, as the reference draws them, a
+               --  batch: the prompt fed once and its keys and values given
+               --  to each, then a step at a time every unfinished draw's
+               --  token fed in one pass over the weights, each attending to
+               --  its own. The likeliest over its length kept: the
+               --  reference's MaximumLikelihoodRanker.
+               procedure Decode_Candidates
+                 (Temperature : Real;
+                  Into        : in out Token_Vectors.Vector;
+                  Log_Sum     : out Wide_Real;
+                  Finished    : out Boolean)
+               is
+                  Draws_Wanted : constant Positive := Settings.Best_Of;
+                  Blocks : constant Positive := Source.Decoder_Blocks;
+                  V      : constant Element_Count := Source.Vocabulary_Size;
+                  W      : constant Element_Count := Source.Width;
+                  type Token_Vector_Array is array (1 .. Draws_Wanted) of Token_Vectors.Vector;
+                  type Log_Array is array (1 .. Draws_Wanted) of Wide_Real;
+                  type Flag_Array is array (1 .. Draws_Wanted) of Boolean;
+                  type Row_Array is array (1 .. Draws_Wanted) of Element_Count;
+                  Said  : Token_Vector_Array;
+                  Logs  : Log_Array := [others => 0.0];
+                  Ended_Draw : Flag_Array := [others => False];
+                  Row   : Row_Array := [others => 0];
+                  Position : Element_Count;
+                  Best  : Wide_Real := Wide_Real'First;
+                  On_Device : Boolean;
+               begin
+                  Into.Clear;
+                  Log_Sum := 0.0;
+                  Finished := False;
+                  if Item.Candidate_K = null or else Item.Candidate_K'Length < Draws_Wanted * Blocks then
+                     T.Free (Item.Candidate_K);
+                     T.Free (Item.Candidate_V);
+                     Item.Candidate_K := new T.Group_Room (1 .. Draws_Wanted * Blocks);
+                     Item.Candidate_V := new T.Group_Room (1 .. Draws_Wanted * Blocks);
+                     for Room in 1 .. Draws_Wanted * Blocks loop
+                        T.Allocate (Source.Text_Context * W, Item.Candidate_K (Room));
+                        T.Allocate (Source.Text_Context * W, Item.Candidate_V (Room));
+                     end loop;
+                     T.Free (Item.Candidate_Logits);
+                     T.Allocate (Element_Count (Draws_Wanted) * V, Item.Candidate_Logits);
+                  end if;
+                  if Item.Candidate_Query = null then
+                     T.Allocate (W, Item.Candidate_Query);
+                     T.Allocate (W, Item.Candidate_Blend);
+                  end if;
+                  if Item.Candidate_Logits = null or else Item.Candidate_Query = null
+                    or else Item.Candidate_Blend = null
+                  then
+                     Status := E.Make (E.Memory_Allocation_Failed);
+                     return;
+                  end if;
+                  for Room in 1 .. Draws_Wanted * Blocks loop
+                     if Item.Candidate_K (Room) = null or else Item.Candidate_V (Room) = null then
+                        Status := E.Make (E.Memory_Allocation_Failed);
+                        return;
+                     end if;
+                  end loop;
+
+                  Start;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Position := Item.Held;
+                  for C in 1 .. Draws_Wanted loop
+                     Item.Candidate_Logits (Element_Count (C - 1) * V .. Element_Count (C) * V - 1) :=
+                       Item.Logits (0 .. V - 1);
+                     Row (C) := Element_Count (C - 1);
+                  end loop;
+
+                  --  On the device where the turn is held, what was heard
+                  --  is there and its cache has the candidates' rows: the
+                  --  prompt's keys and values put in every candidate's
+                  --  columns, then every candidate fed each step, one
+                  --  that ended a dummy token whose answer goes unread, so
+                  --  that row c stays candidate c.
+                  On_Device := Item.Borrowed and then Item.Cross_On_Device and then Item.Wide >= Draws_Wanted;
+                  if On_Device then
+                     declare
+                        Own  : T.Real_Array_Access;
+                        Wide : T.Real_Array_Access;
+                        Ok   : Boolean := True;
+                        Row_Width : constant Element_Count := Element_Count (Draws_Wanted) * W;
+                     begin
+                        T.Allocate (Position * W, Own);
+                        T.Allocate (Position * Row_Width, Wide);
+                        if Own = null or else Wide = null then
+                           Ok := False;
+                        end if;
+                        for L in 1 .. Blocks loop
+                           exit when not Ok;
+                           for Values in Boolean loop
+                              exit when not Ok;
+                              if Item.Self_On_Device then
+                                 Model_Runner.Backend.Device.Get_Cache
+                                   ((if Values then Own_Values_At (Item, L) else Own_Keys_At (Item, L)), Own.all, Ok);
+                              else
+                                 if Values then
+                                    Own.all := Item.Self_V (L) (0 .. Position * W - 1);
+                                 else
+                                    Own.all := Item.Self_K (L) (0 .. Position * W - 1);
+                                 end if;
+                              end if;
+                              if Ok then
+                                 for P_I in 0 .. Position - 1 loop
+                                    for C in 0 .. Element_Count (Draws_Wanted) - 1 loop
+                                       Wide (P_I * Row_Width + C * W .. P_I * Row_Width + (C + 1) * W - 1) :=
+                                         Own (P_I * W .. (P_I + 1) * W - 1);
+                                    end loop;
+                                 end loop;
+                                 Model_Runner.Backend.Device.Put_Cache
+                                   ((if Values then Wide_Values_At (Item, L) else Wide_Keys_At (Item, L)),
+                                    Wide.all, Ok);
+                              end if;
+                           end loop;
+                        end loop;
+                        T.Free (Own);
+                        T.Free (Wide);
+                        On_Device := Ok;
+                     end;
+                  end if;
+
+                  for Step in 1 .. Settings.Max_Tokens loop
+                     exit when E.Is_Error (Status);
+                     if Cancelled then
+                        Status := E.Make (E.Generation_Cancelled);
+                        exit;
+                     end if;
+                     declare
+                        Fed   : Tk.Token_Array (1 .. Draws_Wanted);
+                        Slots : Slot_List (1 .. Draws_Wanted);
+                        Count : Natural := 0;
+                        Every : Tk.Token_Array (1 .. Draws_Wanted) := [others => Source.End_Of_Text];
+                     begin
+                        for C in 1 .. Draws_Wanted loop
+                           if not Ended_Draw (C) then
+                              declare
+                                 Next : Token_Id;
+                              begin
+                                 Choose (Temperature, Said (C),
+                                         Item.Candidate_Logits (Row (C) * V .. (Row (C) + 1) * V - 1), Next, Logs (C));
+                                 Said (C).Append (Next);
+                                 if Next = Source.End_Of_Text then
+                                    Ended_Draw (C) := True;
+                                 else
+                                    Count := Count + 1;
+                                    Fed (Count) := Next;
+                                    Slots (Count) := C;
+                                    Every (C) := Next;
+                                 end if;
+                              end;
+                           end if;
+                        end loop;
+                        exit when Count = 0 or else Position + 1 > Source.Text_Context;
+                        if On_Device then
+                           for C in 1 .. Draws_Wanted loop
+                              declare
+                                 At_Row : constant Element_Count := Element_Count (C - 1) * W;
+                              begin
+                                 T.Dequantize_Row (Source.Token_Table, Element_Count (Every (C)),
+                                                   Item.Dec_X (At_Row .. At_Row + W - 1), Status);
+                                 K.Add (Item.Dec_X (At_Row .. At_Row + W - 1),
+                                        Source.Text_Positions (Position * W .. (Position + 1) * W - 1));
+                              end;
+                           end loop;
+                           if E.Is_Ok (Status) then
+                              Feed_On_Device (Item, Element_Count (Draws_Wanted), Status, Fold => False, Drawn => True,
+                                              At_Position => Position);
+                           end if;
+                           if E.Is_Ok (Status) then
+                              Item.Device_Fed := Item.Device_Fed + Draws_Wanted;
+                           elsif Step = 1 then
+                              --  Refused before anything was fed: the pool
+                              --  takes the draws from the prompt, as below.
+                              Status := E.Success;
+                              On_Device := False;
+                           end if;
+                        end if;
+                        if not On_Device then
+                           if Step = 1 then
+                              if Item.Self_On_Device then
+                                 Bring_Home (Item, Status);
+                                 exit when E.Is_Error (Status);
+                              end if;
+                              for C in 1 .. Draws_Wanted loop
+                                 for L in 1 .. Blocks loop
+                                    Item.Candidate_K ((C - 1) * Blocks + L) (0 .. Position * W - 1) :=
+                                      Item.Self_K (L) (0 .. Position * W - 1);
+                                    Item.Candidate_V ((C - 1) * Blocks + L) (0 .. Position * W - 1) :=
+                                      Item.Self_V (L) (0 .. Position * W - 1);
+                                 end loop;
+                              end loop;
+                           end if;
+                           Feed (Item, Fed (1 .. Count), Status, Slots => Slots (1 .. Count), At_Position => Position);
+                           for R in 1 .. Count loop
+                              Row (Slots (R)) := Element_Count (R - 1);
+                           end loop;
+                        end if;
+                        Position := Position + 1;
+                     end;
+                  end loop;
+
+                  for C in 1 .. Draws_Wanted loop
+                     if Ended_Draw (C) then
+                        Said (C).Delete_Last;
+                     end if;
+                     declare
+                        Score : constant Wide_Real :=
+                          Logs (C) / Wide_Real (Natural'Max (1, Natural (Said (C).Length)));
+                     begin
+                        if Score > Best then
+                           Best := Score;
+                           Into := Said (C);
+                           Log_Sum := Logs (C);
+                           Finished := Ended_Draw (C);
+                        end if;
+                     end;
+                  end loop;
+               end Decode_Candidates;
+
             begin
                for Round in 1 .. Settings.Temperature_Count loop
                   Temperature := Settings.Temperatures (Round);
-                  if Temperature = 0.0 then
-                     Decode_Once (0.0, Sampled, Sum_Log, Ended);
+                  if Temperature = 0.0 or else Settings.Best_Of = 1 then
+                     Decode_Once (Temperature, Sampled, Sum_Log, Ended);
                   else
-                     --  Best_Of drawn, the likeliest over its length kept:
-                     --  the reference's MaximumLikelihoodRanker.
-                     declare
-                        Best : Wide_Real := Wide_Real'First;
-                     begin
-                        for Draw in 1 .. Settings.Best_Of loop
-                           exit when E.Is_Error (Status);
-                           Decode_Once (Temperature, Candidate, Candidate_Log, Candidate_Ended);
-                           declare
-                              Score : constant Wide_Real :=
-                                Candidate_Log / Wide_Real (Natural'Max (1, Natural (Candidate.Length)));
-                           begin
-                              if Score > Best then
-                                 Best := Score;
-                                 Sampled := Candidate;
-                                 Sum_Log := Candidate_Log;
-                                 Ended := Candidate_Ended;
-                              end if;
-                           end;
-                        end loop;
-                     end;
+                     Decode_Candidates (Temperature, Sampled, Sum_Log, Ended);
                   end if;
                   exit when E.Is_Error (Status);
                   --  Refused, as the reference refuses a window: repeating
@@ -2981,6 +3362,7 @@ package body Model_Runner.Whisper is
       Fed  : constant Natural := Item.Device_Fed;
    begin
       if Item.Source /= null then
+         Item.Wide := (if Settings.Best_Of > 1 then Settings.Best_Of else 0);
          Hold (Item, Took);
       end if;
       Transcribe_Here (Item, Samples, Settings, Result, Status, Cancel);

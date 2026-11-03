@@ -289,6 +289,14 @@ package Model_Runner.Platform.Device is
    --  @return Bytes, or zero when the context is not open.
    function Storage_Limit (Item : Context) return Interfaces.Unsigned_64;
 
+   --  The alignment a storage buffer's binding must begin at: a binding
+   --  of part of a buffer, at an offset not a multiple of it, is invalid.
+   --
+   --  @param Item Open context.
+   --  @return Bytes, or zero where it is not known -- a caller then binds
+   --    nothing at an offset of its own choosing.
+   function Storage_Alignment (Item : Context) return Interfaces.Unsigned_64;
+
 private
 
    type Name_Text is record
@@ -352,6 +360,8 @@ private
       --  What the device says one storage buffer may hold. Read where the
       --  name and the kind are read, from the same structure.
       Storage  : Interfaces.Unsigned_64 := 0;
+      --  minStorageBufferOffsetAlignment; see Storage_Alignment.
+      Aligned  : Interfaces.Unsigned_64 := 0;
 
       --  Whether this device will take a pointer to the host's own memory
       --  as a buffer, instead of being given a copy of what is in it, and

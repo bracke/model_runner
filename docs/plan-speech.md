@@ -377,8 +377,10 @@ sequence holds -- the shifted norm with its bias (`Add_Norm`, `Shift`),
 products and biases, the position's keys and values put in the block's
 part of the cache (`Add_Place`) and attended to causally, the cross-
 attention over what Encode put in the cache (`Causal => False`), the
-joins, and GELU in the device's tanh form (unit 5; the reference's is
-erf's, within half precision of it). The activation is carried from block
+joins, and GELU in its erf form (combine.comp's unit 10, the error
+function by Abramowitz and Stegun's 7.1.26, within 1.5e-7; the tanh form
+of unit 5 moved tiny's Danish by three points of word error, the erf form
+scores as the processor does). The activation is carried from block
 to block on the device (`Carry_Out`/`Carry_In`), and a last sequence
 normalizes and, for one token, makes the logits; a prompt of more brings
 its rows home and the pool makes the last one's logits. The cross-
@@ -398,6 +400,93 @@ test transcribing the wide fixture on both and getting the same text with
 every position on the device (`Statistics.Device_Positions`), and by
 `tests speech-corpus --device`: small f16 and Q8_0 score as on the
 processor; tiny's Danish 73.2 % of words against 69.9.
+
+Then three more. A window decoded again drew its five candidates one
+after another, each through the whole decoder: 5 s of noise heard as
+Nynorsk, every temperature tried, took 52 s. The reference draws them as a
+batch, and so does this now (`Decode_Candidates`): the prompt fed once, its
+keys and values given to each candidate, then a step at a time every
+unfinished candidate's token fed in one pass over the weights, each
+attending to its own keys and values (`Candidate_K`, `_V`) and every row's
+logits made from one read of the table. A step of five costs what a token
+did, 12.9 ms; the noise takes 25 s. The candidates run on the processor:
+the device's attention reads one cache for a batch's rows. The draws come
+from the same seeded stream in another order, a step at a time.
+And a block's keys and values, the values' bias added and both placed in
+the cache, are one heads step now where they were three (`Add_Heads` took
+no head without a turn; a head with nothing turned now reads no table and
+passes as it is): 1.5 % of the decoder, measured over six alternated
+rounds, the text the same.
+
+Then the cross-attention's and the projection down's biases were added to
+the residual rather than to the product, so that each join folds into its
+product's store: two dispatches a block fewer. On jfk that was right at
+once; on da-long the down join's fold went wrong -- the text changed and a
+round took 27 s. Found by placing the same bias step two ways: right
+after the join it extends it was right, between the GELU and the
+projection down it was not, and a bias step there with its answer unused
+was right too. The fault was Products': a tiled product judged whether the
+half-precision copy held its operand by the latest step it reads at all,
+which for a product with a join folded into it is the join's residual.
+Where that residual was made after the operand, the copy was taken not to
+hold it and the operand converted again from its binary32 form -- which a
+step written only as halves, the GELU here, never writes. The product's
+operand (`Operand`: the step it names, the one before where it is
+chained, or the activation) is what is asked now, and `cpu backend : a
+join folded over a residual made after the product's operand reads that
+operand's halves` holds it, failing without the fix (4.8e-2 off a largest
+of 0.77) and passing with it. No language model's layer makes a residual
+after its operand, so none answered wrongly. With it, Whisper folds both:
+the decoder on da-long 1.683 -> 1.622 s over three alternated pairs (3.6
+%), the six recordings' text the processor's.
+
+And the projections' own biases into their products' stores, with no
+kernel changed: a row kernel's store adds a folded join's residual at
+`rj[out_at]`, and for one position `out_at` is the row, so the bias bound
+there is added row for row (`Add_Bias`'s `Fold`). Products refuses a
+folded bias over more than one position, where the residual is read a
+position at a time, and on a device whose storage alignment (now read:
+`Platform.Device.Storage_Alignment`, minStorageBufferOffsetAlignment, 4
+on the 780M) the bias's offset does not keep; Whisper names the token
+again without folds then, and stops asking. The queries', the cross
+queries', the up projection's and the first output projection's biases
+fold: decoder on da-long 1.636 -> 1.553 s over three alternated pairs (5
+%), the six recordings' text the processor's; held by `cpu backend : a
+bias folded into its product says what the bias step says, and refuses
+two positions`. Left as dispatches of their own: the first join, whose
+residual is the block's carried activation and no step a bias can be
+added to, and the three norms.
+
+And the candidates on the device. The device's attention reads one cache
+for a batch's rows, where each candidate has its own keys and values; so
+the candidates are made heads of one position (`Add_Attention`'s
+`Rows_As_Heads`): their keys and values lie in a row of five widths a
+position (`Wide_Keys_At`), candidate c's in its c-th, placed there by the
+heads step's row stride, and the attention takes one position of five
+times twelve heads, head c * 12 + h reading candidate c's columns -- the
+rows of a batch lie in memory as that one row does. Only the token kernel
+takes it, which is the one a single position takes; Products refuses it
+anywhere else. The products and the attention to what was heard are an
+ordinary batch of five; every candidate is fed each step, one that ended
+a dummy whose answer goes unread, so that row c stays candidate c; the
+prompt's keys and values are put in every candidate's columns once a
+round. 5 s of noise tried at every temperature: 24.1 s on the processor,
+13.5 s with the device; the corpus scores as before (small identical,
+tiny's Danish 67.3 % -> 68.0 % of words: a noisy window's candidates draw
+from probabilities a device rounds otherwise). Room for the candidates'
+rows is taken with the turn, and left out where the cache has none.
+
+Found while measuring it: every transcription on the device put
+Whisper's part of the cache past what the cache last held -- its own
+part from the turn before among it -- so the cache grew by a part each
+time, and in a session by one each dictation; the corpus's ninth
+recording, silence, took 0.82 s on the device for 0.22 on the processor,
+copying the eight before it to reserve its own. A turn now puts it where
+the last one did wherever nothing has reserved the cache since (`Hold`,
+`Last_Base`, `Last_End`, the end as the cache records it). The vision
+encoder had the same fault, a picture's worth of cache each picture, and
+the same fix; both are held by their device tests transcribing or
+encoding twice and finding the cache as the first left it.
 
 Also found here: a recording of thirty seconds or more had its first
 window encoded twice, once for the language and once to transcribe, though

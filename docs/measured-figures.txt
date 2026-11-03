@@ -8703,7 +8703,11 @@ reference 0AEA12BA5499DFF2 src/library/model_runner-backend-reference.adb src/li
 # tests_main.adb gained the speech-corpus command, which no figure of these groups runs
 # Backend.Device gained the device's turn, a protected flag pair only an interactive session lends and only Whisper borrows, and tests_main the hear --device switch: no measured path lends, takes or borrows it
 # tests_main gained speech-corpus --device, which no figure of these groups runs
-device DF877BC45D5CF5B7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-shaders-super.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama-adopt.adb src/library/model_runner-llama-blend_eighth.adb src/library/model_runner-llama-blend_exact.adb src/library/model_runner-llama-draft_next.adb src/library/model_runner-llama-evaluate_batch_body.adb src/library/model_runner-llama-evaluate_token_body.adb src/library/model_runner-llama-make_room.adb src/library/model_runner-llama-mamba2_batch.adb src/library/model_runner-llama-mamba_batch.adb src/library/model_runner-llama-merge_adapter.adb src/library/model_runner-llama-mixture_batch_body.adb src/library/model_runner-llama-mixture_body.adb src/library/model_runner-llama-open.adb src/library/model_runner-llama-prepare.adb src/library/model_runner-llama-read_configuration.adb src/library/model_runner-llama-rwkv6_batch.adb src/library/model_runner-llama-shift.adb src/library/model_runner-llama-snapshot.adb src/library/model_runner-llama-take_block.adb src/library/model_runner-llama-take_pages.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb tests/src/tests_main.adb src/library/model_runner-draft_policy.adb src/library/model_runner-cli-execute-support.adb src/library/model_runner-cli-execute.adb src/library/model_runner-generation.adb
+# combine.comp gained unit 10 (the erf GELU) and Add_Heads takes Rotary 0: the measured models use units 0-9 and turn their heads, their branches unchanged
+# a tiled product asks the copy for its operand rather than the latest step it reads: in every measured model's layer the folded join's residual comes before the operand, so the two are the same step
+# Products' Add_Bias takes Fold, false unless asked, and the engine reads the device's storage alignment: no measured model folds a bias, and the alignment changes no binding they make
+# Products' Add_Attention takes Rows_As_Heads, false unless asked, and the vision encoder places a picture's cache where the last went: the measured models attend as they did, and the image paths' pictures place nothing in it
+device F9BA4F3DC1880A6C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-shaders-super.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama-adopt.adb src/library/model_runner-llama-blend_eighth.adb src/library/model_runner-llama-blend_exact.adb src/library/model_runner-llama-draft_next.adb src/library/model_runner-llama-evaluate_batch_body.adb src/library/model_runner-llama-evaluate_token_body.adb src/library/model_runner-llama-make_room.adb src/library/model_runner-llama-mamba2_batch.adb src/library/model_runner-llama-mamba_batch.adb src/library/model_runner-llama-merge_adapter.adb src/library/model_runner-llama-mixture_batch_body.adb src/library/model_runner-llama-mixture_body.adb src/library/model_runner-llama-open.adb src/library/model_runner-llama-prepare.adb src/library/model_runner-llama-read_configuration.adb src/library/model_runner-llama-rwkv6_batch.adb src/library/model_runner-llama-shift.adb src/library/model_runner-llama-snapshot.adb src/library/model_runner-llama-take_block.adb src/library/model_runner-llama-take_pages.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb tests/src/tests_main.adb src/library/model_runner-draft_policy.adb src/library/model_runner-cli-execute-support.adb src/library/model_runner-cli-execute.adb src/library/model_runner-generation.adb
 
 
 # covers: the three-row table under "Drafting", the per-token costs derived
@@ -12412,7 +12416,11 @@ tokenizer 27D64AC2DCF2EF7B src/library/model_runner-tokenizer.adb
 # tests_main.adb gained the speech-corpus command, which no figure of these groups runs
 # Backend.Device gained the device's turn, a protected flag pair only an interactive session lends and only Whisper borrows, and tests_main the hear --device switch: no measured path lends, takes or borrows it
 # tests_main gained speech-corpus --device, which no figure of these groups runs
-outside DF877BC45D5CF5B7 src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-shaders-super.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama-adopt.adb src/library/model_runner-llama-blend_eighth.adb src/library/model_runner-llama-blend_exact.adb src/library/model_runner-llama-draft_next.adb src/library/model_runner-llama-evaluate_batch_body.adb src/library/model_runner-llama-evaluate_token_body.adb src/library/model_runner-llama-make_room.adb src/library/model_runner-llama-mamba2_batch.adb src/library/model_runner-llama-mamba_batch.adb src/library/model_runner-llama-merge_adapter.adb src/library/model_runner-llama-mixture_batch_body.adb src/library/model_runner-llama-mixture_body.adb src/library/model_runner-llama-open.adb src/library/model_runner-llama-prepare.adb src/library/model_runner-llama-read_configuration.adb src/library/model_runner-llama-rwkv6_batch.adb src/library/model_runner-llama-shift.adb src/library/model_runner-llama-snapshot.adb src/library/model_runner-llama-take_block.adb src/library/model_runner-llama-take_pages.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb tests/src/tests_main.adb src/library/model_runner-draft_policy.adb src/library/model_runner-cli-execute-support.adb src/library/model_runner-cli-execute.adb src/library/model_runner-generation.adb
+# combine.comp gained unit 10 (the erf GELU) and Add_Heads takes Rotary 0: the measured models use units 0-9 and turn their heads, their branches unchanged
+# a tiled product asks the copy for its operand rather than the latest step it reads: in every measured model's layer the folded join's residual comes before the operand, so the two are the same step
+# Products' Add_Bias takes Fold, false unless asked, and the engine reads the device's storage alignment: no measured model folds a bias, and the alignment changes no binding they make
+# Products' Add_Attention takes Rows_As_Heads, false unless asked, and the vision encoder places a picture's cache where the last went: the measured models attend as they did, and the image paths' pictures place nothing in it
+outside F9BA4F3DC1880A6C src/shaders/row_product.comp src/shaders/matrix_product.comp src/shaders/half_batch.comp src/shaders/combine.comp src/shaders/norm.comp src/shaders/rotate.comp src/shaders/place.comp src/library/model_runner-shaders.ads src/library/model_runner-shaders-attend.ads src/library/model_runner-shaders-super.ads src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-device.adb src/library/model_runner-backend-cpu.adb src/library/model_runner-llama.adb src/library/model_runner-llama-adopt.adb src/library/model_runner-llama-blend_eighth.adb src/library/model_runner-llama-blend_exact.adb src/library/model_runner-llama-draft_next.adb src/library/model_runner-llama-evaluate_batch_body.adb src/library/model_runner-llama-evaluate_token_body.adb src/library/model_runner-llama-make_room.adb src/library/model_runner-llama-mamba2_batch.adb src/library/model_runner-llama-mamba_batch.adb src/library/model_runner-llama-merge_adapter.adb src/library/model_runner-llama-mixture_batch_body.adb src/library/model_runner-llama-mixture_body.adb src/library/model_runner-llama-open.adb src/library/model_runner-llama-prepare.adb src/library/model_runner-llama-read_configuration.adb src/library/model_runner-llama-rwkv6_batch.adb src/library/model_runner-llama-shift.adb src/library/model_runner-llama-snapshot.adb src/library/model_runner-llama-take_block.adb src/library/model_runner-llama-take_pages.adb src/library/model_runner-llama.ads src/library/model_runner-kernels.adb src/library/model_runner-kernels.ads src/library/model_runner-quantization.adb src/library/model_runner-numerics.adb src/library/model_runner-tensors.adb tests/src/speed_run.adb tests/src/benchmarks.adb src/library/model_runner-quantization-decoders.adb src/library/model_runner-quantization-wide.ads model_runner.gpr src/library/model_runner-byte_sources-files.adb src/library/model_runner-generation.ads src/library/model_runner-sampling.ads src/library/model_runner-sampling.adb src/library/model_runner-cli-options.ads src/platform/posix/model_runner-platform-device.adb src/library/model_runner-quantization-integers.ads src/library/model_runner-quantization-integers.adb src/library/model_runner-quantization-integers-kernels.ads src/library/model_runner-quantization-integers-kernels.adb src/library/model_runner-quantization-integers-plain.ads src/library/model_runner-quantization-integers-wide.ads src/library/model_runner-quantization-integers-deep.ads src/library/model_runner-platform-instructions.ads src/platform/linux/model_runner-platform-instructions.adb tests/src/tests_main.adb src/library/model_runner-draft_policy.adb src/library/model_runner-cli-execute-support.adb src/library/model_runner-cli-execute.adb src/library/model_runner-generation.adb
 
 # 2026-08-27  The row tile at sixty-four, and the instrument's first row
 #
@@ -27861,35 +27869,58 @@ panels 6CFF89DB8A7C2C22 src/library/model_runner-quantization-interleave.ads src
 # comments only: a duplicated line in attention_split.comp removed and the reason gpt-oss's sink layers keep the other kernel restated from measurements
 # a head with a sink takes the split kernel too: only gpt-oss has sinks, and TinyLlama's rows and the pictures have none
 # Backend.Device gained the device's turn, a protected flag pair only an interactive session lends and only Whisper borrows, and tests_main the hear --device switch: no measured path lends, takes or borrows it
-image 1C151533E92FB046 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
+# combine.comp gained unit 10 (the erf GELU) and Add_Heads takes Rotary 0: the measured models use units 0-9 and turn their heads, their branches unchanged
+# a tiled product asks the copy for its operand rather than the latest step it reads: in every measured model's layer the folded join's residual comes before the operand, so the two are the same step
+# Products' Add_Bias takes Fold, false unless asked, and the engine reads the device's storage alignment: no measured model folds a bias, and the alignment changes no binding they make
+# Products' Add_Attention takes Rows_As_Heads, false unless asked, and the vision encoder places a picture's cache where the last went: the measured models attend as they did, and the image paths' pictures place nothing in it
+image D58E57AD90AC1984 src/library/model_runner-qwen_image.adb src/library/model_runner-qwen_image.ads src/library/model_runner-qwen_image-decoder.adb src/library/model_runner-qwen_image-prompts.adb src/library/model_runner-cli-execute-image_command.adb src/library/model_runner-backend-device.adb src/library/model_runner-platform-device-products.adb src/library/model_runner-backend-cpu.adb
 
 # 2026-11-03, the speech group: Whisper heard by `tests hear --repeats 3`
-# on tests/fixtures/speech (jfk.wav 11.0 s, da-long.wav 45 s, two windows),
-# sixteen workers, the language detected; --device puts the encoder's
-# products and attention, and every decoder token -- a sequence a block,
-# then the norm and the logits -- on the device. A fuzzer of another
-# project and another chat's compiler held about two processors
-# throughout, load 8.0-9.4, so these are a busy box's figures. Per round,
-# the three rounds:
+# on tests/fixtures/speech (jfk.wav 11.0 s, da-long.wav 45 s, two windows)
+# and 5 s of white noise at -20 dBFS (noise20), sixteen workers, the
+# language detected; --device puts the encoder's products and attention,
+# and every decoder token -- a sequence a block, then the norm and the
+# logits -- on the device. A fuzzer of another project and another chat's
+# compiler held about two processors throughout, load 2.7-11.9, so these
+# are a busy box's figures. Per round, the three rounds:
 #
-#   tiny f16    jfk 0.552 / 0.448 / 0.438 s (encoder 0.33-0.39, decoder
-#               0.074-0.115); RSS 235 MB. da-long 1.179 / 1.128 / 1.141 s
-#               (decoder 0.70-0.72); RSS 246 MB
-#     device    jfk 0.472 / 0.316 / 0.328 s (encoder 0.21-0.32, decoder
-#               0.068-0.072); RSS 251 MB. da-long 1.035 / 0.902 / 0.925 s
-#               (decoder 0.57-0.58)
-#   small f16   jfk 3.177 / 2.788 / 2.994 s (encoder 2.43-2.80, decoder
-#               0.32-0.33); RSS 1212 MB. da-long 5.401 / 5.329 / 5.313 s
-#               (decoder 2.70-2.76); RSS 1241 MB
-#     device    jfk 2.178 / 1.637 / 1.664 s (encoder 1.31-1.68, decoder
-#               0.23); RSS 508 MB. da-long 3.904 / 3.295 / 3.303 s (decoder
-#               1.72-1.79); RSS 520 MB
-#   small q8_0  jfk 2.826 / 2.873 / 2.726 s (decoder 0.23-0.24); RSS
-#               994 MB. da-long 5.131 / 4.772 / 4.833 s (decoder 2.09-2.15)
-#     device    jfk 2.054 / 1.843 / 1.855 s (decoder 0.19-0.20); RSS 471 MB.
-#               da-long 3.294 / 2.964 / 2.965 s (decoder 1.32-1.34)
+#   tiny f16    jfk 0.526 / 0.375 / 0.378 s (decoder 0.067-0.070); RSS
+#               236 MB. da-long 0.997 / 1.020 / 1.021 s (decoder 0.60-0.62)
+#     device    jfk 0.445 / 0.308 / 0.309 s; da-long 0.962 / 0.853 / 0.860 s
+#               (decoder 0.53); RSS 255 MB
+#   small f16   jfk 3.186 / 2.684 / 2.836 s (encoder 2.33-2.79, decoder
+#               0.31-0.32); RSS 1213 MB. da-long 5.540 / 5.094 / 5.436 s
+#               (decoder 2.75-2.86); RSS 1241 MB
+#     device    jfk 2.166 / 1.935 / 1.861 s (encoder 1.50-1.69, decoder
+#               0.22-0.24, load 11); RSS 508 MB. da-long 3.815 / 3.282 /
+#               3.293 s (decoder 1.72-1.75); RSS 522 MB
+#   small q8_0  jfk 3.564 / 2.674 / 2.909 s; RSS 995 MB. da-long 5.061 /
+#               5.018 / 5.075 s (decoder 2.14-2.15)
+#     device    jfk 2.080 / 1.860 / 1.846 s; RSS 472 MB. da-long 3.311 /
+#               2.976 / 3.011 s (decoder 1.33-1.35)
+#   noise20     small f16 25.2 / 24.6 / 26.5 s, 22.5 s with the device
+#               (the language heard as nn, every temperature tried: some
+#               4,100 tokens, the last five draws at a time, which the
+#               device does not take); the commit before drew them one at
+#               a time: 52.1 s. Asked as Danish, 8.2 s (15.2 before).
+#               tiny 0.36-0.40 s
+#
+# The erf form of GELU on the device (combine.comp unit 10) and the keys'
+# and values' bias and placing in one heads step: da-long's decoder on the
+# device 1.676 s with the tanh form and three steps, 1.650 with the heads
+# step, six rounds each, alternated, separate binaries, load 2.5-4.1, the
+# text the same. Then the cross-attention's and the projection down's joins
+# folded over pre-biased residuals: 1.618 / 1.620, 1.612 / 1.627, 1.624 /
+# 1.634 s against the heads step's 1.724 / 1.668, 1.683 / 1.655, 1.693 /
+# 1.674, alternated, load 2.8-3.1, the text the same. Then four biases a
+# block folded into their products' stores: 1.555 / 1.547, 1.560 / 1.587,
+# 1.532 / 1.538 s against 1.595 / 1.644, 1.642 / 1.635, 1.639 / 1.659,
+# alternated, load 3.7-7.2, the text the same. And the candidates on the
+# device: noise20, small f16, 31.7 / 24.1 s on the processor, 13.5 / 13.7 s
+# with the device (4,720 positions there), the verdict silent on both.
 #
 # A small f16 token on the device, from its timeline: 12 blocks of 26 steps
+# (24 since the heads step)
 # at 528 us (the cross-attention 86 us of it, reading the half-precision
 # copy of what was heard), then the logits at 1.24 ms. On the processor it
 # was about 12 ms: products 5.2, cross-attention 2.8, logits 1.8,
@@ -27899,10 +27930,9 @@ image 1C151533E92FB046 src/library/model_runner-qwen_image.adb src/library/model
 # spectrogram by an encode of its own, as the reference does: two encodes a
 # round. A recording of thirty seconds or more has the first window's
 # encode stand for the language's. The corpus (tests speech-corpus
-# --device) scores the same on both for small f16 and q8_0 (en 0 %, da
-# 25.49 % of words); tiny's Danish is 73.20 % on the device against 69.93 %
-# (a model that weak turns on near ties, and the device's GELU is the tanh
-# form).
+# --device) scores the same on both: small f16 and q8_0 en 0 %, da 25.49 %
+# of words; tiny en 7.04 %, da 67.32 % (its characters 34.09 % on the
+# processor, 35.10 % on the device: a sampled window's near tie).
 #
 #   spectrogram 0.021-0.026 s for 11 s of sound
 #   cold (file evicted with dd iflag=nocache before each of three runs, on
@@ -27932,9 +27962,13 @@ image 1C151533E92FB046 src/library/model_runner-qwen_image.adb src/library/model
 # The two share the memory bus, the device's model as much as the
 # processor's; a Whisper held but not hearing runs nothing and costs only
 # its memory.
-# load: 8.0 to 9.4 through the Whisper rows, 2.8 to 4.9 through the TinyLlama pairs
+# load: 2.7 to 11.9 through the Whisper rows, 2.8 to 4.9 through the TinyLlama pairs
 # model: whisper-tiny-f16, whisper-small-f16, whisper-small-q8_0 (tests whisper-convert from openai/whisper-tiny and -small), TinyLlama-1.1B-Chat Q8_0
 # the speech group re-measured with the device rows
 # a session lends the device's turn back when it ends, after any dictation it measured
 # the speech group re-measured with the decoder on the device
-speech 737149A0F60E59C3 src/library/model_runner-whisper.adb src/library/model_runner-whisper.ads src/library/model_runner-whisper-decoding.adb src/library/model_runner-whisper-timing.adb src/library/model_runner-audio-spectrograms.adb src/library/model_runner-fourier.adb src/library/model_runner-float_panels.adb src/library/model_runner-kernels.adb src/library/model_runner-shares.ads tests/src/speech_hear.adb model_runner.gpr src/library/model_runner-backend-device.adb src/library/model_runner-cli-interactive.adb
+# the speech group re-measured: candidates batched, erf GELU, heads step
+# the speech group's device rows taken with the heads step; the two folded joins measured beside them, 3.6 % of the decoder
+# the speech group's device rows taken before the folds; the folded joins and biases measured beside them, 3.6 and 5 % of the decoder
+# the speech group's device rows taken before the folds and the candidates' batch; the candidates on the device measured beside them, the verdicts the same
+speech 3697BA732D725A9F src/library/model_runner-whisper.adb src/library/model_runner-whisper.ads src/library/model_runner-whisper-decoding.adb src/library/model_runner-whisper-timing.adb src/library/model_runner-audio-spectrograms.adb src/library/model_runner-fourier.adb src/library/model_runner-float_panels.adb src/library/model_runner-kernels.adb src/library/model_runner-shares.ads tests/src/speech_hear.adb model_runner.gpr src/library/model_runner-backend-device.adb src/library/model_runner-cli-interactive.adb

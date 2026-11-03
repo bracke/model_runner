@@ -1465,6 +1465,17 @@ package body Tests.Speech_Cases is
                     & Beside.Figures.Tokens'Image & " tokens");
             Assert (Beside.Text = Alone.Text, "the device heard [" & To_String (Beside.Text)
                     & "] where the processor heard [" & To_String (Alone.Text) & "]");
+            --  Heard again, in the same part of the cache: each turn's part
+            --  was once put past the last, and the cache grew by one every
+            --  transcription.
+            declare
+               Reserved : constant N.Element_Count := Device.Cached_Elements;
+            begin
+               W.Transcribe (Session, Sound, Settings, Beside, Status);
+               Assert (E.Is_Ok (Status), "the device did not transcribe again");
+               Assert (Device.Cached_Elements = Reserved, "a second transcription grew the device's cache from"
+                       & Reserved'Image & " to" & Device.Cached_Elements'Image);
+            end;
             Assert (Device.Resident = Held, "the decoder's matrices were left on the device");
          end;
 

@@ -144,6 +144,10 @@ package body Model_Runner.Platform.Device is
    --  unsigned numbers stand before the one wanted here.
    Offset_Limits             : constant := 296;
    Offset_Storage_Range      : constant := Offset_Limits + 28;
+   --  minStorageBufferOffsetAlignment, a sixty-four bit number after the
+   --  viewport limits, the memory map's alignment and the texel and
+   --  uniform buffers' offset alignments.
+   Offset_Storage_Alignment  : constant := Offset_Limits + 328;
 
    --  And how many nanoseconds one tick of the device's timestamp is, a
    --  binary32 four hundred and twenty-four bytes into the limits -- after
@@ -1200,8 +1204,13 @@ package body Model_Runner.Platform.Device is
                Period : Interfaces.IEEE_Float_32;
                for Period'Address use Room (Offset_Timestamp_Period + 1)'Address;
                pragma Import (Ada, Period);
+
+               Alignment : Interfaces.Unsigned_64;
+               for Alignment'Address use Room (Offset_Storage_Alignment + 1)'Address;
+               pragma Import (Ada, Alignment);
             begin
                Item.Storage := Interfaces.Unsigned_64 (Stated);
+               Item.Aligned := Alignment;
                Item.Tick :=
                  (if Allowed /= 0 and then Interfaces.">" (Period, 0.0)
                   then Float (Period) else 0.0);
@@ -1741,6 +1750,9 @@ package body Model_Runner.Platform.Device is
 
    function Storage_Limit (Item : Context) return Interfaces.Unsigned_64
    is (Item.Storage);
+
+   function Storage_Alignment (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Aligned);
 
    function Timestamp_Period (Item : Context) return Float is (Item.Tick);
 

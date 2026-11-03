@@ -166,6 +166,9 @@ package body Model_Runner.Platform.Device is
    function Storage_Limit (Item : Context) return Interfaces.Unsigned_64
    is (Item.Storage);
 
+   function Storage_Alignment (Item : Context) return Interfaces.Unsigned_64
+   is (Item.Aligned);
+
    function Timestamp_Period (Item : Context) return Float is (Item.Tick);
 
 end Model_Runner.Platform.Device;

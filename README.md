@@ -1011,8 +1011,10 @@ and in a session it is borrowed while the conversation's model, there
 already, waits for the line -- never while that model runs, and not at
 all where the device has no room beside it. 45 s of Danish is heard in
 5.3 s by small f16 on the processor (1.2 GB resident) and 3.3 s with the
-device (0.5 GB), 3.0 s by small Q8_0; 11 s of English in 0.44 s by tiny
-and 0.32 s with the device. A model read cold adds 0.05 s (tiny) to
+device (0.5 GB), 3.0 s by small Q8_0; 11 s of English in 0.38 s by tiny
+and 0.31 s with the device. A window the reference decodes again draws
+its five candidates together, as the reference does: 5 s of noise tried at
+every temperature takes 24 s where it took 52, and 13.5 s with the device. A model read cold adds 0.05 s (tiny) to
 0.5 s (small). While Whisper hears on the processor, an LLM beside it
 shares the memory bus: TinyLlama's generation fell from 39 to 31 t/s on
 the processor and from 57 to 47 t/s on the device; a Whisper held but

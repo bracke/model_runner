@@ -3350,8 +3350,18 @@ package body Tests.Vision_Cases is
       Assert (E.Is_Ok (Status), "the Qwen2-VL blocks did not encode on the device: "
               & E.Error_Code'Image (Status.Code));
       Model_Runner.Backend.Device.Set_Whole_Layers (False);
-      Vision.Encode (Eyes, Picture, null, Apart, Grid_Rows, Grid_Columns,
-                     Status => Status);
+      declare
+         Reserved : constant N.Element_Count := Model_Runner.Backend.Device.Cached_Elements;
+      begin
+         Vision.Encode (Eyes, Picture, null, Apart, Grid_Rows, Grid_Columns,
+                        Status => Status);
+         --  A second picture's keys and values where the first's were:
+         --  each was once put past the last, and the cache grew by a
+         --  picture's every time one was seen.
+         Assert (Model_Runner.Backend.Device.Cached_Elements = Reserved,
+                 "a second picture grew the device's cache from" & Reserved'Image & " to"
+                 & Model_Runner.Backend.Device.Cached_Elements'Image);
+      end;
       Model_Runner.Backend.Device.Set_Whole_Layers (True);
       Vision.Close (Eyes);
       Model_Runner.Backend.Device.Close;

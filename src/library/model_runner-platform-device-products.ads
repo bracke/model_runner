@@ -1381,6 +1381,15 @@ package Model_Runner.Platform.Device.Products is
    --    tanh of it over Cap after the bias -- the bound some architectures
    --    put on their logits. Base may then be null, for a bound alone over
    --    a projection's rows.
+   --  @param Fold A projection's bias added in its product's own store
+   --    rather than by a dispatch of its own, where the source is the
+   --    plain product just named, nothing reads that product alone and
+   --    nothing is folded into it yet: the product binds the bias where a
+   --    folded join's residual goes, which for one position is the bias
+   --    row for row. The step is still counted, and names the product's
+   --    answer biased. A run of more than one position, or on a device
+   --    whose storage alignment the bias does not keep, refuses the
+   --    sequence; the caller names it again without.
    procedure Add_Bias
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -1397,7 +1406,8 @@ package Model_Runner.Platform.Device.Products is
       Count       : Natural := 0;
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0;
-      Cap           : Model_Runner.Numerics.Real := 0.0);
+      Cap           : Model_Runner.Numerics.Real := 0.0;
+      Fold          : Boolean := False);
 
    --  What an RWKV6 step does: see Add_Rwkv.
    type Rwkv_Mode is (Shift, Decay, Tanh, Squared_Relu, Finish, Save);
@@ -1938,7 +1948,8 @@ package Model_Runner.Platform.Device.Products is
    --    position: a hybrid mixture's shared expert, by its own router's
    --    score. Eight is the two arms multiplied, nothing applied; nine the
    --    quick Gaussian unit alone, x times the logistic of 1.702 x, as four
-   --    and five are alone.
+   --    and five are alone; ten the Gaussian unit alone in its error
+   --    function form, as Whisper states it.
    --  @param Added False when the sequence is full, when there are not two
    --    steps to combine, or when their rows do not match.
    --  @param Kept False when nothing on the host reads this step's answer,
@@ -2046,7 +2057,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param From_Step The projection to read: the queries, or the keys.
    --  @param Heads How many heads that projection holds.
    --  @param Head_Size How wide a head is; at most 256.
-   --  @param Rotary How many components of a head turn.
+   --  @param Rotary How many components of a head turn; nought for none,
+   --    which reads no table.
    --  @param Pairing Which two components make a pair.
    --  @param Table First byte of the angle table, as Add_Rotation takes it.
    --  @param Table_Span Bytes that table holds.
@@ -2338,6 +2350,14 @@ package Model_Runner.Platform.Device.Products is
    --    cache in blocks.
    --  @param Page_Shift The page's width in positions, as a shift; zero
    --    for a cache in blocks.
+   --  @param Rows_As_Heads The batch's rows are not positions of one text
+   --    but texts at one position -- a window's candidates drawn together
+   --    -- each with its own keys and values: the step attends as one
+   --    position of Heads times the batch's heads, row r's head h reading
+   --    the cache's head r * Heads + h, so each text's keys and values lie
+   --    in its own heads of a row KV_Width wide, and Last is the position.
+   --    Causal, no window, slopes, cap, sinks, packing or pages, a group of
+   --    one; Run refuses it where the token kernel cannot take it.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -2362,7 +2382,8 @@ package Model_Runner.Platform.Device.Products is
       Packed     : Packed_Cache := Not_Packed;
       Sinks_At   : Natural := 0;
       Pages_At   : Natural := 0;
-      Page_Shift : Natural := 0);
+      Page_Shift : Natural := 0;
+      Rows_As_Heads : Boolean := False);
 
    --  Where a caller's rows begin, one for each answer a sequence keeps.
    type Address_List is array (Positive range <>) of System.Address;
@@ -4321,6 +4342,9 @@ private
       --  And what it says one buffer may hold, which is the bound on a
       --  single matrix rather than on all of them.
       Storage    : Interfaces.Unsigned_64 := 0;
+      --  The device's storage binding alignment (Storage_Alignment): a
+      --  bias folded into a product is bound at its own offset.
+      Aligned    : Interfaces.Unsigned_64 := 0;
 
       --  Whether this device will take the host's own memory as a buffer,
       --  and what a pointer to it has to be aligned to.
@@ -4681,6 +4705,9 @@ private
       --  the products around the attention as well and they have no opinion
       --  about it.
       Causal     : Boolean := True;
+      --  Whether the batch's rows attend as heads of one position; see
+      --  Add_Attention.
+      Rows_As_Heads : Boolean := False;
       Heads      : Natural := 0;
       Head_Size  : Natural := 0;
       Value_Size : Natural := 0;

@@ -5,7 +5,19 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The device's cache no longer grows with every dictation or picture.** Whisper and the vision encoder each put their keys and values past what the device's cache last held -- their own from the time before among it -- so the cache grew by one transcription's or one picture's worth each time, and every reservation copied the growing rest. They now go where they went last wherever nothing has reserved the cache since; held by the speech and vision device tests, which encode twice and find the cache as the first left it.
+
+- **A product over the tile read its operand wrong after a residual made later.** A tiled product with a join folded into it judged whether the half-precision copy held its operand by the latest step it reads -- the join's residual -- and where that residual was made after the operand, converted the operand again from a binary32 form that a step written only as halves never writes. It reads its own operand's copy now (`Platform.Device.Products`, held by a backend test that fails without the fix). No language model's layer was shaped so; Whisper's decoder now folds two joins a block over pre-biased residuals, 3.6 % of its time.
+
 ### Added
+
+- **Whisper's retry candidates on the device.** A window decoded again draws its five candidates on the device as one batch, each candidate's keys and values in its own heads of a wide cache row and the attention taking the batch as heads of one position (`Products.Add_Attention`'s `Rows_As_Heads`): 5 s of noise tried at every temperature takes 13.5 s with the device, 24 on the processor.
+
+- **A projection's bias added in its product's store.** `Products.Add_Bias` takes `Fold`: a projection's bias over the plain product just named is bound where a folded join's residual goes and added by the product's own store, for a single position on a device whose storage alignment the bias keeps (`Platform.Device.Storage_Alignment`, read from the device's limits); anything else is refused and named again apart. Whisper's decoder folds four biases a block: 5 % of its time on the device.
+
+- **Whisper's candidates drawn together, and its GELU exact on the device.** A window decoded again draws its best-of-five as one batch, as the reference does -- the prompt fed once, every unfinished candidate's token fed in one pass over the weights, each attending to its own keys and values: 5 s of noise tried at every temperature takes 25 s where it took 52. The device's GELU is the error function's now (`Add_Combination` unit 10), and tiny's Danish scores on the device as on the processor. A block's keys and values are biased and placed in one heads step, which now takes a head with nothing turned (`Add_Heads` with `Rotary => 0`).
 
 - **Whisper's decoder on the device.** Every token runs there now, a recorded sequence a block -- norms, products, biases, its own attention and the attention to what was heard, from the half-precision copy -- the activation carried from block to block, then the logits: small f16 hears 45 s of Danish in 3.3 s where the processor takes 5.3, the decoder 2.7 -> 1.7 s, the transcripts and the corpus's scores the same (tiny's Danish 73.2 % of words against 69.9; GELU is the device's tanh form). The device's turn is held for a whole transcription, and the pool goes on from where the device stopped if it declines. `tests hear` says how many positions ran on the device; `tests speech-corpus --device` scores there.
 
