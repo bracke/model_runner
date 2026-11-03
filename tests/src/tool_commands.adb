@@ -18,6 +18,7 @@ package body Tool_Commands is
    Name_Image          : aliased constant String := "image";
    Name_Whisper_Convert : aliased constant String := "whisper-convert";
    Name_Hear           : aliased constant String := "hear";
+   Name_Speech_Corpus  : aliased constant String := "speech-corpus";
    Name_Records        : aliased constant String := "records";
    Name_Cut            : aliased constant String := "cut";
    Name_Docs           : aliased constant String := "docs";
@@ -316,7 +317,12 @@ package body Tool_Commands is
    Opts_Hear  : aliased constant String :=
      " --model --audio --language --detect-from-window --word-timestamps --reference --threads --repeats ";
 
-   Held : constant array (1 .. 39) of Command :=
+   Says_Speech_Corpus  : aliased constant String :=
+     "hear the speech corpus with a Whisper model and score it: word and character error rates by language";
+   Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N]";
+   Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads ";
+
+   Held : constant array (1 .. 40) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -357,6 +363,7 @@ package body Tool_Commands is
       (Name_Whisper_Convert'Access, Takes_Whisper_Convert'Access, Says_Whisper_Convert'Access,
        Opts_Whisper_Convert'Access),
       (Name_Hear'Access, Takes_Hear'Access, Says_Hear'Access, Opts_Hear'Access),
+      (Name_Speech_Corpus'Access, Takes_Speech_Corpus'Access, Says_Speech_Corpus'Access, Opts_Speech_Corpus'Access),
       (Name_Records'Access, Takes_Records'Access, Says_Records'Access,
        Opts_Records'Access),
       (Name_Render'Access, Takes_Render'Access, Says_Render'Access,

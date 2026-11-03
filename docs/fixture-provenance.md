@@ -30,6 +30,33 @@ No test reads it. `tests speed --prompt-file` does. It is not a fixture in
 the sense the file above is; it is the input to a published measurement, and
 a published measurement whose input is not written down is an anecdote.
 
+### `tests/fixtures/speech/`
+
+Recordings speech is held to, and what the reference made of them.
+
+- `jfk.wav` -- J. F. Kennedy's inaugural address, 20 January 1961, eleven
+  seconds, as whisper.cpp's `samples/jfk.wav` carries it. A work of the US
+  government: public domain. `en-short.wav` is its first 2.4 s, cut here.
+- `da-short.wav` (fourteen seconds) and `da-long.wav` (forty-five) --
+  LibriVox's "Udvalgte Danske Eventyr 001", "Den lille pige med
+  svovlstikkerne" by H. C. Andersen, read by Hedvig and Kristoffer
+  Hunsdahl (archive.org `danish_fairytales_0805_librivox`), from 34 s into
+  the reading, brought to sixteen kilohertz and one channel by ffmpeg.
+  LibriVox's recordings are public domain.
+- `corpus.txt` -- the corpus `tests speech-corpus` scores: each recording,
+  its language, the noise mixed in, and what is said. The English is the
+  speech's published text. The Danish is Andersen's text of 1848 in modern
+  spelling, with the reader's own "jo" and "kom" where the reading departs
+  from it; it was set against what Whisper small heard, not checked by ear.
+- `*-mel.expect` -- the reference's log-Mel spectrogram of each recording,
+  sampled, from an independent numpy implementation of openai/whisper's
+  `audio.py` (docs/plan-speech.md).
+
+Not here, and wanted: Danish speech with English technical words, and Ada
+identifiers spoken. No such recording was found under a licence that
+allows it; one of the maintainer's own voice would serve, added as a line
+of `corpus.txt`.
+
 ### `tests/fixtures/speed-prompt-short.txt`
 
 The same, for the headline figure at the top of the README's speed section.

@@ -244,6 +244,34 @@ again.
 `<|transcribe|>`; small on the Danish fixture writes "It was so crudely
 cold. It snowed and it started to get dark in the evening."
 
+## 7b. The corpus
+
+`tests speech-corpus --model PATH` hears `tests/fixtures/speech/corpus.txt`
+and scores it: word and character error rates against what is said, after
+case and punctuation are taken away; the language heard unasked; the
+seconds taken; each language's rates over its recordings; and the words
+heard in silence. Noise is white, from a fixed seed, mixed in at a stated
+signal-to-noise ratio. 2026-11-03, eight cores:
+
+| model | en WER / CER | da WER / CER | words in silence | real-time factor en / da |
+| --- | ---: | ---: | ---: | ---: |
+| tiny f16 | 7.04 % / 4.73 % | 69.93 % / 36.74 % | 0 | 0.03 / 0.07 |
+| small f16 | 0.00 % / 0.00 % | 25.49 % / 8.21 % | 0 | 0.18 / 0.28 |
+| small Q8_0 | 0.00 % / 0.00 % | 25.49 % / 8.46 % | 0 | 0.16 / 0.17 |
+
+English is jfk.wav clean, at 10 dB and at 0 dB, and its first 2.4 s; small
+writes all four word for word (tiny gives way at 0 dB). Danish is a
+LibriVox reading of Andersen in an old-fashioned diction: small's errors
+are the reader's archaisms and names ("pi" for "pige", "grulig" for
+"grueligt"), which the reference implementation makes too, word for word,
+where it was run (da-short, da-long on tiny). That is the release criterion
+the specification sets -- no degradation against the same checkpoint and
+decoding in the reference -- and it holds: on the binary32 files the
+tokens are the reference's.
+
+Wanted and not had: Danish with English technical words, and Ada
+identifiers spoken; see docs/fixture-provenance.md.
+
 ## 8. The harness
 
 `Model_Runner.Speech` is the auxiliary owner: two tasks of its own (the

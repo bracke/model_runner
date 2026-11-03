@@ -91,6 +91,7 @@ with Speed_Run;
 with Crossing;
 with Image_Crossing;
 with Tool_Commands;
+with Speech_Corpus;
 with Speech_Hear;
 with Whisper_Convert;
 with Fuzzing;
@@ -524,6 +525,28 @@ begin
                               Ada.Command_Line.Argument (Index) = "--detect-from-window"),
             Words => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
                         Ada.Command_Line.Argument (Index) = "--word-timestamps")) /= 0
+         then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "speech-corpus" then
+      declare
+         function Option (Name : String; Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+      begin
+         if Option ("--model", "") = "" then
+            Ada.Text_IO.Put_Line ("speech-corpus: --model PATH is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         elsif Speech_Corpus.Run (Option ("--model", ""), Option ("--corpus", ""),
+                                  Natural'Value (Option ("--threads", "0"))) /= 0
          then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

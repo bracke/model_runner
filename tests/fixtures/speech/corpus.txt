@@ -1,0 +1,17 @@
+# The speech corpus `tests speech-corpus` reads (docs/plan-speech.md).
+# A line: recording|language|noise|what is said
+#   recording  a WAV file beside this one, or silence:SECONDS
+#   noise      "-" for none, or a signal-to-noise ratio in decibels: white
+#              noise from a fixed seed mixed in at that ratio (for silence,
+#              the noise's level against full scale)
+#   what is said, as a person would write it; compared after case and
+#              punctuation are taken away. Empty: nothing is said.
+jfk.wav|en|-|And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+jfk.wav|en|10|And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+jfk.wav|en|0|And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country.
+en-short.wav|en|-|And so my fellow Americans
+da-short.wav|da|-|Den lille pige med svovlstikkerne af H.C. Andersen. Det var så grueligt koldt, det sneede, og det begyndte at blive mørk aften.
+da-short.wav|da|10|Den lille pige med svovlstikkerne af H.C. Andersen. Det var så grueligt koldt, det sneede, og det begyndte at blive mørk aften.
+da-long.wav|da|-|Den lille pige med svovlstikkerne af H.C. Andersen. Det var så grueligt koldt, det sneede, og det begyndte at blive mørk aften. Det var også den sidste aften i året, nytårsaften. I denne kulde og i dette mørke gik på gaden en lille fattig pige med bart hoved og nøgne fødder. Ja, hun havde jo rigtignok haft tøfler på, da hun kom hjemmefra, men hvad kunne det hjælpe? Det var meget store tøfler, hendes moder havde sidst brugt dem, så store var de, og dem tabte den lille, da hun skyndte sig over gaden, idet to vogne fór så grueligt stærkt forbi. Den ene tøffel var
+silence:5|en|-|
+silence:5|da|20|

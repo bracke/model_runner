@@ -7,6 +7,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A speech corpus, scored.** `tests speech-corpus --model PATH` hears `tests/fixtures/speech/corpus.txt` -- English and Danish, short, long and across a window's edge, clean and with noise mixed in, silence -- and reports word and character error rates by language, the language heard unasked, the real-time factor and the words heard in silence. Whisper small: English 0 %, Danish 25.5 % of words (a LibriVox reading in old diction); no words in silence.
+
 - **Speech input on Windows and macOS.** hostkit records there too: winmm's waveIn on Windows, AudioToolbox's input queue on macOS (the default input only). Checked by hostkit's CI on both, not on this machine.
 
 - **A microphone named that is not there is refused.** `--speech-device NAME` for a source the sound server has not was recorded from the default microphone (PipeWire's pulse server falls back without a word); hostkit now asks the server first and the recording is refused by name (`MR-IO-0014`), which the suite reaches without opening a microphone.
