@@ -78,7 +78,8 @@ package body Speech_Hear is
    function Run
      (Model, Audio, Language, Reference : String;
       Threads : Natural;
-      Repeats : Positive) return Natural
+      Repeats : Positive;
+      Fast_Detect : Boolean := False) return Natural
    is
       Whisper : aliased W.Model;
       Samples : T.Real_Array_Access;
@@ -155,6 +156,7 @@ package body Speech_Hear is
          end if;
 
          Settings.Language := To_Unbounded_String (Language);
+         Settings.Detect_From_Window := Fast_Detect;
          for Round in 1 .. Repeats loop
             declare
                Before : constant Ada.Calendar.Time := Ada.Calendar.Clock;

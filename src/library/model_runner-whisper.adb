@@ -1501,6 +1501,8 @@ package body Model_Runner.Whisper is
       Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
       Mels : constant Element_Count := (if Source = null then 0 else Element_Count (Source.Mels));
 
+      function I_Of (Token : Token_Id) return Positive is (Natural (Token - Source.First_Language) + 1);
+
       function Cancelled return Boolean is
         (Cancel /= null and then Model_Runner.Cancellation.Is_Cancelled (Cancel));
 
@@ -1620,7 +1622,7 @@ package body Model_Runner.Whisper is
       --  spectrogram as they are -- the padding's own frames after a short
       --  recording, as the reference reads them -- and the likeliest
       --  language token after <|startoftranscript|>.
-      if Source.Multilingual and then Language = 0 then
+      if Source.Multilingual and then Language = 0 and then not Settings.Detect_From_Window then
          declare
             Started_Encoder : constant Ada.Calendar.Time := Ada.Calendar.Clock;
             Best : Real := Real'First;
@@ -1652,10 +1654,12 @@ package body Model_Runner.Whisper is
             end loop;
          end;
       end if;
-      Result.Language :=
-        (if Source.Multilingual
-         then To_Unbounded_String (Language_Code (Source.all, Natural (Language - Source.First_Language) + 1))
-         else To_Unbounded_String ("en"));
+      if not Source.Multilingual then
+         Result.Language := To_Unbounded_String ("en");
+      elsif Language /= 0 then
+         Result.Language :=
+           To_Unbounded_String (Language_Code (Source.all, Natural (Language - Source.First_Language) + 1));
+      end if;
 
       while Seek < Content loop
          if Cancelled then
@@ -1712,6 +1716,25 @@ package body Model_Runner.Whisper is
             end;
             if E.Is_Ok (Status) then
                No_Speech := Decoding.Probability (Item.Logits (0 .. Source.Vocabulary_Size - 1), Source.No_Speech);
+               --  The language, where it is read off this window.
+               if Source.Multilingual and then Language = 0 then
+                  declare
+                     Best : Real := Real'First;
+                  begin
+                     for I in 1 .. Source.Language_Total loop
+                        declare
+                           Value : constant Real :=
+                             Item.Logits (Element_Count (Source.First_Language) + Element_Count (I - 1));
+                        begin
+                           if Value > Best then
+                              Best := Value;
+                              Language := Source.First_Language + Token_Id (I - 1);
+                           end if;
+                        end;
+                     end loop;
+                     Result.Language := To_Unbounded_String (Language_Code (Source.all, I_Of (Language)));
+                  end;
+               end if;
                if Source.Multilingual then
                   Feed (Item, [Language, Source.Transcribe_Token], Status);
                end if;

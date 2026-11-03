@@ -350,6 +350,9 @@ package body Model_Runner.Speech is
             return;
          end if;
          Settings.Language := Owner.Wanted.Language;
+         --  What is said to a prompt is short: the language from the
+         --  window heard, not from an encoder pass of its own.
+         Settings.Detect_From_Window := True;
          Settings.Initial_Prompt := Owner.Wanted.Initial_Prompt;
          declare
             Room : constant Recording_Buffer := Owner.Common.Buffer;

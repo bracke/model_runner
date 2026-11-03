@@ -196,6 +196,15 @@ packed once a session (the encoder is the panels' own arithmetic, about
 300 GFLOP/s of the kernel's 573). The binary32 files' transcripts stay the
 reference's, token for token.
 
+**Language detection without a second encoder pass.** The reference
+detects the language with an encoder pass of its own, over the first 3,000
+frames as they are; then decodes the first window zero-padded, a second
+pass. `Options.Detect_From_Window` reads the language off the logits at
+`<|startoftranscript|>` of the decoded window instead -- the same logits
+the no-speech probability is read from -- and the encoder runs once.
+Dictation does so; `transcribe` keeps the reference's way. On 14 s of
+Danish, small f16, auto: 2.78 -> 1.85 s, the language da either way.
+
 **Q8_0** (`--type q8_0`, ggml's encoding): 270 MB for small against 490
 binary16, 1.53 s for the same 14 s. It is not the reference's arithmetic:
 the encoder's output stands 0.37 of its largest value from the binary32

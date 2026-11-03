@@ -167,6 +167,16 @@ package Model_Runner.Whisper is
       Initial_Prompt : Ada.Strings.Unbounded.Unbounded_String;
       --  Whether a window is prompted with the text before it.
       Condition_On_Previous : Boolean := True;
+      --  Where no language is given: whether it is read off the first
+      --  window as decoded -- the logits at <|startoftranscript|> the
+      --  no-speech probability is read from already -- rather than from an
+      --  encoder pass of its own over the spectrogram's first thirty
+      --  seconds as they are, as the reference reads it. The first window's
+      --  frames past a short recording are zeros one way and the padding's
+      --  own the other, so the two may name different languages on a
+      --  recording that barely says; the encoder runs once instead of
+      --  twice.
+      Detect_From_Window : Boolean := False;
       --  The reference's thresholds.
       No_Speech_Threshold   : Real := 0.6;
       Log_Prob_Threshold    : Real := -1.0;

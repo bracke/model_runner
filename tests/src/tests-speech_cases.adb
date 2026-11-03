@@ -751,6 +751,11 @@ package body Tests.Speech_Cases is
       Settings.Language := Null_Unbounded_String;
       W.Transcribe (Session, Sound, Settings, Heard, Status);
       Assert (E.Is_Ok (Status) and then To_String (Heard.Language) in "en" | "da", "no language was detected");
+      Settings.Detect_From_Window := True;
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      Assert (E.Is_Ok (Status) and then To_String (Heard.Language) in "en" | "da",
+              "no language was read off the window");
+      Settings.Detect_From_Window := False;
 
       Settings.Language := To_Unbounded_String ("fr");
       W.Transcribe (Session, Sound, Settings, Heard, Status);
