@@ -313,7 +313,8 @@ package body Tool_Commands is
    Takes_Hear : aliased constant String :=
      "--model PATH --audio FILE [--language CODE] [--detect-from-window] [--reference DIR] [--threads N]"
      & " [--repeats N]";
-   Opts_Hear  : aliased constant String := " --model --audio --language --detect-from-window --reference --threads --repeats ";
+   Opts_Hear  : aliased constant String :=
+     " --model --audio --language --detect-from-window --reference --threads --repeats ";
 
    Held : constant array (1 .. 39) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

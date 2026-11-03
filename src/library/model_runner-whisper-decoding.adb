@@ -216,7 +216,8 @@ package body Model_Runner.Whisper.Decoding is
       begin
          for I in Logits'Range loop
             if Allowed (Logits (I)) then
-               Running := Running + Elementary.Exp ((Wide_Real (Logits (I)) - Wide_Real (Top)) / Wide_Real (Temperature));
+               Running := Running
+                 + Elementary.Exp ((Wide_Real (Logits (I)) - Wide_Real (Top)) / Wide_Real (Temperature));
                Last := I;
                if Running > Goal then
                   return Token_Id (I - Logits'First);
