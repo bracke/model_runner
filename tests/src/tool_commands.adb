@@ -305,7 +305,7 @@ package body Tool_Commands is
    Says_Whisper_Convert  : aliased constant String :=
      "write OpenAI's Whisper checkpoint, as Hugging Face publishes it, as the GGUF file the "
      & "speech model reads";
-   Takes_Whisper_Convert : aliased constant String := "--from DIR --out FILE [--type f32|f16]";
+   Takes_Whisper_Convert : aliased constant String := "--from DIR --out FILE [--type f32|f16|q8_0]";
    Opts_Whisper_Convert  : aliased constant String := " --from --out --type ";
 
    Says_Hear  : aliased constant String :=

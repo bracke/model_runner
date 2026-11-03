@@ -541,10 +541,14 @@ begin
          Into : constant String := Option ("--out", "");
          Kind : constant String := Option ("--type", "f16");
       begin
-         if From = "" or else Into = "" or else (Kind /= "f16" and then Kind /= "f32") then
-            Ada.Text_IO.Put_Line ("whisper-convert: --from DIR --out FILE [--type f32|f16]");
+         if From = "" or else Into = "" or else (Kind /= "f16" and then Kind /= "f32" and then Kind /= "q8_0") then
+            Ada.Text_IO.Put_Line ("whisper-convert: --from DIR --out FILE [--type f32|f16|q8_0]");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
-         elsif Whisper_Convert.Run (From, Into, Half => Kind = "f16") /= 0 then
+         elsif Whisper_Convert.Run
+           (From, Into,
+            (if Kind = "f16" then Model_Runner.GGUF.Type_F16 elsif Kind = "q8_0" then Model_Runner.GGUF.Type_Q8_0
+             else Model_Runner.GGUF.Type_F32)) /= 0
+         then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;

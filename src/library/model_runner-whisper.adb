@@ -40,6 +40,7 @@ package body Model_Runner.Whisper is
    use type Model_Runner.Cancellation.Token_Reference;
 
    procedure Free is new Ada.Unchecked_Deallocation (Block_Array, Block_Array_Access);
+   procedure Free is new Ada.Unchecked_Deallocation (Panel_Array, Panel_Array_Access);
 
    Architecture : constant String := "whisper";
 
@@ -733,7 +734,7 @@ package body Model_Runner.Whisper is
          Decoded    => Element_Count'Max (W * F, Element_Count'Max (W * 3 * W, W * 3 * M)),
          Row        => Ctx * W,
          Feed_Row   => Ctx * F,
-         Dec_Scores => Element_Count (Positive'Max (Item.Decoder_Heads, Item.Encoder_Heads)) * P,
+         Dec_Scores => Element_Count (Positive'Max (Item.Decoder_Heads, Item.Encoder_Heads)) * P * Ctx,
          Logits     => Item.Vocabulary_Size);
    end Sizes_Of;
 
@@ -745,7 +746,12 @@ package body Model_Runner.Whisper is
         --  The decoded weight, and the three panel sets about as large as
         --  what they lay out.
         + 2 * S.Decoded + 2 * Item.Audio_Context * Item.Width
-        + 6 * S.Row + S.Feed_Row + S.Dec_Scores + Item.Width + S.Logits;
+        + 6 * S.Row + S.Feed_Row + S.Dec_Scores + Item.Width + S.Logits
+        --  The encoder's matrices kept in panels, and the decoder's keys'
+        --  and values' of what was heard.
+        + Element_Count (Item.Encoder_Blocks) * (4 * Item.Width * Item.Width + 2 * Item.Width * Item.Encoder_Feed)
+        + 3 * Item.Width * (Element_Count (Item.Mels) + Item.Width)
+        + 2 * Element_Count (Item.Decoder_Blocks) * Item.Width * Item.Width;
    begin
       return (if Item.Ready then 4 * B.Byte_Count (Floats) else 0);
    end Session_Bytes;
@@ -753,6 +759,16 @@ package body Model_Runner.Whisper is
    --------------
    -- Sessions --
    --------------
+
+   procedure Free_Panels (Set : in out Panel_Array_Access) is
+   begin
+      if Set /= null then
+         for Each of Set.all loop
+            FP.Free (Each);
+         end loop;
+         Free (Set);
+      end if;
+   end Free_Panels;
 
    procedure Close (Item : in out Session) is
    begin
@@ -774,6 +790,9 @@ package body Model_Runner.Whisper is
       T.Free (Item.Scores);
       T.Free (Item.Decoded);
       FP.Free (Item.Weight_Panels);
+      Free_Panels (Item.Packed);
+      Free_Panels (Item.Cross_Keys);
+      Free_Panels (Item.Cross_Values);
       FP.Free (Item.Key_Panels);
       FP.Free (Item.Value_Panels);
       T.Free (Item.Dec_X);
@@ -791,6 +810,7 @@ package body Model_Runner.Whisper is
    end Close;
 
    function Is_Open (Item : Session) return Boolean is (Item.Source /= null);
+
 
    procedure Open
      (Item   : in out Session;
@@ -843,6 +863,9 @@ package body Model_Runner.Whisper is
       Room (S.Dec_Scores, Item.Dec_Scores);
       Room (Source.Width, Item.Last_Row);
       Room (S.Logits, Item.Logits);
+      Item.Packed := new Panel_Array (1 .. 2 + 6 * Source.Encoder_Blocks + 2 * Source.Decoder_Blocks);
+      Item.Cross_Keys := new Panel_Array (1 .. Source.Decoder_Blocks * Source.Decoder_Heads);
+      Item.Cross_Values := new Panel_Array (1 .. Source.Decoder_Blocks * Source.Decoder_Heads);
       --  The session is closed before the model may be: the model refuses
       --  to close while it counts one open.
       Item.Source := Source.all'Unchecked_Access;
@@ -982,13 +1005,21 @@ package body Model_Runner.Whisper is
       Weight : T.View;
       Target : T.Real_Array_Access;
       Bias   : T.Real_Array_Access;
-      Status : in out E.Error_Info)
+      Status : in out E.Error_Info;
+      Slot   : Positive)
    is
       Team : constant Model_Runner.Shares.Team_Access := CPU.Sharing (Item.Team);
       Rows : constant Element_Count := Weight.Rows;
       Cols : constant Element_Count := Weight.Columns;
    begin
       if E.Is_Error (Status) then
+         return;
+      end if;
+      if FP.Is_Packed (Item.Packed (Slot)) then
+         FP.Multiply (Team, Item.Packed (Slot), Source.all, 0, Cols, Count, Target.all, 0, Rows);
+         if Bias /= null then
+            Rows_Through (Item, Add_Bias, Target, Count, Rows, Status, Bias => Bias);
+         end if;
          return;
       end if;
       declare
@@ -1002,12 +1033,12 @@ package body Model_Runner.Whisper is
          end if;
       end;
       if E.Is_Ok (Status) then
-         FP.Pack (Team, Item.Decoded.all, 0, Rows, Cols, Cols, 1, Item.Weight_Panels, Status);
+         FP.Pack (Team, Item.Decoded.all, 0, Rows, Cols, Cols, 1, Item.Packed (Slot), Status);
       end if;
       if E.Is_Error (Status) then
          return;
       end if;
-      FP.Multiply (Team, Item.Weight_Panels, Source.all, 0, Cols, Count, Target.all, 0, Rows);
+      FP.Multiply (Team, Item.Packed (Slot), Source.all, 0, Cols, Count, Target.all, 0, Rows);
       if Bias /= null then
          Rows_Through (Item, Add_Bias, Target, Count, Rows, Status, Bias => Bias);
       end if;
@@ -1027,7 +1058,7 @@ package body Model_Runner.Whisper is
       if E.Is_Error (Status) then
          return;
       end if;
-      CPU.Dispatch_Batch (Item.Team, Weight, Source, Count, Target, Status);
+      CPU.Dispatch_Batch (Item.Team, Weight, Source, Count, Target, Status, Roles => CPU.Every_Role);
       if Bias /= null then
          Rows_Through (Item, Add_Bias, Target, Count, Weight.Rows, Status, Bias => Bias);
       end if;
@@ -1105,6 +1136,47 @@ package body Model_Runner.Whisper is
       end loop;
    end Run;
 
+   --  A token's attention to what was heard, a head a share: its queries
+   --  against the head's keys laid out in panels, the rows of scores
+   --  softened, the head's values -- turned, in panels -- blended by them.
+   --  Each head's products on its own worker, alone: the pool is shared
+   --  over the heads, not inside one.
+   type Cross_Work is new Model_Runner.Shares.Work with record
+      Owner   : access Session;
+      Block   : Positive := 1;
+      Count   : Element_Count := 0;
+      Scale   : Real := 1.0;
+      Failed  : Boolean := False with Atomic;
+   end record;
+
+   overriding procedure Run (Item : in out Cross_Work; First : Element_Count; Last : Element_Count) is
+      S     : Session renames Item.Owner.all;
+      P     : constant Element_Count := S.Source.Audio_Context;
+      W     : constant Element_Count := S.Source.Width;
+      Heads : constant Positive := S.Source.Decoder_Heads;
+      Head  : constant Element_Count := W / Element_Count (Heads);
+      Ok    : Boolean;
+   begin
+      for H in First .. Last loop
+         declare
+            Slot   : constant Positive := (Item.Block - 1) * Heads + Positive (H + 1);
+            Scores : constant Element_Count := H * P * S.Source.Text_Context;
+         begin
+            FP.Multiply (null, S.Cross_Keys (Slot), S.Dec_Q.all, H * Head, W, Item.Count,
+                         S.Dec_Scores.all, Scores, P);
+            for I in 0 .. Item.Count - 1 loop
+               K.Scale (S.Dec_Scores (Scores + I * P .. Scores + (I + 1) * P - 1), Item.Scale);
+               K.Softmax (S.Dec_Scores (Scores + I * P .. Scores + (I + 1) * P - 1), Ok);
+               if not Ok then
+                  Item.Failed := True;
+               end if;
+            end loop;
+            FP.Multiply (null, S.Cross_Values (Slot), S.Dec_Scores.all, Scores, P, Item.Count,
+                         S.Dec_A.all, H * Head, W);
+         end;
+      end loop;
+   end Run;
+
    --  The encoder's attention: every position to every position, a head at
    --  a time, both products by panels -- the keys laid out as a weight the
    --  queries multiply, the scores softened row by row, then the values,
@@ -1149,6 +1221,12 @@ package body Model_Runner.Whisper is
       W  : constant Element_Count := Source.Width;
       M  : constant Element_Count := Element_Count (Source.Mels);
       F  : constant Element_Count := Source.Encoder_Feed;
+
+      --  Where each matrix's panels are kept: the two convolutions, six a
+      --  block, then two a decoder block.
+      function Slot_Of (Block, Which : Positive) return Positive is (2 + 6 * (Block - 1) + Which);
+      function Cross_Slot (Block, Which : Positive) return Positive is
+        (2 + 6 * Source.Encoder_Blocks + 2 * (Block - 1) + Which);
    begin
       Status := E.Success;
       Item.Has_Encoded := False;
@@ -1170,7 +1248,7 @@ package body Model_Runner.Whisper is
             end loop;
          end loop;
       end loop;
-      Multiply_Many (Item, Item.Work_A, P2, Source.Conv1.Weight, Item.Work_B, Source.Conv1.Bias, Status);
+      Multiply_Many (Item, Item.Work_A, P2, Source.Conv1.Weight, Item.Work_B, Source.Conv1.Bias, Status, 1);
       Rows_Through (Item, Gaussian, Item.Work_B, P2, W, Status);
 
       --  The second, stride two: position t reads frames 2t - 1 .. 2t + 1.
@@ -1183,7 +1261,7 @@ package body Model_Runner.Whisper is
             end loop;
          end loop;
       end loop;
-      Multiply_Many (Item, Item.Work_C, P, Source.Conv2.Weight, Item.Encoded, Source.Conv2.Bias, Status);
+      Multiply_Many (Item, Item.Work_C, P, Source.Conv2.Weight, Item.Encoded, Source.Conv2.Bias, Status, 2);
       Rows_Through (Item, Gaussian, Item.Encoded, P, W, Status);
       Rows_Through (Item, Accumulate, Item.Encoded, P, W, Status, Source => Source.Audio_Positions);
 
@@ -1194,19 +1272,21 @@ package body Model_Runner.Whisper is
          begin
             Rows_Through (Item, Normalize, Item.Work_A, P, W, Status, Source => Item.Encoded,
                           Weight => Each.Attention_Norm.Weight, Bias => Each.Attention_Norm.Bias);
-            Multiply_Many (Item, Item.Work_A, P, Each.Attention.Q.Weight, Item.Work_B, Each.Attention.Q.Bias, Status);
-            Multiply_Many (Item, Item.Work_A, P, Each.Attention.K.Weight, Item.Work_C, null, Status);
-            Multiply_Many (Item, Item.Work_A, P, Each.Attention.V.Weight, Item.Work_D, Each.Attention.V.Bias, Status);
+            Multiply_Many (Item, Item.Work_A, P, Each.Attention.Q.Weight, Item.Work_B, Each.Attention.Q.Bias, Status,
+                           Slot_Of (L, 1));
+            Multiply_Many (Item, Item.Work_A, P, Each.Attention.K.Weight, Item.Work_C, null, Status, Slot_Of (L, 2));
+            Multiply_Many (Item, Item.Work_A, P, Each.Attention.V.Weight, Item.Work_D, Each.Attention.V.Bias, Status,
+                           Slot_Of (L, 3));
             Attend_Both_Ways (Item, Item.Work_B, Item.Work_C, Item.Work_D, Item.Work_E, Status);
             Multiply_Many (Item, Item.Work_E, P, Each.Attention.Output.Weight, Item.Work_A,
-                           Each.Attention.Output.Bias, Status);
+                           Each.Attention.Output.Bias, Status, Slot_Of (L, 4));
             Rows_Through (Item, Accumulate, Item.Encoded, P, W, Status, Source => Item.Work_A);
 
             Rows_Through (Item, Normalize, Item.Work_B, P, W, Status, Source => Item.Encoded,
                           Weight => Each.Feed_Norm.Weight, Bias => Each.Feed_Norm.Bias);
-            Multiply_Many (Item, Item.Work_B, P, Each.Up.Weight, Item.Work_C, Each.Up.Bias, Status);
+            Multiply_Many (Item, Item.Work_B, P, Each.Up.Weight, Item.Work_C, Each.Up.Bias, Status, Slot_Of (L, 5));
             Rows_Through (Item, Gaussian, Item.Work_C, P, F, Status);
-            Multiply_Many (Item, Item.Work_C, P, Each.Down.Weight, Item.Work_A, Each.Down.Bias, Status);
+            Multiply_Many (Item, Item.Work_C, P, Each.Down.Weight, Item.Work_A, Each.Down.Bias, Status, Slot_Of (L, 6));
             Rows_Through (Item, Accumulate, Item.Encoded, P, W, Status, Source => Item.Work_A);
          end;
       end loop;
@@ -1219,10 +1299,29 @@ package body Model_Runner.Whisper is
 
       --  Each decoder block's keys and values of what was heard, once.
       for L in 1 .. Source.Decoder_Blocks loop
-         Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.K.Weight, Item.Cross_K (L), null, Status);
+         Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.K.Weight, Item.Cross_K (L), null, Status,
+                        Cross_Slot (L, 1));
          Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.V.Weight, Item.Cross_V (L),
-                        Source.Decoder (L).Cross.V.Bias, Status);
+                        Source.Decoder (L).Cross.V.Bias, Status, Cross_Slot (L, 2));
       end loop;
+      --  And laid out a head at a time for the products a token makes of
+      --  them: its scores against the keys, the values blended by them.
+      declare
+         Team  : constant Model_Runner.Shares.Team_Access := CPU.Sharing (Item.Team);
+         Heads : constant Positive := Source.Decoder_Heads;
+         Head  : constant Element_Count := W / Element_Count (Heads);
+      begin
+         for L in 1 .. Source.Decoder_Blocks loop
+            for H in 1 .. Heads loop
+               exit when E.Is_Error (Status);
+               FP.Pack (Team, Item.Cross_K (L).all, Element_Count (H - 1) * Head, P, Head, W, 1,
+                        Item.Cross_Keys ((L - 1) * Heads + H), Status);
+               exit when E.Is_Error (Status);
+               FP.Pack (Team, Item.Cross_V (L).all, Element_Count (H - 1) * Head, Head, P, 1, W,
+                        Item.Cross_Values ((L - 1) * Heads + H), Status);
+            end loop;
+         end loop;
+      end;
       Item.Has_Encoded := E.Is_Ok (Status);
    end Encode;
 
@@ -1316,12 +1415,19 @@ package body Model_Runner.Whisper is
                           Weight => Each.Cross_Norm.Weight, Bias => Each.Cross_Norm.Bias);
             Multiply_Few (Item, Item.Dec_H, Count, Each.Cross.Q.Weight, Item.Dec_Q, Each.Cross.Q.Bias, Status);
             exit when E.Is_Error (Status);
-            Work.Keys := Item.Cross_K (L);
-            Work.Values := Item.Cross_V (L);
-            Work.Key_Count := Source.Audio_Context;
-            Work.Causal := False;
-            CPU.Dispatch_Shares (Item.Team, Heads, Work'Unchecked_Access, Status,
-                                 Cost => Count * Source.Audio_Context * W);
+            declare
+               Across : aliased Cross_Work;
+            begin
+               Across.Owner := Item'Unchecked_Access;
+               Across.Block := L;
+               Across.Count := Count;
+               Across.Scale := Scale;
+               CPU.Dispatch_Shares (Item.Team, Heads, Across'Unchecked_Access, Status,
+                                    Cost => Count * Source.Audio_Context * W);
+               if E.Is_Ok (Status) and then Across.Failed then
+                  Status := E.Make (E.Sampling_Non_Finite_Logit);
+               end if;
+            end;
             Multiply_Few (Item, Item.Dec_A, Count, Each.Cross.Output.Weight, Item.Dec_H, Each.Cross.Output.Bias,
                           Status);
             Rows_Through (Item, Accumulate, Item.Dec_X, Count, W, Status, Source => Item.Dec_H);
@@ -1341,7 +1447,7 @@ package body Model_Runner.Whisper is
 
       K.Layer_Norm (Item.Dec_X ((Count - 1) * W .. Count * W - 1), Source.Decoder_Norm.Weight.all,
                     Source.Decoder_Norm.Bias.all, Source.Epsilon, Item.Last_Row.all);
-      CPU.Dispatch (Item.Team, Source.Token_Table, Item.Last_Row, Item.Logits, Status);
+      CPU.Dispatch (Item.Team, Source.Token_Table, Item.Last_Row, Item.Logits, Status, Roles => CPU.Every_Role);
    end Feed;
 
    ------------

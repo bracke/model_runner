@@ -14,7 +14,6 @@ with Jsonlib.Parsers;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
-with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Heap_Buffers;
@@ -23,6 +22,7 @@ with Model_Runner.Safetensors;
 with Model_Runner.Tensors;
 
 with Fixtures;
+with Quantizer;
 
 package body Whisper_Convert is
 
@@ -145,6 +145,13 @@ package body Whisper_Convert is
 
    package Plan_Vectors is new Ada.Containers.Indefinite_Vectors (Positive, Planned);
 
+   --  Bytes Count elements take in a format the converter writes.
+   function Bytes_Of (Format : G.Tensor_Type; Count : N.Element_Count) return B.Byte_Count is
+     (case Format is
+         when G.Type_F16  => 2 * B.Byte_Count (Count),
+         when G.Type_Q8_0 => 34 * B.Byte_Count (Count / 32),
+         when others      => 4 * B.Byte_Count (Count));
+
    function Image (Value : Long_Long_Integer) return String is
       Text : constant String := Long_Long_Integer'Image (Value);
    begin
@@ -155,7 +162,7 @@ package body Whisper_Convert is
    -- Run --
    ---------
 
-   function Run (From, Into : String; Half : Boolean) return Natural is
+   function Run (From, Into : String; Matrices : Model_Runner.GGUF.Tensor_Type) return Natural is
       Config, Generation, Vocab, Added : J.Document;
       Source : Model_Runner.Byte_Sources.Files.File_Source;
       Table  : ST.Table;
@@ -509,15 +516,17 @@ package body Whisper_Convert is
          declare
             Elements : N.Element_Count := 1;
             Dims     : Fixtures.Dimension_List (1 .. P.Rank);
-            Format   : constant G.Tensor_Type := (if Half and then P.Matrix then G.Type_F16 else G.Type_F32);
+            Format   : constant G.Tensor_Type := (if P.Matrix then Matrices else G.Type_F32);
          begin
             for D in 1 .. P.Rank loop
                Elements := Elements * P.Dims (D);
                Dims (D) := G.U64 (P.Dims (P.Rank + 1 - D));
             end loop;
-            Fixtures.Plan_Tensor
-              (Build, To_String (P.To), Dims, Format,
-               B.Byte_Count (Elements) * (if Format = G.Type_F16 then 2 else 4));
+            if Format = G.Type_Q8_0 and then P.Dims (P.Rank) mod 32 /= 0 then
+               Say (To_String (P.From) & "'s rows are not whole blocks of 32");
+               raise Refused;
+            end if;
+            Fixtures.Plan_Tensor (Build, To_String (P.To), Dims, Format, Bytes_Of (Format, Elements));
          end;
       end loop;
 
@@ -567,8 +576,9 @@ package body Whisper_Convert is
                --  Written from the heap, a row at a time: the token table
                --  is a hundred and fifty megabytes.
                declare
-                  Width   : constant B.Byte_Count := (if Half and then P.Matrix then 2 else 4);
-                  Length  : constant B.Byte_Count := B.Byte_Count (Info.Elements) * Width;
+                  Format  : constant G.Tensor_Type := (if P.Matrix then Matrices else G.Type_F32);
+                  Width   : constant B.Byte_Count := (if Format = G.Type_F16 then 2 else 4);
+                  Length  : constant B.Byte_Count := Bytes_Of (Format, N.Element_Count (Info.Elements));
                   Encoded : B.Byte_Array_Access;
                   Zeros   : constant B.Byte_Array (1 .. Fixtures.Padding_After (Build, Length)) :=
                     [others => 0];
@@ -578,7 +588,20 @@ package body Whisper_Convert is
                      Say ("no memory for " & To_String (P.From));
                      raise Refused;
                   end if;
-                  for I in Values.all'Range loop
+                  if Format = G.Type_Q8_0 then
+                     --  A row at a time, as ggml's quantize_row_q8_0 does it.
+                     declare
+                        Row_Bytes : constant B.Byte_Count := Bytes_Of (Format, Last_D);
+                     begin
+                        for R in 0 .. Rows - 1 loop
+                           Encoded (Encoded'First + B.Byte_Count (R) * Row_Bytes
+                                    .. Encoded'First + B.Byte_Count (R + 1) * Row_Bytes - 1) :=
+                             Quantizer.Encode (Values (R * Last_D .. (R + 1) * Last_D - 1), Quantizer.Q8_0);
+                        end loop;
+                     end;
+                  end if;
+                  for I in (if Format = G.Type_Q8_0 then 1 else 0) .. (if Format = G.Type_Q8_0 then 0
+                                                                       else Values.all'Last) loop
                      declare
                         At_Byte : constant B.Byte_Count := Encoded'First + B.Byte_Count (I) * Width;
                      begin
@@ -639,7 +662,7 @@ package body Whisper_Convert is
          Ada.Text_IO.Create (Manifest, Ada.Text_IO.Out_File, Into & ".manifest");
          Ada.Text_IO.Put_Line (Manifest, "profile " & Image (Profile));
          Ada.Text_IO.Put_Line (Manifest, "tool " & Tool_Version);
-         Ada.Text_IO.Put_Line (Manifest, "matrices " & (if Half then "f16" else "f32"));
+         Ada.Text_IO.Put_Line (Manifest, "matrices " & G.Type_Name (Matrices));
          Ada.Text_IO.Put_Line (Manifest, "source " & Digest_Of (From & "/model.safetensors") & " model.safetensors");
          Ada.Text_IO.Put_Line (Manifest, "output " & Digest_Of (Into) & " "
                                & Ada.Directories.Simple_Name (Into));

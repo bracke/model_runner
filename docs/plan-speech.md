@@ -183,6 +183,26 @@ program's dumps for the same recording):
 | tiny F32 | da-long, 45 s, language detected | -- | -- | identical: da, nine segments, their times, the second window at 25.0 s |
 | small F32 | da-short, 14 s | 1.5e-5 | 1.0e-6 | identical: "Den lille pi med svovelstikkerne af H.C. Andersen. Det var så grulig koldt. Det snede og det begyndte at blive mørk aften.", logprob -0.42276 |
 
+**Speed, 2026-11-03** (small, 14 s of Danish, eight cores, quiet machine,
+third of three rounds): f16 2.47 -> 1.68 s, the decoder 30 -> 10.5 ms a
+token. What did it, measured one at a time on 45 s: the decoder's products
+with integer activations where a matrix is quantized (the backend's float
+path for a raw view decodes a block and dots it, 30 -> 19 ms a token on
+Q8_0; f16 and f32 are untouched by it); the cross-attention's keys and
+values laid out in panels a head once a window, each token's two products
+a head on its own worker (19 -> 8.6 ms); row work of a few rows done on the
+calling task. Kept but worth nothing measurable: the encoder's matrices
+packed once a session (the encoder is the panels' own arithmetic, about
+300 GFLOP/s of the kernel's 573). The binary32 files' transcripts stay the
+reference's, token for token.
+
+**Q8_0** (`--type q8_0`, ggml's encoding): 270 MB for small against 490
+binary16, 1.53 s for the same 14 s. It is not the reference's arithmetic:
+the encoder's output stands 0.37 of its largest value from the binary32
+reference at its worst element, and on 45 s of Danish the text differs by
+a comma and two words; on 14 s it is the same. It is for a machine short of
+memory, not a default.
+
 What is not done: the reference's temperature fallback (decoding again,
 sampled, when a window repeats itself or is unsure). A window that would
 have been retried is marked uncertain and kept; nothing is sampled.

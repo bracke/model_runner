@@ -376,6 +376,9 @@ private
 
    type Model_Access is access all Model;
 
+   type Panel_Array is array (Positive range <>) of Model_Runner.Float_Panels.Panel_Set;
+   type Panel_Array_Access is access Panel_Array;
+
    type Session is tagged limited record
       Source  : Model_Access := null;
       Team    : Model_Runner.Backend.CPU.Pool_Reference := null;
@@ -394,6 +397,14 @@ private
       --  A weight decoded to binary32, and laid out in panels.
       Decoded : T.Real_Array_Access;
       Weight_Panels, Key_Panels, Value_Panels : Model_Runner.Float_Panels.Panel_Set;
+      --  Every matrix the encoder multiplies, and the decoder's keys and
+      --  values of it, laid out in panels the first time it is heard and
+      --  kept: decoding and laying them out again each window was a third
+      --  of the encoder's time.
+      Packed : Panel_Array_Access;
+      --  Each decoder block's keys of what was heard, a head a set, and its
+      --  values turned: the two products a token's cross-attention is.
+      Cross_Keys, Cross_Values : Panel_Array_Access;
       --  The decoder's scratch: a row a position, the context's rows.
       Dec_X, Dec_H, Dec_Q, Dec_K, Dec_V, Dec_A, Dec_F : T.Real_Array_Access;
       Dec_Scores : T.Real_Array_Access;
