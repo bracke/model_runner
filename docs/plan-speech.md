@@ -212,9 +212,19 @@ reference at its worst element, and on 45 s of Danish the text differs by
 a comma and two words; on 14 s it is the same. It is for a machine short of
 memory, not a default.
 
-What is not done: the reference's temperature fallback (decoding again,
-sampled, when a window repeats itself or is unsure). A window that would
-have been retried is marked uncertain and kept; nothing is sampled.
+**The temperature fallback** is the reference's `decode_with_fallback`: a
+window refused -- compression past 2.4, or an average log probability under
+-1 and not silent -- is decoded again at 0.2, 0.4, ... 1, five drawn at
+each (`best_of`), the likeliest over its length kept, and the window after
+one decoded past 0.5 prompted with nothing. The draws are SplitMix64's from
+a seed (`Options.Seed`), not torch's, so a retried window is not the
+reference's to the token; every window of the three fixtures is decoded at
+nought and is. Tiny made to hear Danish as English tries every temperature
+and keeps the last, marked uncertain, as the reference keeps it.
+
+**Translation**: `--speech-translate` puts `<|translate|>` for
+`<|transcribe|>`; small on the Danish fixture writes "It was so crudely
+cold. It snowed and it started to get dark in the evening."
 
 ## 8. The harness
 

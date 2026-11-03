@@ -22,6 +22,7 @@ package body Model_Runner.CLI.Speech_Input is
           Max_Seconds    => Positive'Max (1, From.Speech_Max_Seconds),
           Keep_Loaded    => From.Speech_Keep_Loaded,
           Initial_Prompt => To_Unbounded_String (Model_Runner.Text.To_String (From.Speech_Initial_Prompt)),
+          Translate      => From.Speech_Translate,
           Workers        => 0,
           Played         => null));
    end Open;

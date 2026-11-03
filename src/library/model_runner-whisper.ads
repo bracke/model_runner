@@ -1,5 +1,6 @@
 with Ada.Containers.Vectors;
 with Ada.Strings.Unbounded;
+with Interfaces;
 with System;
 
 with Model_Runner.Backend.CPU;
@@ -56,9 +57,12 @@ with Model_Runner.Tokenizer;
 --  (its no-speech probability above the threshold and its average log
 --  probability below the other) is kept as a segment marked silent with no
 --  text; one that repeats itself (compression above the threshold) or that
---  the model was unsure of is kept, marked uncertain. Nothing decoded is
---  dropped or rewritten unasked; the reference's retries at higher
---  temperatures are not made (greedy decoding only).
+--  the model was unsure of is decoded again, as the reference's
+--  decode_with_fallback does: at 0.2, 0.4 and on to 1, five drawn at each
+--  and the likeliest over its length kept; one unsure at every temperature
+--  is kept, marked uncertain. Draws come from a seeded stream of this
+--  package's own, so a window decoded again is the reference's in kind and
+--  not to the token. Nothing decoded is dropped or rewritten unasked.
 --
 --  Task safety: a Model may be read by every session on it once prepared;
 --  Prepare and Close are the owner's. A Session is one task's.
@@ -155,6 +159,14 @@ package Model_Runner.Whisper is
    -- Transcripts --
    -----------------
 
+   --  The temperatures a window is decoded at, in turn, until one is not
+   --  refused: the reference's 0, 0.2, 0.4, 0.6, 0.8 and 1.
+   Max_Temperatures : constant := 8;
+
+   type Temperature_List is array (1 .. Max_Temperatures) of Real;
+
+   Reference_Temperatures : constant Temperature_List := [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, others => 0.0];
+
    --  How to transcribe.
    type Options is record
       --  The language spoken, as its code; empty, the model detects it from
@@ -177,6 +189,20 @@ package Model_Runner.Whisper is
       --  recording that barely says; the encoder runs once instead of
       --  twice.
       Detect_From_Window : Boolean := False;
+      --  Translate what is said into English, rather than write it in the
+      --  language spoken (<|translate|> for <|transcribe|>).
+      Translate : Boolean := False;
+      --  The temperatures a window is decoded at until it is not refused --
+      --  repeating itself past Compression_Threshold, or less likely on
+      --  average than Log_Prob_Threshold, and not silent -- the first of
+      --  them greedy and the rest sampled, Best_Of times each, the likeliest
+      --  of those by its log probability over its length kept. One
+      --  temperature of nought is greedy alone.
+      Temperatures      : Temperature_List := Reference_Temperatures;
+      Temperature_Count : Positive range 1 .. Max_Temperatures := 6;
+      Best_Of           : Positive := 5;
+      --  Where the draws for sampling start.
+      Seed              : Interfaces.Unsigned_64 := 0;
       --  The reference's thresholds.
       No_Speech_Threshold   : Real := 0.6;
       Log_Prob_Threshold    : Real := -1.0;
@@ -193,8 +219,11 @@ package Model_Runner.Whisper is
       --  The window it came from was judged silent: no text.
       Silent    : Boolean := False;
       --  The window it came from repeated itself or was decoded with
-      --  little confidence: kept, for the reader to judge.
+      --  little confidence at every temperature: kept, for the reader to
+      --  judge.
       Uncertain : Boolean := False;
+      --  The temperature its window was decoded at.
+      Temperature : Real := 0.0;
       --  Its window decoded Max_Tokens without ending.
       Cut_Short : Boolean := False;
    end record;

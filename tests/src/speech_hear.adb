@@ -182,7 +182,7 @@ package body Speech_Hear is
                     & (if Piece.Uncertain then " (uncertain)" else "")
                     & " logprob" & Piece.Average_Log_Probability'Image
                     & " no-speech" & Piece.No_Speech_Probability'Image
-                    & " ratio" & Piece.Compression_Ratio'Image
+                    & " ratio" & Piece.Compression_Ratio'Image & " t" & Piece.Temperature'Image
                     & " " & To_String (Piece.Text));
             end loop;
             Say ("text: " & To_String (Heard.Text));

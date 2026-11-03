@@ -170,6 +170,63 @@ package body Model_Runner.Whisper.Decoding is
       return (if Log_P = Wide_Real'First then 0.0 else Elementary.Exp (Log_P));
    end Probability;
 
+   ------------
+   -- Seeded --
+   ------------
+
+   function Seeded (Seed : Interfaces.Unsigned_64) return Stream is ((State => Seed));
+
+   ----------
+   -- Next --
+   ----------
+
+   procedure Next (Item : in out Stream; Draw : out Wide_Real) is
+      use type Interfaces.Unsigned_64;
+      Z : Interfaces.Unsigned_64;
+   begin
+      Item.State := Item.State + 16#9E37_79B9_7F4A_7C15#;
+      Z := Item.State;
+      Z := (Z xor Interfaces.Shift_Right (Z, 30)) * 16#BF58_476D_1CE4_E5B9#;
+      Z := (Z xor Interfaces.Shift_Right (Z, 27)) * 16#94D0_49BB_1331_11EB#;
+      Z := Z xor Interfaces.Shift_Right (Z, 31);
+      --  The top fifty-three bits, a binary64's fraction.
+      Draw := Wide_Real (Interfaces.Shift_Right (Z, 11)) / 9_007_199_254_740_992.0;
+   end Next;
+
+   ------------
+   -- Sample --
+   ------------
+
+   function Sample (Logits : Real_Array; Temperature : N.Real; Draw : Wide_Real) return Token_Id is
+      Top   : N.Real := Never;
+      Total : Wide_Real := 0.0;
+   begin
+      for V of Logits loop
+         Top := N.Real'Max (Top, V);
+      end loop;
+      for V of Logits loop
+         if Allowed (V) then
+            Total := Total + Elementary.Exp ((Wide_Real (V) - Wide_Real (Top)) / Wide_Real (Temperature));
+         end if;
+      end loop;
+      declare
+         Goal    : constant Wide_Real := Draw * Total;
+         Running : Wide_Real := 0.0;
+         Last    : N.Element_Count := Logits'First;
+      begin
+         for I in Logits'Range loop
+            if Allowed (Logits (I)) then
+               Running := Running + Elementary.Exp ((Wide_Real (Logits (I)) - Wide_Real (Top)) / Wide_Real (Temperature));
+               Last := I;
+               if Running > Goal then
+                  return Token_Id (I - Logits'First);
+               end if;
+            end if;
+         end loop;
+         return Token_Id (Last - Logits'First);
+      end;
+   end Sample;
+
    -----------------------
    -- Compression_Ratio --
    -----------------------

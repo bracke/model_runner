@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 143) of Registry_Row :=
+   Registry : constant array (1 .. 144) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -237,6 +237,8 @@ package body Model_Runner.CLI.Options is
        [Command_Run => True, others => False], Text ("no_speech_enabled")),
       (Text ("--speech-shortcut"),
        [Command_Run => True, others => False], Text ("speech_shortcut")),
+      (Text ("--speech-translate"),
+       [Command_Run | Command_Transcribe => True, others => False], Text ("speech_translate")),
       (Text ("--speech-timestamps"),
        [Command_Transcribe => True, others => False], Text ("speech_timestamps")),
       (Text ("--pan-and-scan"),
@@ -949,7 +951,7 @@ package body Model_Runner.CLI.Options is
          Flag_Draft_Model, Flag_Projector, Flag_Draft_Tokens, Flag_Embed_Model,
          Flag_Speech_Model, Flag_Speech_Language, Flag_Speech_Device, Flag_Speech_Max_Seconds,
          Flag_Speech_Keep_Loaded, Flag_Speech_Prompt, Flag_Speech_Enabled, Flag_Speech_Shortcut,
-         Flag_Speech_Timestamps,
+         Flag_Speech_Timestamps, Flag_Speech_Translate,
          Flag_Memory_File, Flag_Trace_File, Flag_Checkpoint_File,
          Flag_Locale,
          Flag_Color, Flag_Mapping, Flag_Stats, Flag_Verbosity,
@@ -2632,6 +2634,17 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Speech_Timestamps := True;
+
+                  elsif Name = "--speech-translate" then
+                     No_Value (Name, Value_Present, Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Mark (Flag_Speech_Translate, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Speech_Translate := True;
 
                   elsif Name = "--speech-initial-prompt" then
                      Mark (Flag_Speech_Prompt, Name, Good);

@@ -625,6 +625,37 @@ package body Tests.Speech_Cases is
               "a sentence compresses as though it repeated itself");
    end Picking_And_Measuring;
 
+   --  A draw is the reference's Categorical over the logits and a
+   --  temperature: the first token whose running probability passes it,
+   --  never one suppressed; the stream is the same for the same seed and
+   --  stays in [0, 1).
+   procedure Sampling_At_A_Temperature
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      --  One in four, three in four at a temperature of one.
+      Logits : constant N.Real_Array := [0 => 0.0, 1 => N.Real (F.Log (3.0)), 2 => N.Real'First];
+      One, Two : D.Stream := D.Seeded (42);
+      A, B : N.Wide_Real;
+      Ones : Natural := 0;
+   begin
+      Assert (D.Sample (Logits, 1.0, 0.2) = 0, "a draw of 0.2 is not the first quarter's");
+      Assert (D.Sample (Logits, 1.0, 0.3) = 1, "a draw of 0.3 is not the rest's");
+      Assert (D.Sample (Logits, 1.0, 0.999) = 1, "the last draw fell to a suppressed token");
+      --  Hot, the two even; cold, the likelier alone.
+      Assert (D.Sample (Logits, 100.0, 0.49) = 0, "a hot draw of 0.49 is not the first half's");
+      Assert (D.Sample (Logits, 0.01, 0.001) = 1, "a cold draw is not the likelier");
+      for I in 1 .. 1_000 loop
+         D.Next (One, A);
+         D.Next (Two, B);
+         Assert (A = B and then A >= 0.0 and then A < 1.0, "the stream is not the same, or not in [0, 1)");
+         if D.Sample (Logits, 1.0, A) = 1 then
+            Ones := Ones + 1;
+         end if;
+      end loop;
+      Assert (Ones in 700 .. 800, "three in four draws came out" & Ones'Image & " in a thousand");
+   end Sampling_At_A_Temperature;
+
    -----------
    -- Model --
    -----------
@@ -756,6 +787,26 @@ package body Tests.Speech_Cases is
       Assert (E.Is_Ok (Status) and then To_String (Heard.Language) in "en" | "da",
               "no language was read off the window");
       Settings.Detect_From_Window := False;
+
+      --  The fixture is noise: unlikely at every temperature, so every one
+      --  is tried and the last kept, marked; and asked to translate, it
+      --  does, the same way.
+      Settings.Language := To_Unbounded_String ("da");
+      Settings.Translate := True;
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      Assert (E.Is_Ok (Status), "translating failed: " & Status.Code'Image);
+      for Piece of Heard.Segments loop
+         Assert (Piece.Silent or else Piece.Temperature in 0.0 | 0.2 | 0.4 | 0.6 | 0.8 | 1.0,
+                 "a window was decoded at" & Piece.Temperature'Image);
+         Assert (Piece.Silent or else Piece.Temperature = 0.0 or else Piece.Uncertain or else
+                 Piece.Average_Log_Probability >= -1.0, "a window retried and kept was not marked");
+      end loop;
+      Settings.Translate := False;
+      Settings.Temperature_Count := 1;
+      W.Transcribe (Session, Sound, Settings, Heard, Status);
+      for Piece of Heard.Segments loop
+         Assert (Piece.Temperature = 0.0, "one temperature of nought sampled");
+      end loop;
 
       Settings.Language := To_Unbounded_String ("fr");
       W.Transcribe (Session, Sound, Settings, Heard, Status);
@@ -1070,6 +1121,9 @@ package body Tests.Speech_Cases is
       Register_Routine
         (T, Picking_And_Measuring'Access,
          "greedy picks the first largest, log probabilities are log-softmax, repeats compress");
+      Register_Routine
+        (T, Sampling_At_A_Temperature'Access,
+         "a sampled token is the reference's draw over a temperature, from a stream the same for its seed");
       Register_Routine
         (T, Whisper_Files_Are_Held_To_The_Profile'Access,
          "a Whisper file not of the profile is refused by name and leaves no model");

@@ -73,6 +73,8 @@ package Model_Runner.Speech is
       Keep_Loaded    : Boolean := True;
       --  Text the first window is prompted with: names, spellings.
       Initial_Prompt : Ada.Strings.Unbounded.Unbounded_String;
+      --  Whether what is said is written in English whatever is spoken.
+      Translate      : Boolean := False;
       --  Workers for the products, or 0 for the machine's default.
       Workers        : Natural := 0;
       --  Samples recorded in place of the microphone's, at the canonical

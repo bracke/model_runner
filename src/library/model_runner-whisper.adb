@@ -1497,6 +1497,10 @@ package body Model_Runner.Whisper is
       --  Every token the windows decoded, the initial prompt's first.
       All_Tokens : Token_Vectors.Vector;
       Reset_Since : Natural := 0;
+      --  The temperature the last window was decoded at: past a half, the
+      --  reference prompts the next with nothing before it.
+      Last_Temperature : Real := 0.0;
+      Draws : Decoding.Stream := Decoding.Seeded (Settings.Seed);
       Rules : Model_Runner.Whisper.Decoding.Rules;
       Started : constant Ada.Calendar.Time := Ada.Calendar.Clock;
       Mels : constant Element_Count := (if Source = null then 0 else Element_Count (Source.Mels));
@@ -1677,6 +1681,7 @@ package body Model_Runner.Whisper is
             Sum_Log  : Wide_Real := 0.0;
             No_Speech : Wide_Real := 0.0;
             Ended    : Boolean := False;
+            Temperature : Real := 0.0;
          begin
             Take_Window (Seek, Size);
             Encode (Item, Window.all, Status);
@@ -1703,81 +1708,156 @@ package body Model_Runner.Whisper is
             end;
             Prompt.Append (Source.Start_Of_Transcript);
 
-            --  The decoder up to the start of the transcript: what it says
-            --  there is how likely the window holds no speech.
-            Item.Held := 0;
+            --  The window decoded once, at a temperature: the decoder up to
+            --  the start of the transcript -- what it says there is how
+            --  likely the window holds no speech, and, where asked, which
+            --  language it is in -- then the language and the task, then a
+            --  token at a time until the end of text, the window's tokens,
+            --  or the context: the likeliest where the temperature is
+            --  nought, else drawn.
             declare
-               Head : Tk.Token_Array (1 .. Natural (Prompt.Length));
-            begin
-               for I in Head'Range loop
-                  Head (I) := Prompt (I);
-               end loop;
-               Feed (Item, Head, Status);
-            end;
-            if E.Is_Ok (Status) then
-               No_Speech := Decoding.Probability (Item.Logits (0 .. Source.Vocabulary_Size - 1), Source.No_Speech);
-               --  The language, where it is read off this window.
-               if Source.Multilingual and then Language = 0 then
-                  declare
-                     Best : Real := Real'First;
-                  begin
-                     for I in 1 .. Source.Language_Total loop
-                        declare
-                           Value : constant Real :=
-                             Item.Logits (Element_Count (Source.First_Language) + Element_Count (I - 1));
-                        begin
-                           if Value > Best then
-                              Best := Value;
-                              Language := Source.First_Language + Token_Id (I - 1);
-                           end if;
-                        end;
-                     end loop;
-                     Result.Language := To_Unbounded_String (Language_Code (Source.all, I_Of (Language)));
-                  end;
-               end if;
-               if Source.Multilingual then
-                  Feed (Item, [Language, Source.Transcribe_Token], Status);
-               end if;
-            end if;
-
-            --  Greedy, a token at a time, until the end of text, the window's
-            --  tokens, or the context.
-            for Step in 1 .. Settings.Max_Tokens loop
-               exit when E.Is_Error (Status);
-               if Cancelled then
-                  Status := E.Make (E.Generation_Cancelled);
-                  exit;
-               end if;
-               declare
-                  Said : Tk.Token_Array (1 .. Natural (Sampled.Length));
-                  Next : Token_Id;
-                  Logits : Real_Array renames Item.Logits (0 .. Source.Vocabulary_Size - 1);
+               procedure Decode_Once
+                 (Temperature : Real;
+                  Into        : in out Token_Vectors.Vector;
+                  Log_Sum     : out Wide_Real;
+                  Finished    : out Boolean)
+               is
+                  Head : Tk.Token_Array (1 .. Natural (Prompt.Length));
                begin
-                  for I in Said'Range loop
-                     Said (I) := Sampled (I);
+                  Into.Clear;
+                  Log_Sum := 0.0;
+                  Finished := False;
+                  for I in Head'Range loop
+                     Head (I) := Prompt (I);
                   end loop;
-                  Decoding.Apply (Rules, Said, Logits);
-                  Next := Decoding.Pick (Logits);
-                  if Next /= Source.End_Of_Text then
-                     Sum_Log := Sum_Log + Decoding.Log_Probability (Logits, Next);
+                  Item.Held := 0;
+                  Feed (Item, Head, Status);
+                  if E.Is_Error (Status) then
+                     return;
                   end if;
-                  Sampled.Append (Next);
-                  Result.Figures.Tokens := Result.Figures.Tokens + 1;
-                  if Next = Source.End_Of_Text then
-                     Ended := True;
-                     exit;
+                  No_Speech := Decoding.Probability (Item.Logits (0 .. Source.Vocabulary_Size - 1), Source.No_Speech);
+                  if Source.Multilingual and then Language = 0 then
+                     declare
+                        Best : Real := Real'First;
+                     begin
+                        for I in 1 .. Source.Language_Total loop
+                           declare
+                              Value : constant Real :=
+                                Item.Logits (Element_Count (Source.First_Language) + Element_Count (I - 1));
+                           begin
+                              if Value > Best then
+                                 Best := Value;
+                                 Language := Source.First_Language + Token_Id (I - 1);
+                              end if;
+                           end;
+                        end loop;
+                        Result.Language := To_Unbounded_String (Language_Code (Source.all, I_Of (Language)));
+                     end;
                   end if;
-                  exit when Item.Held + 1 > Source.Text_Context;
-                  Feed (Item, [1 => Next], Status);
-               end;
-            end loop;
+                  if Source.Multilingual then
+                     Feed (Item, [Language, (if Settings.Translate then Source.Translate_Token
+                                             else Source.Transcribe_Token)], Status);
+                  end if;
+                  for Step in 1 .. Settings.Max_Tokens loop
+                     exit when E.Is_Error (Status);
+                     if Cancelled then
+                        Status := E.Make (E.Generation_Cancelled);
+                        exit;
+                     end if;
+                     declare
+                        Said : Tk.Token_Array (1 .. Natural (Into.Length));
+                        Next : Token_Id;
+                        Logits : Real_Array renames Item.Logits (0 .. Source.Vocabulary_Size - 1);
+                     begin
+                        for I in Said'Range loop
+                           Said (I) := Into (I);
+                        end loop;
+                        Decoding.Apply (Rules, Said, Logits);
+                        if Temperature = 0.0 then
+                           Next := Decoding.Pick (Logits);
+                        else
+                           declare
+                              Draw : Wide_Real;
+                           begin
+                              Decoding.Next (Draws, Draw);
+                              Next := Decoding.Sample (Logits, Temperature, Draw);
+                           end;
+                        end if;
+                        if Next /= Source.End_Of_Text then
+                           Log_Sum := Log_Sum + Decoding.Log_Probability (Logits, Next);
+                        end if;
+                        Into.Append (Next);
+                        Result.Figures.Tokens := Result.Figures.Tokens + 1;
+                        if Next = Source.End_Of_Text then
+                           Finished := True;
+                           exit;
+                        end if;
+                        exit when Item.Held + 1 > Source.Text_Context;
+                        Feed (Item, [1 => Next], Status);
+                     end;
+                  end loop;
+                  if Finished then
+                     Into.Delete_Last;
+                  end if;
+               end Decode_Once;
+
+               Candidate : Token_Vectors.Vector;
+               Candidate_Log : Wide_Real;
+               Candidate_Ended : Boolean;
+            begin
+               for Round in 1 .. Settings.Temperature_Count loop
+                  Temperature := Settings.Temperatures (Round);
+                  if Temperature = 0.0 then
+                     Decode_Once (0.0, Sampled, Sum_Log, Ended);
+                  else
+                     --  Best_Of drawn, the likeliest over its length kept:
+                     --  the reference's MaximumLikelihoodRanker.
+                     declare
+                        Best : Wide_Real := Wide_Real'First;
+                     begin
+                        for Draw in 1 .. Settings.Best_Of loop
+                           exit when E.Is_Error (Status);
+                           Decode_Once (Temperature, Candidate, Candidate_Log, Candidate_Ended);
+                           declare
+                              Score : constant Wide_Real :=
+                                Candidate_Log / Wide_Real (Natural'Max (1, Natural (Candidate.Length)));
+                           begin
+                              if Score > Best then
+                                 Best := Score;
+                                 Sampled := Candidate;
+                                 Sum_Log := Candidate_Log;
+                                 Ended := Candidate_Ended;
+                              end if;
+                           end;
+                        end loop;
+                     end;
+                  end if;
+                  exit when E.Is_Error (Status);
+                  --  Refused, as the reference refuses a window: repeating
+                  --  itself, or unlikely on average -- unless it is silent.
+                  declare
+                     Count   : constant Natural := Natural (Sampled.Length);
+                     Average : constant Wide_Real := Sum_Log / Wide_Real (Count + 1);
+                     Ratio   : constant Wide_Real :=
+                       Decoding.Compression_Ratio ((if Count = 0 then "" else Text_Of (Sampled, 1, Count)));
+                     Refused : Boolean :=
+                       Ratio > Wide_Real (Settings.Compression_Threshold)
+                       or else Average < Wide_Real (Settings.Log_Prob_Threshold);
+                  begin
+                     if No_Speech > Wide_Real (Settings.No_Speech_Threshold)
+                       and then Average < Wide_Real (Settings.Log_Prob_Threshold)
+                     then
+                        Refused := False;
+                     end if;
+                     exit when not Refused;
+                  end;
+               end loop;
+            end;
+            Last_Temperature := Temperature;
             Result.Figures.Decoder_Seconds := Result.Figures.Decoder_Seconds + (Ada.Calendar.Clock - Started_Window);
             if E.Is_Error (Status) then
                Release;
                return;
-            end if;
-            if Ended then
-               Sampled.Delete_Last;
             end if;
 
             declare
@@ -1808,6 +1888,7 @@ package body Model_Runner.Whisper is
                   Piece.No_Speech_Probability := Real (No_Speech);
                   Piece.Compression_Ratio := Real (Ratio);
                   Piece.Uncertain := Doubtful;
+                  Piece.Temperature := Temperature;
                   Piece.Cut_Short := not Ended;
                   declare
                      Text : constant String := (if To >= From then Text_Of (Sampled, From, To) else "");
@@ -1886,7 +1967,7 @@ package body Model_Runner.Whisper is
                end if;
             end;
          end;
-         if not Settings.Condition_On_Previous then
+         if not Settings.Condition_On_Previous or else Last_Temperature > 0.5 then
             Reset_Since := Natural (All_Tokens.Length);
          end if;
       end loop;

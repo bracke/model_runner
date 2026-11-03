@@ -1,3 +1,5 @@
+with Interfaces;
+
 with Model_Runner.Numerics;
 with Model_Runner.Tokenizer;
 
@@ -86,11 +88,45 @@ package Model_Runner.Whisper.Decoding is
    --  @return Its probability.
    function Probability (Logits : Real_Array; Token : Token_Id) return Model_Runner.Numerics.Wide_Real;
 
+   --  A stream of uniform draws for sampling, the same for the same seed:
+   --  SplitMix64. The reference draws from torch's generator, which nothing
+   --  here imitates, so a sampled window is the reference's in kind, not to
+   --  the token.
+   type Stream is private;
+
+   --  @param Seed Where the stream starts.
+   --  @return The stream.
+   function Seeded (Seed : Interfaces.Unsigned_64) return Stream;
+
+   --  The next draw.
+   --
+   --  @param Item The stream, moved on.
+   --  @param Draw Receives a value in [0, 1).
+   procedure Next (Item : in out Stream; Draw : out Model_Runner.Numerics.Wide_Real);
+
+   --  A token drawn from the softmax of the logits over a temperature, as
+   --  the reference's Categorical (logits / temperature) draws one: the
+   --  first token whose running probability passes the draw.
+   --
+   --  @param Logits The logits, from index 0; minus infinity never drawn.
+   --  @param Temperature Above nought.
+   --  @param Draw A value in [0, 1).
+   --  @return The token.
+   function Sample
+     (Logits : Real_Array; Temperature : Model_Runner.Numerics.Real; Draw : Model_Runner.Numerics.Wide_Real)
+      return Token_Id;
+
    --  How much a text compresses: its bytes over its zlib stream's at
    --  level 6, as the reference measures a transcript that repeats itself.
    --
    --  @param Text The text.
    --  @return The ratio; 0 for an empty text.
    function Compression_Ratio (Text : String) return Model_Runner.Numerics.Wide_Real;
+
+private
+
+   type Stream is record
+      State : Interfaces.Unsigned_64 := 0;
+   end record;
 
 end Model_Runner.Whisper.Decoding;

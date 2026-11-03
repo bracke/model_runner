@@ -388,13 +388,13 @@ Speech into a session's line, and `model_runner transcribe` (docs/plan-speech.md
 | Whisper | Implemented: tiny to large multilingual and English-only, from a GGUF of the Whisper profile (1) that `tests whisper-convert` writes from OpenAI's checkpoint as Hugging Face publishes it, matrices binary32, binary16 or Q8_0 (Q8_0 not the reference's arithmetic: its encoder output is within 0.37 of its largest value, its text close). Every dimension read from the file, every tensor held to it; a file of another architecture or profile, or missing a tensor, refused by name |
 | Recordings | WAV, integer samples of 8 to 32 bits or floats of 32 or 64, any channels (averaged) and rate (to 16 kHz, a windowed sinc); compressed audio refused |
 | Spectrogram | The reference's log-Mel: Slaney filters, 400-sample Hann window, 160 hop, its padding, floor and scale; held to it to 1e-4 |
-| Transcription | The reference's transcribe(): language detected or given, thirty-second windows, times decoded and the next window started at the last, the text before as the prompt, the reference's suppressions and timestamp rules; greedy only -- a window the reference would retry sampled is kept and marked uncertain |
+| Transcription | The reference's transcribe(): language detected or given, thirty-second windows, times decoded and the next window started at the last, the text before as the prompt, the reference's suppressions and timestamp rules, and its fallback: a window refused decoded again at 0.2 to 1, best of five, from a seeded stream (not torch's: a retried window is the reference's in kind, not to the token); one unsure at every temperature kept and marked uncertain. `--speech-translate` writes English whatever is spoken |
 | Checked against the reference | Encoder output to 1e-4 of its largest value, first logits to 1e-6, and the whole transcript -- tokens, times, text -- on jfk.wav (English, tiny), 45 s of Danish across a window's edge (tiny) and 14 s of Danish (small) |
 | Microphone | Linux, through the sound server (PipeWire or PulseAudio) by libpulse-simple opened by name; macOS and Windows refuse by name |
 | Session | Ctrl-G (or `--speech-shortcut`) records and stops; the transcript put in at the cursor; Escape drops; keys pressed meanwhile kept and acted on after |
 | Processor | Yes: encoder products in binary32 panels, decoder on the processor's products |
 | Device | Not supported: the device backend is fed from one task, and speech is heard on its own while the conversation's model may run (docs/plan-speech.md, section 9); speech runs on the processor whatever the conversation's backend |
-| Not implemented | Translation, word timestamps, beam search, the temperature fallback, quantized formats other than Q8_0 |
+| Not implemented | Word timestamps, beam search, quantized formats other than Q8_0 |
 
 ## Backend
 
