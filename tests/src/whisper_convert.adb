@@ -398,8 +398,8 @@ package body Whisper_Convert is
                      for I in 1 .. J.Length (Generation, Pairs) loop
                         for K in 1 .. 2 loop
                            Fixtures.Int32_Element
-                             (Build, Interfaces.Integer_32
-                                (J.As_Integer (Generation, J.Element (Generation, J.Element (Generation, Pairs, I), K))));
+                             (Build, Interfaces.Integer_32 (J.As_Integer
+                                       (Generation, J.Element (Generation, J.Element (Generation, Pairs, I), K))));
                         end loop;
                      end loop;
                      Fixtures.End_Array (Build);
