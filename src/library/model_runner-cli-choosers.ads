@@ -195,9 +195,9 @@ package Model_Runner.CLI.Choosers is
    --  Escape or Ctrl-C while it records drops the recording; while it is
    --  heard, stops hearing it. Ctrl-_ takes the last transcript out again,
    --  the line as it was before it, while nothing else has changed the
-   --  line. Every other key pressed meanwhile is kept, in
-   --  order, and acted on once the transcript is in -- typed after it, so
-   --  nothing typed is lost and nothing the transcript lands on moves.
+   --  line. Every other key pressed meanwhile is kept, in order, and acted
+   --  on once the transcript is in -- typed after it, so nothing typed is
+   --  lost and nothing the transcript lands on moves.
    --
    --  The calls return at once, the work being elsewhere; what the person
    --  is shown -- that it records and for how long, that it is heard, why
