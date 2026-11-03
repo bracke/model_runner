@@ -21,13 +21,6 @@ package body Unreached_Codes is
          --  the bound itself is checked where it is applied.
             | E.IO_Input_Too_Large
 
-         --  No microphone: the sound server's library missing, or the
-         --  server refusing. The suite records from played samples and
-         --  opens no microphone -- a source named that does not exist is
-         --  not refused but taken as the default by PipeWire -- so nothing
-         --  here can be made to refuse; hostkit's own test holds that a
-         --  refusal is said, not hidden.
-            | E.IO_Microphone_Unavailable
 
          --  Reached when a size computation would overflow while reading a
          --  container. The fuzzing campaign is what walks those paths, and

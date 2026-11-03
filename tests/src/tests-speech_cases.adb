@@ -1007,6 +1007,23 @@ package body Tests.Speech_Cases is
       Wait (Is_Unloaded'Access);
       Assert (Sp.Current (Heard_Here.all) = Sp.Unloaded, "the model was not given back");
 
+      --  A source the sound server has not: refused by name, and no
+      --  microphone opened in its place -- hostkit asks the server first.
+      declare
+         Deaf : Sp.Recognizer_Access :=
+           Sp.Create ((Model_Path => To_Unbounded_String (Fixture_Path), Workers => 1,
+                       Source => To_Unbounded_String ("model-runner-test-no-such-source"), others => <>));
+         function Deaf_Done return Boolean is (Sp.Has_Result (Deaf.all));
+      begin
+         Sp.Start (Deaf.all, Status);
+         Sp.Finish (Deaf.all, Status);
+         Wait (Deaf_Done'Access);
+         Sp.Take (Deaf.all, Text, Status, Limit);
+         Sp.Shutdown (Deaf);
+         Assert (Status.Code = E.IO_Microphone_Unavailable,
+                 "a source the server has not was not refused by name: " & Status.Code'Image);
+      end;
+
       Sp.Shutdown (Off);
       Sp.Shutdown (Absent);
       Sp.Shutdown (Heard_Here);

@@ -7,6 +7,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A microphone named that is not there is refused.** `--speech-device NAME` for a source the sound server has not was recorded from the default microphone (PipeWire's pulse server falls back without a word); hostkit now asks the server first and the recording is refused by name (`MR-IO-0014`), which the suite reaches without opening a microphone.
+
 - **Dictation undone, and tested on a terminal.** Ctrl-_ takes the last transcript out of the line again. `--speech-device file:PATH.wav` plays a recording as the microphone, at its own pace; the suite runs a session so under a pseudo-terminal and holds dictation, keys pressed meanwhile, Escape and the undo to what the session entered. A transcript is decoded with errors replaced, as the reference decodes.
 
 - **Word timestamps.** `transcribe --speech-word-timestamps` (`Options.Word_Timestamps`) gives each word its start and end, as the reference's timing does: the alignment heads' attention -- `whisper.alignment_heads`, written by the converter now -- filtered and warped (`Whisper.Timing`), words cut, clipped and punctuated as it does, the next window from the last word's end; every word's times the reference's on the two fixtures checked.
