@@ -68,6 +68,7 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
          Settings.Language := To_Unbounded_String (Model_Runner.Text.To_String (Item.Speech_Language));
          Settings.Translate := Item.Speech_Translate;
          Settings.Word_Timestamps := Item.Speech_Word_Timestamps;
+         Settings.Detect_From_Window := Item.Speech_Detect_From_Window;
          Settings.Initial_Prompt := To_Unbounded_String (Model_Runner.Text.To_String (Item.Speech_Initial_Prompt));
          W.Transcribe (Session, Samples.all, Settings, Heard, Condition);
          W.Close (Session);

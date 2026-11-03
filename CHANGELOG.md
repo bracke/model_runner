@@ -5,6 +5,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`transcribe --speech-detect-from-window`.** Reads the language off the first window as it is decoded, as dictation does, rather than by an encode of its own over the padded spectrogram: one encode for a recording under thirty seconds, 11 s in 1.7 s rather than 2.5 on small. The reference's way stays the default.
+
+### Changed
+
+- **The speech figures re-measured** at a lower load, with every change of today in them, and a Whisper held but idle measured: no cost to the conversation's generation on either backend, its threads asleep.
+
 ### Fixed
 
 - **The device's cache no longer grows with every dictation or picture.** Whisper and the vision encoder each put their keys and values past what the device's cache last held -- their own from the time before among it -- so the cache grew by one transcription's or one picture's worth each time, and every reservation copied the growing rest. They now go where they went last wherever nothing has reserved the cache since; held by the speech and vision device tests, which encode twice and find the cache as the first left it.

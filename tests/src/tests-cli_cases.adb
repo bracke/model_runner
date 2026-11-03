@@ -295,6 +295,37 @@ package body Tests.CLI_Cases is
       Opt.Release (Item);
    end Turns_Parse_In_Order;
 
+   --  transcribe's speech flags land where it reads them, and the one it
+   --  alone takes -- the language read off the window -- is refused by run.
+   procedure Transcribe_Flags_Parse (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T2);
+      Source : Fixed_Arguments;
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+   begin
+      Add (Source, "transcribe");
+      Add (Source, "talk.wav");
+      Add (Source, "--speech-model");
+      Add (Source, "whisper.gguf");
+      Add (Source, "--speech-detect-from-window");
+      Add (Source, "--speech-word-timestamps");
+      Add (Source, "--speech-translate");
+      Opt.Parse (Source, Item, Status);
+      Assert (E.Is_Ok (Status), "transcribe's flags were refused: " & E.Error_Code'Image (Status.Code));
+      Assert (Item.Speech_Detect_From_Window and then Item.Speech_Word_Timestamps and then Item.Speech_Translate
+              and then not Item.Speech_Timestamps,
+              "transcribe's flags did not land where it reads them");
+      Opt.Release (Item);
+
+      Source.Used := 0;
+      Add (Source, "run");
+      Add (Source, "model.gguf");
+      Add (Source, "--speech-detect-from-window");
+      Opt.Parse (Source, Item, Status);
+      Assert (E.Is_Error (Status), "run took --speech-detect-from-window, which only transcribe reads");
+      Opt.Release (Item);
+   end Transcribe_Flags_Parse;
+
    --  A well-formed run command parses into the values it named.
    procedure Run_Command_Parses (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T2);
@@ -16101,6 +16132,9 @@ package body Tests.CLI_Cases is
         (T, Terminal_Text_Is_Shown_And_Measured'Access,
          "what a model writes is shown on a terminal, not obeyed, and a "
          & "line is measured in the columns it takes");
+      Register_Routine
+        (T, Transcribe_Flags_Parse'Access,
+         "transcribe's speech flags land where it reads them, and run refuses the one it alone takes");
       Register_Routine
         (T, Run_Command_Parses'Access,
          "a well-formed run command parses into the values it named");

@@ -576,6 +576,10 @@ package Model_Runner.CLI.Options is
       Speech_Timestamps     : Boolean := False;
       Speech_Translate      : Boolean := False;
       Speech_Word_Timestamps : Boolean := False;
+      --  Read the language off the window as it is decoded, not by an
+      --  encode of its own over the padded spectrogram (Options.
+      --  Detect_From_Window): one encode a short recording rather than two.
+      Speech_Detect_From_Window : Boolean := False;
 
       --  The recording transcribe hears.
       Audio_Path            : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;

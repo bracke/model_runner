@@ -488,6 +488,14 @@ encoder had the same fault, a picture's worth of cache each picture, and
 the same fix; both are held by their device tests transcribing or
 encoding twice and finding the cache as the first left it.
 
+What is left of a token's small steps on the device is the first join
+and the three norms. Two of the three joins are inside their products'
+stores already, so the norms cannot go: what a fused join-and-norm would
+save is the first join, about 1.5 % of the decoder, and the norm kernel
+adds a residual after normalizing where Whisper needs it before -- a step
+that writes two answers, the sum and its norm, which nothing here has.
+Not built.
+
 Also found here: a recording of thirty seconds or more had its first
 window encoded twice, once for the language and once to transcribe, though
 the two windows are the same frames. The language's encode now stands for

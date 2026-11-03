@@ -1010,16 +1010,20 @@ of its decoder: `transcribe` opens it unless `--backend cpu` is given,
 and in a session it is borrowed while the conversation's model, there
 already, waits for the line -- never while that model runs, and not at
 all where the device has no room beside it. 45 s of Danish is heard in
-5.3 s by small f16 on the processor (1.2 GB resident) and 3.3 s with the
-device (0.5 GB), 3.0 s by small Q8_0; 11 s of English in 0.38 s by tiny
-and 0.31 s with the device. A window the reference decodes again draws
-its five candidates together, as the reference does: 5 s of noise tried at
-every temperature takes 24 s where it took 52, and 13.5 s with the device. A model read cold adds 0.05 s (tiny) to
-0.5 s (small). While Whisper hears on the processor, an LLM beside it
-shares the memory bus: TinyLlama's generation fell from 39 to 31 t/s on
-the processor and from 57 to 47 t/s on the device; a Whisper held but
-idle costs only its memory (docs/measured-figures.txt, the speech group,
-on a loaded box).
+4.8 s by small f16 on the processor (1.2 GB resident) and 2.9 s with the
+device (0.5 GB), 2.5 s by small Q8_0 with the device; 11 s of English in
+0.35 s by tiny and 0.27 s with the device. A window the reference decodes
+again draws its five candidates together, as the reference does: 5 s of
+noise tried at every temperature takes 22 s on the processor where it
+took 52, and 12.5 s with the device. A model read cold adds 0.15 s
+(tiny) to 0.7 s (small). `transcribe --speech-detect-from-window` reads
+the language off the window it decodes, as dictation does, rather than by
+an encode of its own: 11 s in 1.7 s rather than 2.5. While Whisper hears,
+an LLM beside it shares the memory bus: TinyLlama's generation fell from
+39 to 31 t/s on the processor and from 58 to 50 t/s on the device. Held
+but idle it costs nothing measured -- 57.22 t/s without it and 57.23 with
+it on the device, its threads asleep (docs/measured-figures.txt, the
+speech group; load 1 to 7).
 
 ### Embedding
 
