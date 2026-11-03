@@ -16,7 +16,8 @@ package Speech_Corpus is
    --  @param Corpus The manifest, tests/fixtures/speech/corpus.txt unless
    --    named; recordings are looked for beside it.
    --  @param Threads Workers, or 0 for the machine's default.
+   --  @param Device Open the device and hear on it.
    --  @return 0 when every recording was heard.
-   function Run (Model, Corpus : String; Threads : Natural) return Natural;
+   function Run (Model, Corpus : String; Threads : Natural; Device : Boolean := False) return Natural;
 
 end Speech_Corpus;

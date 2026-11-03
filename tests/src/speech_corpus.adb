@@ -8,6 +8,7 @@ with Interfaces;
 
 with Model_Runner.Audio;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
 with Model_Runner.Platform;
@@ -175,7 +176,7 @@ package body Speech_Corpus is
       return (if Count = Index then Line (Start .. Line'Last) else "");
    end Field;
 
-   function Run (Model, Corpus : String; Threads : Natural) return Natural is
+   function Run (Model, Corpus : String; Threads : Natural; Device : Boolean := False) return Natural is
       Manifest : constant String := (if Corpus = "" then "fixtures/speech/corpus.txt" else Corpus);
       Folder   : constant String := Ada.Directories.Containing_Directory (Manifest);
       Whisper  : aliased W.Model;
@@ -207,6 +208,7 @@ package body Speech_Corpus is
             Failed := True;
             return;
          end if;
+         W.Use_Device (Session, Device, Keep => True);
          Say ("recording        lang  noise      WER      CER  heard  seconds  of sound  transcript");
          Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Manifest, Form => "shared=no");
          while not Ada.Text_IO.End_Of_File (File) loop
@@ -344,6 +346,14 @@ package body Speech_Corpus is
          Say ("speech-corpus: model refused: " & Status.Code'Image);
          return 1;
       end if;
+      if Device then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Ready);
+            Say ("speech-corpus: device: " & (if Ready then Model_Runner.Backend.Device.Name else "none opened"));
+         end;
+      end if;
       declare
          Wanted : constant Positive :=
            (if Threads > 0 then Threads else Positive (CPU.Default_Workers (Model_Runner.Platform.Core_Count)));
@@ -364,6 +374,9 @@ package body Speech_Corpus is
             end;
          end if;
       end;
+      if Device then
+         Model_Runner.Backend.Device.Close;
+      end if;
       W.Close (Whisper, Status);
       return (if Failed then 1 else 0);
    end Run;

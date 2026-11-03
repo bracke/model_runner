@@ -352,8 +352,7 @@ weights, any shape the tile takes whole: Whisper's widths are multiples of
 128 and its rows of 32; the first convolution's 240 columns stay on the
 processor) and its attention both ways (`Attend` with `Causal => False`,
 the keys and values put in the device's cache past the conversation's,
-as the vision encoder does it). The decoder's few rows stay on the
-processor, where they are a read of the weights and not arithmetic. The
+as the vision encoder does it). The
 device knows a matrix by where its bytes lie, so a session's Whisper gives
 its matrices back at the end of each encode while it still has the turn:
 kept past it, a model read again at the same address would be answered
@@ -369,6 +368,36 @@ tie, the f16 file's own text). Held by `speech : the encoder on the device
 hears what the processor does` (the encoder's output within half
 precision, products on the device, matrices given back, nothing asked of
 the device without the turn) and `speech : the device's turn is lent`.
+
+The decoder followed. Its products sent one at a time lost -- 2.8 s of
+decoder became 4.7 on da-long, each a submission of its own at some 80 us
+before any work, seventy a token -- so a token is recorded as the language
+model's are: a sequence a block (`Feed_On_Device`), 26 steps of the 40 a
+sequence holds -- the shifted norm with its bias (`Add_Norm`, `Shift`),
+products and biases, the position's keys and values put in the block's
+part of the cache (`Add_Place`) and attended to causally, the cross-
+attention over what Encode put in the cache (`Causal => False`), the
+joins, and GELU in the device's tanh form (unit 5; the reference's is
+erf's, within half precision of it). The activation is carried from block
+to block on the device (`Carry_Out`/`Carry_In`), and a last sequence
+normalizes and, for one token, makes the logits; a prompt of more brings
+its rows home and the pool makes the last one's logits. The cross-
+attention reads the cache's half-precision copy (`Attend_In_Halves`, the
+conversation's own choice put back with the turn): 170 us a block became
+86. A small f16 token is 12 x 528 us and 1.24 ms of logits, about 7.6 ms
+against 12 on the processor; da-long's decoder 2.7 -> 1.7 s, the whole
+5.3 -> 3.3 s. The turn is now held for a whole transcription (`Hold`,
+`Let_Go`, nested by who took it), the cache laid out as each block's
+heard keys and values, then its own, then the encoder's scratch. Where a
+step is refused or a run fails the pool goes on from the same place, the
+positions' keys and values brought home first (`Bring_Home`); word
+timing's pass, which needs the alignment heads' scores on the host,
+decodes on the processor. Biases and norms are given back with the
+matrices, as the device knows them by address too. Held by the device
+test transcribing the wide fixture on both and getting the same text with
+every position on the device (`Statistics.Device_Positions`), and by
+`tests speech-corpus --device`: small f16 and Q8_0 score as on the
+processor; tiny's Danish 73.2 % of words against 69.9.
 
 Also found here: a recording of thirty seconds or more had its first
 window encoded twice, once for the language and once to transcribe, though

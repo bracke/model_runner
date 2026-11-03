@@ -176,7 +176,8 @@ package body Speech_Hear is
                     & Heard.Figures.Audio_Seconds'Image & " s of sound; spectrogram"
                     & Heard.Figures.Spectrogram_Seconds'Image & ", encoder" & Heard.Figures.Encoder_Seconds'Image
                     & ", decoder" & Heard.Figures.Decoder_Seconds'Image & ";" & Heard.Figures.Windows'Image
-                    & " windows," & Heard.Figures.Tokens'Image & " tokens");
+                    & " windows," & Heard.Figures.Tokens'Image & " tokens," & Heard.Figures.Device_Positions'Image
+                    & " positions on the device");
             end;
          end loop;
          if E.Is_Ok (Status) then

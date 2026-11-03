@@ -256,6 +256,8 @@ package Model_Runner.Whisper is
       Decoder_Seconds     : Duration := 0.0;
       Windows             : Natural := 0;
       Tokens              : Natural := 0;
+      --  Of the decoder's positions, those run on the device.
+      Device_Positions    : Natural := 0;
    end record;
 
    --  A recording transcribed.
@@ -508,9 +510,23 @@ private
       Borrowed  : Boolean := False;
       --  Whether the matrices stay on the device between encodes.
       Keep_On_Device : Boolean := False;
-      --  Where the encoder's keys and values go in the device's cache:
-      --  past the conversation's, as it stood when the turn was borrowed.
+      --  Where Whisper's part of the device's cache begins: past the
+      --  conversation's, as it stood when the turn was borrowed. Each
+      --  decoder block's keys and values of what was heard, then its own
+      --  positions', then the encoder's attention's scratch.
       Cache_Base : Element_Count := 0;
+      --  Whether what was heard is in the device's cache for this turn,
+      --  and the decoder's own positions too: a token then runs on the
+      --  device, a sequence a block.
+      Cross_On_Device, Self_On_Device : Boolean := False;
+      --  Each decoder norm's gain then bias, as the device's norm step
+      --  reads one: three a block, then the last.
+      Norm_Pairs : T.Real_Array_Access;
+      --  Whether the conversation read halves of the cache before the turn
+      --  was borrowed, to be put back.
+      Halves_Were : Boolean := False;
+      --  Decoder positions run on the device since the session opened.
+      Device_Fed : Natural := 0;
    end record;
 
 end Model_Runner.Whisper;

@@ -6,6 +6,7 @@ with System.Storage_Elements;
 
 with Model_Runner.Audio.Spectrograms;
 with Model_Runner.Backend.Device;
+with Model_Runner.Platform.Device.Products;
 with Model_Runner.GGUF;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Kernels;
@@ -837,6 +838,7 @@ package body Model_Runner.Whisper is
       T.Free (Item.Work_E);
       T.Free (Item.Scores);
       T.Free (Item.Decoded);
+      T.Free (Item.Norm_Pairs);
       FP.Free (Item.Weight_Panels);
       Free_Panels (Item.Packed);
       Free_Panels (Item.Cross_Keys);
@@ -1272,6 +1274,29 @@ package body Model_Runner.Whisper is
    --  encoder's do.
    Device_Queries : constant Element_Count := 512;
 
+   --  Whisper's part of the device's cache, from Cache_Base: each decoder
+   --  block's keys and values of what was heard, then of its own
+   --  positions, then the encoder's attention's keys and values.
+   function Heard_Keys_At (Item : Session; Block : Positive) return Element_Count is
+     (Item.Cache_Base + Element_Count (Block - 1) * 2 * Item.Source.Audio_Context * Item.Source.Width);
+
+   function Heard_Values_At (Item : Session; Block : Positive) return Element_Count is
+     (Heard_Keys_At (Item, Block) + Item.Source.Audio_Context * Item.Source.Width);
+
+   function Own_Keys_At (Item : Session; Block : Positive) return Element_Count is
+     (Item.Cache_Base
+      + Element_Count (Item.Source.Decoder_Blocks) * 2 * Item.Source.Audio_Context * Item.Source.Width
+      + Element_Count (Block - 1) * 2 * Item.Source.Text_Context * Item.Source.Width);
+
+   function Own_Values_At (Item : Session; Block : Positive) return Element_Count is
+     (Own_Keys_At (Item, Block) + Item.Source.Text_Context * Item.Source.Width);
+
+   function Scratch_At (Item : Session) return Element_Count is
+     (Own_Keys_At (Item, Item.Source.Decoder_Blocks + 1));
+
+   function Cache_End (Item : Session) return Element_Count is
+     (Scratch_At (Item) + 2 * Item.Source.Audio_Context * Item.Source.Width);
+
    procedure Attend_Both_Ways
      (Item   : in out Session;
       Q, Kv, V, Into : T.Real_Array_Access;
@@ -1289,16 +1314,14 @@ package body Model_Runner.Whisper is
       --  of every other, a batch of queries at a time.
       if Item.Borrowed and then Head mod 16 = 0 then
          declare
-            Keys_At   : constant Element_Count := Item.Cache_Base;
+            Keys_At   : constant Element_Count := Scratch_At (Item);
             Values_At : constant Element_Count := Keys_At + P * W;
             Was_Exact : constant Boolean := Model_Runner.Backend.Device.Attends_Exactly;
             Ok        : Boolean;
             From      : Element_Count := 0;
          begin
-            Model_Runner.Backend.Device.Reserve_Cache (Values_At + P * W, Values_At + P * W, Ok);
-            if Ok then
-               Model_Runner.Backend.Device.Put_Cache (Keys_At, Kv (0 .. P * W - 1), Ok);
-            end if;
+            Ok := True;
+            Model_Runner.Backend.Device.Put_Cache (Keys_At, Kv (0 .. P * W - 1), Ok);
             if Ok then
                Model_Runner.Backend.Device.Put_Cache (Values_At, V (0 .. P * W - 1), Ok);
             end if;
@@ -1431,6 +1454,25 @@ package body Model_Runner.Whisper is
          Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.V.Weight, Item.Cross_V (L),
                         Source.Decoder (L).Cross.V.Bias, Status, Cross_Slot (L, 2));
       end loop;
+      --  And into the device's cache, where the turn is held: a token's
+      --  blocks attend to them there.
+      Item.Cross_On_Device := False;
+      Item.Self_On_Device := False;
+      if Item.Borrowed and then E.Is_Ok (Status) then
+         declare
+            Ok : Boolean := True;
+         begin
+            for L in 1 .. Source.Decoder_Blocks loop
+               exit when not Ok;
+               Model_Runner.Backend.Device.Put_Cache (Heard_Keys_At (Item, L), Item.Cross_K (L) (0 .. P * W - 1), Ok);
+               if Ok then
+                  Model_Runner.Backend.Device.Put_Cache (Heard_Values_At (Item, L), Item.Cross_V (L) (0 .. P * W - 1),
+                                                         Ok);
+               end if;
+            end loop;
+            Item.Cross_On_Device := Ok;
+         end;
+      end if;
       --  And laid out a head at a time for the products a token makes of
       --  them: its scores against the keys, the values blended by them.
       declare
@@ -1452,13 +1494,30 @@ package body Model_Runner.Whisper is
       Item.Has_Encoded := E.Is_Ok (Status);
    end Encode_Here;
 
-   --  Every matrix the encoder may have put on the device, given back.
-   procedure Forget_Matrices (Source : Model) is
+   --  Every matrix, bias and norm the session may have put on the device,
+   --  given back: the device knows each by where its bytes lie.
+   procedure Forget_Matrices (Item : in out Session) is
+      Source : constant Model_Access := Item.Source;
+
       procedure Drop (Weight : T.View) is
       begin
          if Weight.Rows > 0 then
             Model_Runner.Backend.Device.Forget (Weight);
          end if;
+      end Drop;
+
+      procedure Drop (Values : T.Real_Array_Access) is
+      begin
+         if Values /= null then
+            Model_Runner.Backend.Device.Forget
+              ((T.Empty_View with delta Base => Values.all (Values.all'First)'Address, Offset => 0));
+         end if;
+      end Drop;
+
+      procedure Drop (Layer : Projection) is
+      begin
+         Drop (Layer.Weight);
+         Drop (Layer.Bias);
       end Drop;
    begin
       Drop (Source.Conv1.Weight);
@@ -1472,10 +1531,77 @@ package body Model_Runner.Whisper is
          Drop (Each.Down.Weight);
       end loop;
       for Each of Source.Decoder.all loop
-         Drop (Each.Cross.K.Weight);
-         Drop (Each.Cross.V.Weight);
+         Drop (Each.Attention.Q);
+         Drop (Each.Attention.K);
+         Drop (Each.Attention.V);
+         Drop (Each.Attention.Output);
+         Drop (Each.Cross.Q);
+         Drop (Each.Cross.K);
+         Drop (Each.Cross.V);
+         Drop (Each.Cross.Output);
+         Drop (Each.Up);
+         Drop (Each.Down);
       end loop;
+      Drop (Source.Token_Table);
+      if Item.Norm_Pairs /= null then
+         for N_I in 0 .. 3 * Element_Count (Source.Decoder_Blocks) loop
+            Model_Runner.Backend.Device.Forget
+              ((T.Empty_View with delta
+                  Base => Item.Norm_Pairs (N_I * 2 * Source.Width)'Address, Offset => 0));
+         end loop;
+      end if;
    end Forget_Matrices;
+
+   --  The device's turn taken for what follows, where the session asks for
+   --  the device, it is open and lent, and it has room beside the
+   --  conversation's model; Took says whether this call took it, and
+   --  Let_Go gives it back then. A call inside one that took it takes
+   --  nothing.
+   procedure Hold (Item : in out Session; Took : out Boolean) is
+      use type Interfaces.Unsigned_64;
+      Ok : Boolean;
+   begin
+      Took := False;
+      if Item.Borrowed or else not Item.On_Device or else not Model_Runner.Backend.Device.Is_Ready
+        or else Model_Runner.Backend.Device.Room_Beside < Interfaces.Unsigned_64 (Weight_Bytes (Item.Source.all))
+      then
+         return;
+      end if;
+      Model_Runner.Backend.Device.Borrow_Turn (Took);
+      if not Took then
+         return;
+      end if;
+      Item.Borrowed := True;
+      Item.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
+      --  A token reads the half-precision copy of what was heard: its
+      --  attention is the bytes it reads, and the copy is half of them.
+      --  The conversation's choice is put back with the turn.
+      Item.Halves_Were := Model_Runner.Backend.Device.Attends_In_Halves;
+      Model_Runner.Backend.Device.Attend_In_Halves (True);
+      Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok);
+      if not Ok then
+         Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
+         Model_Runner.Backend.Device.Return_Turn;
+         Item.Borrowed := False;
+         Took := False;
+      end if;
+   end Hold;
+
+   procedure Let_Go (Item : in out Session; Took : Boolean) is
+   begin
+      if not Took then
+         return;
+      end if;
+      if not Item.Keep_On_Device then
+         Forget_Matrices (Item);
+      end if;
+      --  What the cache holds is the conversation's to overwrite now.
+      Item.Cross_On_Device := False;
+      Item.Self_On_Device := False;
+      Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
+      Model_Runner.Backend.Device.Return_Turn;
+      Item.Borrowed := False;
+   end Let_Go;
 
    --  On the device where the session asks for it and the turn is lent,
    --  and the device has room for the model beside the conversation's;
@@ -1485,32 +1611,14 @@ package body Model_Runner.Whisper is
       Mel    : Real_Array;
       Status : out E.Error_Info)
    is
-      use type Interfaces.Unsigned_64;
+      Took : Boolean;
    begin
-      Item.Borrowed := False;
-      if Item.On_Device and then Model_Runner.Backend.Device.Is_Ready
-        and then Model_Runner.Backend.Device.Room_Beside >= Interfaces.Unsigned_64 (Weight_Bytes (Item.Source.all))
-      then
-         Model_Runner.Backend.Device.Borrow_Turn (Item.Borrowed);
-         if Item.Borrowed then
-            Item.Cache_Base := Model_Runner.Backend.Device.Cached_Elements;
-         end if;
-      end if;
+      Hold (Item, Took);
       Encode_Here (Item, Mel, Status);
-      if Item.Borrowed then
-         if not Item.Keep_On_Device then
-            Forget_Matrices (Item.Source.all);
-         end if;
-         Model_Runner.Backend.Device.Return_Turn;
-         Item.Borrowed := False;
-      end if;
+      Let_Go (Item, Took);
    exception
       when others =>
-         if Item.Borrowed then
-            Forget_Matrices (Item.Source.all);
-            Model_Runner.Backend.Device.Return_Turn;
-            Item.Borrowed := False;
-         end if;
+         Let_Go (Item, Took);
          raise;
    end Encode;
 
@@ -1529,6 +1637,222 @@ package body Model_Runner.Whisper is
 
    --  The decoder over Tokens, after the positions its cache holds; the
    --  logits at the last of them left in Item.Logits.
+   ---------------------
+   -- Feed_On_Device --
+   ---------------------
+
+   --  Count tokens through the decoder on the device, their embedded rows
+   --  in Dec_X: a sequence a block, the activation carried from one to the
+   --  next and never home, the keys and values of each position put in the
+   --  block's part of the cache and attended to there, and what was heard
+   --  attended to where Encode put it. Then the last norm and, for one
+   --  token, the logits; for more, the rows come home and the last one's
+   --  logits are the pool's, as Feed makes them. GELU is the device's tanh
+   --  form, within half precision of the reference's erf.
+   procedure Feed_On_Device
+     (Item   : in out Session;
+      Count  : Element_Count;
+      Status : out E.Error_Info)
+   is
+      package D renames Model_Runner.Backend.Device;
+      package P renames Model_Runner.Platform.Device.Products;
+      Source : constant Model_Access := Item.Source;
+      W      : constant Element_Count := Source.Width;
+      Heads  : constant Natural := Source.Decoder_Heads;
+      Head   : constant Element_Count := W / Element_Count (Heads);
+      Scale  : constant Real := Real (1.0 / Elementary.Sqrt (Wide_Real (Head)));
+      Pair   : constant Model_Runner.Bytes.Byte_Count := Model_Runner.Bytes.Byte_Count (2 * W * 4);
+      Steps  : P.Sequence;
+      Added  : Boolean := True;
+
+      function Pair_At (Index : Element_Count) return System.Address is
+        (Item.Norm_Pairs (Index * 2 * W)'Address);
+
+      --  The step reading Step biased, where the projection has a bias.
+      procedure Biased (Bias : T.Real_Array_Access; Step : in out Natural) is
+      begin
+         if Added and then Bias /= null then
+            P.Add_Bias (Steps, Bias.all (Bias.all'First)'Address, Model_Runner.Bytes.Byte_Count (Bias.all'Length) * 4,
+                        0, 1, Bias.all'Length, Step, 0, Added, Key => Bias.all (Bias.all'First)'Address,
+                        Kept => False);
+            Step := P.Length (Steps);
+         end if;
+      end Biased;
+
+      --  A projection of step From, biased; its step.
+      function Projected (Layer : Projection; From : Natural) return Natural is
+         Step : Natural := 0;
+      begin
+         if Added then
+            D.Add_View_Product (Steps, Layer.Weight, From, Added);
+            Step := P.Length (Steps);
+            Biased (Layer.Bias, Step);
+         end if;
+         return Step;
+      end Projected;
+
+      function Normed (Index : Element_Count; From : Natural; Kept : Boolean := False) return Natural is
+      begin
+         if Added then
+            P.Add_Norm (Steps, Pair_At (Index), Pair, 0, Natural (W), Source.Epsilon, Added, From_Step => From,
+                        Key => Pair_At (Index), Kept => Kept, Shift => True);
+         end if;
+         return P.Length (Steps);
+      end Normed;
+   begin
+      Status := E.Success;
+      if Item.Norm_Pairs = null then
+         T.Allocate ((3 * Element_Count (Source.Decoder_Blocks) + 1) * 2 * W, Item.Norm_Pairs);
+         if Item.Norm_Pairs = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+         declare
+            procedure Put (Index : Element_Count; Of_Norm : Norm) is
+            begin
+               Item.Norm_Pairs (Index * 2 * W .. Index * 2 * W + W - 1) := Of_Norm.Weight.all;
+               Item.Norm_Pairs (Index * 2 * W + W .. (Index + 1) * 2 * W - 1) := Of_Norm.Bias.all;
+            end Put;
+         begin
+            for L in 1 .. Source.Decoder_Blocks loop
+               Put (3 * Element_Count (L - 1), Source.Decoder (L).Attention_Norm);
+               Put (3 * Element_Count (L - 1) + 1, Source.Decoder (L).Cross_Norm);
+               Put (3 * Element_Count (L - 1) + 2, Source.Decoder (L).Feed_Norm);
+            end loop;
+            Put (3 * Element_Count (Source.Decoder_Blocks), Source.Decoder_Norm);
+         end;
+      end if;
+
+      for L in 1 .. Source.Decoder_Blocks loop
+         declare
+            Each : Block renames Source.Decoder (L);
+            First : constant Element_Count := 3 * Element_Count (L - 1);
+            Norm_1, Query, Key, Value, Mixed, Out_1, Join_1 : Natural := 0;
+            Norm_2, Asked, Heard, Out_2, Join_2 : Natural := 0;
+            Norm_3, Up, Gelu, Down : Natural := 0;
+         begin
+            P.Open_Sequence (Steps);
+            Added := True;
+            Norm_1 := Normed (First, 0);
+            Query := Projected (Each.Attention.Q, Norm_1);
+            Key := Projected (Each.Attention.K, Norm_1);
+            if Added then
+               P.Add_Place (Steps, Natural (W), Natural (W), Own_Keys_At (Item, L) + Item.Held * W, Added,
+                            From_Step => Key);
+            end if;
+            Value := Projected (Each.Attention.V, Norm_1);
+            if Added then
+               P.Add_Place (Steps, Natural (W), Natural (W), Own_Values_At (Item, L) + Item.Held * W, Added,
+                            From_Step => Value);
+            end if;
+            if Added then
+               P.Add_Attention (Steps, Heads, Natural (Head), Natural (Head), 1, 0, Natural (Item.Held),
+                                Own_Keys_At (Item, L), Own_Values_At (Item, L), Natural (W), Natural (W), Scale, 0.0,
+                                Added, Chained => True, Causal => True, Kept => False, From_Step => Query);
+               Mixed := P.Length (Steps);
+            end if;
+            Out_1 := Projected (Each.Attention.Output, Mixed);
+            if Added then
+               P.Add_Join (Steps, Added, From_Step => Out_1, From_Vector => 0, Kept => False);
+               Join_1 := P.Length (Steps);
+            end if;
+
+            Norm_2 := Normed (First + 1, Join_1);
+            Asked := Projected (Each.Cross.Q, Norm_2);
+            if Added then
+               P.Add_Attention (Steps, Heads, Natural (Head), Natural (Head), 1, 0,
+                                Natural (Source.Audio_Context - 1), Heard_Keys_At (Item, L), Heard_Values_At (Item, L),
+                                Natural (W), Natural (W), Scale, 0.0, Added, Chained => True, Causal => False,
+                                Kept => False, From_Step => Asked);
+               Heard := P.Length (Steps);
+            end if;
+            Out_2 := Projected (Each.Cross.Output, Heard);
+            if Added then
+               P.Add_Join (Steps, Added, From_Step => Out_2, Residual_Step => Join_1, Kept => False);
+               Join_2 := P.Length (Steps);
+            end if;
+
+            Norm_3 := Normed (First + 2, Join_2);
+            Up := Projected (Each.Up, Norm_3);
+            if Added then
+               --  A unit alone, both its arms named as the one step.
+               P.Add_Combination (Steps, 5, Added, Kept => False, From_Step => Up, Other_Step => Up);
+               Gelu := P.Length (Steps);
+            end if;
+            Down := Projected (Each.Down, Gelu);
+            if Added then
+               P.Add_Join (Steps, Added, From_Step => Down, Residual_Step => Join_2, Kept => False);
+            end if;
+            if not Added then
+               Status := E.Make (E.Backend_Capability_Missing);
+               E.Add_Text (Status, "capability", "whisper decoder block", E.Param_Identifier);
+               E.Add_Text (Status, "backend", "device", E.Param_Identifier);
+               return;
+            end if;
+            D.Run_Steps (Steps, Item.Dec_X (0 .. Count * W - 1), Positive (Count), System.Null_Address, Status,
+                         Carry_In => L > 1, Carry_Out => True);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
+      end loop;
+
+      P.Open_Sequence (Steps);
+      Added := True;
+      if Count = 1 then
+         declare
+            Last : constant Natural := Normed (3 * Element_Count (Source.Decoder_Blocks), 0);
+         begin
+            if Added then
+               D.Add_View_Product (Steps, Source.Token_Table, Last, Added, Kept => True);
+            end if;
+            if Added then
+               D.Run_Steps (Steps, Item.Dec_X (0 .. W - 1), 1, Item.Logits (0)'Address, Status, Carry_In => True);
+            end if;
+         end;
+      else
+         declare
+            Last : constant Natural := Normed (3 * Element_Count (Source.Decoder_Blocks), 0, Kept => True);
+            pragma Unreferenced (Last);
+         begin
+            if Added then
+               D.Run_Steps (Steps, Item.Dec_X (0 .. Count * W - 1), Positive (Count), Item.Dec_H (0)'Address, Status,
+                            Carry_In => True);
+            end if;
+            if Added and then E.Is_Ok (Status) then
+               Item.Last_Row.all := Item.Dec_H ((Count - 1) * W .. Count * W - 1);
+               CPU.Dispatch (Item.Team, Source.Token_Table, Item.Last_Row, Item.Logits, Status,
+                             Roles => CPU.Every_Role);
+            end if;
+         end;
+      end if;
+      if not Added then
+         Status := E.Make (E.Backend_Capability_Missing);
+         E.Add_Text (Status, "capability", "whisper decoder head", E.Param_Identifier);
+         E.Add_Text (Status, "backend", "device", E.Param_Identifier);
+      end if;
+   end Feed_On_Device;
+
+   --  The decoder's own keys and values brought home from the device, for
+   --  the pool to go on from.
+   procedure Bring_Home (Item : in out Session; Status : in out E.Error_Info) is
+      W  : constant Element_Count := Item.Source.Width;
+      Ok : Boolean := True;
+   begin
+      for L in 1 .. Item.Source.Decoder_Blocks loop
+         exit when not Ok;
+         Model_Runner.Backend.Device.Get_Cache (Own_Keys_At (Item, L), Item.Self_K (L) (0 .. Item.Held * W - 1), Ok);
+         if Ok then
+            Model_Runner.Backend.Device.Get_Cache
+              (Own_Values_At (Item, L), Item.Self_V (L) (0 .. Item.Held * W - 1), Ok);
+         end if;
+      end loop;
+      if not Ok then
+         Status := E.Make (E.Backend_Closed);
+      end if;
+      Item.Self_On_Device := False;
+   end Bring_Home;
+
    procedure Feed
      (Item   : in out Session;
       Tokens : Tk.Token_Array;
@@ -1567,6 +1891,29 @@ package body Model_Runner.Whisper is
          K.Add (Item.Dec_X (I * W .. (I + 1) * W - 1),
                 Source.Text_Positions ((Item.Held + I) * W .. (Item.Held + I + 1) * W - 1));
       end loop;
+
+      --  On the device where what was heard is there and the positions
+      --  before are too; where it declines, the pool goes on from the same
+      --  place.
+      if Item.Borrowed and then Item.Cross_On_Device and then not Item.Capturing
+        and then (Item.Held = 0 or else Item.Self_On_Device)
+      then
+         Feed_On_Device (Item, Count, Status);
+         if E.Is_Ok (Status) then
+            Item.Device_Fed := Item.Device_Fed + Natural (Count);
+            Item.Held := Item.Held + Count;
+            Item.Self_On_Device := True;
+            return;
+         end if;
+         Status := E.Success;
+         Item.Cross_On_Device := False;
+      end if;
+      if Item.Self_On_Device then
+         Bring_Home (Item, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
 
       Work.Width := W;
       Work.Head := Head;
@@ -1647,13 +1994,22 @@ package body Model_Runner.Whisper is
      (Item   : in out Session;
       Tokens : Tk.Token_Array;
       Logits : out Real_Array;
-      Status : out E.Error_Info) is
+      Status : out E.Error_Info)
+   is
+      Took : Boolean;
    begin
+      Hold (Item, Took);
       Item.Held := 0;
+      Item.Self_On_Device := False;
       Feed (Item, Tokens, Status);
       if E.Is_Ok (Status) then
          Logits := Item.Logits (0 .. Logits'Length - 1);
       end if;
+      Let_Go (Item, Took);
+   exception
+      when others =>
+         Let_Go (Item, Took);
+         raise;
    end Decode;
 
    ----------------
@@ -1698,7 +2054,7 @@ package body Model_Runner.Whisper is
      & "!" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#81#)
      & "?" & Character'Val (16#EF#) & Character'Val (16#BC#) & Character'Val (16#9F#);
 
-   procedure Transcribe
+   procedure Transcribe_Here
      (Item     : in out Session;
       Samples  : Real_Array;
       Settings : Options;
@@ -2609,6 +2965,31 @@ package body Model_Runner.Whisper is
          Result := (others => <>);
          Status := E.Make (E.Memory_Allocation_Failed);
          E.Add_Text (Status, "category", "speech", E.Param_Identifier);
+   end Transcribe_Here;
+
+   --  With the device's turn held throughout where it is to be had: the
+   --  encoder and every token on it.
+   procedure Transcribe
+     (Item     : in out Session;
+      Samples  : Real_Array;
+      Settings : Options;
+      Result   : out Transcript;
+      Status   : out E.Error_Info;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Took : Boolean := False;
+      Fed  : constant Natural := Item.Device_Fed;
+   begin
+      if Item.Source /= null then
+         Hold (Item, Took);
+      end if;
+      Transcribe_Here (Item, Samples, Settings, Result, Status, Cancel);
+      Result.Figures.Device_Positions := Item.Device_Fed - Fed;
+      Let_Go (Item, Took);
+   exception
+      when others =>
+         Let_Go (Item, Took);
+         raise;
    end Transcribe;
 
 end Model_Runner.Whisper;

@@ -1393,9 +1393,10 @@ package body Tests.Speech_Cases is
 
    --  The encoder on the device, in shapes its tile and attention take:
    --  what it heard is the processor's to half precision, its products ran
-   --  there, and its matrices were given back; with the turn not lent it
-   --  runs on the processor and the device is not asked. Passes with
-   --  nothing compared where no device opens.
+   --  there, and its matrices were given back; a recording transcribed
+   --  with every token on the device says what the processor's does; with
+   --  the turn not lent it runs on the processor and the device is not
+   --  asked. Passes with nothing compared where no device opens.
    procedure Whisper_Hears_On_The_Device
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -1437,6 +1438,35 @@ package body Tests.Speech_Cases is
             Largest := Long_Float'Max (Largest, abs Long_Float (Here (I)));
          end loop;
          Assert (Worst <= 2.0E-2 * Largest, "the device heard otherwise: worst" & Worst'Image & " of" & Largest'Image);
+
+         --  And a recording heard whole: every token on the device, its
+         --  text the processor's.
+         declare
+            use Ada.Strings.Unbounded;
+            Sound    : N.Real_Array (0 .. 15_999);
+            Settings : W.Options;
+            Alone, Beside : W.Transcript;
+         begin
+            for I in Sound'Range loop
+               Sound (I) := N.Real (0.3 * Noise (Natural (I) + 7));
+            end loop;
+            Settings.Language := To_Unbounded_String ("en");
+            Settings.Temperature_Count := 1;
+            W.Use_Device (Session, False);
+            W.Transcribe (Session, Sound, Settings, Alone, Status);
+            Assert (E.Is_Ok (Status), "the processor did not transcribe: " & Status.Code'Image);
+            Assert (Alone.Figures.Device_Positions = 0, "the processor's transcript was decoded on the device");
+            W.Use_Device (Session, True);
+            W.Transcribe (Session, Sound, Settings, Beside, Status);
+            Assert (E.Is_Ok (Status), "the device did not transcribe: " & Status.Code'Image);
+            Assert (Beside.Figures.Device_Positions > 0
+                    and then Beside.Figures.Device_Positions >= Beside.Figures.Tokens,
+                    "the device decoded" & Beside.Figures.Device_Positions'Image & " positions of"
+                    & Beside.Figures.Tokens'Image & " tokens");
+            Assert (Beside.Text = Alone.Text, "the device heard [" & To_String (Beside.Text)
+                    & "] where the processor heard [" & To_String (Alone.Text) & "]");
+            Assert (Device.Resident = Held, "the decoder's matrices were left on the device");
+         end;
 
          --  The turn not lent: the processor's, the device not asked.
          Device.Take_Turn;
@@ -1509,7 +1539,8 @@ package body Tests.Speech_Cases is
          "the device's turn is lent, borrowed by one at a time and taken back once given back");
       Register_Routine
         (T, Whisper_Hears_On_The_Device'Access,
-         "the encoder on the device hears what the processor does, gives its matrices back and needs the turn");
+         "the encoder and decoder on the device hear what the processor does, give their matrices back"
+         & " and need the turn");
       Register_Routine
         (T, Word_Timing_Arithmetic'Access,
          "a word's time is warped and filtered as the reference's timing does it");

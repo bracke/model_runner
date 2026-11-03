@@ -227,7 +227,7 @@ en.help.image.verbose =   --verbose               report progress and detail on 
 en.help.image.locale =   --locale NAME           locale for program messages
 en.help.image.color =   --color=MODE            colour output: {value}
 en.help.transcribe.usage = Usage: model_runner transcribe FILE.wav --speech-model PATH [options]
-en.help.transcribe.summary = Write out what is said in a recording, with a Whisper model (GGUF), its encoder on the device where one opens. The recording is a WAV file of any rate and channels; its text goes to standard output, or with --speech-timestamps a line for each stretch of it with its times. Nothing is sampled: the model's likeliest words, as the reference decodes them greedily.
+en.help.transcribe.summary = Write out what is said in a recording, with a Whisper model (GGUF), on the device where one opens. The recording is a WAV file of any rate and channels; its text goes to standard output, or with --speech-timestamps a line for each stretch of it with its times. Nothing is sampled: the model's likeliest words, decoded greedily as OpenAI's own does.
 en.help.transcribe.options = Options:
 en.help.transcribe.speech_model =   --speech-model PATH     the Whisper model to hear it with
 en.help.transcribe.speech_language =   --speech-language CODE  the language spoken, as en or da; auto, unless said, detects it
@@ -1659,7 +1659,7 @@ da.help.image.verbose =   --verbose               rapportér fremdrift og detalj
 da.help.image.locale =   --locale NAVN           sprog for programmets beskeder
 da.help.image.color =   --color=TILSTAND        farvelæg output: {value}
 da.help.transcribe.usage = Brug: model_runner transcribe FIL.wav --speech-model STI [tilvalg]
-da.help.transcribe.summary = Skriv det sagte i en optagelse ud med en Whisper-model (GGUF), dens koder på enheden, hvor en åbner. Optagelsen er en WAV-fil med vilkårlig rate og kanaler; dens tekst går til standardoutput, eller med --speech-timestamps en linje for hvert stykke med dets tider. Intet trækkes tilfældigt: modellens mest sandsynlige ord, som referencen afkoder dem grådigt.
+da.help.transcribe.summary = Skriv det sagte i en optagelse ud med en Whisper-model (GGUF), på enheden, hvor en åbner. Optagelsen er en WAV-fil med vilkårlig rate og kanaler; dens tekst går til standardoutput, eller med --speech-timestamps en linje for hvert stykke med dets tider. Intet trækkes tilfældigt: modellens mest sandsynlige ord, afkodet grådigt som OpenAIs egen gør.
 da.help.transcribe.options = Tilvalg:
 da.help.transcribe.speech_model = --speech-model STI       Whisper-modellen den høres med
 da.help.transcribe.speech_language = --speech-language KODE   det talte sprog, som en eller da; auto, medmindre andet angives, genkender det
@@ -3203,7 +3203,7 @@ qps.help.image.verbose = ⟦  --verbose               ŕépóŕŧ pŕógŕéßß
 qps.help.image.locale = ⟦  --locale NAME           ĺóçáĺé fóŕ pŕógŕám méßßágéß⟧
 qps.help.image.color = ⟦  --color=MODE            çóĺóúŕ óúŧpúŧ: {value}⟧
 qps.help.transcribe.usage = ⟦Ußágé: móðéĺ_ŕúññéŕ ŧŕáñßçŕíƀé FILE.wáv --speech-model PATH [ópŧíóñß]⟧
-qps.help.transcribe.summary = ⟦Wŕíŧé óúŧ wháŧ íß ßáíð íñ á ŕéçóŕðíñg, wíŧh á Whíßpéŕ móðéĺ (GGUF), íŧß éñçóðéŕ óñ ŧhé ðévíçé whéŕé óñé ópéñß. Thé ŕéçóŕðíñg íß á WAV fíĺé óf áñý ŕáŧé áñð çháññéĺß; íŧß ŧéxŧ góéß ŧó ßŧáñðáŕð óúŧpúŧ, óŕ wíŧh --speech-timestamps á ĺíñé fóŕ éáçh ßŧŕéŧçh óf íŧ wíŧh íŧß ŧíméß. Nóŧhíñg íß ßámpĺéð: ŧhé móðéĺ'ß ĺíkéĺíéßŧ wóŕðß, áß ŧhé ŕéféŕéñçé ðéçóðéß ŧhém gŕééðíĺý.⟧
+qps.help.transcribe.summary = ⟦Wŕíŧé óúŧ wháŧ íß ßáíð íñ á ŕéçóŕðíñg, wíŧh á Whíßpéŕ móðéĺ (GGUF), óñ ŧhé ðévíçé whéŕé óñé ópéñß. Thé ŕéçóŕðíñg íß á WAV fíĺé óf áñý ŕáŧé áñð çháññéĺß; íŧß ŧéxŧ góéß ŧó ßŧáñðáŕð óúŧpúŧ, óŕ wíŧh --speech-timestamps á ĺíñé fóŕ éáçh ßŧŕéŧçh óf íŧ wíŧh íŧß ŧíméß. Nóŧhíñg íß ßámpĺéð: ŧhé móðéĺ'ß ĺíkéĺíéßŧ wóŕðß, ðéçóðéð gŕééðíĺý áß OpéñAI'ß ówñ ðóéß.⟧
 qps.help.transcribe.options = ⟦Opŧíóñß:⟧
 qps.help.transcribe.speech_model = ⟦  --speech-model PATH     ŧhé Whíßpéŕ móðéĺ ŧó héáŕ íŧ wíŧh⟧
 qps.help.transcribe.speech_language = ⟦  --speech-language CODE  ŧhé ĺáñgúágé ßpókéñ, áß éñ óŕ ðá; áúŧó, úñĺéßß ßáíð, ðéŧéçŧß íŧ⟧

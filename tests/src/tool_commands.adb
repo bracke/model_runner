@@ -320,8 +320,8 @@ package body Tool_Commands is
 
    Says_Speech_Corpus  : aliased constant String :=
      "hear the speech corpus with a Whisper model and score it: word and character error rates by language";
-   Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N]";
-   Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads ";
+   Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N] [--device]";
+   Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads --device ";
 
    Held : constant array (1 .. 40) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,

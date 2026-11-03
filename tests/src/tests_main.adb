@@ -548,7 +548,9 @@ begin
             Ada.Text_IO.Put_Line ("speech-corpus: --model PATH is required");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          elsif Speech_Corpus.Run (Option ("--model", ""), Option ("--corpus", ""),
-                                  Natural'Value (Option ("--threads", "0"))) /= 0
+                                  Natural'Value (Option ("--threads", "0")),
+                                  Device => (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
+                                               Ada.Command_Line.Argument (Index) = "--device")) /= 0
          then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;

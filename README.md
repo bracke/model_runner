@@ -1005,19 +1005,19 @@ whisper-small-f16.gguf`. Transcription is the reference's, greedy: on
 Whisper tiny and small the tokens, times and text of English and Danish
 recordings are the reference's own (docs/plan-speech.md).
 
-Whisper's encoder goes to the device when one is open: `transcribe`
-opens it unless `--backend cpu` is given, and in a session it is
-borrowed while the conversation's model, there already, waits for the
-line -- never while that model runs, and not at all where the device has
-no room beside it. The decoder's few rows stay on the processor. 11 s of
-speech, its language detected, is heard in 0.38 s by tiny f16 and 2.7 s
-by small f16 on the processor (236 MB and 1.2 GB resident), 0.30 s and
-1.6 s with the device; small Q8_0 is 1.0 GB. A model read cold adds
-0.05 s (tiny) to 0.5 s (small). While Whisper hears on the processor, an
-LLM beside it shares the memory bus: TinyLlama's generation fell from 39
-to 31 t/s on the processor and from 57 to 47 t/s on the device; a
-Whisper held but idle costs only its memory (docs/measured-figures.txt,
-the speech group, on a loaded box).
+Whisper runs on the device when one is open, its encoder and every token
+of its decoder: `transcribe` opens it unless `--backend cpu` is given,
+and in a session it is borrowed while the conversation's model, there
+already, waits for the line -- never while that model runs, and not at
+all where the device has no room beside it. 45 s of Danish is heard in
+5.3 s by small f16 on the processor (1.2 GB resident) and 3.3 s with the
+device (0.5 GB), 3.0 s by small Q8_0; 11 s of English in 0.44 s by tiny
+and 0.32 s with the device. A model read cold adds 0.05 s (tiny) to
+0.5 s (small). While Whisper hears on the processor, an LLM beside it
+shares the memory bus: TinyLlama's generation fell from 39 to 31 t/s on
+the processor and from 57 to 47 t/s on the device; a Whisper held but
+idle costs only its memory (docs/measured-figures.txt, the speech group,
+on a loaded box).
 
 ### Embedding
 
