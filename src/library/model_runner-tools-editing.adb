@@ -1072,7 +1072,12 @@ package body Model_Runner.Tools.Editing is
       Status : E.Error_Info;
    begin
       Read_Text (Path, Held, Status, Base);
-      if E.Is_Error (Status) then
+      --  A file not there is made by write_file: a helper edited one into
+      --  being with old_text "", heard "no file", and gave the part up.
+      if E.Is_Error (Status) and then Status.Code = E.IO_Open_Failed then
+         return Failing (Why_Unread (Path, Status) & "; edit_file changes a file that is there -- write_file makes"
+                         & " a new one, with its whole content");
+      elsif E.Is_Error (Status) then
          return Failing (Why_Unread (Path, Status));
       end if;
       declare

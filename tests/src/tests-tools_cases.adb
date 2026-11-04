@@ -804,6 +804,10 @@ package body Tests.Tools_Cases is
       Assert (Ed.Edit (Path, "Integer", "Natural", "").Failed
               and then Has (Ed.Edit (Path, "Integer", "Natural", ""), "times"),
               "an edit of a passage there more than once was made");
+      --  An edit of a file not there points at write_file, which makes one.
+      Assert (Ed.Edit ("no-such-dir/new.md", "", "x", "").Failed
+              and then Has (Ed.Edit ("no-such-dir/new.md", "", "x", ""), "write_file makes a new one"),
+              "an edit of a file not there did not point at write_file");
 
       --  Lines by number, and searches.
       Assert (Has (Ed.Read_Range (Path, 2, 3), "2:    function Add")
