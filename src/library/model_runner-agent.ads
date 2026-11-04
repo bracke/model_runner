@@ -135,6 +135,14 @@ package Model_Runner.Agent is
       --  the reused prefix once per turn.
       Prompt_Tokens : Natural := 0;
 
+      --  Where the model's time went over the loop: reading its prompts --
+      --  the part of each a session did not hold already, Read_Tokens of
+      --  them, Reused_Tokens held -- and writing its replies.
+      Prompt_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
+      Reply_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
+      Read_Tokens   : Natural := 0;
+      Reused_Tokens : Natural := 0;
+
       --  How many times the conversation was compacted to keep rendering --
       --  the oldest turns dropped to make room. Zero for a run that stayed
       --  within its space, or one that was not asked to compact.

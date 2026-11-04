@@ -691,9 +691,10 @@ package body Agent_Trial is
       Build : constant String := Build_Named;
 
       --  One run, a line of the history: when, the build, the model, the
-      --  task, where it worked, how it ended, its seconds, calls and the
-      --  thoughts closed at their budget; a tab apart.
-      procedure Keep_In_History (Task_Name, Ending : String; Seconds, Calls : Natural; Closed : String) is
+      --  task, where it worked, how it ended, its seconds, calls, the
+      --  thoughts closed at their budget, the context and where the work's
+      --  time went (the harness's figures from "time:"); a tab apart.
+      procedure Keep_In_History (Task_Name, Ending : String; Seconds, Calls : Natural; Closed, Split : String) is
          Path  : constant String := Ada.Directories.Full_Name ("obj/agent-trial-history.tsv");
          File  : Ada.Text_IO.File_Type;
          Fresh : constant Boolean := not Ada.Directories.Exists (Path);
@@ -705,7 +706,7 @@ package body Agent_Trial is
             Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
             Ada.Text_IO.Put_Line
               (File, "when_utc" & HT & "build" & HT & "model" & HT & "task" & HT & "isolation" & HT & "outcome"
-               & HT & "seconds" & HT & "calls" & HT & "thoughts_closed" & HT & "context");
+               & HT & "seconds" & HT & "calls" & HT & "thoughts_closed" & HT & "context" & HT & "time");
          else
             --  A history kept before the context was: its heading given the
             --  column, its rows left as they were -- the context they ran at
@@ -719,10 +720,16 @@ package body Agent_Trial is
                   Lines.Append (To_Unbounded_String (Ada.Text_IO.Get_Line (Old)));
                end loop;
                Ada.Text_IO.Close (Old);
+               --  And one kept before the time was: the column added, its
+               --  rows not saying it.
                if not Lines.Is_Empty
-                 and then Ada.Strings.Fixed.Index (To_String (Lines.First_Element), HT & "context") = 0
+                 and then (Ada.Strings.Fixed.Index (To_String (Lines.First_Element), HT & "context") = 0
+                           or else Ada.Strings.Fixed.Index (To_String (Lines.First_Element), HT & "time") = 0)
                then
-                  Lines.Replace_Element (Lines.First_Index, Lines.First_Element & HT & "context");
+                  if Ada.Strings.Fixed.Index (To_String (Lines.First_Element), HT & "context") = 0 then
+                     Lines.Replace_Element (Lines.First_Index, Lines.First_Element & HT & "context");
+                  end if;
+                  Lines.Replace_Element (Lines.First_Index, Lines.First_Element & HT & "time");
                   Ada.Text_IO.Create (Old, Ada.Text_IO.Out_File, Path);
                   for Line of Lines loop
                      Ada.Text_IO.Put_Line (Old, To_String (Line));
@@ -742,7 +749,8 @@ package body Agent_Trial is
             & Ada.Strings.Fixed.Trim (Natural'Image (Seconds), Ada.Strings.Left) & HT
             & Ada.Strings.Fixed.Trim (Natural'Image (Calls), Ada.Strings.Left) & HT & Closed & HT
             & (if Context_Size = 0 then "own" else Ada.Strings.Fixed.Trim (Natural'Image (Context_Size),
-                                                                             Ada.Strings.Left)));
+                                                                             Ada.Strings.Left))
+            & HT & Split);
          Ada.Text_IO.Close (File);
       exception
          --  A history not kept is no trial lost.
@@ -1414,6 +1422,15 @@ package body Agent_Trial is
                               Closed : constant String := Figure ("thoughts closed at their budget:");
                               Made   : constant String := Figure ("tokens generated:");
                               Held   : constant String := Figure ("context at most:");
+                              --  Where the time went, as the harness says it:
+                              --  from "time:" to the line's end.
+                              Split  : constant String :=
+                                (declare
+                                   Line  : constant String := To_String (Figures);
+                                   At_It : constant Natural := Ada.Strings.Fixed.Index (Line, "time:");
+                                 begin
+                                   (if At_It = 0 then ""
+                                    else Ada.Strings.Fixed.Trim (Line (At_It .. Line'Last), Ada.Strings.Both)));
                               --  Whether the report names the path a right
                               --  answer names: the last report, from its
                               --  status to the harness's record of the work.
@@ -1446,8 +1463,9 @@ package body Agent_Trial is
                                       & [1 .. Natural'Max (1, 12 - Ending'Length) => ' ']
                                       & Integer'Image (Integer (Took)) & " s," & Natural'Image (Calls) & " calls, "
                                       & Made & " tokens made, " & Held & " held at most, "
-                                      & Closed & " thoughts closed" & LF);
-                              Keep_In_History (Name, Ending, Natural (Took), Calls, Closed);
+                                      & Closed & " thoughts closed" & LF
+                                      & (if Split = "" then "" else "    " & Split & LF));
+                              Keep_In_History (Name, Ending, Natural (Took), Calls, Closed, Split);
                            end;
                            Ada.Text_IO.Put_Line
                              ("agent-trial " & Name

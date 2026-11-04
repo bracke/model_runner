@@ -385,6 +385,17 @@ package body Model_Runner.Agent is
       --  What a reply needs after its thought to make a call or answer in.
       Answer_Room : constant := 384;
 
+      --  A generation's time, read and written, counted to the loop's.
+      procedure Count_Time (Generated : Gen.Result) is
+      begin
+         Result.Prompt_Ns := Result.Prompt_Ns + Generated.Prefill_Ns;
+         Result.Reply_Ns := Result.Reply_Ns + Generated.Decode_Ns;
+         Result.Read_Tokens :=
+           Result.Read_Tokens
+           + (Generated.Prompt_Tokens - Natural'Min (Generated.Prompt_Tokens, Generated.Reused_Tokens));
+         Result.Reused_Tokens := Result.Reused_Tokens + Generated.Reused_Tokens;
+      end Count_Time;
+
       --  The reply as a whole: what came before a closed thought, and what
       --  the generation after it said.
       function Reply_Text return String
@@ -880,6 +891,7 @@ package body Model_Runner.Agent is
                      Bounds   => Bounds,
                      Pictures => Pictures,
                      Outcome  => Last_Result);
+                  Count_Time (Last_Result);
                end if;
                --  Stopped at the thought's budget: the thought closed for it
                --  where it is still thinking, and the reply asked for after
@@ -971,6 +983,7 @@ package body Model_Runner.Agent is
                            Bounds   => Bounds,
                            Pictures => Pictures,
                            Outcome  => Last_Result);
+                        Count_Time (Last_Result);
                      end if;
                      --  Round again after it: the reply ends there.
                      if Rounds.Looped then

@@ -11,6 +11,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A `/work` run's record says where its time went.** The figures line after the work now ends with `time:` -- the model reading its prompts (the tokens read, and those a session held already), writing its replies, the checks, the helpers (each delegate call whole, its model's time in it) and the other tools, the harness's own the rest -- and `tests agent-trial` shows it under each run and keeps it in its history as a `time` column. Mellum2.1-12B on the trial's three tasks: the harness 0.6-1.1 s of 45-498 s, the replies 64-90 % of every run, prompts read 4-8 %, the most of them held from the turn before (98,649 held against 17,891 read on edit).
+
 - **The speech figures re-measured** at a lower load, with every change of today in them, and a Whisper held but idle measured: no cost to the conversation's generation on either backend, its threads asleep.
 
 ### Fixed

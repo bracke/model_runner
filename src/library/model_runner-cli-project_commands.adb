@@ -592,13 +592,37 @@ package body Model_Runner.CLI.Project_Commands is
       --  most its conversation came to hold: what it cost the model.
       Generated     : Natural := 0;
       Context_Most  : Natural := 0;
+
+      --  Where the time went, from when its loop began: the model reading
+      --  its prompts (Read of their tokens, Reused held already) and
+      --  writing its replies, the checks, the helpers -- each a delegate
+      --  call as a whole, its own model's time in it -- and the other tools.
+      --  What is left of the whole is the harness's own.
+      Began         : Model_Runner.Clocks.Nanoseconds := 0;
+      Prompt_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
+      Reply_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
+      Read          : Natural := 0;
+      Reused        : Natural := 0;
+      Check_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
+      Helper_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
+      Tool_Ns       : Model_Runner.Clocks.Nanoseconds := 0;
    end record;
 
-   --  Those, in a line.
-   function Figures (Self : Work_Tools'Class) return String;
+   --  Those, in a line; Now is when the line is written.
+   function Figures (Self : Work_Tools'Class; Now : Model_Runner.Clocks.Nanoseconds) return String;
 
    overriding procedure Run
      (Self      : in out Work_Tools;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  The call itself, which Run times.
+   procedure Run_Call
+     (Self      : in out Work_Tools'Class;
       Named     : String;
       Arguments : String;
       Result    : out String;
@@ -630,6 +654,7 @@ package body Model_Runner.CLI.Project_Commands is
       Watcher  : aliased Watch (Self.Screen, Host);
       Sink     : aliased Watching_Sink :=
         (Pres.Standard_Output_Sink with Styled => Pres.Styles_Answers (Self.Screen.all), others => <>);
+      use type Model_Runner.Clocks.Nanoseconds;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
       Request  : Model_Runner.Generation.Request;
@@ -670,6 +695,7 @@ package body Model_Runner.CLI.Project_Commands is
         (if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON)
          then Model_Runner.Tools.Open_JSON else Written);
    begin
+      Runner.Began := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
       --  The tools work in the tree the work is done in, named, not in
       --  whatever directory the process is in.
       Runner.Set_Base (Tree);
@@ -830,6 +856,10 @@ package body Model_Runner.CLI.Project_Commands is
          Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
          Runner.Generated := All_Spent;
          Runner.Context_Most := Prompt_Tokens;
+         Runner.Prompt_Ns := Runner.Prompt_Ns + Outcome.Prompt_Ns;
+         Runner.Reply_Ns := Runner.Reply_Ns + Outcome.Reply_Ns;
+         Runner.Read := Runner.Read + Outcome.Read_Tokens;
+         Runner.Reused := Runner.Reused + Outcome.Reused_Tokens;
          --  What comes of the round, decided from how it ended (Wk.Next_Step).
          declare
             Last_Own : constant Boolean :=
@@ -942,7 +972,7 @@ package body Model_Runner.CLI.Project_Commands is
                         & (if Host = null or else Host.Tool_Budget = 0 then ""
                            else "calls:" & Natural'Image (Calls) & " of"
                                 & Natural'Image (Host.Tool_Budget) & " planned" & ASCII.LF)
-                        & Figures (Runner) & ASCII.LF)]);
+                        & Figures (Runner, Model_Runner.Clocks.Read (Clock'Unchecked_Access)) & ASCII.LF)]);
       end if;
       if Root then
          Self.Notes.Refused := Null_Unbounded_String;
@@ -1285,7 +1315,35 @@ package body Model_Runner.CLI.Project_Commands is
       return To_String (Told);
    end Delegate;
 
-   function Figures (Self : Work_Tools'Class) return String is
+   --  Seconds to a tenth, from nanoseconds.
+   function Seconds_Of (Span : Model_Runner.Clocks.Nanoseconds) return String is
+      use type Model_Runner.Clocks.Nanoseconds;
+      Tenths : constant Model_Runner.Clocks.Nanoseconds := (Span + 50_000_000) / 100_000_000;
+      Whole  : constant String := Model_Runner.Clocks.Nanoseconds'Image (Tenths / 10);
+   begin
+      return Whole (Whole'First + 1 .. Whole'Last) & "." & Character'Val (Character'Pos ('0') + Natural (Tenths mod 10))
+        & " s";
+   end Seconds_Of;
+
+   --  Where the loop's time went, the harness's own the rest of it.
+   function Time_Split (Self : Work_Tools'Class; Now : Model_Runner.Clocks.Nanoseconds) return String is
+      use type Model_Runner.Clocks.Nanoseconds;
+      Whole  : constant Model_Runner.Clocks.Nanoseconds := Model_Runner.Clocks.Elapsed (Self.Began, Now);
+      Spent  : constant Model_Runner.Clocks.Nanoseconds :=
+        Self.Prompt_Ns + Self.Reply_Ns + Self.Check_Ns + Self.Helper_Ns + Self.Tool_Ns;
+   begin
+      return "time: " & Seconds_Of (Whole)
+        & " -- prompts read " & Seconds_Of (Self.Prompt_Ns)
+        & " (" & Natural'Image (Self.Read) (2 .. Natural'Image (Self.Read)'Last) & " tokens,"
+        & Natural'Image (Self.Reused) & " held)"
+        & ", replies " & Seconds_Of (Self.Reply_Ns)
+        & ", checks " & Seconds_Of (Self.Check_Ns)
+        & (if Self.Helper_Ns = 0 then "" else ", helpers " & Seconds_Of (Self.Helper_Ns))
+        & ", other tools " & Seconds_Of (Self.Tool_Ns)
+        & ", the harness " & Seconds_Of (Model_Runner.Clocks.Elapsed (Spent, Whole));
+   end Time_Split;
+
+   function Figures (Self : Work_Tools'Class; Now : Model_Runner.Clocks.Nanoseconds) return String is
      ("calls before the first change:" & Natural'Image (Self.Before_Change)
       & (if Self.Changed_Yet then "" else " (none made)")
       & "; whole reads:" & Natural'Image (Self.Whole_Reads)
@@ -1299,10 +1357,45 @@ package body Model_Runner.CLI.Project_Commands is
       & (if Self.Thoughts_Looped = 0 then ""
          else ", thoughts closed going round:" & Natural'Image (Self.Thoughts_Looped))
       & "; tokens generated:" & Natural'Image (Self.Generated)
-      & ", context at most:" & Natural'Image (Self.Context_Most));
+      & ", context at most:" & Natural'Image (Self.Context_Most)
+      & "; " & Time_Split (Self, Now));
 
    overriding procedure Run
      (Self      : in out Work_Tools;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      use type Model_Runner.Clocks.Nanoseconds;
+      Clock : aliased Model_Runner.Clocks.System_Clock;
+      From  : constant Model_Runner.Clocks.Nanoseconds := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
+
+      procedure Count is
+         Took : constant Model_Runner.Clocks.Nanoseconds :=
+           Model_Runner.Clocks.Elapsed (From, Model_Runner.Clocks.Read (Clock'Unchecked_Access));
+      begin
+         if Named = "run_checks" then
+            Self.Check_Ns := Self.Check_Ns + Took;
+         elsif Named = "delegate" then
+            Self.Helper_Ns := Self.Helper_Ns + Took;
+         else
+            Self.Tool_Ns := Self.Tool_Ns + Took;
+         end if;
+      end Count;
+   begin
+      Run_Call (Self, Named, Arguments, Result, Last, Outcome, Status);
+      Count;
+   exception
+      when others =>
+         Count;
+         raise;
+   end Run;
+
+   procedure Run_Call
+     (Self      : in out Work_Tools'Class;
       Named     : String;
       Arguments : String;
       Result    : out String;
@@ -1517,7 +1610,7 @@ package body Model_Runner.CLI.Project_Commands is
          Put ("error: the budget of" & Natural'Image (Budget)
               & (if Budget = 1 then " tool call" else " tool calls") & " is spent; give your answer now");
       elsif Named = "delegate" then
-         Put (Delegate (Self, Arguments, Outcome));
+         Put (Delegate (Work_Tools (Self), Arguments, Outcome));
          --  What is left of the run, for the turn's next helper: set once
          --  a step, before its calls, each delegate call's helpers were
          --  given half of the same.
@@ -1757,7 +1850,7 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
          end;
       end if;
-   end Run;
+   end Run_Call;
 
    --  The root's run, with children through Host or without them.
    procedure Work_On

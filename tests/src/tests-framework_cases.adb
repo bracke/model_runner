@@ -11556,6 +11556,18 @@ package body Tests.Framework_Cases is
                  "a helper was given half of what one before it in the turn was, its spending not counted:"
                  & First.Budget'Image & Again.Budget'Image & Second.Budget'Image);
       end;
+      --  And where the work's time went, said with its record: the
+      --  helpers' apart from the rest, the harness's own what is left.
+      declare
+         Said : constant String := To_String (Shown);
+         At_It : constant Natural := Ada.Strings.Fixed.Index (Said, "time: ");
+      begin
+         Assert (At_It > 0
+                 and then Ada.Strings.Fixed.Index (Said (At_It .. Said'Last), "prompts read ") > 0
+                 and then Ada.Strings.Fixed.Index (Said (At_It .. Said'Last), ", helpers ") > 0
+                 and then Ada.Strings.Fixed.Index (Said (At_It .. Said'Last), ", the harness ") > 0,
+                 "the record did not say where the work's time went: " & Said);
+      end;
       S.Close (Store);
       --  And what a helper's own helpers spent is its parent's to count:
       --  of the helper's own alone, the turn's next helper was given as if
