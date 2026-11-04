@@ -16,6 +16,7 @@ with Model_Runner.Platform.Topology;
 with Model_Runner.Text;
 
 with Ada.Containers;
+with Ada.Containers.Generic_Array_Sort;
 with Ada.Strings.Hash;
 
 with Model_Runner.Config;
@@ -566,38 +567,41 @@ package body Model_Runner.Platform is
       end loop;
       End_Search (Look);
 
-      --  Used longest ago first.
-      for I in 2 .. Held loop
-         for J in reverse 2 .. I loop
-            exit when List (J - 1).Used <= List (J).Used;
+      --  Used longest ago first, by their places: sorted in place, with
+      --  an insertion sort, the 1,836 files of a prefill cache moved their
+      --  names some eight hundred thousand times after every run's answer.
+      declare
+         type Places is array (Positive range <>) of Positive;
+         function Older (Left, Right : Positive) return Boolean
+         is (List (Left).Used < List (Right).Used);
+         procedure Sort is new Ada.Containers.Generic_Array_Sort (Positive, Positive, Places, Older);
+         Order : Places (1 .. Held);
+      begin
+         for I in Order'Range loop
+            Order (I) := I;
+         end loop;
+         Sort (Order);
+
+         for I of Order loop
+            exit when Total <= Most;
             declare
-               Swap : constant Found := List (J);
+               Name : constant String :=
+                 Ada.Strings.Unbounded.To_String (List (I).Name);
             begin
-               List (J) := List (J - 1);
-               List (J - 1) := Swap;
+               --  Aged only where an age was asked: Mark_Used stamps a whole
+               --  second, which can be half of one ahead of the clock.
+               if Full (Name) /= Kept
+                 and then (Settled = 0.0 or else Now - List (I).Used >= Settled)
+               then
+                  Delete_File (Name);
+                  Total := Total - List (I).Size;
+               end if;
+            exception
+               when others =>
+                  null;
             end;
          end loop;
-      end loop;
-
-      for I in 1 .. Held loop
-         exit when Total <= Most;
-         declare
-            Name : constant String :=
-              Ada.Strings.Unbounded.To_String (List (I).Name);
-         begin
-            --  Aged only where an age was asked: Mark_Used stamps a whole
-            --  second, which can be half of one ahead of the clock.
-            if Full (Name) /= Kept
-              and then (Settled = 0.0 or else Now - List (I).Used >= Settled)
-            then
-               Delete_File (Name);
-               Total := Total - List (I).Size;
-            end if;
-         exception
-            when others =>
-               null;
-         end;
-      end loop;
+      end;
    exception
       when others =>
          null;

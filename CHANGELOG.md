@@ -21,6 +21,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The cache folders are trimmed by a sort, not an insertion sort.** `Platform.Trim_Directory` ordered the files by their use by moving each record, its name with it, past every newer one: the prefill cache's 1,836 files, some eight hundred thousand moves after every run's answer. It sorts their places now, held by a platform test that the files used longest ago go first.
+
 - **The reminder after a reply with no call names no tool.** It told the model to call `write_file`, and a root whose task said not to write the file itself (it was to hand it to a helper) answered blocked. It now says to make the change with the calls the task needs.
 
 - **`edit_file` on a file not there points at `write_file`.** A helper made `docs/calc.md` with `edit_file` and `old_text` empty, heard "no file at docs/calc.md" and gave its part up; the answer now says `write_file` makes a new file.

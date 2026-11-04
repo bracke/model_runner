@@ -692,6 +692,23 @@ package body Tests.Platform_Cases is
       Assert (not Ada.Directories.Exists (Folder & "/newer.kv"),
               "the trim kept the folder over its bound");
       Ada.Directories.Delete_Tree (Folder);
+
+      --  And the files used longest ago go first, whatever order the
+      --  folder lists them in.
+      Ada.Directories.Create_Path (Folder);
+      Write ("c.kv", 2019);
+      Write ("a.kv", 2023);
+      Write ("d.kv", 2017);
+      Write ("b.kv", 2021);
+      Write ("e.kv", 2018);
+      Model_Runner.Platform.Trim_Directory (Folder, "*.kv", 250);
+      Assert (not Ada.Directories.Exists (Folder & "/d.kv")
+              and then not Ada.Directories.Exists (Folder & "/e.kv")
+              and then not Ada.Directories.Exists (Folder & "/c.kv")
+              and then Ada.Directories.Exists (Folder & "/b.kv")
+              and then Ada.Directories.Exists (Folder & "/a.kv"),
+              "a trim did not take the files used longest ago first");
+      Ada.Directories.Delete_Tree (Folder);
    end A_Trim_Keeps_The_File_However_It_Is_Named;
 
    --  A relative XDG base directory is ignored, as the specification says:
