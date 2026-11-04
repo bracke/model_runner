@@ -11,6 +11,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A `/work` step that must act is held to calls.** The first reply of a run, and one sent back to act ("you have not called a tool", checks that failed), is generated under a call grammar with no prose and no report in it (`Agent.Run`'s `Call_First`, `Compile_Call_Grammar`'s `Call_Required`), for the JSON envelope and the tag call forms; a step whose prompt opened a thought keeps the ordinary rules, and under these the thought must open in the reply -- left optional, Steelman-14B wrote its report as an unclosed thought to its token limit. On Steelman's edit, find and delegate trials, six alternated rounds against before: 18 of 18 complete against 12 (delegate 6 against 2).
+
 - **A `/work` helper is told its part in the words its root is told the task.** It opens as "one part of a task in a project" rather than "helping an agent", its brief is "Your part" with the files it starts from quoted and numbered as a task's own are (where they fit), and its "What to do" is the root's -- do it now with your tools, describing a change does not make it, report when the files are written -- with findings: in its report, or the root's read-and-answer form where it may write nothing (`Framework.Work.Child_Opening`, `Child_Instructions`). `run`'s helpers keep theirs. On Steelman-14B's delegate trial, six alternated rounds: complete 2 of 6 either way, the helper writing the tool list out in place of a call 4 runs of 6 before and none after, the median run 198 s before and 74 s after.
 
 - **Every model reply of a `/work` run is kept on its invocation.** Each reply's words, up to 16 KiB, are a `reply.NNNN` entry beside its `call.NNNN` ones (`Invocations.Note_Reply`, `Replies_Of`), the root's and each helper's on their own: a helper that said it had written a file without a call was known before only by its summary line. Read on Steelman-14B's delegate trial, they show the "schema echo" is the helper writing out the tool list (`<tools>` and the definitions), which the open reader takes for calls, and the helpers that call nothing answering with the report straight away, and the same words again when told they called nothing.
@@ -20,6 +22,8 @@ Keep a Changelog and the project uses semantic versioning.
 - **The speech figures re-measured** at a lower load, with every change of today in them, and a Whisper held but idle measured: no cost to the conversation's generation on either backend, its threads asleep.
 
 ### Fixed
+
+- **`edit_file` takes only a read's revision as one.** A `revision` that is not sixteen hex digits, as a read gives, stands for none -- a model held to a call before it read the file filled the optional field with `"0"`, was told the file had changed since it read it, and gave the task up. A revision of a read's shape that is not the file's is refused as before.
 
 - **A `/work` reply stops where it writes a tool's answer itself.** Where the template's calls are the JSON envelope, the loop's stops are the session's and `<tool_response>` beside them (`Stops.Copy`): a Steelman-14B helper wrote its calls' errors back as `<tool_response>` blocks and went on. The session's own conversation keeps its stops.
 

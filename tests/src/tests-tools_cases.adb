@@ -105,7 +105,7 @@ package body Tests.Tools_Cases is
 
    --  Whether the call grammar, compiled from the built-in tools, accepts a
    --  text whole and calls it complete.
-   function Grammar_Takes (Text : String) return Boolean is
+   function Grammar_Takes (Text : String; Required : Boolean := False) return Boolean is
       Defs   : Tools.Definitions;
       Rules  : G.Compiled;
       State  : G.Matcher;
@@ -115,7 +115,7 @@ package body Tests.Tools_Cases is
       Tools.Read (Defs, Builtin.Definitions_Text, Status);
       Assert (E.Is_Ok (Status), "the built-in definitions would not read");
 
-      Constraint.Compile_Call_Grammar (Defs, Rules, Status);
+      Constraint.Compile_Call_Grammar (Defs, Rules, Status, Call_Required => Required);
       Assert (E.Is_Ok (Status),
               "the call grammar would not compile: "
               & E.Error_Code'Image (Status.Code));
@@ -1885,6 +1885,35 @@ package body Tests.Tools_Cases is
            ("<tool_call>{""name"": ""lookup"", ""arguments"": "
             & "{""key"":""nonesuch""}}</tool_call>"),
          "the grammar took a lookup call with a key outside its enum");
+
+      --  A step that must act takes calls and nothing else: a call, and a
+      --  thought before it, but no report in its place -- told in words to
+      --  call, a 14B helper wrote "status: done" for a file it never wrote.
+      Assert
+        (Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>", Required => True)
+         and then Grammar_Takes
+           ("<think>multiply</think><tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>", Required => True),
+         "a grammar that requires a call refused one");
+      Assert
+        (not Grammar_Takes ("status: done" & ASCII.LF & "summary: wrote it", Required => True)
+         and then not Grammar_Takes
+           ("I will call it." & ASCII.LF & "<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>", Required => True),
+         "a grammar that requires a call took a reply that is not only calls");
+      --  Its thought is opened in the reply: prose taken as the inside of a
+      --  thought the prompt never opened let the 14B write its report there,
+      --  unclosed, to its token limit.
+      Assert
+        (not Grammar_Takes
+           ("status: done</think><tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>", Required => True)
+         and then Grammar_Takes
+           ("status: done</think><tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>"),
+         "a grammar that requires a call took a thought it never opened");
    end Grammar_Constrains;
 
    --  retrieve ranks a folder's passages against a query: the file that
@@ -3065,6 +3094,17 @@ package body Tests.Tools_Cases is
                      Room, Last, Ended, Status);
          Assert (Whole_File (Tree & "/gone.txt") = "a" & ASCII.LF & "c" & ASCII.LF,
                  "a loose edit to nothing left a blank line: " & Whole_File (Tree & "/gone.txt"));
+         --  A revision no read gave -- "0", filled in by a model held to a
+         --  call before it read the file -- is no revision; one of a read's
+         --  shape that is not the file's is still refused.
+         Placed.Run ("edit_file", "{""path"": ""gone.txt"", ""old_text"": ""c\n"", ""new_text"": ""d\n"","
+                     & " ""revision"": ""0""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed and then Whole_File (Tree & "/gone.txt") = "a" & ASCII.LF & "d" & ASCII.LF,
+                 "an edit naming revision 0 was refused: " & Room (Room'First .. Last));
+         Placed.Run ("edit_file", "{""path"": ""gone.txt"", ""old_text"": ""d\n"", ""new_text"": ""e\n"","
+                     & " ""revision"": ""0123456789abcdef""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed and then Whole_File (Tree & "/gone.txt") = "a" & ASCII.LF & "d" & ASCII.LF,
+                 "an edit naming another revision was taken: " & Room (Room'First .. Last));
          --  A file no one may write is not written over.
          Placed.Run ("write_file", "{""path"": ""locked.txt"", ""content"": ""mine""}", Room, Last, Ended, Status);
          declare

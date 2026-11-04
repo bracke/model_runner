@@ -65,12 +65,20 @@ package Model_Runner.Tools.Constraint is
    --    forms admit a <think> block ahead of the reply, since the families
    --    that write them reason in one, and it is a '<' the prose rule could
    --    not otherwise carry.
+   --  @param Call_Required Whether the reply must be calls and nothing
+   --    else -- a thought before them where the family thinks -- as a step
+   --    that must act is held: told in words to call, a Steelman-14B helper
+   --    answered with a report of work it had not done. Honoured on the
+   --    tight path of the JSON envelope and the tag forms; elsewhere, and
+   --    where a tool's schema forces the loose grammar, the reply is as
+   --    free as it would have been.
    procedure Compile_Call_Grammar
      (Offered       : Model_Runner.Tools.Definitions;
       Into          : in out Model_Runner.Grammar.Compiled;
       Status        : out Model_Runner.Errors.Error_Info;
       Answer_Schema : String := "";
       Syntax        : Model_Runner.Tools.Call_Syntax :=
-        Model_Runner.Tools.Tool_Call_JSON);
+        Model_Runner.Tools.Tool_Call_JSON;
+      Call_Required : Boolean := False);
 
 end Model_Runner.Tools.Constraint;

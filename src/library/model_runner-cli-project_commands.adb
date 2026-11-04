@@ -673,6 +673,11 @@ package body Model_Runner.CLI.Project_Commands is
       --  The messages whose replies the invocation has: those after are
       --  the round's own.
       Replied : Natural := 0;
+      --  Whether the round's first reply must be calls: the first round's,
+      --  and one sent back to act -- not one asked for its report. Left
+      --  free, Steelman-14B's helpers answered with a report of a file
+      --  they never wrote, word for word again when told they had not.
+      Must_Call : Boolean := True;
       Asked_To_Fix    : Boolean := False;
       --  What the loop holds of its calls, carried from round to round.
       Rounds_Memory   : aliased Model_Runner.Agent.Recall.Carried;
@@ -844,6 +849,7 @@ package body Model_Runner.CLI.Project_Commands is
             Pace_Tokens => (if Host /= null and then Wk.Is_Paced (Host.all) then Wk.Pace_Tokens else 0),
             --  The task's, its root's and its helpers' together.
             Pace        => (if Host /= null then Wk.Pace_Of (Host.all) else Rounds_Pace'Unchecked_Access),
+            Call_First  => Must_Call,
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran
@@ -920,6 +926,7 @@ package body Model_Runner.CLI.Project_Commands is
          begin
             case Wk.Next_Step (State) is
                when Wk.Ask_To_Fix =>
+                  Must_Call := True;
                   Asked_To_Fix := True;
                   Doing := Model_Runner.Framework.Inference_Policy.Failure_Recovery;
                   Conv.Append
@@ -928,6 +935,7 @@ package body Model_Runner.CLI.Project_Commands is
                      & " error is in its answer above -- run the checks again, and report status: done only"
                      & " when they pass.", Status);
                when Wk.Check_For_It =>
+                  Must_Call := True;
                   declare
                      Report : Unbounded_String;
                      Ran    : E.Error_Info;
@@ -945,6 +953,7 @@ package body Model_Runner.CLI.Project_Commands is
                         & " they pass.", Status);
                   end;
                when Wk.Ask_To_Mend =>
+                  Must_Call := False;
                   Asked_To_Mend := True;
                   Doing := Model_Runner.Framework.Inference_Policy.Result_Reporting;
                   Conv.Append
@@ -953,6 +962,7 @@ package body Model_Runner.CLI.Project_Commands is
                      & ". Finish again with the report lines as you were told -- status:, summary: and"
                      & " changed_files:, each on a line of its own.", Status);
                when Wk.Ask_To_Report =>
+                  Must_Call := False;
                   Asked_To_Report := True;
                   Doing := Model_Runner.Framework.Inference_Policy.Result_Reporting;
                   Conv.Append
@@ -961,6 +971,7 @@ package body Model_Runner.CLI.Project_Commands is
                      & " If the task is done, finish now with the report lines: status: done, summary:,"
                      & " changed_files:.", Status);
                when Wk.Ask_To_Call =>
+                  Must_Call := True;
                   --  Not told which tool: told write_file, a root whose
                   --  task said not to write the file itself said blocked.
                   Doing := Model_Runner.Framework.Inference_Policy.Task_Work;

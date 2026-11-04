@@ -274,8 +274,13 @@ package body Model_Runner.Tools.Constraint is
    --  by the first '<' it wrote.
    --  Its body any reasoning but the close: held from every "</" once, it
    --  could close no tag it quoted.
-   function Think_Rule return String
-   is ("think ::= ""<think>""? think_body ""</think>"" ws" & ASCII.LF
+   --  Where calls are all a reply may be, the opening tag is not optional:
+   --  with it so, any prose that closed a think block was a reply's start,
+   --  and Steelman, held from writing its report, wrote it as reasoning it
+   --  never closed, to its token limit -- 965 s for an edit against 71.
+   function Think_Rule (Opened : Boolean := False) return String
+   is ("think ::= ""<think>""" & (if Opened then "" else "?")
+       & " think_body ""</think>"" ws" & ASCII.LF
        & Model_Runner.Grammar.Excluding ("think_body", "</think>"));
 
    --  The loose grammar for a tag syntax: the envelope around parameters
@@ -376,7 +381,8 @@ package body Model_Runner.Tools.Constraint is
       Scratch       : Text_Access;
       B             : in out Builder;
       Ok            : out Boolean;
-      Syntax        : Call_Syntax)
+      Syntax        : Call_Syntax;
+      Call_Required : Boolean := False)
    is
       Count_Of     : constant Natural := Count (Offered);
       Typed_Answer : constant Boolean := Answer_Schema /= "";
@@ -389,7 +395,10 @@ package body Model_Runner.Tools.Constraint is
       --  it (Model_Runner.Schema emits a shared ws rule), and those helpers
       --  are emitted once below; defining it here too would be a duplicate
       --  rule and refuse the grammar.
-      if Typed_Answer then
+      if Call_Required then
+         --  Calls and nothing else: a step that must act.
+         Put (B, "root ::= think? calls" & ASCII.LF);
+      elsif Typed_Answer then
          --  A reply is a call or the answer, in the shape asked for -- no
          --  free prose. The answer rule is defined after the tools, from the
          --  same shared helpers.
@@ -398,7 +407,7 @@ package body Model_Runner.Tools.Constraint is
          Put (B, "root ::= think? prose calls?" & ASCII.LF);
          Put (B, Prose_Rule (Syntax));
       end if;
-      Put (B, Think_Rule);
+      Put (B, Think_Rule (Opened => Call_Required));
       Put (B, Calls_Rule (Syntax));
 
       Put (B, "call ::= ");
@@ -790,7 +799,8 @@ package body Model_Runner.Tools.Constraint is
       Status        : out Model_Runner.Errors.Error_Info;
       Answer_Schema : String := "";
       Syntax        : Model_Runner.Tools.Call_Syntax :=
-        Model_Runner.Tools.Tool_Call_JSON)
+        Model_Runner.Tools.Tool_Call_JSON;
+      Call_Required : Boolean := False)
    is
       Tool_Count : constant Natural := Count (Offered);
    begin
@@ -909,7 +919,8 @@ package body Model_Runner.Tools.Constraint is
          --  tool's schema cannot be read or the result will not compile. The
          --  answer schema is honoured only on the tight path; the loose
          --  fallback leaves the answer as free text.
-         Build_Tight (Offered, Answer_Schema, Scratch, Tight, Ok, Syntax);
+         Build_Tight (Offered, (if Call_Required then "" else Answer_Schema), Scratch, Tight, Ok, Syntax,
+                      Call_Required => Call_Required);
          if Ok then
             Model_Runner.Grammar.Compile
               (Into, Tight.Room (1 .. Tight.Used), Status);

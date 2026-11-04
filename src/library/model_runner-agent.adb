@@ -154,6 +154,7 @@ package body Model_Runner.Agent is
       Pace_Tokens : Natural := 0;
       Pace        : Pace_Reference := null;
       Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
+      Call_First  : Boolean := False;
       Result     : out Outcome)
    is
       --  The shape the model's calls are read in: the caller's, unless it
@@ -209,6 +210,12 @@ package body Model_Runner.Agent is
       Grammar_Room  : Model_Runner.Grammar.Rooms.Holder;
       Rules_Grammar : Model_Runner.Grammar.Compiled renames Grammar_Room.Data.all;
       Rules         : Gen.Grammar_Reference := null;
+
+      --  The first reply's grammar where it must be calls: compiled apart,
+      --  in the envelope the template writes where the rest are read open.
+      Required_Room : Model_Runner.Grammar.Rooms.Holder;
+      Required      : Model_Runner.Grammar.Compiled renames Required_Room.Data.all;
+      First_Rules   : Gen.Grammar_Reference := null;
 
       --  A generation request the loop owns the discipline of. The caller's
       --  sampling and budget are kept; the three fields the loop must decide
@@ -640,6 +647,24 @@ package body Model_Runner.Agent is
          end if;
          Rules := Rules_Grammar'Unchecked_Access;
       end if;
+      if Call_First and then Have_Tools
+        and then Read_Syntax in Model_Runner.Tools.Open_JSON | Model_Runner.Tools.Tool_Call_JSON
+                              | Model_Runner.Tools.Qwen_XML | Model_Runner.Tools.Function_XML
+      then
+         declare
+            Made : E.Error_Info;
+         begin
+            Model_Runner.Tools.Constraint.Compile_Call_Grammar
+              (Offered, Required, Made,
+               Syntax        => (if Read_Syntax = Model_Runner.Tools.Open_JSON
+                                 then Model_Runner.Tools.Tool_Call_JSON else Read_Syntax),
+               Call_Required => True);
+            --  One that will not compile leaves the first reply as the rest.
+            if E.Is_Ok (Made) then
+               First_Rules := Required'Unchecked_Access;
+            end if;
+         end;
+      end if;
 
       Step_Loop :
       loop
@@ -882,7 +907,9 @@ package body Model_Runner.Agent is
                      Prompt   => Rendered.all,
                      Item     => Request,
                      Stop_Set => Stop_Set,
-                     Rules    => Rules,
+                     Rules    =>
+                       (if Gen."/=" (First_Rules, null) and then Result.Steps = 0 and then not Prompt_Thought
+                        then First_Rules else Rules),
                      Sink     => Watched,
                      Observer => null,
                      Time     => Time,
@@ -974,7 +1001,11 @@ package body Model_Runner.Agent is
                            --  The call grammar holds a reply from its start:
                            --  after a closing it starts one again, but in the
                            --  middle of a call begun it would ask for another.
-                           Rules    => (if Was_Open then Rules else null),
+                           Rules    =>
+                             (if not Was_Open then null
+                              elsif Gen."/=" (First_Rules, null) and then Result.Steps = 0
+                                and then not Prompt_Thought then First_Rules
+                              else Rules),
                            Sink     => Watched,
                            Observer => null,
                            Time     => Time,

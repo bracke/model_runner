@@ -1070,6 +1070,12 @@ package body Model_Runner.Tools.Editing is
    is
       Held   : U.Unbounded_String;
       Status : E.Error_Info;
+      --  A revision as a read gives one, sixteen hex digits. Any other was
+      --  never read and stands for none: Steelman, held to a call before
+      --  it read the file, filled the optional field with "0", was refused
+      --  as if the file had changed, and gave the task up.
+      Read_Revision : constant Boolean :=
+        Expected'Length = 16 and then (for all C of Expected => C in '0' .. '9' | 'a' .. 'f');
    begin
       Read_Text (Path, Held, Status, Base);
       --  A file not there is made by write_file: a helper edited one into
@@ -1084,7 +1090,7 @@ package body Model_Runner.Tools.Editing is
          Text : constant String := U.To_String (Held);
          Now  : constant String := Revision (Text);
       begin
-         if Expected /= "" and then Expected /= Now then
+         if Read_Revision and then Expected /= Now then
             return Failing (Path & " has changed since you read it (you read revision " & Expected
                             & ", it is now " & Now & "): read it again, then edit what is there");
          elsif Old_Text = "" then

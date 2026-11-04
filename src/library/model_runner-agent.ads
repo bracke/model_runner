@@ -493,6 +493,10 @@ package Model_Runner.Agent is
    --    final one -- run --hide-reasoning.
    --  @param Round_Rule When a thought that goes round is closed; null
    --    for its family's (Round_Rule_For).
+   --  @param Call_First Whether the loop's first reply must be calls and
+   --    nothing else, held by the call grammar where the call syntax has a
+   --    tight one (Tools.Constraint, Call_Required) -- the JSON envelope
+   --    included, though its later replies are read in the open form.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
    --  @param Approve The gate asked before each fresh call runs, or null to
@@ -575,6 +579,7 @@ package Model_Runner.Agent is
       Pace_Tokens : Natural := 0;
       Pace        : Pace_Reference := null;
       Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
+      Call_First  : Boolean := False;
       Result     : out Outcome);
 
    --  gpt-oss's rule (harmony), at high effort: a line come an eighth time
