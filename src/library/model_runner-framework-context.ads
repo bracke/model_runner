@@ -135,6 +135,8 @@ package Model_Runner.Framework.Context is
    --  @param Result The context and its manifest.
    --  @param Status Framework_Context_Overflow when it does not fit.
    --  @param Instructions As for Build.
+   --  @param Inputs The files it starts from, quoted where they fit.
+   --  @param Tree The tree they are read in, as for Build.
    procedure Build_Brief
      (Item    : Stores.Store;
       Task_Id : String;
@@ -143,7 +145,9 @@ package Model_Runner.Framework.Context is
       Brief   : String;
       Result  : out Built;
       Status  : out Model_Runner.Errors.Error_Info;
-      Instructions : String := "");
+      Instructions : String := "";
+      Inputs  : Name_Lists.Vector := Name_Lists.Empty_Vector;
+      Tree    : String := "");
 
    --  The context's identifier: CTX- and its fingerprint.
    --

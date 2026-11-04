@@ -1143,6 +1143,16 @@ package body Model_Runner.CLI.Project_Commands is
       Asked    : constant String := To_String (Contract.Task_Text);
       Brief    : constant String := Rt.Brief (Contract);
       Named_Outputs : constant Rt.Paths.Vector := Contract.Outputs;
+      --  The files it starts from, as its context quotes them.
+      function Inputs_Of return Model_Runner.Framework.Name_Lists.Vector is
+      begin
+         return Listed : Model_Runner.Framework.Name_Lists.Vector do
+            for Path of Contract.Inputs loop
+               Listed.Append (Path);
+            end loop;
+         end return;
+      end Inputs_Of;
+      Inputs_Named : constant Model_Runner.Framework.Name_Lists.Vector := Inputs_Of;
 
       --  What each output held before the helper ran.
       --  Read in the tree the helper writes in: a workspace's, where the
@@ -1209,7 +1219,8 @@ package body Model_Runner.CLI.Project_Commands is
                --  one that writes code (inference.helpers).
                Documents_Only => not Named_Outputs.Is_Empty
                                  and then (for all Path of Named_Outputs =>
-                                             Model_Runner.Framework.Inference_Policy.Is_Document (Path)));
+                                             Model_Runner.Framework.Inference_Policy.Is_Document (Path)),
+               Inputs => Inputs_Named);
             --  Run once more and not made: the helper that ran failed, and
             --  that is the call's ending -- a refusal, it read as one no
             --  helper may be made for, after "failed, and was run once more".

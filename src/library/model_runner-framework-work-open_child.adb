@@ -10,7 +10,8 @@ procedure Open_Child
    Budget   : out Natural;
    Status   : out Model_Runner.Errors.Error_Info;
    Left     : Natural := Natural'Last;
-   Documents_Only : Boolean := False)
+   Documents_Only : Boolean := False;
+   Inputs   : Name_Lists.Vector := Name_Lists.Empty_Vector)
 is
    Change  : Stores.Transaction;
    Parent  : constant String := Current (Host);
@@ -101,6 +102,18 @@ begin
       Made   : Framework.Context.Built;
       Called : Unbounded_String;
 
+      --  Whether it may change files: one that may not is told to read and
+      --  answer, as a root that may write nothing is.
+      function Child_Writes return Boolean is
+         Held : Agents.Agent;
+         Got  : E.Error_Info;
+      begin
+         Agents.Read (Host.Item.all, To_String (Child_Id), Held, Got);
+         return E.Is_Error (Got)
+           or else Holds_Now (Host, Held, Permissions.Write_Source)
+           or else Holds_Now (Host, Held, Permissions.Write_Specs);
+      end Child_Writes;
+
       --  What it may do, told it as the root agent is told: where it
       --  may write, whether it may make helpers or propose work.
       function Child_Allowed return String is
@@ -161,8 +174,12 @@ begin
    begin
       Framework.Context.Build_Brief
         (Host.Item.all, To_String (Host.Task_Id), Host.Model,
-         Model_Runner.Agent_Runtime.Helper_Opening (Named),
-         Brief, Made, Read, Instructions => Child_Instructions & Child_Allowed);
+         Child_Opening (Named),
+         Brief, Made, Read,
+         Instructions => Child_Instructions
+                           (May_Write => Child_Writes, May_Check => May_Check (Host, Task_Profile (Host)))
+                         & Child_Allowed,
+         Inputs => Inputs, Tree => (if Host.Apart then To_String (Host.Tree) else ""));
       if E.Is_Ok (Read) then
          Framework.Context.Keep (Host.Item.all, Change, Made, Read);
       end if;

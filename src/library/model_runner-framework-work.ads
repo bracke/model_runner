@@ -158,6 +158,8 @@ package Model_Runner.Framework.Work is
    --    given half the record's rest took what the parent spent meanwhile.
    --  @param Documents_Only Whether every output the helper must write is
    --    a document, which inference.helpers may set apart.
+   --  @param Inputs The files it starts from, quoted in its context where
+   --    they fit.
    procedure Open_Child
      (Host     : in out Child_Host;
       Role     : String;
@@ -169,7 +171,8 @@ package Model_Runner.Framework.Work is
       Budget   : out Natural;
       Status   : out Model_Runner.Errors.Error_Info;
       Left     : Natural := Natural'Last;
-      Documents_Only : Boolean := False);
+      Documents_Only : Boolean := False;
+      Inputs   : Name_Lists.Vector := Name_Lists.Empty_Vector);
 
    --  Take the innermost open child's answer: hold it to the child result
    --  contract, keep it, charge what it used and record how it ended.
@@ -1026,10 +1029,21 @@ package Model_Runner.Framework.Work is
    --  @return The answers, as QUESTION: ANSWER.
    function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector;
 
-   --  What a child is told after its context: how to answer.
+   --  What a /work helper is told after its context: how to work and
+   --  answer, in the words its root is told them.
    --
+   --  @param May_Write Whether it may change files: one that may not is
+   --    told to read and answer.
+   --  @param May_Check Whether it may run the project's checks.
    --  @return The text.
-   function Child_Instructions return String;
+   function Child_Instructions (May_Write : Boolean := True; May_Check : Boolean := True) return String;
+
+   --  What a /work helper's context opens with, in the words a task's
+   --  opens with.
+   --
+   --  @param Role What it is for, as its parent named it.
+   --  @return The text.
+   function Child_Opening (Role : String) return String;
 
    --  The instructions an agent is given after its context: how to answer.
    --

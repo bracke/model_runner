@@ -6140,7 +6140,7 @@ package body Tests.Framework_Cases is
       --  nothing of the task's own context.
       Cx.Build_Brief (Store, To_String (Id), Profile, "Help it.", "Look at a.adb", Two, Status);
       Assert (E.Is_Ok (Status)
-              and then Ada.Strings.Fixed.Index (Cx.Rendered (Two), "What you are asked") > 0
+              and then Ada.Strings.Fixed.Index (Cx.Rendered (Two), "Your part") > 0
               and then Ada.Strings.Fixed.Index (Cx.Rendered (Two), "Look at a.adb") > 0
               and then Cx.Manifest_Id (Two) /= Cx.Manifest_Id (One)
               and then Cx.Included_Count (Two) = 3,
@@ -11327,6 +11327,18 @@ package body Tests.Framework_Cases is
       Assert (Ada.Strings.Fixed.Index (Wk.Instructions_Of (Store, To_String (Id)), "status:") > 0
               and then Ada.Strings.Fixed.Index (Wk.Child_Instructions, "status:") > 0,
               "the instructions did not say how to answer");
+      --  A helper told as its root is: to act now, and that describing a
+      --  change does not make it -- or, where it may write nothing, to read
+      --  and answer; its opening in a task's words, with its role.
+      Assert (Ada.Strings.Fixed.Index (Wk.Child_Instructions, "describing a change does not make it") > 0
+              and then Ada.Strings.Fixed.Index (Wk.Child_Instructions, "changed_files:") > 0
+              and then Ada.Strings.Fixed.Index
+                         (Wk.Child_Instructions (May_Write => False), "you may change no file") > 0
+              and then Ada.Strings.Fixed.Index (Wk.Child_Instructions (May_Write => False), "edit_file") = 0
+              and then Ada.Strings.Fixed.Index (Wk.Child_Instructions (May_Check => False), "run_checks") = 0
+              and then Ada.Strings.Fixed.Index (Wk.Child_Opening ("reviewer"), "one part of a task, ") = 0
+              and then Ada.Strings.Fixed.Index (Wk.Child_Opening ("reviewer"), "as its reviewer") > 0,
+              "a helper was not told how to work as its root is");
       Assert (Wk.Unable_Reason (Store, To_String (Id)) = "", "a task able to work was said unable");
 
       --  The configuration's settings: what each means and its default,
@@ -17554,9 +17566,17 @@ package body Tests.Framework_Cases is
       procedure Ask (Need, Said : String; Retry_Of : String := ""; Close : Boolean := True;
                      Ran : E.Error_Info := E.Success) is
       begin
+         --  Its input quoted, numbered, as a task's own files are: told only
+         --  its name, a 14B helper said it was not there.
+         Dirs.Create_Path (Project & "/src");
+         Put_File (Project & "/src/input.adb", "procedure Input is begin null; end;");
          Children.Open_Child
-           ("reviewer", Need, "look at hello", Retry_Of, Id, Context, Budget, Parent_Status);
+           ("reviewer", Need, "look at hello", Retry_Of, Id, Context, Budget, Parent_Status,
+            Inputs => F.Name_Lists.To_Vector ("src/input.adb", 1));
          if E.Is_Ok (Parent_Status) then
+            Assert (Ada.Strings.Fixed.Index (To_String (Context), "## The file src/input.adb (quoted") > 0
+                    and then Ada.Strings.Fixed.Index (To_String (Context), "1: procedure Input is") > 0,
+                    "a child was not given the file it starts from: " & To_String (Context));
             Assert (Ada.Strings.Fixed.Index (To_String (Context), "look at hello") > 0
                     and then Ada.Strings.Fixed.Index (To_String (Context), "status: done") > 0
                     and then Budget > 0 and then Children.Current = To_String (Id),

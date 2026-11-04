@@ -106,7 +106,7 @@ package body Model_Runner.Framework.Context is
       elsif Kind = "helped" then
          return "The task it works on, " & Id (Id'First .. Ada.Strings.Fixed.Index (Id, "#") - 1);
       elsif Kind = "brief" then
-         return "What you are asked";
+         return "Your part";
       elsif Kind = "source" then
          return "The file " & Id (Id'First + 5 .. Id'Last);
       elsif Kind'Length > 6 and then Kind (Kind'First .. Kind'First + 5) = "code: " then
@@ -658,6 +658,27 @@ package body Model_Runner.Framework.Context is
       return True;
    end Decode;
 
+   --  A file's or an excerpt's lines, each led by its number, as a read of
+   --  part of a file shows them: told to give the line a function is
+   --  declared on, qwen3-8b had the file whole and no number in it, took
+   --  another excerpt's and asked for lines past the file's end until it
+   --  was stopped -- twice in three runs.
+   function Numbered (Text : String; First : Positive) return String is
+      Result : Unbounded_String;
+      Line   : Positive := First;
+      Start  : Positive := Text'First;
+   begin
+      for Index in Text'Range loop
+         if Text (Index) = ASCII.LF or else Index = Text'Last then
+            Append (Result, Image (Line) & ": "
+                    & Text (Start .. (if Text (Index) = ASCII.LF then Index - 1 else Index)) & ASCII.LF);
+            Line := Line + 1;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return To_String (Result);
+   end Numbered;
+
    --  Fit what is offered to the model's room -- mandatory whatever it
    --  costs, the rest by priority while it fits, the same text once -- and
    --  take the fingerprint of everything the manifest says.
@@ -864,27 +885,6 @@ package body Model_Runner.Framework.Context is
       --  Each file offered, as its item and its revision, read whole.
       File_Revisions : Name_Lists.Vector;
       Component  : Unbounded_String;
-
-      --  A file's or an excerpt's lines, each led by its number, as a read of
-      --  part of a file shows them: told to give the line a function is
-      --  declared on, qwen3-8b had the file whole and no number in it, took
-      --  another excerpt's and asked for lines past the file's end until it
-      --  was stopped -- twice in three runs.
-      function Numbered (Text : String; First : Positive) return String is
-         Result : Unbounded_String;
-         Line   : Positive := First;
-         Start  : Positive := Text'First;
-      begin
-         for Index in Text'Range loop
-            if Text (Index) = ASCII.LF or else Index = Text'Last then
-               Append (Result, Image (Line) & ": "
-                       & Text (Start .. (if Text (Index) = ASCII.LF then Index - 1 else Index)) & ASCII.LF);
-               Line := Line + 1;
-               Start := Index + 1;
-            end if;
-         end loop;
-         return To_String (Result);
-      end Numbered;
 
       --  Where a piece's lines begin: an excerpt's, as its identifier
       --  says (code:PATH#FIRST-LAST); a file's at its first.
@@ -2115,7 +2115,9 @@ package body Model_Runner.Framework.Context is
       Brief   : String;
       Result  : out Built;
       Status  : out Model_Runner.Errors.Error_Info;
-      Instructions : String := "")
+      Instructions : String := "";
+      Inputs  : Name_Lists.Vector := Name_Lists.Empty_Vector;
+      Tree    : String := "")
    is
       Defined    : Records.Item;
       Config     : Records.Item;
@@ -2164,6 +2166,32 @@ package body Model_Runner.Framework.Context is
              & (if Records.Get (Defined, "component") = "" then ""
                 else "component: " & Records.Get (Defined, "component") & ASCII.LF));
       Offer ("brief", "brief", Brief);
+      --  The files it starts from, quoted as a task's own are -- where they
+      --  fit, not mandatory.
+      for Path of Inputs loop
+         declare
+            Full : constant String := Hostkit.Fs.Join (Tree_Of (Item, Tree), Path);
+            Text : Unbounded_String;
+            Got  : E.Error_Info;
+         begin
+            if Ada.Directories.Exists (Full)
+              and then Ada.Directories."=" (Ada.Directories.Kind (Full), Ada.Directories.Ordinary_File)
+            then
+               Files.Read_Text (Full, Text, Got);
+               if E.Is_Ok (Got) and then Length (Text) > 0 then
+                  Candidates.Append
+                    (Context.Item'(Id   => To_Unbounded_String ("file:" & Path),
+                                   Kind => To_Unbounded_String ("source"),
+                                   Rank => High,
+                                   Text => To_Unbounded_String (Numbered (To_String (Text), 1))));
+               end if;
+            end if;
+         exception
+            when others =>
+               --  An offer, not a requirement: a file that cannot be read is not offered.
+               null;
+         end;
+      end loop;
       Settle (Candidates, Task_Id, Result, Status);
    end Build_Brief;
 
