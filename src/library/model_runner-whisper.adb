@@ -819,8 +819,16 @@ package body Model_Runner.Whisper is
       end if;
    end Free_Panels;
 
+   --  The device's copies of the session's matrices and norms forgotten.
+   procedure Forget_Matrices (Item : in out Session);
+
    procedure Close (Item : in out Session) is
    begin
+      --  Kept, the device holds the session's norms too, by the address of
+      --  a buffer freed here that the next allocation may be given.
+      if Item.Source /= null and then Item.Keep_On_Device then
+         Forget_Matrices (Item);
+      end if;
       if Item.Source /= null then
          Item.Source.Open_Sessions := Item.Source.Open_Sessions - 1;
          Item.Source := null;
@@ -1567,14 +1575,6 @@ package body Model_Runner.Whisper is
       end if;
    end Forget_Matrices;
 
-   --  Where Whisper's part of the device's cache was put last, by any
-   --  session, and where the cache it reserved ended: taken while the turn
-   --  is held, so by one task at a time. Each turn's part was put past what
-   --  the cache last held -- its own part from the turn before among it --
-   --  so every transcription grew the cache by a part, and the corpus's
-   --  ninth recording copied eight to reserve its own.
-   Last_Base, Last_End : Element_Count := 0;
-
    --  The device's turn taken for what follows, where the session asks for
    --  the device, it is open and lent, and it has room beside the
    --  conversation's model; Took says whether this call took it, and
@@ -1595,35 +1595,41 @@ package body Model_Runner.Whisper is
          return;
       end if;
       Item.Borrowed := True;
-      --  The part where it was where nothing has reserved the cache since;
-      --  past the conversation's otherwise.
-      Item.Cache_Base :=
-        (if Last_End > 0 and then Model_Runner.Backend.Device.Cached_Elements = Last_End then Last_Base
-         else Model_Runner.Backend.Device.Cached_Elements);
-      --  A token reads the half-precision copy of what was heard: its
-      --  attention is the bytes it reads, and the copy is half of them.
-      --  The conversation's choice is put back with the turn.
       Item.Halves_Were := Model_Runner.Backend.Device.Attends_In_Halves;
-      Model_Runner.Backend.Device.Attend_In_Halves (True);
-      Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok);
-      --  Without the candidates' rows where there is no room for them: a
-      --  window drawn again draws on the pool then.
-      if not Ok and then Item.Wide > 0 then
-         Item.Wide := 0;
-         Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok);
-      end if;
-      --  The end as the cache records it, which a reservation that grew
-      --  it puts a quarter past what was asked.
-      if Ok then
-         Last_Base := Item.Cache_Base;
-         Last_End := Model_Runner.Backend.Device.Cached_Elements;
-      end if;
-      if not Ok then
-         Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
-         Model_Runner.Backend.Device.Return_Turn;
-         Item.Borrowed := False;
-         Took := False;
-      end if;
+      --  Taken, it is given back on the way out of a fault here: the caller
+      --  hears nothing of the taking then, a Boolean out not being copied
+      --  back past an exception, and the conversation would wait for it.
+      begin
+         --  Past what the conversation may hold rows to. Each turn's part was
+         --  once put past what the cache held -- its own part from the turn
+         --  before among it -- so every transcription grew the cache by a part;
+         --  then where it was, where the cache had not grown since, which the
+         --  conversation's pages could have grown into meanwhile.
+         Item.Cache_Base := Model_Runner.Backend.Device.Cache_Claimed;
+         --  A token reads the half-precision copy of what was heard: its
+         --  attention is the bytes it reads, and the copy is half of them.
+         --  The conversation's choice is put back with the turn.
+         Model_Runner.Backend.Device.Attend_In_Halves (True);
+         Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok, Scratch => True);
+         --  Without the candidates' rows where there is no room for them: a
+         --  window drawn again draws on the pool then.
+         if not Ok and then Item.Wide > 0 then
+            Item.Wide := 0;
+            Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok, Scratch => True);
+         end if;
+         if not Ok then
+            Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
+            Model_Runner.Backend.Device.Return_Turn;
+            Item.Borrowed := False;
+            Took := False;
+         end if;
+      exception
+         when others =>
+            Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
+            Model_Runner.Backend.Device.Return_Turn;
+            Item.Borrowed := False;
+            raise;
+      end;
    end Hold;
 
    procedure Let_Go (Item : in out Session; Took : Boolean) is
@@ -1650,7 +1656,7 @@ package body Model_Runner.Whisper is
       Mel    : Real_Array;
       Status : out E.Error_Info)
    is
-      Took : Boolean;
+      Took : Boolean := False;
    begin
       Hold (Item, Took);
       Encode_Here (Item, Mel, Status);
@@ -2019,8 +2025,10 @@ package body Model_Runner.Whisper is
          --  refuses that, the token again with them named apart.
          Feed_On_Device (Item, Count, Status, Fold => Count = 1 and then not Item.Folds_Refused);
          if E.Is_Error (Status) and then Count = 1 and then not Item.Folds_Refused then
-            Item.Folds_Refused := True;
+            --  Refused for the folds only where it runs without them: a
+            --  device that refuses both has not said the folds were why.
             Feed_On_Device (Item, Count, Status, Fold => False);
+            Item.Folds_Refused := E.Is_Ok (Status);
          end if;
          if E.Is_Ok (Status) then
             Item.Device_Fed := Item.Device_Fed + Natural (Count);
@@ -2160,7 +2168,7 @@ package body Model_Runner.Whisper is
       Logits : out Real_Array;
       Status : out E.Error_Info)
    is
-      Took : Boolean;
+      Took : Boolean := False;
    begin
       Hold (Item, Took);
       Item.Held := 0;
@@ -3157,6 +3165,16 @@ package body Model_Runner.Whisper is
                      Decode_Once (Temperature, Sampled, Sum_Log, Ended);
                   else
                      Decode_Candidates (Temperature, Sampled, Sum_Log, Ended);
+                     --  The device failing past the first draw leaves the
+                     --  candidates' rows there alone: the window drawn again
+                     --  on the pool, from its prompt.
+                     if E.Is_Error (Status) and then Item.Borrowed and then Item.Wide > 0
+                       and then not E."=" (Status.Code, E.Generation_Cancelled)
+                     then
+                        Item.Wide := 0;
+                        Status := E.Success;
+                        Decode_Candidates (Temperature, Sampled, Sum_Log, Ended);
+                     end if;
                   end if;
                   exit when E.Is_Error (Status);
                   --  Refused, as the reference refuses a window: repeating

@@ -583,6 +583,11 @@ package body Model_Runner.Backend.Device is
    Bias_Answers : array (1 .. 512) of Bias_Answer;
    Bias_Answered : Natural := 0;
 
+   --  The furthest any reservation but a scratch one asked the cache to
+   --  reach and was met: what the sessions may hold rows up to, though the
+   --  cache may be larger. See Cache_Claimed.
+   Claimed : Model_Runner.Numerics.Element_Count := 0;
+
    -----------
    -- Close --
    -----------
@@ -590,6 +595,7 @@ package body Model_Runner.Backend.Device is
    procedure Close is
    begin
       Bias_Answered := 0;
+      Claimed := 0;
       Products.Close_Keeper;
       Devices.Close (Keeping);
       Keeper_Asked := False;
@@ -1544,7 +1550,8 @@ package body Model_Runner.Backend.Device is
       Ok              : out Boolean;
       Allow_Copy_Only : Boolean := False;
       Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
-      Front           : Model_Runner.Numerics.Element_Count := 0) is
+      Front           : Model_Runner.Numerics.Element_Count := 0;
+      Scratch         : Boolean := False) is
    begin
       if not Ready_Now then
          Ok := False;
@@ -1554,7 +1561,12 @@ package body Model_Runner.Backend.Device is
       Products.Reserve (Engine, Elements, Copy_Upto, Ok,
                         Allow_Copy_Only => Allow_Copy_Only,
                         Keys_Upto => Keys_Upto, Front => Front);
+      if Ok and then not Scratch then
+         Claimed := Model_Runner.Numerics.Element_Count'Max (Claimed, Elements);
+      end if;
    end Reserve_Cache;
+
+   function Cache_Claimed return Model_Runner.Numerics.Element_Count is (Claimed);
 
    procedure Reserve_Second_Cache
      (Copy_Upto : Model_Runner.Numerics.Element_Count;
@@ -1574,6 +1586,7 @@ package body Model_Runner.Backend.Device is
 
    procedure Release_Cache is
    begin
+      Claimed := 0;
       if Ready_Now then
          Products.Release_Cache (Engine);
       end if;

@@ -374,6 +374,10 @@ package body Model_Runner.CLI.Execute.Image_Command is
                Model_Runner.Backend.Device.Open
                  (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
                   Which => Item.Device_Index);
+               --  Named and not answering: refused, as run refuses it.
+               if Item.Backend_Set and then not On_Device then
+                  Condition := E.Make (E.Backend_No_Device);
+               end if;
             end if;
             declare
                Denoiser_Path : constant String :=
@@ -381,11 +385,13 @@ package body Model_Runner.CLI.Execute.Image_Command is
             begin
                --  On the processor its panels kept between runs, as a
                --  model's are: rebuilt each run they took 3 s and 7.6 GB.
-               Q.Open (Model, Denoiser_Path, Condition,
-                       Panels => not On_Device,
-                       Panel_Cache =>
-                         (if On_Device then ""
-                          else Panel_Cache_For (Denoiser_Path, Item.No_Cache)));
+               if E.Is_Ok (Condition) then
+                  Q.Open (Model, Denoiser_Path, Condition,
+                          Panels => not On_Device,
+                          Panel_Cache =>
+                            (if On_Device then ""
+                             else Panel_Cache_For (Denoiser_Path, Item.No_Cache)));
+               end if;
             end;
             for Index in Latents'Range loop
                exit when E.Is_Error (Condition);

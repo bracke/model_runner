@@ -268,7 +268,7 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed => True, others => False],
        Text ("device_patience")),
       (Text ("--device"),
-       [Command_Run | Command_Embed => True, others => False],
+       [Command_Run | Command_Embed | Command_Transcribe => True, others => False],
        Text ("device")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),

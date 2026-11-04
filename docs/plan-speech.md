@@ -481,12 +481,18 @@ Whisper's part of the cache past what the cache last held -- its own
 part from the turn before among it -- so the cache grew by a part each
 time, and in a session by one each dictation; the corpus's ninth
 recording, silence, took 0.82 s on the device for 0.22 on the processor,
-copying the eight before it to reserve its own. A turn now puts it where
-the last one did wherever nothing has reserved the cache since (`Hold`,
-`Last_Base`, `Last_End`, the end as the cache records it). The vision
-encoder had the same fault, a picture's worth of cache each picture, and
-the same fix; both are held by their device tests transcribing or
-encoding twice and finding the cache as the first left it.
+copying the eight before it to reserve its own. A turn now puts it past
+what the conversation's sessions have reserved (`Hold`,
+`Backend.Device.Cache_Claimed`; Whisper's own reservation is `Scratch`
+and does not move it). The vision encoder had the same fault, a
+picture's worth of cache each picture, and the same fix; both are held
+by their device tests transcribing or encoding twice and finding the
+cache as the first left it. The first fix, where the last turn's part
+went wherever the cache had not grown since, was found unsafe in review:
+a conversation's pages grow into the room a reservation leaves past what
+it asked without the cache growing, and the next dictation would have
+written over them. The speech device test claims that room as a
+conversation would and finds the next transcription put past it.
 
 What is left of a token's small steps on the device is the first join
 and the three norms. Two of the three joins are inside their products'

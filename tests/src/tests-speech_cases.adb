@@ -31,6 +31,7 @@ with Model_Runner.Whisper;
 with Model_Runner.Whisper.Decoding;
 with Model_Runner.Whisper.Timing;
 
+with Device_Notes;
 with Whisper_Fixture;
 with Tiny_Model;
 with Model_Runner.Byte_Sources.Memory;
@@ -1341,7 +1342,8 @@ package body Tests.Speech_Cases is
       end Taker;
 
       --  Either rendezvous may never come where an assertion fails first,
-      --  and the test must still end.
+      --  and the test must still end; where the turn never comes back the
+      --  taker waits in it, and is aborted.
       task body Taker is
       begin
          select
@@ -1376,6 +1378,7 @@ package body Tests.Speech_Cases is
          Taker.Done;
       or
          delay 10.0;
+         abort Taker;
          Assert (False, "the turn was not taken back once it was given back");
       end select;
 
@@ -1470,11 +1473,29 @@ package body Tests.Speech_Cases is
             --  transcription.
             declare
                Reserved : constant N.Element_Count := Device.Cached_Elements;
+               Claimed  : constant N.Element_Count := Device.Cache_Claimed;
             begin
                W.Transcribe (Session, Sound, Settings, Beside, Status);
                Assert (E.Is_Ok (Status), "the device did not transcribe again");
                Assert (Device.Cached_Elements = Reserved, "a second transcription grew the device's cache from"
                        & Reserved'Image & " to" & Device.Cached_Elements'Image);
+               Assert (Device.Cache_Claimed = Claimed, "a transcription claimed the cache as a session's");
+            end;
+            --  A conversation claiming all of it, as its pages grow into
+            --  the room the last transcription left without the cache
+            --  growing: the next is put past it, not over its rows.
+            declare
+               Reserved : constant N.Element_Count := Device.Cached_Elements;
+               Met      : Boolean;
+            begin
+               Device.Reserve_Cache (Reserved, 0, Met);
+               Assert (Met and then Device.Cache_Claimed = Reserved, "the conversation's room was not claimed");
+               W.Transcribe (Session, Sound, Settings, Beside, Status);
+               Assert (E.Is_Ok (Status), "the device did not transcribe past the conversation");
+               Assert (Beside.Text = Alone.Text, "past the conversation the device heard otherwise");
+               Assert (Device.Cached_Elements > Reserved, "the transcription was put over the conversation's rows");
+               Assert (Device.Cache_Claimed = Reserved, "the transcription moved the conversation's claim");
+               Device.Release_Cache;
             end;
             Assert (Device.Resident = Held, "the decoder's matrices were left on the device");
          end;
@@ -1489,6 +1510,8 @@ package body Tests.Speech_Cases is
          W.Copy_Encoded (Session, There.all);
          Assert (N."=" (There.all, Here.all), "without the turn the encoder was not the processor's");
          Device.Close;
+      else
+         Device_Notes.Skip ("for Whisper to hear on");
       end if;
       W.Close (Session);
       W.Close (Model, Status);

@@ -3433,7 +3433,8 @@ package body Tests.Backend_Cases is
       end loop;
 
       Run (True, 2, Pair (0)'Address);
-      Assert (E.Is_Error (Status), "a folded bias ran over two positions");
+      Assert (E."=" (Status.Code, E.Backend_Capability_Missing),
+              "a folded bias over two positions was not refused: " & Status.Code'Image);
 
       B.Free (Weights);
       T.Free (Bias);

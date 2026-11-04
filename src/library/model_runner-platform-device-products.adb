@@ -15664,14 +15664,17 @@ package body Model_Runner.Platform.Device.Products is
                then Packed_Most
                elsif This.Attends and then Few_Line (Index) /= Null_Handle
                then Few_Most_Slices
+               --  Counted as the dispatch counts them: rows attending as
+               --  heads are one position of heads by rows, which the batch
+               --  test that leaves no records does not see.
                elsif This.Attends and then Item.Merge_Line /= Null_Handle
                then Natural'Min
                       (Attend_Slices
-                         (Item, Count, This.Head_Size, This.Value_Size,
+                         (Item, Attending_Of (Index), This.Head_Size, This.Value_Size,
                           First    => 0,
                           Last     => Slice_Limit * Slice_Least,
                           Rounding => False),
-                       Merged_Slices (This.Heads, Natural'Last))
+                       Merged_Slices (Heads_Attending_Of (Index), Natural'Last))
                else 1);
 
             Mine : constant Interfaces.Unsigned_64 :=
@@ -16370,6 +16373,7 @@ package body Model_Runner.Platform.Device.Products is
                      or else Item.Aligned = 0
                      or else Places (Index).Base mod Item.Aligned /= 0)
          then
+            Item.Refused := Shape_Refused;
             Release_All;
             return;
          end if;

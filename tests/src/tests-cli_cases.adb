@@ -52,6 +52,7 @@ with Model_Runner.UTF8;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Presentation;
+with Whisper_Fixture;
 with Model_Runner.Kernels;
 with Fixtures;
 with Model_Runner.Memory;
@@ -325,6 +326,42 @@ package body Tests.CLI_Cases is
       Assert (E.Is_Error (Status), "run took --speech-detect-from-window, which only transcribe reads");
       Opt.Release (Item);
    end Transcribe_Flags_Parse;
+
+   --  transcribe told to use a device none of which answers -- the last
+   --  this build counts, past any this host has -- refuses as run does, rather than hearing the
+   --  recording on the processor without a word.
+   procedure Transcribe_Refuses_A_Device_Not_There (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T2);
+      Speech  : constant String := "obj/refused-device-whisper.gguf";
+      Source  : Fixed_Arguments;
+      Item    : Opt.Command;
+      Parsed  : E.Error_Info;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Status  : Natural;
+   begin
+      Whisper_Fixture.Write (Speech);
+      Add (Source, "transcribe");
+      Add (Source, "fixtures/speech/jfk.wav");
+      Add (Source, "--speech-model");
+      Add (Source, Speech);
+      Add (Source, "--backend");
+      Add (Source, "device");
+      Add (Source, "--device");
+      Add (Source, "8");
+      Opt.Parse (Source, Item, Parsed);
+      Assert (E.Is_Ok (Parsed), "transcribe's device flags were refused: " & E.Error_Code'Image (Parsed.Code));
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Opt.Normal);
+      Model_Runner.CLI.Execute.Dispatch (Item, Screen, Catalog, Status);
+      Opt.Release (Item);
+      Assert (Status = E.Exit_Status (E.Make (E.Backend_No_Device)),
+              "transcribe on a device not there ended with" & Status'Image);
+   end Transcribe_Refuses_A_Device_Not_There;
 
    --  A well-formed run command parses into the values it named.
    procedure Run_Command_Parses (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -16135,6 +16172,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Transcribe_Flags_Parse'Access,
          "transcribe's speech flags land where it reads them, and run refuses the one it alone takes");
+      Register_Routine
+        (T, Transcribe_Refuses_A_Device_Not_There'Access,
+         "transcribe told to use a device that does not answer refuses, as run does");
       Register_Routine
         (T, Run_Command_Parses'Access,
          "a well-formed run command parses into the values it named");

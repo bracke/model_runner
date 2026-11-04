@@ -8,6 +8,7 @@ with AUnit.Assertions;
 with Interfaces;
 with Model_Runner.Backend.Device;
 
+with Device_Notes;
 with Fixtures;
 with Model_Runner.Byte_Sources.Memory;
 with Model_Runner.Bytes;
@@ -3325,6 +3326,7 @@ package body Tests.Vision_Cases is
    begin
       Model_Runner.Backend.Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for Qwen2-VL's blocks to run whole on");
          return;
       end if;
       declare
@@ -3407,6 +3409,7 @@ package body Tests.Vision_Cases is
    begin
       Model_Runner.Backend.Device.Open (Ready);
       if not Ready then
+         Device_Notes.Skip ("for Qwen2.5-VL's windowed blocks to run whole on");
          return;
       end if;
       declare

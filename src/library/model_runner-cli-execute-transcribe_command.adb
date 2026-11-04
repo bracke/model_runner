@@ -147,6 +147,16 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
            (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
             Which => Item.Device_Index);
       end if;
+      --  The device named and none answering is refused, as run refuses
+      --  it, rather than heard on the processor without a word.
+      if Item.Backend_Set and then not On_Device
+        and then Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device)
+      then
+         Tn.Free (Samples);
+         W.Close (Whisper, Ignored);
+         Fail (E.Make (E.Backend_No_Device));
+         return;
+      end if;
       declare
          Wanted : constant Positive := Selected_Workers (Item);
       begin
@@ -165,6 +175,16 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
                   raise;
             end;
          end if;
+      exception
+         when others =>
+            --  A fault, not a status: the device and the model closed
+            --  before it goes on.
+            Tn.Free (Samples);
+            if On_Device then
+               Model_Runner.Backend.Device.Close;
+            end if;
+            W.Close (Whisper, Ignored);
+            raise;
       end;
       Tn.Free (Samples);
       if On_Device then

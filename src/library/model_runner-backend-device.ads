@@ -711,13 +711,28 @@ package Model_Runner.Backend.Device is
    --  @param Front Elements at the front that hold a paged cache's tables
    --    rather than rows: with the copy allowed and halves read, only the
    --    copy and this front are kept. Nought for none.
+   --  @param Scratch The room is for rows only the caller reads, and only
+   --    until it next gives the device up -- a picture's or a recording's,
+   --    placed past Cache_Claimed -- so it does not move Cache_Claimed.
    procedure Reserve_Cache
      (Elements        : Model_Runner.Numerics.Element_Count;
       Copy_Upto       : Model_Runner.Numerics.Element_Count;
       Ok              : out Boolean;
       Allow_Copy_Only : Boolean := False;
       Keys_Upto       : Model_Runner.Numerics.Element_Count := 0;
-      Front           : Model_Runner.Numerics.Element_Count := 0);
+      Front           : Model_Runner.Numerics.Element_Count := 0;
+      Scratch         : Boolean := False);
+
+   --  How far into the cache the sessions' rows may reach: the furthest a
+   --  reservation not for scratch asked for and was met, since the cache
+   --  was last released. The cache itself may be larger -- a reservation
+   --  that grows it takes a quarter more, and scratch is past this -- and
+   --  a session's pages grow into that room without the cache growing,
+   --  so scratch placed past Cached_Elements once and found there again
+   --  can be under a session's rows by then; placed here it is not.
+   --
+   --  @return Elements the sessions may hold rows up to, or zero.
+   function Cache_Claimed return Model_Runner.Numerics.Element_Count;
 
    --  The second copy of a paged cache, for the layers whose pages one
    --  storage buffer does not hold: the cache's numbering at or past
