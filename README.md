@@ -3185,7 +3185,8 @@ device is handed a pointer into this process's memory instead of a copy,
 where the device shares the host's memory and will take one.
 
 `--device N` says which of the host's devices to compute on, counting from
-one in the order `inspect` lists them. A machine with one device has nothing
+one in the order `inspect` lists them; `run`, `embed`, `image` and
+`transcribe` take it. A machine with one device has nothing
 to choose and the default chooses it; a machine with an integrated device
 beside a discrete one has a reason to say which, and until now the answer was
 whichever the host named first. A number past the devices the host has is

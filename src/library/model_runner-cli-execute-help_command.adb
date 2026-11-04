@@ -37,8 +37,9 @@ package body Model_Runner.CLI.Execute.Help_Command is
       return Room (1 .. Used);
    end Format_Names;
 
-   --  The backends this build has, in the order they are declared.
-   function Backend_Names return String is
+   --  The backends this build has that the command runs on, in the order
+   --  they are declared.
+   function Backend_Names (Kind : Opt.Command_Kind) return String is
       Room : String (1 .. 256);
       Used : Natural := 0;
 
@@ -50,11 +51,13 @@ package body Model_Runner.CLI.Execute.Help_Command is
          end if;
       end Add;
    begin
-      for Kind in Model_Runner.Backend.Backend_Kind loop
-         if Used > 0 then
-            Add (", ");
+      for Backend in Model_Runner.Backend.Backend_Kind loop
+         if Opt.Has_Backend (Kind, Backend) then
+            if Used > 0 then
+               Add (", ");
+            end if;
+            Add (Model_Runner.Backend.Backend_Name (Backend));
          end if;
-         Add (Model_Runner.Backend.Backend_Name (Kind));
       end loop;
       return Room (1 .. Used);
    end Backend_Names;
@@ -123,7 +126,7 @@ package body Model_Runner.CLI.Execute.Help_Command is
       Screen.Put_Message
         ("application.formats", [Loc.Named ("value", Decodable_Formats)]);
       Screen.Put_Message
-        ("application.backends", [Loc.Named ("value", Backend_Names)]);
+        ("application.backends", [Loc.Named ("value", Backend_Names (Opt.Command_Run))]);
       Screen.Put_Message
         ("application.chat_formats", [Loc.Named ("value", Format_Names)]);
 
@@ -223,7 +226,7 @@ package body Model_Runner.CLI.Execute.Help_Command is
                      elsif Opt.Option_Name (Index) = "--color"
                      then Opt.Color_Names
                      elsif Opt.Option_Name (Index) = "--backend"
-                     then Backend_Names
+                     then Backend_Names (Kind)
                      elsif Opt.Option_Name (Index) = "--chat-template"
                      then Format_Names
                      else "");

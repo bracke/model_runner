@@ -361,7 +361,60 @@ package body Tests.CLI_Cases is
       Opt.Release (Item);
       Assert (Status = E.Exit_Status (E.Make (E.Backend_No_Device)),
               "transcribe on a device not there ended with" & Status'Image);
+
+      --  And image, before any of its models is read: none is named here.
+      Source.Used := 0;
+      Add (Source, "image");
+      Add (Source, "--prompt");
+      Add (Source, "a cat");
+      Add (Source, "--out");
+      Add (Source, "obj/refused-device.png");
+      Add (Source, "--backend");
+      Add (Source, "device");
+      Add (Source, "--device");
+      Add (Source, "8");
+      Opt.Parse (Source, Item, Parsed);
+      Assert (E.Is_Ok (Parsed), "image's device flags were refused: " & E.Error_Code'Image (Parsed.Code));
+      Model_Runner.CLI.Execute.Dispatch (Item, Screen, Catalog, Status);
+      Opt.Release (Item);
+      Assert (Status = E.Exit_Status (E.Make (E.Backend_No_Device)),
+              "image on a device not there ended with" & Status'Image);
    end Transcribe_Refuses_A_Device_Not_There;
+
+   --  The reference backend is refused by the commands that have none,
+   --  which took it for the processor's without a word, and taken by run.
+   procedure Reference_Is_Refused_Where_There_Is_None (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T2);
+      Source : Fixed_Arguments;
+      Item   : Opt.Command;
+      Status : E.Error_Info;
+
+      procedure Refused (Word : String) is
+      begin
+         Source.Used := 0;
+         Add (Source, Word);
+         Add (Source, "--backend");
+         Add (Source, "reference");
+         Opt.Parse (Source, Item, Status);
+         Assert (Status.Code = E.CLI_Invalid_Option_Value,
+                 Word & " --backend reference ended with " & E.Error_Code'Image (Status.Code));
+         Opt.Release (Item);
+         Assert (Opt.Has_Backend (Opt.Command_Of (Word), Model_Runner.Backend.Backend_Device)
+                 and then Opt.Has_Backend (Opt.Command_Of (Word), Model_Runner.Backend.Backend_CPU),
+                 Word & " does not have the device and the processor");
+      end Refused;
+   begin
+      Refused ("transcribe");
+      Refused ("image");
+      Source.Used := 0;
+      Add (Source, "run");
+      Add (Source, "model.gguf");
+      Add (Source, "--backend");
+      Add (Source, "reference");
+      Opt.Parse (Source, Item, Status);
+      Assert (E.Is_Ok (Status), "run refused the reference backend: " & E.Error_Code'Image (Status.Code));
+      Opt.Release (Item);
+   end Reference_Is_Refused_Where_There_Is_None;
 
    --  A well-formed run command parses into the values it named.
    procedure Run_Command_Parses (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -16174,7 +16227,10 @@ package body Tests.CLI_Cases is
          "transcribe's speech flags land where it reads them, and run refuses the one it alone takes");
       Register_Routine
         (T, Transcribe_Refuses_A_Device_Not_There'Access,
-         "transcribe told to use a device that does not answer refuses, as run does");
+         "transcribe and image told to use a device that does not answer refuse, as run does");
+      Register_Routine
+        (T, Reference_Is_Refused_Where_There_Is_None'Access,
+         "the reference backend is refused by transcribe and image, which have none, and taken by run");
       Register_Routine
         (T, Run_Command_Parses'Access,
          "a well-formed run command parses into the values it named");

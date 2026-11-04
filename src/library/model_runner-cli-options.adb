@@ -268,7 +268,7 @@ package body Model_Runner.CLI.Options is
        [Command_Run | Command_Embed => True, others => False],
        Text ("device_patience")),
       (Text ("--device"),
-       [Command_Run | Command_Embed | Command_Transcribe => True, others => False],
+       [Command_Run | Command_Embed | Command_Image | Command_Transcribe => True, others => False],
        Text ("device")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
@@ -2047,6 +2047,11 @@ package body Model_Runner.CLI.Options is
                               Found := True;
                            end if;
                         end loop;
+
+                        if Found and then not Has_Backend (Result.Kind, Result.Backend) then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Model_Runner.Text.To_String (Chosen));
+                           return;
+                        end if;
 
                         if not Found then
                            Status := E.Make (E.Backend_Unknown);

@@ -495,6 +495,22 @@ package body Model_Runner.CLI.Execute.Image_Command is
          Fail (Init_Read);
          return;
       end if;
+      --  The device named and none answering, refused before the prompt's
+      --  eight billion parameters are read for nothing.
+      if Item.Backend_Set and then Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
+         declare
+            Ready : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open
+              (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+               Which => Item.Device_Index);
+            if not Ready then
+               Fail (E.Make (E.Backend_No_Device));
+               return;
+            end if;
+            Model_Runner.Backend.Device.Close;
+         end;
+      end if;
       --  Each reference at the size it is encoded at.
       for Index in References'Range loop
          declare

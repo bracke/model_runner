@@ -175,6 +175,19 @@ package Model_Runner.CLI.Options is
    --  @return True when that command takes it.
    function Accepts (Kind : Command_Kind; Name : String) return Boolean;
 
+   --  Whether a command that takes --backend has that backend: transcribe
+   --  and image have no reference path, and took the name to mean the
+   --  processor's without a word.
+   --
+   --  @param Kind Command being parsed.
+   --  @param Backend Backend named.
+   --  @return True when that command runs on it.
+   function Has_Backend
+     (Kind    : Command_Kind;
+      Backend : Model_Runner.Backend.Backend_Kind) return Boolean
+   is (not (Kind in Command_Transcribe | Command_Image
+            and then Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_Reference)));
+
    --  Where the prompt comes from.
    type Prompt_Source is
      (Prompt_Unset,
