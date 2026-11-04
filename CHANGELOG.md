@@ -19,6 +19,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The reminder after a reply with no call names no tool.** It told the model to call `write_file`, and a root whose task said not to write the file itself (it was to hand it to a helper) answered blocked. It now says to make the change with the calls the task needs.
+
 - **`edit_file` on a file not there points at `write_file`.** A helper made `docs/calc.md` with `edit_file` and `old_text` empty, heard "no file at docs/calc.md" and gave its part up; the answer now says `write_file` makes a new file.
 
 - **A tool's schema written back as its call is told as that.** A model whose template writes the JSON envelope runs `/work` unshaped by the call grammar, and a Steelman-14B helper sent every tool's parameter schema as its arguments, heard "read_file needs a path" and claimed the file written having written nothing. Such a call is answered now with what it is and the parameters to give values for (`Tools.Builtin.Schema_Given`, held by an agent-loop test); on the trial's delegate task a helper that sent them so wrote the file with its next call in 4 runs of 6; Steelman's delegate runs still end complete in 2 of 6 to 3 of 6, the most of the rest a helper that called nothing and said it had written the file, which the harness catches. Naming the tools again at the helper's prompt's end was not the cause: left out, with a word that a call gives values, the same 2 of 6 (an A/B of six alternated rounds).

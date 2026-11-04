@@ -947,12 +947,14 @@ package body Model_Runner.CLI.Project_Commands is
                      & " If the task is done, finish now with the report lines: status: done, summary:,"
                      & " changed_files:.", Status);
                when Wk.Ask_To_Call =>
+                  --  Not told which tool: told write_file, a root whose
+                  --  task said not to write the file itself said blocked.
                   Doing := Model_Runner.Framework.Inference_Policy.Task_Work;
                   Conv.Append
                     (Messages, Conv.User_Role,
-                     "You have not called a tool, so no file has changed. If the task"
-                     & " needs a change, make it now by calling write_file, then report"
-                     & " again.", Status);
+                     "You have not called a tool, so nothing has changed. If the task"
+                     & " needs a change, make it now with the calls it needs -- the task"
+                     & " says what they are -- then report again.", Status);
                when Wk.Finish =>
                   --  Finished for want of time where a round was owed: the
                   --  work ran out of time, as it would have at that round's
