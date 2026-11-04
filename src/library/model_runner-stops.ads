@@ -70,6 +70,13 @@ package Model_Runner.Stops is
       Text   : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Make a set the same as another, to extend for one use without
+   --  changing the one it came from.
+   --
+   --  @param From The set to copy.
+   --  @param Into Opened afresh with From's bounds, its tokens and strings.
+   procedure Copy (From : Set; Into : in out Set);
+
    --  Report whether a token is a stop token.
    --
    --  @param Item Set to query.

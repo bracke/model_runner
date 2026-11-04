@@ -21,6 +21,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A `/work` reply stops where it writes a tool's answer itself.** Where the template's calls are the JSON envelope, the loop's stops are the session's and `<tool_response>` beside them (`Stops.Copy`): a Steelman-14B helper wrote its calls' errors back as `<tool_response>` blocks and went on. The session's own conversation keeps its stops.
+
+- **A call written in tags the JSON reader does not read is told so.** A reply holding `<tool><name>write_file</name><arguments>...` read as no call, and was taken for the answer; the model is now told that form is not read, and given the `<tool_call>{...}</tool_call>` it is to use.
+
+- **`tests agent-trial --repeats` keeps every completed run.** Each is moved to `...-complete-TIME` as a failed one is to `...-failed-TIME`; only the last completed run was left to set beside the failures.
+
 - **The cache folders are trimmed by a sort, not an insertion sort.** `Platform.Trim_Directory` ordered the files by their use by moving each record, its name with it, past every newer one: the prefill cache's 1,836 files, some eight hundred thousand moves after every run's answer. It sorts their places now, held by a platform test that the files used longest ago go first.
 
 - **The reminder after a reply with no call names no tool.** It told the model to call `write_file`, and a root whose task said not to write the file itself (it was to hand it to a helper) answered blocked. It now says to make the change with the calls the task needs.

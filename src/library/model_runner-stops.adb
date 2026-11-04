@@ -104,6 +104,27 @@ package body Model_Runner.Stops is
    -- Add_String --
    -----------------
 
+   ----------
+   -- Copy --
+   ----------
+
+   procedure Copy (From : Set; Into : in out Set) is
+      Ignored : E.Error_Info;
+   begin
+      Open (Into, From.Bounds);
+      for Index in 1 .. From.Tokens_Used loop
+         Add_Token (Into, From.Tokens (Index), Ignored);
+      end loop;
+      for Index in 1 .. From.Strings_Used loop
+         Add_String
+           (Into,
+            From.Storage.all (From.Storage.all'First + From.Extents (Index).Offset
+                              .. From.Storage.all'First + From.Extents (Index).Offset
+                                 + From.Extents (Index).Length - 1),
+            Ignored);
+      end loop;
+   end Copy;
+
    procedure Add_String
      (Item   : in out Set;
       Text   : String;

@@ -1262,6 +1262,33 @@ package body Model_Runner.Agent is
             end;
          end if;
 
+         --  A call written in a form of tags the JSON envelope's reader does
+         --  not read -- <tool><name>write_file</name><arguments>.. -- is no
+         --  call, and the reply was the answer: told so, with the envelope
+         --  that is read. A Steelman-14B root wrote its write so, after two
+         --  status blocks, and the task failed for the answer's last line.
+         if E.Is_Ok (Reading)
+           and then Model_Runner.Tools."=" (Read_Syntax, Model_Runner.Tools.Open_JSON)
+           and then Conv.Call_Count (Messages, Conv.Length (Messages)) = 0
+           and then Ada.Strings.Fixed.Index (Reply_Text, "<tool>") > 0
+           and then Ada.Strings.Fixed.Index (Reply_Text, "<name>") > 0
+           and then Result.Steps < Max_Steps and then Chances_Left > 0
+         then
+            declare
+               Told : E.Error_Info;
+            begin
+               Chances_Left := Chances_Left - 1;
+               Conv.Append
+                 (Messages, Conv.User_Role,
+                  "Your reply writes a tool call as <tool><name>..., which is not read, so nothing was run."
+                  & " Write each call as <tool_call>{""name"": ""the tool"", ""arguments"": {...}}</tool_call>,"
+                  & " or answer without a call.", Told);
+               if E.Is_Ok (Told) then
+                  goto Next_Iteration;
+               end if;
+            end;
+         end if;
+
          declare
             Turn  : constant Positive := Conv.Length (Messages);
             Asked : constant Natural := Conv.Call_Count (Messages, Turn);

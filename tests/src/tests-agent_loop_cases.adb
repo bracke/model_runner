@@ -221,6 +221,8 @@ package body Tests.Agent_Loop_Cases is
    Left_Open  : Natural := 0;
    --  Whether it was told a call of its reply could not be read at all.
    Told_Unreadable : Boolean := False;
+   --  Whether it was told a call it wrote in tags is not read.
+   Told_Tags : Boolean := False;
 
    --  Run the loop on a fresh conversation, the replies the script's.
    procedure Run
@@ -311,7 +313,12 @@ package body Tests.Agent_Loop_Cases is
       Told_Empty := False;
       Left_Open := 0;
       Told_Unreadable := False;
+      Told_Tags := False;
       for Index in 1 .. Conv.Length (Messages) loop
+         if Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "which is not read, so nothing was run") > 0
+         then
+            Told_Tags := True;
+         end if;
          if Ada.Strings.Fixed.Index (Conv.Content_At (Messages, Index), "Your tool call could not be read") > 0 then
             Told_Unreadable := True;
          end if;
@@ -486,6 +493,32 @@ package body Tests.Agent_Loop_Cases is
                  and then Has (Seen.Results (1), "parameter schema")
                  and then Has (Seen.Results (1), "for each of: path"),
                  "a schema written back as a call was not told as one");
+      end;
+
+      --  A call written in tags the JSON envelope's reader does not read is
+      --  told so, and the run goes on; a tag named in an answer is not.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("status: done" & ASCII.LF & "summary: wrote it" & ASCII.LF
+                                 & "<tools><tool><name>write_file</name><arguments><path>a.md</path>"
+                                 & "<content>x</content></arguments></tool></tools>");
+         Replies.Replies.Append ("status: done" & ASCII.LF & "summary: answered");
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (Told_Tags and then Ended.Reason = Ag.Answered,
+                 "a call written in tags was taken for the answer, unsaid: " & Ended.Reason'Image);
+      end;
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("status: done" & ASCII.LF & "summary: the <tool> element names nothing");
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (not Told_Tags and then Ended.Reason = Ag.Answered,
+                 "an answer naming a tag was told it wrote a call");
       end;
 
       --  A Gemma call cut in a ```tool_call block is said to be cut, not

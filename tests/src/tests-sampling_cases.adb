@@ -984,6 +984,27 @@ package body Tests.Sampling_Cases is
       Assert (First = 2 and then Length = 3,
               "a later match was preferred over an earlier one");
 
+      --  A copy holds the same, and extending it leaves the set it came
+      --  from as it was: /work stops at a tool answer's opener, the
+      --  session's own conversation does not.
+      declare
+         Wider : Stop.Set;
+      begin
+         Stop.Copy (Set, Wider);
+         Stop.Add_String (Wider, "<tool_response>", Status);
+         Assert (E.Is_Ok (Status) and then Stop.Token_Count (Wider) = Stop.Token_Count (Set)
+                 and then Stop.Is_Stop_Token (Wider, 0)
+                 and then Stop.String_Count (Wider) = Stop.String_Count (Set) + 1
+                 and then Stop.String_Count (Set) = 2,
+                 "a copied stop set did not hold the same, or extending it changed the first");
+         Stop.Scan (Wider, "xxENDINGyy", First, Length);
+         Assert (First = 3 and then Length = 6, "a copy's strings did not match as the first's");
+         Stop.Scan (Wider, "a call" & ASCII.LF & "<tool_response>", First, Length);
+         Assert (First = 8 and then Length = 15, "a copy's added string did not match");
+         Stop.Scan (Set, "a call" & ASCII.LF & "<tool_response>", First, Length);
+         Assert (First = 0, "the set copied from matched the copy's added string");
+      end;
+
       Stop.Close (Set);
    end Stop_Strings_Match;
 

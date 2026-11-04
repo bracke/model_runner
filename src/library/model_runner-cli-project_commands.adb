@@ -697,7 +697,21 @@ package body Model_Runner.CLI.Project_Commands is
       Syntax   : constant Model_Runner.Tools.Call_Syntax :=
         (if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON)
          then Model_Runner.Tools.Open_JSON else Written);
+
+      --  The session's stops, and where the calls are the JSON envelope the
+      --  tool answers' own opener: a reply that writes one is writing the
+      --  answer it was to wait for -- a Steelman-14B helper wrote each of
+      --  its calls' errors back as <tool_response> blocks, and went on.
+      Work_Stops : Model_Runner.Stops.Set;
    begin
+      Model_Runner.Stops.Copy (Self.Stop_Set.all, Work_Stops);
+      if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON) then
+         declare
+            Ignored : Model_Runner.Errors.Error_Info;
+         begin
+            Model_Runner.Stops.Add_String (Work_Stops, "<tool_response>", Ignored);
+         end;
+      end if;
       Runner.Began := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
       --  The tools work in the tree the work is done in, named, not in
       --  whatever directory the process is in.
@@ -798,7 +812,7 @@ package body Model_Runner.CLI.Project_Commands is
             Offered     => Offered,
             Executor    => Runner,
             Generation  => Request,
-            Stop_Set    => Self.Stop_Set.all,
+            Stop_Set    => Work_Stops,
             Sink        => Sink'Unchecked_Access,
             Time        => Clock'Unchecked_Access,
             Seeds       => Seeds'Unchecked_Access,

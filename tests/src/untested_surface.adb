@@ -114,7 +114,6 @@ package body Untested_Surface is
          | "Is_Greedy"
          | "Is_Integer"
          | "Is_Power_Of_Two"
-         | "Is_Stop_Token"
          | "Recover_Here"
          | "Is_Valid_Array_Element"
          | "Metadata_Bytes"

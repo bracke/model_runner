@@ -856,6 +856,13 @@ package body Agent_Trial is
                        Root & "-failed-"
                        & Ada.Strings.Fixed.Translate
                            (Local (Began), Ada.Strings.Maps.To_Mapping (" :", "_-"));
+                     --  And where one that did is moved to, among more runs of
+                     --  the task: kept where the next run makes Root afresh, only
+                     --  the last completed run was there to set beside a failed.
+                     Complete_Name : constant String :=
+                       Root & "-complete-"
+                       & Ada.Strings.Fixed.Translate
+                           (Local (Began), Ada.Strings.Maps.To_Mapping (" :", "_-"));
                      Kept_In : Unbounded_String := To_Unbounded_String (Root);
                      Stalls  : Natural := 0;
                      --  Whether a stall -- every thread asleep -- was said.
@@ -1466,6 +1473,8 @@ package body Agent_Trial is
                               Answered := To_Unbounded_String (Answer);
                               if Ada.Strings.Fixed.Index (Ending, "complete") /= 1 then
                                  Kept_In := To_Unbounded_String (Failed_Name);
+                              elsif Repeats > 1 then
+                                 Kept_In := To_Unbounded_String (Complete_Name);
                               end if;
                               Append (Rows (Which),
                                       "  run" & Integer'Image (Round) & ": " & Ending
