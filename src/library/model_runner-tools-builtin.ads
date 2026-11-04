@@ -234,6 +234,16 @@ package Model_Runner.Tools.Builtin is
    function Text_Argument (Args : String; Key : String; Found : out Boolean)
      return String;
 
+   --  Whether a call's arguments are a parameter schema -- an object of
+   --  "type": "object" and "properties" -- rather than values: a model
+   --  shown the tools wrote each one's schema back as its call.
+   --
+   --  @param Args The call's arguments, a JSON object.
+   --  @return The parameters the schema requires, or every one it
+   --    describes where it requires none, joined by ", "; "(none)" for a
+   --    schema that describes none; "" when Args is no schema.
+   function Schema_Given (Args : String) return String;
+
    --  A call's arguments with one string argument given another value --
    --  that argument alone, by its name, not by where its text first
    --  appears.

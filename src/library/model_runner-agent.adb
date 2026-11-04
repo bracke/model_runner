@@ -1616,6 +1616,16 @@ package body Model_Runner.Agent is
                                  & " offered are " & U.To_String (Listed));
                               Items (Call).Ended := Failed_Note;
                            end;
+                        elsif Model_Runner.Tools.Builtin.Schema_Given (Args) /= "" then
+                           --  The tool's schema written back as its call --
+                           --  a 14B helper sent every tool's so, and read
+                           --  "needs a path" as no more than a missing one.
+                           Items (Call).Text := U.To_Unbounded_String
+                             ("error: these arguments are " & Named & "'s parameter schema, as the"
+                              & " tools are described, not values for it; call " & Named
+                              & " with the values themselves, as {""name"": value} for each of: "
+                              & Model_Runner.Tools.Builtin.Schema_Given (Args));
+                           Items (Call).Ended := Failed_Note;
                         else
                            case (if Approve = null then Allow
                                  else Approve.Consider (Named, Args))

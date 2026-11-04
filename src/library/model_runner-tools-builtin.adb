@@ -155,6 +155,40 @@ package body Model_Runner.Tools.Builtin is
       return Doc.As_String (Document, Item);
    end Text_Argument;
 
+   function Schema_Given (Args : String) return String is
+      Document : Doc.Document;
+      Shape    : Doc.Node;
+      Present  : Boolean;
+      Found    : Boolean;
+      Names    : U.Unbounded_String;
+   begin
+      Member (Args, "properties", Document, Shape, Present);
+      if not Present or else Doc."/=" (Doc.Kind (Document, Shape), Doc.Object_Value)
+        or else Text_Argument (Args, "type", Found) /= "object"
+      then
+         return "";
+      end if;
+      --  The names it requires, or every one it describes where it
+      --  requires none.
+      declare
+         Wanted : Schemas.Choice_Lists.Vector;
+         Listed : Boolean;
+      begin
+         Text_List_Argument (Args, "required", Wanted, Found, Listed);
+         if Found and then Listed and then not Wanted.Is_Empty then
+            for One of Wanted loop
+               U.Append (Names, (if U."=" (Names, U.Null_Unbounded_String) then "" else ", ") & One);
+            end loop;
+         else
+            for Index in 1 .. Doc.Length (Document, Shape) loop
+               U.Append (Names, (if U."=" (Names, U.Null_Unbounded_String) then "" else ", ")
+                              & Doc.Name (Document, Shape, Index));
+            end loop;
+         end if;
+      end;
+      return (if U."=" (Names, U.Null_Unbounded_String) then "(none)" else U.To_String (Names));
+   end Schema_Given;
+
    function With_Text_Argument (Args : String; Key : String; Value : String) return String is
       Document : Doc.Document;
       Item     : Doc.Node;

@@ -470,6 +470,24 @@ package body Tests.Agent_Loop_Cases is
                  & Seen.Results.Length'Image & " " & Told_Lost'Image);
       end;
 
+      --  A tool's schema written back as its call is told as that, with
+      --  the names to give values: told "needs a path" alone, a helper
+      --  claimed the file written having called nothing right.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Replies.Replies.Append ("{""name"": ""read_file"", ""arguments"": {""type"": ""object"", ""properties"":"
+                                 & " {""path"": {""type"": ""string""}, ""first_line"": {""type"": ""integer""}},"
+                                 & " ""required"": [""path""]}}");
+         Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON);
+         Assert (Natural (Seen.Results.Length) >= 1
+                 and then Has (Seen.Results (1), "parameter schema")
+                 and then Has (Seen.Results (1), "for each of: path"),
+                 "a schema written back as a call was not told as one");
+      end;
+
       --  A Gemma call cut in a ```tool_call block is said to be cut, not
       --  unreadable: told to write it again in the format, a model wrote it
       --  again as long.

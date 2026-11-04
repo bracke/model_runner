@@ -1331,6 +1331,18 @@ package body Tests.Tools_Cases is
          end;
          Assert (Has (Rt.Helper_Rules, "status: done") and then Has (Rt.Helper_Opening ("reviewer"), "as its reviewer"),
                  "a helper was not told how to work and report");
+         --  A schema given for arguments is known for one, with the names it
+         --  requires -- or describes, where it requires none -- and values
+         --  that happen to hold a "type" are not.
+         Assert (Builtin.Schema_Given
+                   ("{""type"": ""object"", ""properties"": {""path"": {}, ""content"": {}},"
+                    & " ""required"": [""path"", ""content""]}") = "path, content"
+                 and then Builtin.Schema_Given
+                   ("{""type"": ""object"", ""properties"": {""scope"": {""type"": ""string""}}}") = "scope"
+                 and then Builtin.Schema_Given ("{""type"": ""object"", ""properties"": {}}") = "(none)"
+                 and then Builtin.Schema_Given ("{""type"": ""object"", ""path"": ""a.txt""}") = ""
+                 and then Builtin.Schema_Given ("{""path"": ""a.txt""}") = "",
+                 "a schema given for a call's arguments was misread");
       end;
 
       --  A program's failure, said with what the model needs to put it
