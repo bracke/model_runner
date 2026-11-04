@@ -1010,7 +1010,10 @@ package body Agent_Trial is
 
                      --  Read what arrives until Text has, after From, or the
                      --  seconds are up.
-                     function Wait_For (Text : String; Seconds : Duration) return Boolean is
+                     --  Give_Up, where it is seen first, ends the wait at once:
+                     --  a program with no catalog said so in its first second
+                     --  and was waited for five minutes all the same.
+                     function Wait_For (Text : String; Seconds : Duration; Give_Up : String := "") return Boolean is
                         use type Ada.Calendar.Time;
                         From  : constant Natural := Length (Seen);
                         Until_At : constant Ada.Calendar.Time := Ada.Calendar.Clock + Seconds;
@@ -1018,6 +1021,12 @@ package body Agent_Trial is
                         loop
                            if Ada.Strings.Fixed.Index (Plain (Slice (Seen, From + 1, Length (Seen))), Text) > 0 then
                               return True;
+                           end if;
+                           if Give_Up /= ""
+                             and then Ada.Strings.Fixed.Index
+                                        (Plain (Slice (Seen, From + 1, Length (Seen))), Give_Up) > 0
+                           then
+                              return False;
                            end if;
                            exit when Ada.Calendar.Clock > Until_At;
                            if Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 500) then
@@ -1144,7 +1153,7 @@ package body Agent_Trial is
                      Hostkit.Pty.Close_Device (Pair);
 
                      --  The session, as a person would drive it.
-                     if Wait_For ("Interactive mode", 300.0) then
+                     if Wait_For ("Interactive mode", 300.0, Give_Up => "message catalog could not be read") then
                         if not Carried then
                            Send ("/init");
                         end if;
