@@ -2192,6 +2192,23 @@ package body Model_Runner.Framework.Work is
    end Note_Call;
 
    ----------------
+   -- Note_Reply --
+   ----------------
+
+   procedure Note_Reply (Host : in out Child_Host; Text : String) is
+      Change : Stores.Transaction;
+      Status : E.Error_Info;
+   begin
+      if not Host.Calls.Is_Empty then
+         Invocations.Note_Reply (Host.Item.all, Change, Host.Calls.Last_Element, Text, Status);
+         if E.Is_Ok (Status) then
+            Stores.Commit (Host.Item.all, Change, Status);
+         end if;
+         Keep_Unkept (Host, Status);
+      end if;
+   end Note_Reply;
+
+   ----------------
    -- Note_Start --
    ----------------
 

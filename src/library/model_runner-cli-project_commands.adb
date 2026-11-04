@@ -670,6 +670,9 @@ package body Model_Runner.CLI.Project_Commands is
       --  budget is held to.
       All_Spent : Natural := 0;
       Asked_To_Report : Boolean := False;
+      --  The messages whose replies the invocation has: those after are
+      --  the round's own.
+      Replied : Natural := 0;
       Asked_To_Fix    : Boolean := False;
       --  What the loop holds of its calls, carried from round to round.
       Rounds_Memory   : aliased Model_Runner.Agent.Recall.Carried;
@@ -843,6 +846,17 @@ package body Model_Runner.CLI.Project_Commands is
                Pres.Put_Note (Self.Screen.all, "cli.agent.timed_out_in_call");
             end if;
          end;
+         --  The round's replies, whole, on its invocation: a helper that
+         --  said done with no call was known only by its summary line.
+         if Host /= null then
+            Replied := Natural'Min (Replied, Conv.Length (Messages));
+            for Index in Replied + 1 .. Conv.Length (Messages) loop
+               if Conv.Sender_At (Messages, Index) = Conv.Assistant_Role then
+                  Host.Note_Reply (Conv.Content_At (Messages, Index));
+               end if;
+            end loop;
+            Replied := Conv.Length (Messages);
+         end if;
          Calls := Calls + Outcome.Calls;
          Steps_Taken := Steps_Taken + Outcome.Steps;
          All_Spent := All_Spent + Outcome.Generated_Tokens + Outcome.Delegated_Tokens;

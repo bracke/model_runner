@@ -11,6 +11,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Every model reply of a `/work` run is kept on its invocation.** Each reply's words, up to 16 KiB, are a `reply.NNNN` entry beside its `call.NNNN` ones (`Invocations.Note_Reply`, `Replies_Of`), the root's and each helper's on their own: a helper that said it had written a file without a call was known before only by its summary line. Read on Steelman-14B's delegate trial, they show the "schema echo" is the helper writing out the tool list (`<tools>` and the definitions), which the open reader takes for calls, and the helpers that call nothing answering with the report straight away, and the same words again when told they called nothing.
+
 - **A `/work` run's record says where its time went.** The figures line after the work now ends with `time:` -- the model reading its prompts (the tokens read, and those a session held already), writing its replies, the checks, the helpers (each delegate call whole, its model's time in it) and the other tools, the harness's own the rest -- and `tests agent-trial` shows it under each run and keeps it in its history as a `time` column. Mellum2.1-12B on the trial's three tasks: the harness 0.6-1.1 s of 45-498 s, the replies 64-90 % of every run, prompts read 4-8 %, the most of them held from the turn before (98,649 held against 17,891 read on edit).
 
 - **The speech figures re-measured** at a lower load, with every change of today in them, and a Whisper held but idle measured: no cost to the conversation's generation on either backend, its threads asleep.

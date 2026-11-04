@@ -6380,6 +6380,17 @@ package body Tests.Framework_Cases is
                             (Iv.Refused_Calls (Store, To_String (First)).First_Element,
                              "(outside the project)") > 0,
                  "a refused call was not named with what refused it");
+         --  A reply kept whole, and one past the bound cut and said so.
+         Iv.Note_Reply (Store, Change, To_String (First), "status: done" & LF & "summary: wrote it", Status);
+         S.Commit (Store, Change, Status);
+         Iv.Note_Reply (Store, Change, To_String (First), [1 .. Iv.Reply_Most + 10 => 'y'], Status);
+         S.Commit (Store, Change, Status);
+         Assert (Natural (Iv.Replies_Of (Store, To_String (First)).Length) = 2
+                 and then Iv.Replies_Of (Store, To_String (First)).First_Element
+                          = "status: done" & LF & "summary: wrote it"
+                 and then Ada.Strings.Fixed.Index
+                            (Iv.Replies_Of (Store, To_String (First)).Last_Element, "(cut at") > 0,
+                 "a reply was not kept whole, or one past the bound not cut and said so");
          Assert (Iv.Last_For (Store, "TASK-1") = To_String (First)
                  and then Iv.Last_For (Store, "TASK-9") = "",
                  "a task's last invocation was not found, or one was found for none");
@@ -11567,6 +11578,22 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Said (At_It .. Said'Last), ", helpers ") > 0
                  and then Ada.Strings.Fixed.Index (Said (At_It .. Said'Last), ", the harness ") > 0,
                  "the record did not say where the work's time went: " & Said);
+      end;
+      --  And each reply kept whole on its own invocation -- its words; its
+      --  calls are kept as calls: a helper's words were otherwise nowhere
+      --  once its run ended.
+      declare
+         Root_Said, Helper_Said : Boolean := False;
+      begin
+         for Name of S.Names (Store, F.Invocations_Area) loop
+            for Reply of Iv.Replies_Of (Store, Name) loop
+               Root_Said := Root_Said or else (Name = To_String (Done.Invocation_Id)
+                                               and then Ada.Strings.Fixed.Index (Reply, "pppp") > 0);
+               Helper_Said := Helper_Said or else (Name /= To_String (Done.Invocation_Id) and then Reply = "looked");
+            end loop;
+         end loop;
+         Assert (Root_Said and then Helper_Said,
+                 "the root's and a helper's replies were not kept on their invocations");
       end;
       S.Close (Store);
       --  And what a helper's own helpers spent is its parent's to count:

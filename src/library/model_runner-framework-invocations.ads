@@ -174,6 +174,33 @@ package Model_Runner.Framework.Invocations is
       Number    : Natural := 0;
       Ended     : String := "");
 
+   --  Record a reply the model made in an invocation, whole up to Reply_Most
+   --  bytes -- its words, its calls as written, its thinking -- as its next
+   --  reply.NNNN entry: what a helper said in place of a call is otherwise
+   --  nowhere once its run ends.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The invocation, started and not ended.
+   --  @param Text The reply.
+   --  @param Status Framework_Not_Found when there is no such invocation.
+   procedure Note_Reply
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Text   : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  The most of a reply Note_Reply keeps.
+   Reply_Most : constant := 16_384;
+
+   --  The replies an invocation's model made, as Note_Reply kept them.
+   --
+   --  @param Item The store.
+   --  @param Id The invocation.
+   --  @return Them, in the order made; empty for none.
+   function Replies_Of (Item : Stores.Store; Id : String) return Name_Lists.Vector;
+
    --  Record what a generation an invocation is about to make is set to --
    --  its sampling, its reasoning, its reply's length and where each came
    --  from -- as its next settings.NNNN entry: one before each round whose

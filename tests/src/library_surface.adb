@@ -25,6 +25,10 @@ package body Library_Surface is
       --  paired mixture's read-ahead is taken, which nothing else asks.
       new String'("Prefetches_Held"),
 
+      --  An invocation's replies as kept: for the tests that they are kept
+      --  whole, each on its own; a person reads them in the record.
+      new String'("Replies_Of"),
+
       --  The backend run takes unasked, for tests speed: the tool measures
       --  the run run makes, so it asks run's own decision.
       new String'("Unasked_Backend"),

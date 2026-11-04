@@ -207,6 +207,12 @@ package Model_Runner.Framework.Work is
       Number    : Natural := 0;
       Ended     : String := "");
 
+   --  Record a reply of the model's on the invocation now running.
+   --
+   --  @param Host The host.
+   --  @param Text The reply, as the model wrote it.
+   procedure Note_Reply (Host : in out Child_Host; Text : String);
+
    --  Record a call that may change state as started, before it runs, on
    --  the invocation now running; Note_Call with Number fills it in. A run
    --  that stops between leaves it said, and recovery names it.
