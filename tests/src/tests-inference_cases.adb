@@ -8291,7 +8291,8 @@ package body Tests.Inference_Cases is
             Accepted   : out Natural;
             Adapts     : Boolean := False;
             Tokens     : Positive := 6;
-            Rules      : Gen.Grammar_Reference := null)
+            Rules      : Gen.Grammar_Reference := null;
+            Sampled    : Boolean := False)
          is
             Live    : L.Session;
             Second  : aliased L.Session;
@@ -8311,6 +8312,9 @@ package body Tests.Inference_Cases is
             Model_Runner.Stops.Open (Stop);
             Request.Max_Tokens := Tokens;
             Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+            if Sampled then
+               Request.Sampling.Temperature := 0.8;
+            end if;
             Request.Seed := 7;
             Request.Has_Seed := True;
             Request.Add_Beginning := True;
@@ -8444,6 +8448,24 @@ package body Tests.Inference_Cases is
             end loop;
             Assert (Proposed_G > 0,
                     "a greedy run under a grammar did not draft");
+
+            --  Sampled, it drafts too, and keeps to the grammar: a kept
+            --  proposal the grammar refuses ends its round, the position
+            --  drawn again under the grammar.
+            declare
+               Sampled_G : Model_Runner.Bytes.Byte_Array_Access;
+               Sampled_L, Proposed_S, Kept_S : Natural;
+            begin
+               Turn (True, Sampled_G, Sampled_L, Proposed_S, Kept_S,
+                     Tokens => 10, Rules => Rules'Unchecked_Access, Sampled => True);
+               Assert (Sampled_L > 0, "a sampled run under a grammar wrote nothing");
+               for Index in 1 .. B.Byte_Index (Sampled_L) loop
+                  Assert (Character'Val (Sampled_G.all (Index)) in 'a' .. 'c',
+                          "a sampled drafted run let through a byte its grammar does not allow");
+               end loop;
+               Assert (Proposed_S > 0, "a sampled run under a grammar did not draft");
+               B.Free (Sampled_G);
+            end;
 
             B.Free (Plain_G);
             B.Free (Draft_G);

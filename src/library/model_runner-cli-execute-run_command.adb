@@ -23,7 +23,6 @@ with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Grammar;
 with Model_Runner.Schema;
-with Model_Runner.Sampling;
 with Model_Runner.Limits;
 with Model_Runner.Numerics;
 

@@ -3542,6 +3542,108 @@ package body Tests.Sampling_Cases is
       end loop;
    end Speculative_Sampling_Keeps_The_Target;
 
+   --  And under a grammar: the token speculative sampling gives, kept where
+   --  the grammar takes it and drawn again where it does not -- unmasked
+   --  first, then under the mask, as a drafted round under a grammar does
+   --  -- is distributed as the target restricted to what the grammar takes.
+   procedure Speculative_Sampling_Keeps_The_Grammar_Share
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      type Prob_Access is access N.Real_Array;
+      procedure Free is new Ada.Unchecked_Deallocation
+        (N.Real_Array, Prob_Access);
+
+      Sampler : S.Sampler;
+      Config  : S.Configuration;
+      Status  : E.Error_Info;
+
+      P : constant N.Real_Array (0 .. 3) := [0.4, 0.3, 0.2, 0.1];
+      Q : constant N.Real_Array (0 .. 3) := [0.1, 0.2, 0.3, 0.4];
+      --  The grammar refuses token 2: the target's share elsewhere is p/0.8.
+      Refused : constant Vocab.Token_Id := 2;
+      Log_P, Log_Q : N.Real_Array (0 .. 3);
+
+      P_Probs : Prob_Access := new N.Real_Array (0 .. 3);
+      Q_Probs : Prob_Access := new N.Real_Array (0 .. 3);
+
+      Trials : constant := 400_000;
+      Tally  : array (N.Element_Count range 0 .. 3) of Natural :=
+        [others => 0];
+      X, Emit : Vocab.Token_Id;
+      R       : N.Real;
+   begin
+      for I in P'Range loop
+         Log_P (I) := N.Real (N.Log (N.Wide_Real (P (I))));
+         Log_Q (I) := N.Real (N.Log (N.Wide_Real (Q (I))));
+      end loop;
+
+      Config := S.Greedy_Configuration;
+      Config.Temperature := 1.0;
+      Config.Top_K := 0;
+      Config.Top_P := 1.0;
+      Config.Min_P := 0.0;
+      Config.Top_A := 0.0;
+      Config.Repeat_Penalty := 1.0;
+      Config.Typical_P := 1.0;
+      Config.Tail_Free := 1.0;
+
+      S.Open (Sampler, Config, 4, 20240608, Status);
+      Assert (E.Is_Ok (Status), "the sampler would not open");
+
+      S.Sample (Sampler, Log_P, X, Status, Probs => P_Probs);
+      Assert (E.Is_Ok (Status), "sampling p failed");
+
+      for Trial in 1 .. Trials loop
+         S.Sample (Sampler, Log_Q, X, Status, Probs => Q_Probs);
+         Assert (E.Is_Ok (Status), "sampling q failed");
+         S.Draw_Uniform (Sampler, R);
+
+         declare
+            P_X : constant N.Real := P_Probs (N.Element_Count (X));
+            Q_X : constant N.Real := Q_Probs (N.Element_Count (X));
+         begin
+            if Q_X <= 0.0 or else R * Q_X <= P_X then
+               Emit := X;
+            else
+               S.Sample_Residual (Sampler, P_Probs.all, Q_Probs.all,
+                                  Emit, Status);
+               Assert (E.Is_Ok (Status), "the residual would not draw");
+            end if;
+         end;
+
+         if Emit = Refused then
+            S.Sample (Sampler, Log_P, Emit, Status);
+            if Emit = Refused then
+               S.Forbid_For_Step (Sampler, Refused);
+               S.Sample (Sampler, Log_P, Emit, Status);
+               S.Release_Step_Mask (Sampler);
+            end if;
+            Assert (E.Is_Ok (Status), "the draw under the mask failed");
+         end if;
+
+         Tally (N.Element_Count (Emit)) :=
+           Tally (N.Element_Count (Emit)) + 1;
+      end loop;
+
+      S.Close (Sampler);
+      Free (P_Probs);
+      Free (Q_Probs);
+
+      for I in P'Range loop
+         declare
+            Want : constant N.Real :=
+              (if Vocab.Token_Id (I) = Refused then 0.0 else P (I) / 0.8);
+            Got  : constant N.Real := N.Real (Tally (I)) / N.Real (Trials);
+         begin
+            Assert (abs (Got - Want) < 0.01,
+                    "token" & N.Element_Count'Image (I) & " came out at"
+                    & N.Real'Image (Got) & ", the grammar's share is"
+                    & N.Real'Image (Want));
+         end;
+      end loop;
+   end Speculative_Sampling_Keeps_The_Grammar_Share;
+
    ------------------------------------------
    -- Screened_Walks_Choose_As_Full_Ones --
    ------------------------------------------
@@ -4075,6 +4177,10 @@ package body Tests.Sampling_Cases is
         (T, Speculative_Sampling_Keeps_The_Target'Access,
          "accepting a draft by the p-over-q test and drawing the rest from "
          & "the residual leaves the target's own distribution");
+      Register_Routine
+        (T, Speculative_Sampling_Keeps_The_Grammar_Share'Access,
+         "a drafted token the grammar refuses, drawn again under it, leaves "
+         & "the target's share of what the grammar takes");
       Register_Routine
         (T, Bias_Moves_A_Token'Access,
          "a per-token bias moves that token and only that token, on both "

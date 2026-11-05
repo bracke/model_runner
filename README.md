@@ -12922,19 +12922,19 @@ differently; a test draws thousands of runs each way and holds the two
 distributions to each other. This is how `run` drafts by default, since it
 samples by default.
 
-**Under a grammar** (`--grammar`, `--json-schema`, tools) **a greedy run
-drafts and a sampled one does not.** Greedy, the round walks the grammar
-along the proposals and stops at the first it refuses, and keeps a proposal
-where it is the choice the run makes under the grammar at that position --
-the unmasked draw, or the filtered one where the grammar refuses that -- so
-the text is the undrafted run's. qwen3-8b drafted by Qwen3-0.6B under a JSON
-schema on the processor, 200 tokens: 9.46 to 14.79 tokens a second, 77 per
-cent of proposals kept, the same text. Sampled, keeping the distribution
-would need the grammar's mass over every token at every position -- the
-whole filter an undrafted run takes only when its first draw is refused --
-so a sampled run under a grammar generates undrafted, and `--draft-model`
-beside a grammar or a schema is refused there rather than loaded for
-nothing. `--draft-tokens` without anything to draft
+**Under a grammar** (`--grammar`, `--json-schema`, tools) **a run drafts,
+greedy or sampled.** Greedy, the round walks the grammar along the proposals
+and stops at the first it refuses, and keeps a proposal where it is the
+choice the run makes under the grammar at that position -- the unmasked
+draw, or the filtered one where the grammar refuses that -- so the text is
+the undrafted run's. qwen3-8b drafted by Qwen3-0.6B under a JSON schema on
+the processor, 200 tokens: 9.46 to 14.79 tokens a second, 77 per cent of
+proposals kept, the same text. Sampled, each position's token is first the
+model's own by speculative sampling, and kept where the grammar takes it;
+where the grammar refuses it, the round ends there and the position draws
+again under the grammar -- what an undrafted run does with its own first
+draw, which gives the grammar's share of the distribution exactly.
+`--draft-tokens` without anything to draft
 from is a note -- nothing was loaded, so nothing was wasted, and the only
 thing missing is the telling.
 

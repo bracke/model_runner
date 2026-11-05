@@ -683,19 +683,21 @@ package body Model_Runner.Generation is
       --  which evaluating the residual left, and the block drafts at any
       --  temperature -- which is how `run` samples by default, so a file
       --  carrying the block drafted from it only when asked for greedy
-      --  output. Grammar is greedy-only either way, the verify pass carrying
-      --  no grammar mask.
+      --  output.
       --  Under a grammar a round drafts where it samples greedily: each
       --  position's choice is then the one an undrafted run makes under the
       --  grammar, and a proposal is kept where it is that choice. Sampled,
-      --  keeping the distribution would need the grammar's mass over every
-      --  token at every position -- the whole filter an undrafted run takes
-      --  only when its first draw is refused -- so a sampled run under a
-      --  grammar does not draft.
+      --  each position's token is first the target's own, by speculative
+      --  sampling, and taken where the grammar takes it; where it does not,
+      --  the round ends there and the position draws again under the
+      --  grammar's mask -- which is what an undrafted run does with its own
+      --  first draw, and gives the masked distribution exactly. Refused
+      --  that, a sampled run under a grammar did not draft: /work's first
+      --  reply, held to a call, thought undrafted, qwen3-8b's delegate
+      --  trial 70 ms a token against 63.
       Drafting : constant Boolean :=
         (By_Model or else By_Next or else Item.Draft_From_Context)
         and then Item.Draft_Tokens > 0
-        and then (Rules = null or else S.Is_Greedy (Item.Sampling))
         --  Not under mirostat, sampled: it steers by the surprise of every
         --  draw, and a round draws for proposals it throws away -- the
         --  steering, and so the distribution, would follow them.
@@ -1321,12 +1323,18 @@ package body Model_Runner.Generation is
 
          if Item.Logprobs > 0 then
             T.Allocate (N.Element_Count (Settings.Vocabulary), Opened);
+         end if;
+         --  The row a carried token was drawn at: shown with it, and drawn
+         --  from again under a grammar that refuses it.
+         if Item.Logprobs > 0 or else (Sampled_Draft and then Rules /= null) then
             T.Allocate (N.Element_Count (Settings.Vocabulary), Carried_Row);
          end if;
 
          if Proposed = null or else Verified = null or else Every = null
            or else Aside = null
-           or else (Item.Logprobs > 0 and then (Opened = null or else Carried_Row = null))
+           or else (Item.Logprobs > 0 and then Opened = null)
+           or else ((Item.Logprobs > 0 or else (Sampled_Draft and then Rules /= null))
+                    and then Carried_Row = null)
            or else (By_Next
                     and then (Next_In = null or else Next_Out = null
                               or else Next_States = null))
@@ -2314,6 +2322,16 @@ package body Model_Runner.Generation is
             if Has_Carried then
                Guess := Carried;
                Has_Carried := False;
+               --  A residual is the target's draw, not the grammar's: where
+               --  the grammar refuses it, the position draws again under it.
+               if Rules /= null and then not Takes_At (Shape, Guess) then
+                  Choose_Under (Shape, Carried_Row.all, Guess, Local);
+                  if E.Is_Error (Local) then
+                     Conclude (Runtime_Error, Local);
+                     Failed := True;
+                     return;
+                  end if;
+               end if;
             else
                if Rules /= null then
                   Choose_Under (Shape, Logits.all, Guess, Local);
@@ -2715,83 +2733,125 @@ package body Model_Runner.Generation is
                --  position takes a token from the residual max(0, p - q) and
                --  the round stops there. So the run's tokens keep the target's
                --  own distribution, drafted or not, as Leviathan and Chen show.
-               for Step in 2 .. Count loop
-                  declare
-                     V_Size : constant N.Element_Count :=
-                       N.Element_Count (Settings.Vocabulary);
-                     Row    : constant N.Element_Count :=
-                       N.Element_Count (Step - 2) * V_Size;
-                     Q_Base : constant N.Element_Count :=
-                       N.Element_Count (Step - 2) * V_Size;
-                     P_At   : constant N.Element_Count :=
-                       N.Element_Count (Proposed.all (Step));
-                     Wanted : Token_Id;
-                     R, P_X, Q_X : N.Real;
-                     use type N.Real;
-                  begin
-                     --  The target's distribution p at this position, and its
-                     --  own draw from it -- unused unless every proposal is
-                     --  kept, when it is the round's next token.
-                     S.Sample
-                       (Sampler,
-                        Every.all (Every.all'First + Row
-                                   .. Every.all'First + Row + V_Size - 1),
-                        Wanted, Local, Sharing, Probs => Tgt_Dist);
+               --  Under a grammar a kept proposal it refuses ends the round
+               --  as a rejection does, the position drawn again under it.
+               declare
+                  Check : Model_Runner.Grammar.Matcher;
+               begin
+                  if Rules /= null then
+                     Check := Shape;
+                     Move (Check, Proposed.all (1), Local);
                      if E.Is_Error (Local) then
                         Conclude (Runtime_Error, Local);
                         Failed := True;
                         return;
                      end if;
-
-                     --  q: the draft's kept row, or a point mass where a
-                     --  lookup proposed without a distribution of its own.
-                     if From_Context then
-                        Point_Dist.all := [others => 0.0];
-                        Point_Dist.all (Point_Dist.all'First + P_At) := 1.0;
-                     end if;
-
-                     P_X := Tgt_Dist.all (Tgt_Dist.all'First + P_At);
-                     Q_X :=
-                       (if From_Context
-                        then Point_Dist.all (Point_Dist.all'First + P_At)
-                        else Draft_Dist.all
-                               (Draft_Dist.all'First + Q_Base + P_At));
-
-                     S.Draw_Uniform (Sampler, R);
-
-                     if Q_X <= 0.0 or else R * Q_X <= P_X then
-                        Accepted := Accepted + 1;
-                        Verified_Count := Verified_Count + 1;
-                        Verified.all (Verified_Count) := Proposed.all (Step);
-                        S.Record_Token (Sampler, Proposed.all (Step));
-                     else
-                        S.Sample_Residual
-                          (Sampler, Tgt_Dist.all,
-                           (if From_Context then Point_Dist.all
-                            else Draft_Dist.all
-                                   (Draft_Dist.all'First + Q_Base
-                                    .. Draft_Dist.all'First + Q_Base
-                                       + V_Size - 1)),
-                           Residual, Local);
+                  end if;
+                  for Step in 2 .. Count loop
+                     declare
+                        V_Size : constant N.Element_Count :=
+                          N.Element_Count (Settings.Vocabulary);
+                        Row    : constant N.Element_Count :=
+                          N.Element_Count (Step - 2) * V_Size;
+                        Q_Base : constant N.Element_Count :=
+                          N.Element_Count (Step - 2) * V_Size;
+                        P_At   : constant N.Element_Count :=
+                          N.Element_Count (Proposed.all (Step));
+                        Wanted : Token_Id;
+                        R, P_X, Q_X : N.Real;
+                        use type N.Real;
+                     begin
+                        --  The target's distribution p at this position, and its
+                        --  own draw from it -- unused unless every proposal is
+                        --  kept, when it is the round's next token.
+                        S.Sample
+                          (Sampler,
+                           Every.all (Every.all'First + Row
+                                      .. Every.all'First + Row + V_Size - 1),
+                           Wanted, Local, Sharing, Probs => Tgt_Dist);
                         if E.Is_Error (Local) then
                            Conclude (Runtime_Error, Local);
                            Failed := True;
                            return;
                         end if;
 
-                        --  The next round's first proposal, and recorded
-                        --  and given out there, as every first proposal is.
-                        Rejected := True;
-                        Carried := Residual;
-                        Has_Carried := True;
-                        if Carried_Row /= null then
+                        --  q: the draft's kept row, or a point mass where a
+                        --  lookup proposed without a distribution of its own.
+                        if From_Context then
+                           Point_Dist.all := [others => 0.0];
+                           Point_Dist.all (Point_Dist.all'First + P_At) := 1.0;
+                        end if;
+
+                        P_X := Tgt_Dist.all (Tgt_Dist.all'First + P_At);
+                        Q_X :=
+                          (if From_Context
+                           then Point_Dist.all (Point_Dist.all'First + P_At)
+                           else Draft_Dist.all
+                                  (Draft_Dist.all'First + Q_Base + P_At));
+
+                        S.Draw_Uniform (Sampler, R);
+
+                        if (Q_X <= 0.0 or else R * Q_X <= P_X)
+                          and then Rules /= null
+                          and then not Takes_At (Check, Proposed.all (Step))
+                        then
+                           Choose_Under
+                             (Check,
+                              Every.all (Every.all'First + Row .. Every.all'First + Row + V_Size - 1),
+                              Residual, Local);
+                           if E.Is_Error (Local) then
+                              Conclude (Runtime_Error, Local);
+                              Failed := True;
+                              return;
+                           end if;
+                           Rejected := True;
+                           Carried := Residual;
+                           Has_Carried := True;
                            Carried_Row.all :=
                              Every.all (Every.all'First + Row .. Every.all'First + Row + V_Size - 1);
+                           exit;
+                        elsif Q_X <= 0.0 or else R * Q_X <= P_X then
+                           Accepted := Accepted + 1;
+                           Verified_Count := Verified_Count + 1;
+                           Verified.all (Verified_Count) := Proposed.all (Step);
+                           S.Record_Token (Sampler, Proposed.all (Step));
+                           if Rules /= null and then Step < Count then
+                              Move (Check, Proposed.all (Step), Local);
+                              if E.Is_Error (Local) then
+                                 Conclude (Runtime_Error, Local);
+                                 Failed := True;
+                                 return;
+                              end if;
+                           end if;
+                        else
+                           S.Sample_Residual
+                             (Sampler, Tgt_Dist.all,
+                              (if From_Context then Point_Dist.all
+                               else Draft_Dist.all
+                                      (Draft_Dist.all'First + Q_Base
+                                       .. Draft_Dist.all'First + Q_Base
+                                          + V_Size - 1)),
+                              Residual, Local);
+                           if E.Is_Error (Local) then
+                              Conclude (Runtime_Error, Local);
+                              Failed := True;
+                              return;
+                           end if;
+
+                           --  The next round's first proposal, and recorded
+                           --  and given out there, as every first proposal is.
+                           Rejected := True;
+                           Carried := Residual;
+                           Has_Carried := True;
+                           if Carried_Row /= null then
+                              Carried_Row.all :=
+                                Every.all (Every.all'First + Row .. Every.all'First + Row + V_Size - 1);
+                           end if;
+                           exit;
                         end if;
-                        exit;
-                     end if;
-                  end;
-               end loop;
+                     end;
+                  end loop;
+               end;
             end if;
 
             --  Back to what was agreed, on both sides. The target committed

@@ -3827,8 +3827,8 @@ package body Tests.CLI_Cases is
          Model_Runner.Llama.Close (Ready_Too, Status);
       end;
       --  And a draft model beside a grammar, where nothing named the
-      --  temperature and the file's own samples: refused once the model is
-      --  open, as the command line refuses it where a temperature is named.
+      --  temperature and the file's own samples: run, the draft verified
+      --  by speculative sampling under the grammar.
       declare
          Path : constant String := "obj/sampled-model.gguf";
          File : Ada.Streams.Stream_IO.File_Type;
@@ -3867,11 +3867,10 @@ package body Tests.CLI_Cases is
          declare
             Told : constant String := Text_Of ("obj/draft-grammar.txt");
          begin
-            Assert (Code /= 0
-                    and then Ada.Strings.Fixed.Index (Told, "--draft-model cannot be used with --grammar") > 0,
-                    "a draft beside a grammar was not refused where the model file's own settings sample: " & Told);
+            Assert (Code = 0,
+                    "a draft beside a grammar was refused where the model file's own settings sample: " & Told);
          end;
-         --  Greedy, the draft keeps the grammar's text, and runs.
+         --  Greedy too.
          Add (Run_It, "--temperature");
          Add (Run_It, "0");
          Ran (Run_It, Code);
@@ -5636,17 +5635,12 @@ package body Tests.CLI_Cases is
       Expect (E.No_Error, "run m.gguf --prompt a --agent --checkpoint-file c.txt");
       Expect (E.No_Error, "run m.gguf --prompt a --save-session s.bin");
 
-      --  A draft model with a grammar or a schema drafts where the run is
-      --  greedy, and is refused where it samples -- that run cannot draft,
-      --  and a draft is a second model file a run that never asks it
-      --  anything has paid for. A temperature alone is not refused: above
-      --  zero the draft is verified by speculative sampling, which keeps
-      --  the target's own distribution. Refused here where a temperature
-      --  above nought is named; where none is, the model file's own may
-      --  make the run greedy, and run decides once it is open.
-      Expect (E.CLI_Option_Combination,
+      --  A draft model with a grammar or a schema drafts, greedy or
+      --  sampled: a sampled round takes the target's own token where the
+      --  grammar takes it and draws again under the grammar where not.
+      Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --grammar root --temperature 0.8");
-      Expect (E.CLI_Option_Combination,
+      Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --json-schema {} --temperature 0.8");
       Expect (E.No_Error,
               "run m.gguf --prompt a --draft-model d.gguf --grammar root");

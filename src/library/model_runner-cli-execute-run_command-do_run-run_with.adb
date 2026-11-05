@@ -231,24 +231,6 @@ begin
               Model_Runner.Platform.Models_Directory, Model_Runner.Platform.Other_Models_Directory));
    end if;
 
-   --  A draft model beside a grammar or a schema where the run samples,
-   --  as the command line refuses it where a temperature is named: here,
-   --  with the model file's own settings known, before the draft loads.
-   if not T.Is_Empty (Item.Draft_Path)
-     and then not Model_Runner.Sampling.Is_Greedy (Opt.Sampling_For (Item, Prepared))
-     and then (Item.Grammar_Text /= null or else not T.Is_Empty (Item.Grammar_Path)
-               or else Item.Schema_Text /= null or else not T.Is_Empty (Item.Schema_Path))
-   then
-      Condition := E.Make (E.CLI_Option_Combination);
-      E.Add_Text (Condition, "option", "--draft-model", E.Param_Identifier);
-      E.Add_Text (Condition, "other",
-                  (if Item.Grammar_Text /= null or else not T.Is_Empty (Item.Grammar_Path)
-                   then "--grammar" else "--json-schema"),
-                  E.Param_Identifier);
-      Fail (Condition);
-      return;
-   end if;
-
    --  How much to reason, where the command line named it: refused for a
    --  model whose template reads no such level, by the rule /work's
    --  calls are fitted by.
