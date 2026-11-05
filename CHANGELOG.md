@@ -11,7 +11,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
-- **A `/work` step that must act is held to calls.** The first reply of a run, and one sent back to act ("you have not called a tool", checks that failed), is generated under a call grammar with no prose and no report in it (`Agent.Run`'s `Call_First`, `Compile_Call_Grammar`'s `Call_Required`), for the JSON envelope and the tag call forms; a step whose prompt opened a thought keeps the ordinary rules, and under these the thought must open in the reply -- left optional, Steelman-14B wrote its report as an unclosed thought to its token limit. On Steelman's edit, find and delegate trials, six alternated rounds against before: 18 of 18 complete against 12 (delegate 6 against 2).
+- **A `/work` step that must act is held to one call.** The first reply of a run, and one sent back to act ("you have not called a tool", checks that failed), is generated under a call grammar of one call with no prose and no report in it (`Agent.Run`'s `Call_First`, `Compile_Call_Grammar`'s `Call_Required`), for the JSON envelope and the tag call forms; a step whose prompt opened a thought keeps the ordinary rules, and under these the thought must open in the reply -- left optional, Steelman-14B wrote its report as an unclosed thought to its token limit. On Steelman's edit, find and delegate trials, six alternated rounds against before: 18 of 18 complete against 12 (delegate 6 against 2). Held to calls but not to one, Steelman's helper wrote run_checks, read_file and record_observation after its write, 8 KB of them with no answer between, to its token limit: half its delegate runs took 400 s rather than 70; held to one, 12 of 12 runs of the three tasks complete, delegate in 65 to 79 s.
 
 - **A `/work` helper is told its part in the words its root is told the task.** It opens as "one part of a task in a project" rather than "helping an agent", its brief is "Your part" with the files it starts from quoted and numbered as a task's own are (where they fit), and its "What to do" is the root's -- do it now with your tools, describing a change does not make it, report when the files are written -- with findings: in its report, or the root's read-and-answer form where it may write nothing (`Framework.Work.Child_Opening`, `Child_Instructions`). `run`'s helpers keep theirs. On Steelman-14B's delegate trial, six alternated rounds: complete 2 of 6 either way, the helper writing the tool list out in place of a call 4 runs of 6 before and none after, the median run 198 s before and 74 s after.
 
@@ -22,6 +22,8 @@ Keep a Changelog and the project uses semantic versioning.
 - **The speech figures re-measured** at a lower load, with every change of today in them, and a Whisper held but idle measured: no cost to the conversation's generation on either backend, its threads asleep.
 
 ### Fixed
+
+- **A call grammar ends after the space that follows its last call.** That space was read as the space before another call, so a model that wrote a newline after `</tool_call>` was refused the end.
 
 - **`edit_file` takes only a read's revision as one.** A `revision` that is not sixteen hex digits, as a read gives, stands for none -- a model held to a call before it read the file filled the optional field with `"0"`, was told the file had changed since it read it, and gave the task up. A revision of a read's shape that is not the file's is refused as before.
 

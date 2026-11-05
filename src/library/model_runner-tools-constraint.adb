@@ -289,7 +289,7 @@ package body Model_Runner.Tools.Constraint is
    procedure Put_Loose_Tags
      (B : in out Builder; Sp : Spelling; Syntax : Call_Syntax) is
    begin
-      Put (B, "root ::= think? prose calls?" & ASCII.LF);
+      Put (B, "root ::= think? prose ( calls ws )?" & ASCII.LF);
       Put (B, Think_Rule);
       Put (B, Prose_Rule (Syntax));
       Put (B, "calls ::= call ( ws call )*" & ASCII.LF);
@@ -312,7 +312,7 @@ package body Model_Runner.Tools.Constraint is
       if In_Tags (Syntax) then
          Put_Loose_Tags (B, Spelled (Syntax), Syntax);
       else
-         Put (B, "root ::= think? prose calls?" & ASCII.LF);
+         Put (B, "root ::= think? prose ( calls ws )?" & ASCII.LF);
          Put (B, Think_Rule);
          Put (B, Prose_Rule (Syntax));
          Put (B, Calls_Rule (Syntax));
@@ -396,15 +396,20 @@ package body Model_Runner.Tools.Constraint is
       --  are emitted once below; defining it here too would be a duplicate
       --  rule and refuse the grammar.
       if Call_Required then
-         --  Calls and nothing else: a step that must act.
-         Put (B, "root ::= think? calls" & ASCII.LF);
+         --  One call and nothing else: a step that must act. Its answer is
+         --  read before the next, unheld, step: Steelman-14B, let write
+         --  calls on, wrote run_checks, read_file and record_observation
+         --  after its one write_file -- 8 KB of them -- to its token limit,
+         --  never pausing for an answer. The call ends in the space after
+         --  it, the newline it writes after "</tool_call>" taken as the end.
+         Put (B, "root ::= think? call ws" & ASCII.LF);
       elsif Typed_Answer then
          --  A reply is a call or the answer, in the shape asked for -- no
          --  free prose. The answer rule is defined after the tools, from the
          --  same shared helpers.
-         Put (B, "root ::= think? (calls | answer)" & ASCII.LF);
+         Put (B, "root ::= think? ( ( calls ws ) | answer )" & ASCII.LF);
       else
-         Put (B, "root ::= think? prose calls?" & ASCII.LF);
+         Put (B, "root ::= think? prose ( calls ws )?" & ASCII.LF);
          Put (B, Prose_Rule (Syntax));
       end if;
       Put (B, Think_Rule (Opened => Call_Required));

@@ -1897,6 +1897,25 @@ package body Tests.Tools_Cases is
            ("<think>multiply</think><tool_call>{""name"": ""calculator"", ""arguments"": "
             & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>", Required => True),
          "a grammar that requires a call refused one");
+      --  And ends after the newline that follows a call: taken as the space
+      --  before another, it left the 14B no end but its token limit.
+      Assert
+        (Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>" & ASCII.LF, Required => True)
+         and then Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>" & ASCII.LF),
+         "a call grammar refused to end after the newline that follows a call");
+      --  And it is one call: let write calls on, the 14B wrote call after
+      --  call without an answer between, to its token limit.
+      Assert
+        (not Grammar_Takes
+           ("<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 47, ""op"": ""*"", ""b"": 89}}</tool_call>" & ASCII.LF & ASCII.LF
+            & "<tool_call>{""name"": ""calculator"", ""arguments"": "
+            & "{""a"": 1, ""op"": ""+"", ""b"": 2}}</tool_call>", Required => True),
+         "a grammar that requires a call took a second one");
       Assert
         (not Grammar_Takes ("status: done" & ASCII.LF & "summary: wrote it", Required => True)
          and then not Grammar_Takes
