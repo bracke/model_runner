@@ -673,6 +673,9 @@ package body Model_Runner.CLI.Project_Commands is
       --  The messages whose replies the invocation has: those after are
       --  the round's own.
       Replied : Natural := 0;
+      --  Whether the brief, the first user turn, has gone by: kept apart in
+      --  the context's manifest, it is not told.NNNN.
+      Brief_Passed : Boolean := False;
       --  Whether the round's first reply must be calls: the first round's,
       --  and one sent back to act -- not one asked for its report. Left
       --  free, Steelman-14B's helpers answered with a report of a file
@@ -867,12 +870,19 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
          end;
          --  The round's replies, whole, on its invocation: a helper that
-         --  said done with no call was known only by its summary line.
+         --  said done with no call was known only by its summary line. And
+         --  what the harness told the model between them: whether a note
+         --  added to a failed check reached it could not be read anywhere.
          if Host /= null then
             Replied := Natural'Min (Replied, Conv.Length (Messages));
             for Index in Replied + 1 .. Conv.Length (Messages) loop
                if Conv.Sender_At (Messages, Index) = Conv.Assistant_Role then
                   Host.Note_Reply (Conv.Content_At (Messages, Index));
+               elsif Conv.Sender_At (Messages, Index) = Conv.User_Role then
+                  if Brief_Passed then
+                     Host.Note_Told (Conv.Content_At (Messages, Index));
+                  end if;
+                  Brief_Passed := True;
                end if;
             end loop;
             Replied := Conv.Length (Messages);

@@ -29,6 +29,9 @@ package body Library_Surface is
       --  whole, each on its own; a person reads them in the record.
       new String'("Replies_Of"),
 
+      --  And what it was told, for the same tests.
+      new String'("Told_Of"),
+
       --  The backend run takes unasked, for tests speed: the tool measures
       --  the run run makes, so it asks run's own decision.
       new String'("Unasked_Backend"),

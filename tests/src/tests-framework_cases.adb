@@ -6391,6 +6391,13 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index
                             (Iv.Replies_Of (Store, To_String (First)).Last_Element, "(cut at") > 0,
                  "a reply was not kept whole, or one past the bound not cut and said so");
+         --  And what the harness told the model, on its own entries.
+         Iv.Note_Told (Store, Change, To_String (First), "Your last run_checks failed", Status);
+         S.Commit (Store, Change, Status);
+         Assert (Natural (Iv.Told_Of (Store, To_String (First)).Length) = 1
+                 and then Iv.Told_Of (Store, To_String (First)).First_Element = "Your last run_checks failed"
+                 and then Natural (Iv.Replies_Of (Store, To_String (First)).Length) = 2,
+                 "what the model was told was not kept, or was kept as a reply");
          Assert (Iv.Last_For (Store, "TASK-1") = To_String (First)
                  and then Iv.Last_For (Store, "TASK-9") = "",
                  "a task's last invocation was not found, or one was found for none");

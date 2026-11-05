@@ -216,6 +216,13 @@ package Model_Runner.Framework.Work is
    --  @param Text The reply, as the model wrote it.
    procedure Note_Reply (Host : in out Child_Host; Text : String);
 
+   --  Record what the harness told the model, between its replies, on the
+   --  invocation now running.
+   --
+   --  @param Host The host.
+   --  @param Text What the model was told.
+   procedure Note_Told (Host : in out Child_Host; Text : String);
+
    --  Record a call that may change state as started, before it runs, on
    --  the invocation now running; Note_Call with Number fills it in. A run
    --  that stops between leaves it said, and recovery names it.

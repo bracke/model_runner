@@ -794,10 +794,13 @@ package body Model_Runner.Framework.Invocations is
    -- Note_Reply --
    ----------------
 
-   procedure Note_Reply
+   --  A numbered entry, Prefix then the next number, whole up to
+   --  Reply_Most bytes.
+      procedure Note_Numbered
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
       Id     : String;
+      Prefix : String;
       Text   : String;
       Status : out Model_Runner.Errors.Error_Info)
    is
@@ -815,17 +818,45 @@ package body Model_Runner.Framework.Invocations is
          Records.Set_Revision (Value, Records.Revision (Value) + 1);
       end if;
       for Index in 1 .. Records.Field_Count (Value) loop
-         if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "reply.") = 1 then
+         if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), Prefix) = 1 then
             Kept := Kept + 1;
          end if;
       end loop;
       Records.Set
-        (Value, "reply." & [1 .. Integer'Max (0, 4 - Image (Kept + 1)'Length) => '0'] & Image (Kept + 1),
+        (Value, Prefix & [1 .. Integer'Max (0, 4 - Image (Kept + 1)'Length) => '0'] & Image (Kept + 1),
          (if Text'Length <= Reply_Most then Text
           else Text (Text'First .. Text'First + Reply_Most - 1) & ASCII.LF & "(cut at"
                & Natural'Image (Reply_Most) & " bytes of" & Natural'Image (Text'Length) & ")"));
       Stores.Put (Change, Invocations_Area, Id, Value);
+   end Note_Numbered;
+
+   ----------------
+   -- Note_Reply --
+   ----------------
+
+   procedure Note_Reply
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Text   : String;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Note_Numbered (Item, Change, Id, "reply.", Text, Status);
    end Note_Reply;
+
+   ---------------
+   -- Note_Told --
+   ---------------
+
+   procedure Note_Told
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Text   : String;
+      Status : out Model_Runner.Errors.Error_Info) is
+   begin
+      Note_Numbered (Item, Change, Id, "told.", Text, Status);
+   end Note_Told;
 
    ----------------
    -- Replies_Of --
@@ -846,6 +877,26 @@ package body Model_Runner.Framework.Invocations is
       end if;
       return Result;
    end Replies_Of;
+
+   -------------
+   -- Told_Of --
+   -------------
+
+   function Told_Of (Item : Stores.Store; Id : String) return Name_Lists.Vector is
+      Value  : Records.Item;
+      Status : E.Error_Info;
+      Result : Name_Lists.Vector;
+   begin
+      Stores.Read (Item, Invocations_Area, Id, Value, Status);
+      if E.Is_Ok (Status) then
+         for Index in 1 .. Records.Field_Count (Value) loop
+            if Ada.Strings.Fixed.Index (Records.Field_Name (Value, Index), "told.") = 1 then
+               Result.Append (Records.Get (Value, Records.Field_Name (Value, Index)));
+            end if;
+         end loop;
+      end if;
+      return Result;
+   end Told_Of;
 
    -----------------
    -- Settings_Of --

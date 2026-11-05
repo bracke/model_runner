@@ -201,6 +201,31 @@ package Model_Runner.Framework.Invocations is
    --  @return Them, in the order made; empty for none.
    function Replies_Of (Item : Stores.Store; Id : String) return Name_Lists.Vector;
 
+   --  Record what the harness told an invocation's model between its
+   --  replies -- checks that failed, a call not made, a report refused --
+   --  as its next told.NNNN entry, whole up to Reply_Most bytes: with the
+   --  replies alone, what a model answered was kept and what it answered
+   --  was not.
+   --
+   --  @param Item The store.
+   --  @param Change The transaction.
+   --  @param Id The invocation, started and not ended.
+   --  @param Text What the model was told.
+   --  @param Status Framework_Not_Found when there is no such invocation.
+   procedure Note_Told
+     (Item   : Stores.Store;
+      Change : in out Stores.Transaction;
+      Id     : String;
+      Text   : String;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  What an invocation's model was told, as Note_Told kept it.
+   --
+   --  @param Item The store.
+   --  @param Id The invocation.
+   --  @return Them, in the order told; empty for none.
+   function Told_Of (Item : Stores.Store; Id : String) return Name_Lists.Vector;
+
    --  Record what a generation an invocation is about to make is set to --
    --  its sampling, its reasoning, its reply's length and where each came
    --  from -- as its next settings.NNNN entry: one before each round whose
