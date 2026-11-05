@@ -1212,6 +1212,13 @@ package body Model_Runner.Tools.Editing is
                Moved   : U.Unbounded_String;
                Shifted : Boolean := False;
 
+               --  Where old_text's first line stands: past what is before
+               --  the match, its own leading spaces -- "   return" found
+               --  three spaces into "      return". Laid out from the three
+               --  before it alone, Steelman-14B's new body stood at its
+               --  begin's depth, and the style check refused it every time.
+               Target : constant Natural := Lead + Indent_Of (Old_Text);
+
                function Blank (Line : String) return Boolean
                is (for all C of Line => C in ' ' | ASCII.HT | ASCII.CR);
 
@@ -1246,23 +1253,31 @@ package body Model_Runner.Tools.Editing is
                      end if;
                   end loop;
                   if First_Indent = 0
-                    and then (Leftmost = Natural'Last or else Leftmost >= Lead or else Old_Laid_Out)
+                    and then (Leftmost = Natural'Last or else Leftmost >= Target or else Old_Laid_Out)
                   then
                      return;
                   end if;
-                  Shift := Lead - First_Indent;
+                  --  A first line given with no indentation goes on after the
+                  --  line's: where the model meant it is where the lines that
+                  --  close it stand, the leftmost after it. Shifted by the
+                  --  line's whole indentation, Steelman's body under "if"
+                  --  at three stood at twelve.
+                  Shift := Target - First_Indent;
                   for Index in 1 .. Natural (Lines.Length) loop
                      declare
                         Line : constant String := Lines (Index);
                         Own  : constant Natural := Indent_Of (Line);
+                        By   : constant Integer :=
+                          (if Index > 1 and then First_Indent = 0 and then Leftmost /= Natural'Last
+                           then Target - Leftmost else Shift);
                      begin
                         U.Append (Moved, (if Index = 1 then "" else [1 => ASCII.LF]));
                         if Blank (Line) then
                            U.Append (Moved, Line);
-                        elsif Shift >= 0 then
-                           U.Append (Moved, [1 .. Shift => ' '] & Line);
+                        elsif By >= 0 then
+                           U.Append (Moved, [1 .. By => ' '] & Line);
                         else
-                           U.Append (Moved, Line (Line'First + Natural'Min (Own, -Shift) .. Line'Last));
+                           U.Append (Moved, Line (Line'First + Natural'Min (Own, -By) .. Line'Last));
                         end if;
                      end;
                   end loop;
@@ -1335,7 +1350,7 @@ package body Model_Runner.Tools.Editing is
                              & " times, and was edited in the one within the lines you last read"
                         else "")
                      & (if Shifted then "; the new lines were set at that line's indentation ("
-                                         & Ada.Strings.Fixed.Trim (Natural'Image (Lead), Ada.Strings.Left)
+                                         & Ada.Strings.Fixed.Trim (Natural'Image (Target), Ada.Strings.Left)
                                          & " spaces), each kept where it stood from the first"
                         else "")
                      & "; revision now " & Revision (After) & Kept_Note (Put)

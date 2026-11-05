@@ -25,6 +25,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **`edit_file` lays new lines out from where `old_text` stands.** An `old_text` found part way into a line's indentation (`"   return"` three spaces into `"      return"`) had the new lines set from the spaces before the match, not from where its first line stood: Steelman-14B's new body sat at its `begin`'s depth and the style check refused it in every run. And a first new line given with none of the line's indentation shifts the lines after it by the line's indentation less their leftmost column -- where the lines that close it stand -- rather than by the whole: the body under its `if` stood six columns too deep. Steelman's styled trial 0 of 3 to 2 of 3 complete, convention 2 of 3 to 3 of 3.
+
 - **A call grammar ends after the space that follows its last call.** That space was read as the space before another call, so a model that wrote a newline after `</tool_call>` was refused the end.
 
 - **`edit_file` takes only a read's revision as one.** A `revision` that is not sixteen hex digits, as a read gives, stands for none -- a model held to a call before it read the file filled the optional field with `"0"`, was told the file had changed since it read it, and gave the task up. A revision of a read's shape that is not the file's is refused as before.

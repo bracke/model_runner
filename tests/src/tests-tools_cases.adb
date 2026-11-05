@@ -3105,6 +3105,32 @@ package body Tests.Tools_Cases is
          Assert (not Ended.Changed and then Whole_File (Tree & "/tabbed.txt") = "all:" & ASCII.LF & ASCII.HT
                  & "gcc foo  " & ASCII.LF,
                  "a loose edit moved a tabbed line by spaces: " & Room (Room'First .. Last));
+         --  An old_text found part way into a line's indentation: the new
+         --  lines stand from where its first line stood, not from the
+         --  spaces before the match.
+         Placed.Run ("write_file",
+                     "{""path"": ""deep.adb"", ""content"": ""   begin\n      return A + B;\n   end Add;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("read_file", "{""path"": ""deep.adb""}", Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""deep.adb"", ""old_text"": ""   return A + B;"","
+                     & " ""new_text"": ""   if A > 0 then\n      return 1;\n   end if;""}", Room, Last, Ended, Status);
+         Assert (Whole_File (Tree & "/deep.adb") = "   begin" & ASCII.LF & "      if A > 0 then" & ASCII.LF
+                 & "         return 1;" & ASCII.LF & "      end if;" & ASCII.LF & "   end Add;" & ASCII.LF,
+                 "an edit matched inside an indentation was laid out from the match: "
+                 & Whole_File (Tree & "/deep.adb"));
+         --  A first line given with none of the line's indentation, the
+         --  rest laid out from where the model meant it: the lines that
+         --  close it stand with it.
+         Placed.Run ("write_file",
+                     "{""path"": ""after.adb"", ""content"": ""   begin\n      return A + B;\n   end Add;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("read_file", "{""path"": ""after.adb""}", Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""after.adb"", ""old_text"": ""return A + B;"","
+                     & " ""new_text"": ""if A > 0 then\n      return 1;\n   end if;""}", Room, Last, Ended, Status);
+         Assert (Whole_File (Tree & "/after.adb") = "   begin" & ASCII.LF & "      if A > 0 then" & ASCII.LF
+                 & "         return 1;" & ASCII.LF & "      end if;" & ASCII.LF & "   end Add;" & ASCII.LF,
+                 "an edit's lines after an unindented first were shifted by the whole indentation: "
+                 & Whole_File (Tree & "/after.adb"));
          --  Matched loosely and given nothing in its place: the lines go,
          --  not a blank line left for them.
          Placed.Run ("write_file", "{""path"": ""gone.txt"", ""content"": ""a\nb  \nc\n""}",
