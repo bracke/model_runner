@@ -3131,6 +3131,17 @@ package body Tests.Tools_Cases is
                  & "         return 1;" & ASCII.LF & "      end if;" & ASCII.LF & "   end Add;" & ASCII.LF,
                  "an edit's lines after an unindented first were shifted by the whole indentation: "
                  & Whole_File (Tree & "/after.adb"));
+         --  An old_text given with a listing's line numbers on it is found
+         --  without them, and new_text's numbers go too.
+         Placed.Run ("write_file", "{""path"": ""listed.adb"", ""content"": ""a;\n   b;\nc;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""listed.adb"", ""old_text"": ""2:    b;"","
+                     & " ""new_text"": ""2:    d;\n3:    e;""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed
+                 and then Whole_File (Tree & "/listed.adb") = "a;" & ASCII.LF & "   d;" & ASCII.LF & "   e;"
+                                                            & ASCII.LF & "c;" & ASCII.LF,
+                 "an old_text with a listing's line numbers was not found without them: "
+                 & Whole_File (Tree & "/listed.adb"));
          --  Matched loosely and given nothing in its place: the lines go,
          --  not a blank line left for them.
          Placed.Run ("write_file", "{""path"": ""gone.txt"", ""content"": ""a\nb  \nc\n""}",

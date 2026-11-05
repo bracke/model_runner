@@ -1058,6 +1058,69 @@ package body Model_Runner.Tools.Editing is
       end;
    end Edit_Loosely;
 
+   --  Whether every line of a text with anything on it starts as a listing
+   --  numbers its lines -- digits, then a colon -- as read_file and an
+   --  edit's answer show them.
+   function Numbered (Text : String) return Boolean is
+      Start : Positive := Text'First;
+      Any   : Boolean := False;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            declare
+               Line   : constant String := Text (Start .. Index - 1);
+               Count : Natural := 0;
+            begin
+               if (for some C of Line => C not in ' ' | ASCII.HT | ASCII.CR) then
+                  while Count < Line'Length and then Line (Line'First + Count) in '0' .. '9' loop
+                     Count := Count + 1;
+                  end loop;
+                  if Count = 0 or else Count = Line'Length or else Line (Line'First + Count) /= ':' then
+                     return False;
+                  end if;
+                  Any := True;
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Any;
+   end Numbered;
+
+   --  A numbered text without its numbers: each line's digits, its colon
+   --  and the one space after it.
+   function Unnumbered (Text : String) return String is
+      Result : U.Unbounded_String;
+      Start  : Positive := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            declare
+               Line : constant String := Text (Start .. Index - 1);
+               From : Positive := Line'First;
+            begin
+               while From <= Line'Last and then Line (From) in '0' .. '9' loop
+                  From := From + 1;
+               end loop;
+               if From > Line'First and then From <= Line'Last and then Line (From) = ':' then
+                  From := From + 1;
+                  if From <= Line'Last and then Line (From) = ' ' then
+                     From := From + 1;
+                  end if;
+               else
+                  From := Line'First;
+               end if;
+               U.Append (Result, Line (From .. Line'Last));
+               if Index <= Text'Last then
+                  U.Append (Result, ASCII.LF);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return U.To_String (Result);
+   end Unnumbered;
+
    ----------
    -- Edit --
    ----------
@@ -1161,6 +1224,25 @@ package body Model_Runner.Tools.Editing is
                      return Loose;
                   end if;
                end;
+               --  Given with the listing's line numbers on it, as read_file
+               --  shows a file: the numbers left out, of new_text too where
+               --  it has them. Steelman-14B copied "1076:       Item..."
+               --  from a listing and gave the task up when it was not found.
+               if Numbered (Old_Text) then
+                  declare
+                     Again : Said :=
+                       Edit (Path, Unnumbered (Old_Text),
+                             (if Numbered (New_Text) then Unnumbered (New_Text) else New_Text),
+                             Expected, Base, Near_First, Near_Last);
+                  begin
+                     if not Again.Failed then
+                        Again.Text := U.To_Unbounded_String
+                          ("(the line numbers at the start of old_text's lines were left out: they are the"
+                           & " listing's, not the file's) " & U.To_String (Again.Text));
+                     end if;
+                     return Again;
+                  end;
+               end if;
                return Failing ("old_text is not in " & Path & " as it is now (revision " & Now
                                & "): read the part you mean to change again, and give it exactly"
                                & Nearest (Text, Old_Text));

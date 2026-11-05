@@ -20339,6 +20339,18 @@ package body Tests.Framework_Cases is
                  "a guard's plain and was not said where it overflowed, or said where it did not: "
                  & Plain & " / " & Guarded & " / " & Calm);
       end;
+      --  A line a style check calls too long at a column is said with its
+      --  length and the most a line may be; another diagnostic is not.
+      declare
+         Long  : constant String :=
+           Wk.Quoted_Lines ("calc.adb:4:30: (style) this line is too long", Root, ["src/calc.adb"]);
+         Other : constant String := Wk.Quoted_Lines ("calc.adb:4:30: warning: x", Root, ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Long, "it is 34 characters, and a line may be 29") > 0
+                 and then Ada.Strings.Fixed.Index (Other, "characters") = 0,
+                 "a line too long was not said with its length and the limit, or another was: "
+                 & Long & " / " & Other);
+      end;
       Remove_Tree (Root);
    end Check_Output_Quotes_Lines;
 

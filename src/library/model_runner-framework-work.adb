@@ -2605,10 +2605,43 @@ package body Model_Runner.Framework.Work is
                      Seen.Append (Path & ":" & Number);
                      declare
                         Line : constant String := Line_Of (Path, Natural'Value (Number));
+
+                        --  The column the diagnostic names, where it names one
+                        --  (file:line:column), and the rest of its line.
+                        Col_First : constant Natural := Last + 2;
+                        Col_Last  : Natural := Last + 1;
+                        Ends      : Natural;
                      begin
+                        if Last + 2 <= Text'Last and then Text (Last + 1) = ':'
+                          and then Text (Last + 2) in '0' .. '9'
+                        then
+                           Col_Last := Last + 2;
+                           while Col_Last < Text'Last and then Text (Col_Last + 1) in '0' .. '9'
+                             and then Col_Last - Col_First < 6
+                           loop
+                              Col_Last := Col_Last + 1;
+                           end loop;
+                        end if;
+                        Ends := Ada.Strings.Fixed.Index (Text (Last + 1 .. Text'Last), [1 => ASCII.LF]);
+                        if Ends = 0 then
+                           Ends := Text'Last + 1;
+                        end if;
                         if Line /= "" then
                            Append (Said, ASCII.LF & Path & " line " & Number & " is: "
                                    & Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both) & Ada_Slips (Path, Line));
+                           --  Told only "this line is too long" at column 80,
+                           --  Steelman-14B wrote its if, elsif and else on one
+                           --  line again: how long it is, and how long a line
+                           --  may be -- the column the check stops at, less one.
+                           if Col_Last >= Col_First
+                             and then Ada.Strings.Fixed.Index (Text (Last + 1 .. Ends - 1), "too long") > 0
+                             and then Natural'Value (Text (Col_First .. Col_Last)) > 1
+                             and then Line'Length >= Natural'Value (Text (Col_First .. Col_Last))
+                           then
+                              Append (Said, " -- it is" & Natural'Image (Line'Length) & " characters, and a line"
+                                      & " may be" & Natural'Image (Natural'Value (Text (Col_First .. Col_Last)) - 1)
+                                      & ": split it over lines of its own, each statement on its own line");
+                           end if;
                            Given := Given + 1;
                         end if;
                      end;
