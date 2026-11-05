@@ -1921,6 +1921,74 @@ begin
       end;
    end if;
 
+   --  Blocked, it says, with nothing split off and files changed: where
+   --  the task's own checks pass on them, and check something, the work is
+   --  taken as done, what it said kept beside it. Steelman-14B made the
+   --  change a task asked for and said it was blocked, needing the harness
+   --  to run the checks -- which the harness then ran, and they passed.
+   if To_String (Result.Claimed) = "blocked" and then Split_Into.Is_Empty
+     and then not Result.Changed_Files.Is_Empty
+   then
+      declare
+         Chosen   : constant Verification.Choice :=
+           Verification.Choose (Item, Task_Id, Work_Changed,
+                               Own_Profile => To_String (Frozen.Verification_Profile));
+         Passed   : Boolean := False;
+         Evidence : Unbounded_String;
+         Ran      : E.Error_Info;
+
+         --  Whether a check the evidence records ran more than the command
+         --  true, which /init writes where no check was named.
+         function Checks_Something return Boolean is
+            Value : Records.Item;
+            Read  : E.Error_Info;
+            Mark  : constant String := "command=true,";
+         begin
+            Stores.Read (Item, Verification_Area, To_String (Evidence), Value, Read);
+            if E.Is_Error (Read) then
+               return False;
+            end if;
+            for Index in 1 .. Records.Field_Count (Value) loop
+               declare
+                  Field : constant String := Records.Field_Name (Value, Index);
+                  Said  : constant String := Records.Get (Value, Field);
+               begin
+                  if Field'Length > 11 and then Field (Field'First .. Field'First + 10) = "parameters."
+                    and then not (Said'Length >= Mark'Length
+                                  and then Said (Said'First .. Said'First + Mark'Length - 1) = Mark)
+                  then
+                     return True;
+                  end if;
+               end;
+            end loop;
+            return False;
+         end Checks_Something;
+      begin
+         if To_String (Chosen.Profile) /= "" then
+            Verification.Run_Profile
+              (Item, Change, To_String (Chosen.Profile), Task_Id, Evidence, Passed,
+               Ran, Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
+               Workspace => (if Isolated then To_String (Place) else ""),
+               Definition => Frozen_Definition (To_String (Chosen.Profile)),
+               Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
+            if E.Is_Ok (Ran) then
+               Stores.Commit (Item, Change, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+               if Passed and then Checks_Something then
+                  Result.Summary := To_Unbounded_String
+                    ("its agent said blocked -- " & To_String (Result.Summary)
+                     & " -- and the task's checks pass on what it changed, so it is taken as done");
+                  Result.Claimed := To_Unbounded_String ("done");
+               end if;
+            else
+               Change := Stores.No_Changes;
+            end if;
+         end if;
+      end;
+   end if;
+
    if To_String (Result.Claimed) in "blocked" | "issue" and then not Split_Into.Is_Empty
      and then (for all Part of Split_Into => Tasks.State_Of (Item, Part) = "complete")
    then

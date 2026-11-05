@@ -11,6 +11,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A `/work` answer of status: blocked is taken as done where the task's checks pass on what it changed.** With files changed and no parts asked for, the task's own checks are run on the work; where they pass and run more than the command `true`, the task completes, its summary saying the agent said blocked and why. Where they fail, or check nothing, it stays blocked as before. Steelman-14B made the change a task asked for and said it was blocked, needing the harness to run the checks -- which then passed.
+
+- **GNAT's other layout complaints are quoted with what they ask for.** `(style) misplaced "then"` is followed by where `then` goes; `(style) incorrect layout` by how statements and `begin`, `elsif`, `else` and `end` stand, and the column the line starts in; a token or `end` "should be in column N" by the column the line starts in.
+
 - **What `/work` tells the model between its replies is kept on its invocation.** Each message the harness adds after the brief -- checks that failed with what they reported, a call not made, a report refused, a note the loop adds -- is a `told.NNNN` entry beside the `reply.NNNN` ones (`Invocations.Note_Told`, `Told_Of`), up to 16 KiB each; the brief stays in the context's manifest. With the replies alone, what a model answered was kept and what it answered was not: whether a note added to a failed check reached the model could not be read anywhere.
 
 - **A line a check calls too long is quoted with its length and the most a line may be.** Where a failed check's output names a file's line and column and says it is too long -- GNAT's `(style) this line is too long` at column 80 -- the quoted line is followed by how many characters it has, the most a line may hold (the column less one), and to split it, each statement on a line of its own. Told only "too long", Steelman-14B wrote its `if`, `elsif` and `else` on one line again.

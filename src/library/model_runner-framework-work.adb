@@ -2659,6 +2659,30 @@ package body Model_Runner.Framework.Work is
                                       & " may be" & Natural'Image (Natural'Value (Text (Col_First .. Col_Last)) - 1)
                                       & ": split it over lines of its own, each statement on its own line");
                            end if;
+                           --  GNAT's other layout complaints, as terse: what
+                           --  each asks for, and where the line stands now.
+                           declare
+                              Says : constant String := Text (Last + 1 .. Ends - 1);
+                              Lead : Natural := 0;
+                           begin
+                              while Lead < Line'Length and then Line (Line'First + Lead) = ' ' loop
+                                 Lead := Lead + 1;
+                              end loop;
+                              if Ada.Strings.Fixed.Index (Says, "misplaced ""then""") > 0 then
+                                 Append (Said, " -- then ends the line its condition ends on, or stands on a line"
+                                         & " of its own in its if's column; it does not begin a line before"
+                                         & " other words");
+                              elsif Ada.Strings.Fixed.Index (Says, "incorrect layout") > 0 then
+                                 Append (Said, " -- statements stand three columns in from the begin, if, loop"
+                                         & " or case that holds them, and begin, elsif, else and end stand in the"
+                                         & " column of what they close; it starts in column"
+                                         & Natural'Image (Lead + 1));
+                              elsif Ada.Strings.Fixed.Index (Says, "should be in column") > 0
+                                or else Ada.Strings.Fixed.Index (Says, "wrong column") > 0
+                              then
+                                 Append (Said, " -- it starts in column" & Natural'Image (Lead + 1));
+                              end if;
+                           end;
                            Given := Given + 1;
                         end if;
                      end;

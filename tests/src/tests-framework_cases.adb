@@ -11890,6 +11890,39 @@ package body Tests.Framework_Cases is
                  & To_String (Done.Evidence_Id) & " " & R.Get (Value, "passed") & " " & To_String (Done.Reason));
       end;
       S.Close (Store);
+
+      --  A blocked answer with files changed is taken as done where the
+      --  task's checks pass on them and check something; where they fail,
+      --  or only run true, it stays blocked.
+      for Case_Of in 1 .. 3 loop
+         Task_Project
+           (Store, "blocked-passing-" & Character'Val (Character'Pos ('0') + Case_Of),
+            "set execution.allowed = test" & LF
+            & (case Case_Of is
+                 when 1 => "profile checks = exists: test -f src/hello.adb",
+                 when 2 => "profile checks = exists: test -f src/nowhere.adb",
+                 when others => "profile checks = fine: true")
+            & LF & "scalar verification.default = checks" & LF);
+         Tk.Create (Store, Change, Fields ("Said blocked", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute (Store, To_String (Id),
+                     Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
+                                     Answer => To_Unbounded_String
+                                       ("status: blocked" & LF & "summary: cannot run the checks"),
+                                     Broken => False),
+                     Cx.Profile (Store, ""), Done, Status);
+         Assert ((if Case_Of = 1
+                  then To_String (Done.Final_State) = "complete"
+                       and then Ada.Strings.Fixed.Index (To_String (Done.Summary), "said blocked") > 0
+                  else To_String (Done.Final_State) = "blocked"),
+                 "a blocked answer with files changed was judged wrongly by checks of kind"
+                 & Case_Of'Image & ": " & To_String (Done.Final_State) & " " & To_String (Done.Summary)
+                 & " changed" & Done.Changed_Files.Length'Image & " reason " & To_String (Done.Reason)
+                 & " evidence " & To_String (Done.Evidence_Id));
+         S.Close (Store);
+      end loop;
    end Work_Is_Judged_As_It_Began;
 
    --  A narrower run that failed and then passes clears its failure: held
@@ -20357,6 +20390,23 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Other, "characters") = 0,
                  "a line too long was not said with its length and the limit, or another was: "
                  & Long & " / " & Other);
+      end;
+      --  GNAT's other layout complaints said with what they ask for, and
+      --  the column the line starts in.
+      declare
+         Layout : constant String :=
+           Wk.Quoted_Lines ("calc.adb:4:7: (style) incorrect layout", Root, ["src/calc.adb"]);
+         Then_At : constant String :=
+           Wk.Quoted_Lines ("calc.adb:4:31: (style) misplaced ""then""", Root, ["src/calc.adb"]);
+         Column : constant String :=
+           Wk.Quoted_Lines ("calc.adb:4:7: (style) this token should be in column 4", Root, ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Layout, "three columns in") > 0
+                 and then Ada.Strings.Fixed.Index (Layout, "it starts in column 7") > 0
+                 and then Ada.Strings.Fixed.Index (Then_At, "then ends the line its condition ends on") > 0
+                 and then Ada.Strings.Fixed.Index (Column, "it starts in column 7") > 0,
+                 "a layout complaint was not said with what it asks for: "
+                 & Layout & " / " & Then_At & " / " & Column);
       end;
       Remove_Tree (Root);
    end Check_Output_Quotes_Lines;
