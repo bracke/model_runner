@@ -2683,6 +2683,27 @@ package body Model_Runner.Tools.Builtin is
                  (Path & " cannot be read as it is now -- gone, grown too large or no longer text --"
                   & " so it is not changed over what you saw of it: read it again first");
             end if;
+            --  The old_text its last edit of the file replaced, given again
+            --  where it now stands only inside a deeper line's indentation:
+            --  the agent's view from before that edit, not a slip of its
+            --  indentation. Taken, qwen3-8b's second edit of "      return
+            --  A + B;" went into its own new else, an if inside it.
+            if Named = "edit_file" and then Have and then Self.Replaced.Has (Path) then
+               declare
+                  Has_Old : Boolean;
+                  Old     : constant String := Text_Argument (Args, "old_text", Has_Old);
+               begin
+                  if Has_Old and then Old = Self.Replaced.Get (Path)
+                    and then Model_Runner.Tools.Editing.Only_Inside_Indentation
+                               (Spelt, Old, U.To_String (Self.Base))
+                  then
+                     return Failure
+                       ("old_text is what your last edit of " & Path & " replaced, and it is no longer there as"
+                        & " a line of its own -- only inside the indentation of a line that edit wrote: read"
+                        & " " & Path & " again and give the text as it stands now");
+                  end if;
+               end;
+            end if;
             --  Written whole over a file there, it is written over what
             --  was seen of it whole: a part read, or none, would lose the
             --  rest.
@@ -2781,6 +2802,17 @@ package body Model_Runner.Tools.Builtin is
                                     else "100000000"));
                      else
                         Self.Read_At.Put (Path, "");
+                     end if;
+                  end;
+               end if;
+               --  What an edit replaced, for one that gives it again.
+               if Have and then not Given.Failed and then Named = "edit_file" then
+                  declare
+                     Has_Old : Boolean;
+                     Old     : constant String := Text_Argument (Args, "old_text", Has_Old);
+                  begin
+                     if Has_Old then
+                        Self.Replaced.Put (Path, Old);
                      end if;
                   end;
                end if;

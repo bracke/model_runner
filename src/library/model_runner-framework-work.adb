@@ -1154,8 +1154,12 @@ package body Model_Runner.Framework.Work is
       end if;
       --  Given up -- or said done -- on checks that failed, with time
       --  left: sent back once to fix what they reported. A small model
-      --  that saw one compile error ended the task failed at once.
-      if State.Root and then State.Answered and then State.Round < 3 and then not State.Asked_To_Fix
+      --  that saw one compile error ended the task failed at once. So
+      --  where it kept repeating a call on them: asked for its report,
+      --  qwen3-8b sent its edit with elif in it three times over, said
+      --  failed, and was never told the checks named that elif.
+      if State.Root and then (State.Answered or else State.Repeating) and then State.Round < 3
+        and then not State.Asked_To_Fix
         and then State.Hosted and then State.Checks_Failing and then State.Time_Left
       then
          return Ask_To_Fix;
@@ -2682,6 +2686,44 @@ package body Model_Runner.Framework.Work is
                               then
                                  Append (Said, " -- it starts in column" & Natural'Image (Lead + 1));
                               end if;
+                              --  A file that must begin with a line it does
+                              --  not: where that line goes, and where it
+                              --  stands now. qwen3-8b put its license line
+                              --  under the first, eight times over, told
+                              --  only that the file must begin with it.
+                              declare
+                                 Begins : constant Natural :=
+                                   Natural'Max (Ada.Strings.Fixed.Index (Says, "begin with the line "),
+                                                Ada.Strings.Fixed.Index (Says, "start with the line "));
+                                 Opens  : constant Natural := (if Begins = 0 then 0 else Begins + 20);
+                              begin
+                                 if Number = "1" and then Opens > 0 and then Opens < Says'Last
+                                   and then Says (Opens) in ''' | '"'
+                                 then
+                                    declare
+                                       Closes : constant Natural :=
+                                         Ada.Strings.Fixed.Index (Says (Opens + 1 .. Says'Last), [1 => Says (Opens)]);
+                                       Wanted : constant String :=
+                                         (if Closes = 0 then "" else Says (Opens + 1 .. Closes - 1));
+                                       Holds  : Natural := 0;
+                                    begin
+                                       if Wanted /= "" and then Line /= Wanted then
+                                          for At_Line in 2 .. 40 loop
+                                             if Line_Of (Path, At_Line) = Wanted then
+                                                Holds := At_Line;
+                                                exit;
+                                             end if;
+                                          end loop;
+                                          Append (Said, " -- the line it asks for goes before this one, as line 1:"
+                                                  & " old_text this line, new_text that line, a line end, then"
+                                                  & " this line"
+                                                  & (if Holds = 0 then ""
+                                                     else "; line" & Natural'Image (Holds)
+                                                          & " holds it now, after it, and does not count there"));
+                                       end if;
+                                    end;
+                                 end if;
+                              end;
                            end;
                            Given := Given + 1;
                         end if;
@@ -2694,6 +2736,97 @@ package body Model_Runner.Framework.Work is
             Index := Index + 1;
          end if;
       end loop;
+      --  An exception raised with a message and no place: where the
+      --  project raises it, and the condition it is raised under. Told only
+      --  "Add does not hold to Integer's limits", qwen3-8b never read the
+      --  test that said so, and saturated a negative overflow to
+      --  Integer'Last through eleven edits.
+      declare
+         Mark  : constant Natural := Ada.Strings.Fixed.Index (Text, "raised ");
+         Colon : constant Natural :=
+           (if Mark = 0 then 0 else Ada.Strings.Fixed.Index (Text (Mark .. Text'Last), " : "));
+         Ends  : Natural;
+      begin
+         if Given < 3 and then Colon > 0 then
+            Ends := Ada.Strings.Fixed.Index (Text (Colon .. Text'Last), [1 => ASCII.LF]);
+            if Ends = 0 then
+               Ends := Text'Last + 1;
+            end if;
+            declare
+               Message : constant String :=
+                 Ada.Strings.Fixed.Trim (Text (Colon + 3 .. Ends - 1), Ada.Strings.Both);
+               Found   : Unbounded_String;
+               Number  : Natural := 0;
+               Under   : Unbounded_String;
+               Count   : Natural := 0;
+            begin
+               if Message'Length >= 8 and then Ada.Strings.Fixed.Index (Message, ".adb:") = 0
+                 and then Ada.Strings.Fixed.Index (Message, ".ads:") = 0
+               then
+                  for Path of Known loop
+                     declare
+                        Held  : Unbounded_String;
+                        Got   : E.Error_Info;
+                        Lines : Name_Lists.Vector;
+                     begin
+                        Files.Read_Text (Hostkit.Fs.Join (Project, Path), Held, Got);
+                        if not E.Is_Error (Got)
+                          and then Ada.Strings.Fixed.Index (To_String (Held), """" & Message & """") > 0
+                        then
+                           declare
+                              Whole : constant String := To_String (Held);
+                              Start : Positive := Whole'First;
+                           begin
+                              for Position in Whole'First .. Whole'Last + 1 loop
+                                 if Position > Whole'Last or else Whole (Position) = ASCII.LF then
+                                    Lines.Append (Whole (Start .. Position - 1));
+                                    Start := Position + 1;
+                                 end if;
+                              end loop;
+                           end;
+                           for At_Line in 1 .. Natural (Lines.Length) loop
+                              if Ada.Strings.Fixed.Index (Lines (At_Line), """" & Message & """") > 0 then
+                                 Count := Count + 1;
+                                 Found := To_Unbounded_String (Path);
+                                 Number := At_Line;
+                                 Under := Null_Unbounded_String;
+                                 --  The if it stands under: from that if to
+                                 --  the line before it, a few lines at most.
+                                 for Back in reverse Natural'Max (1, At_Line - 12) .. At_Line - 1 loop
+                                    declare
+                                       Held_Line : constant String :=
+                                         Ada.Strings.Fixed.Trim (Lines (Back), Ada.Strings.Both);
+                                    begin
+                                       Under := To_Unbounded_String (Held_Line)
+                                         & (if Under = Null_Unbounded_String then "" else " ") & Under;
+                                       if Held_Line'Length > 3
+                                         and then (Held_Line (Held_Line'First .. Held_Line'First + 2) = "if "
+                                                   or else Held_Line (Held_Line'First .. Held_Line'First + 2)
+                                                     = "els")
+                                       then
+                                          exit;
+                                       elsif Held_Line = "" or else Held_Line (Held_Line'Last) = ';' then
+                                          Under := Null_Unbounded_String;
+                                          exit;
+                                       end if;
+                                    end;
+                                 end loop;
+                              end if;
+                           end loop;
+                        end if;
+                     end;
+                  end loop;
+                  if Count = 1 then
+                     Append (Said, ASCII.LF & To_String (Found) & " line"
+                             & Natural'Image (Number) & " raises it"
+                             & (if Under = Null_Unbounded_String then ""
+                                else ", under: " & To_String (Under))
+                             & " -- read it: what it calls there, and what it wants back, is what fails");
+                  end if;
+               end if;
+            end;
+         end if;
+      end;
       return To_String (Said);
    end Quoted_Lines;
 

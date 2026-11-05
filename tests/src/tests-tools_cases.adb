@@ -3131,6 +3131,37 @@ package body Tests.Tools_Cases is
                  & "         return 1;" & ASCII.LF & "      end if;" & ASCII.LF & "   end Add;" & ASCII.LF,
                  "an edit's lines after an unindented first were shifted by the whole indentation: "
                  & Whole_File (Tree & "/after.adb"));
+         --  So with an old_text of several lines, where the new ones stand
+         --  left of all of its: they were given from a shallower first.
+         Placed.Run ("write_file",
+                     "{""path"": ""short.adb"","
+                     & " ""content"": ""   begin\n      return (A\n        + B);\n   end Add;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("read_file", "{""path"": ""short.adb""}", Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""short.adb"", ""old_text"": ""return (A\n        + B);"","
+                     & " ""new_text"": ""if A > 0 then\n      return 1;\n   end if;\n   return 0;""}",
+                     Room, Last, Ended, Status);
+         Assert (Whole_File (Tree & "/short.adb") = "   begin" & ASCII.LF & "      if A > 0 then" & ASCII.LF
+                 & "         return 1;" & ASCII.LF & "      end if;" & ASCII.LF & "      return 0;" & ASCII.LF
+                 & "   end Add;" & ASCII.LF,
+                 "an edit of several lines kept new lines left of all of old_text's: "
+                 & Whole_File (Tree & "/short.adb"));
+         --  An if's first line given as old_text and a whole if as new_text
+         --  is refused: the old if's elsif and end if would be left over.
+         Placed.Run ("write_file",
+                     "{""path"": ""block.adb"", ""content"": ""if A then\n   X;\nelsif B then\n   Y;\nend if;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""block.adb"", ""old_text"": ""if A then"","
+                     & " ""new_text"": ""if C then\n   Z;\nend if;""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed
+                 and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "Give old_text through the end") > 0
+                 and then Whole_File (Tree & "/block.adb")
+                          = "if A then" & ASCII.LF & "   X;" & ASCII.LF & "elsif B then" & ASCII.LF & "   Y;"
+                            & ASCII.LF & "end if;" & ASCII.LF,
+                 "an edit that left an if's tail over was not refused: " & Room (Room'First .. Last));
+         Placed.Run ("edit_file", "{""path"": ""block.adb"", ""old_text"": ""if A then"","
+                     & " ""new_text"": ""if C then""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed, "an if's first line was not edited alone: " & Room (Room'First .. Last));
          --  An old_text given with a listing's line numbers on it is found
          --  without them, and new_text's numbers go too.
          Placed.Run ("write_file", "{""path"": ""listed.adb"", ""content"": ""a;\n   b;\nc;\n""}",
@@ -3142,6 +3173,31 @@ package body Tests.Tools_Cases is
                                                             & ASCII.LF & "c;" & ASCII.LF,
                  "an old_text with a listing's line numbers was not found without them: "
                  & Whole_File (Tree & "/listed.adb"));
+         --  The old_text an edit replaced, given again where it now stands
+         --  only inside a line that edit wrote: refused, not edited there.
+         Placed.Run ("write_file",
+                     "{""path"": ""again.adb"", ""content"": ""   begin\n      return A + B;\n   end Add;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("read_file", "{""path"": ""again.adb""}", Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""again.adb"", ""old_text"": ""      return A + B;"","
+                     & " ""new_text"": ""      if A > 0 then\n         return A + B;\n      end if;""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""again.adb"", ""old_text"": ""      return A + B;"","
+                     & " ""new_text"": ""      return 0;""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "your last edit") > 0
+                 and then Whole_File (Tree & "/again.adb") = "   begin" & ASCII.LF & "      if A > 0 then" & ASCII.LF
+                                                             & "         return A + B;" & ASCII.LF & "      end if;"
+                                                             & ASCII.LF & "   end Add;" & ASCII.LF,
+                 "an edit's old_text given again inside what it wrote was taken: "
+                 & Room (Room'First .. Last) & " / " & Whole_File (Tree & "/again.adb"));
+         --  Asked directly: inside a deeper line's indentation only, not at
+         --  a line's start, and not a passage that starts with no space.
+         Assert (Model_Runner.Tools.Editing.Only_Inside_Indentation (Tree & "/again.adb", "      return A + B;")
+                 and then not Model_Runner.Tools.Editing.Only_Inside_Indentation
+                                (Tree & "/again.adb", "      if A > 0 then")
+                 and then not Model_Runner.Tools.Editing.Only_Inside_Indentation
+                                (Tree & "/again.adb", "return A + B;"),
+                 "a passage was not told inside a line's indentation only");
          --  Matched loosely and given nothing in its place: the lines go,
          --  not a blank line left for them.
          Placed.Run ("write_file", "{""path"": ""gone.txt"", ""content"": ""a\nb  \nc\n""}",

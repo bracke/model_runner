@@ -941,9 +941,15 @@ package body Model_Runner.CLI.Project_Commands is
                   Doing := Model_Runner.Framework.Inference_Policy.Failure_Recovery;
                   Conv.Append
                     (Messages, Conv.User_Role,
-                     "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
-                     & " error is in its answer above -- run the checks again, and report status: done only"
-                     & " when they pass.", Status);
+                     (if State.Repeating
+                      then "That call was made already, and repeating it changes nothing: what it wrote is"
+                           & " in the file, and your last run_checks failed on it. "
+                      else "")
+                     & "Your last run_checks failed, so the work is not done. Fix what it reported -- the"
+                     & " error is in its answer above, with the line it names"
+                     & (if State.Repeating then " and how Ada writes it; give old_text as the file holds it now"
+                        else "")
+                     & " -- run the checks again, and report status: done only when they pass.", Status);
                when Wk.Check_For_It =>
                   Must_Call := True;
                   declare
@@ -978,8 +984,12 @@ package body Model_Runner.CLI.Project_Commands is
                   Conv.Append
                     (Messages, Conv.User_Role,
                      "That call was made already and its file is written; repeating it changes nothing."
-                     & " If the task is done, finish now with the report lines: status: done, summary:,"
-                     & " changed_files:.", Status);
+                     & (if State.Checks_Failing
+                        then " Your last run_checks failed, so the work is not done: change what it names, or"
+                             & " finish with the report lines: status: failed, summary: what still fails,"
+                             & " changed_files:."
+                        else " If the task is done, finish now with the report lines: status: done, summary:,"
+                             & " changed_files:."), Status);
                when Wk.Ask_To_Call =>
                   Must_Call := True;
                   --  Not told which tool: told write_file, a root whose

@@ -15,6 +15,8 @@ is
    Id     : Unbounded_String;
    Fresh  : Boolean;
    Wrong  : Unbounded_String;
+   --  How many evidence items were words, not a result or a verification.
+   Dropped : Natural := 0;
 
    --  A list argument, every item kept; one not given as a list is said.
    procedure Take (Key : String; Into : in out Name_Lists.Vector) is
@@ -48,6 +50,27 @@ begin
    Take ("files", Said.Files);
    Take ("symbols", Said.Symbols);
    Take ("evidence", Said.Evidence);
+   --  Evidence given as words is no evidence the project keeps: dropped,
+   --  and said, the observation kept. Refused whole, qwen3-8b sent its
+   --  reasoning as evidence three times in one run and kept nothing.
+   declare
+      Named : Name_Lists.Vector;
+   begin
+      for One of Said.Evidence loop
+         declare
+            Given : constant String := Ada.Strings.Fixed.Trim (One, Ada.Strings.Both);
+         begin
+            if Given'Length > 4
+              and then Given (Given'First .. Given'First + 3) in "RES-" | "VER-"
+            then
+               Named.Append (One);
+            else
+               Dropped := Dropped + 1;
+            end if;
+         end;
+      end loop;
+      Said.Evidence := Named;
+   end;
    if Length (Wrong) > 0 then
       Status := E.Make (E.Framework_Input_Invalid);
       E.Add_Text (Status, "name", "record_observation");
@@ -83,6 +106,10 @@ begin
          & (if Fresh and then E.Is_Ok (Read) and then Length (Kept.Similar_To) > 0
             then " (nearly what " & To_String (Kept.Similar_To) & " says)" else "")
          & " -- an observation of " & To_String (Host.Task_Id)
-         & ", told to later work on it; it changes nothing about the task");
+         & ", told to later work on it; it changes nothing about the task"
+         & (if Dropped > 0
+            then "; its evidence was left out: evidence names a result (RES-...) or a verification"
+                 & " (VER-...) the project keeps, as run_checks says, not words"
+            else ""));
    end;
 end Record_Observation;

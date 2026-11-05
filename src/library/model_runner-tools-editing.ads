@@ -71,6 +71,16 @@ package Model_Runner.Tools.Editing is
    --  @return Its revision.
    function Revision_Of (Path : String; Base : String := "") return String;
 
+   --  Whether a passage that starts with spaces is in a file only part way
+   --  into a line's indentation -- somewhere, and nowhere as a line's own
+   --  start. False for one that does not start with a space.
+   --
+   --  @param Path The file.
+   --  @param Passage The text looked for.
+   --  @param Base As for Revision_Of.
+   --  @return Whether it is there only inside deeper indentation.
+   function Only_Inside_Indentation (Path, Passage : String; Base : String := "") return Boolean;
+
    --  What a tool said, and how it went: for a change, also the file's
    --  revision before and after it, and whether it made the file -- as
    --  values, beside the words the model reads.

@@ -6569,6 +6569,11 @@ package body Tests.Framework_Cases is
                  = Wk.Ask_To_Report,
                  "an agent repeating a write it made was not asked for its report");
          Assert (Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True,
+                                Checks_Failing => True)) = Wk.Ask_To_Fix
+                 and then Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True,
+                                         Checks_Failing => True, Asked_To_Fix => True)) = Wk.Ask_To_Report,
+                 "an agent repeating a write its checks failed on was asked for its report, not to fix them");
+         Assert (Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True,
                                 Time_Left => False)) = Wk.Finish
                  and then Wk.Next_Step ((Worked with delta Check_Runs => 1, Time_Left => False,
                                          Answer => To_Unbounded_String ("status: blocked" & LF & "parts: x")))
@@ -10197,9 +10202,14 @@ package body Tests.Framework_Cases is
          begin
             Children.Record_Observation
               ("{""kind"": ""environment_constraint"", ""summary"": """ & Knowing_Finding
-               & """, ""files"": [""src/parser.adb""]}", Report, Kept);
-            Assert (E.Is_Ok (Kept) and then Ada.Strings.Fixed.Index (To_String (Report), "OBS-") > 0,
-                    "the agent's finding was not kept: " & To_String (Report));
+               & """, ""files"": [""src/parser.adb""], ""evidence"": [""the build log said so""]}",
+               Report, Kept);
+            --  Kept, its evidence given as words left out and said so:
+            --  refused whole, a model sent its reasoning as evidence again.
+            Assert (E.Is_Ok (Kept) and then Ada.Strings.Fixed.Index (To_String (Report), "OBS-") > 0
+                    and then Ada.Strings.Fixed.Index (To_String (Report), "its evidence was left out") > 0,
+                    "the agent's finding was not kept, or its worded evidence not said left out: "
+                    & To_String (Report));
          end;
       end if;
       Dirs.Create_Path (Project & "/src");
@@ -20407,6 +20417,45 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Column, "it starts in column 7") > 0,
                  "a layout complaint was not said with what it asks for: "
                  & Layout & " / " & Then_At & " / " & Column);
+      end;
+      --  A file that must begin with a line said with where it goes, and
+      --  where it stands now; one that begins with it is not.
+      Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Root & "/src/head.adb");
+      Ada.Text_IO.Put_Line (Out_File, "package body Head is");
+      Ada.Text_IO.Put_Line (Out_File, "--  Licensed");
+      Ada.Text_IO.Close (Out_File);
+      declare
+         Header : constant String :=
+           Wk.Quoted_Lines ("src/head.adb:1:1: error: a file must begin with the line '--  Licensed'", Root,
+                            ["src/head.adb"]);
+         Begun : constant String :=
+           Wk.Quoted_Lines ("src/head.adb:1:1: error: a file must begin with the line 'package body Head is'",
+                            Root, ["src/head.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Header, "goes before this one, as line 1") > 0
+                 and then Ada.Strings.Fixed.Index (Header, "line 2 holds it now") > 0
+                 and then Ada.Strings.Fixed.Index (Begun, "goes before") = 0,
+                 "a line a file must begin with was not said where it goes, or said where it stood: "
+                 & Header & " / " & Begun);
+      end;
+      --  An exception raised with a message and no place said with where
+      --  the project raises it, under the condition it is raised under.
+      Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Root & "/src/test_add.adb");
+      Ada.Text_IO.Put_Line (Out_File, "begin");
+      Ada.Text_IO.Put_Line (Out_File, "   if Calc.Add (Integer'Last, 1) /= Integer'Last");
+      Ada.Text_IO.Put_Line (Out_File, "     or else Calc.Add (2, 3) /= 5");
+      Ada.Text_IO.Put_Line (Out_File, "   then");
+      Ada.Text_IO.Put_Line (Out_File, "      raise Program_Error with ""Add does not hold"";");
+      Ada.Text_IO.Put_Line (Out_File, "   end if;");
+      Ada.Text_IO.Close (Out_File);
+      declare
+         Raised : constant String :=
+           Wk.Quoted_Lines ("raised PROGRAM_ERROR : Add does not hold", Root, ["src/calc.adb", "src/test_add.adb"]);
+      begin
+         Assert (Raised = LF & "src/test_add.adb line 5 raises it, under: if Calc.Add (Integer'Last, 1) /="
+                 & " Integer'Last or else Calc.Add (2, 3) /= 5 then -- read it: what it calls there, and what"
+                 & " it wants back, is what fails",
+                 "an exception's message was not said with where it is raised: " & Raised);
       end;
       Remove_Tree (Root);
    end Check_Output_Quotes_Lines;

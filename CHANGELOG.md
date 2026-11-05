@@ -33,6 +33,20 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A check that says a file must begin with a line is quoted with where that line goes.** `run_checks` adds that the line goes before line 1 -- old_text that line, new_text the wanted line then it -- and which line holds it now, after it: told only that the file must begin with its license line, qwen3-8b put it under the first line eight times over and ran out of steps.
+
+- **A /work agent that keeps repeating a call while its checks fail is sent back to fix them.** It was asked for its report instead, told "if the task is done, finish now": qwen3-8b sent its edit with `elif` in it three times over, said failed, and was never told the checks named that `elif`. Now it is told the call was made already and its checks failed on what it wrote, once; asked for its report after that, it is told the work is not done.
+
+- **`edit_file` refuses, in an Ada source, an `old_text` that opens a block and a `new_text` that is whole.** Replacing an `if`'s first line with a whole `if ... end if;` left the old `elsif`, `else` and `end if` standing under it; qwen3-8b spent ten calls on them and gave the task up. Told to give `old_text` through the `end` that closes it; one line for one line is still edited.
+
+- **A check whose program raised an exception with a message and no place says where the project raises it.** `run_checks` quotes the one project line that raises that message and the `if` it stands under: told only `raised PROGRAM_ERROR : Add does not hold to Integer's limits`, qwen3-8b never read the test that said so, and saturated a negative overflow to `Integer'Last` through eleven edits before its convention trial failed.
+
+- **`edit_file` lays out new lines that stand left of all of a several-line `old_text`'s.** Those were put in as given, taken to be in the file's layout; qwen3-8b's new body for a three-line `return` stood three columns short of it, under the `begin`, and the style check refused it six times before the agent gave the task up. Such lines now shift by what the first one's place asks; new lines at or right of old_text's stay as given.
+
+- **`edit_file` refuses an `old_text` its last edit of the file replaced, where it now stands only inside a deeper line.** Given again, that text is the agent's view from before its edit: matched part way into the indentation of a line the edit wrote, qwen3-8b's second edit of `      return A + B;` went into its own new `else`, an `if` nested inside it. Told so, it reads the file again; the same text standing as a line of its own is still edited.
+
+- **`record_observation` keeps an observation whose evidence is words.** Evidence that is not a result or a verification (`RES-...`, `VER-...`) is left out and the answer says so, the observation kept; refused whole, qwen3-8b sent its reasoning as evidence three times in one run and kept nothing.
+
 - **`edit_file` finds an `old_text` given with a listing's line numbers.** Where `old_text` is not in the file and every line of it starts as `read_file` numbers its lines -- digits, a colon -- it is looked for without them, and `new_text`'s numbers go too where it has them; the answer says they were left out. Steelman-14B copied `1076:       Item.Balance := ...` from a listing, was told it was not there, and gave the task up.
 
 - **`edit_file` lays new lines out from where `old_text` stands.** An `old_text` found part way into a line's indentation (`"   return"` three spaces into `"      return"`) had the new lines set from the spaces before the match, not from where its first line stood: Steelman-14B's new body sat at its `begin`'s depth and the style check refused it in every run. And a first new line given with none of the line's indentation shifts the lines after it by the line's indentation less their leftmost column -- where the lines that close it stand -- rather than by the whole: the body under its `if` stood six columns too deep. Steelman's styled trial 0 of 3 to 2 of 3 complete, convention 2 of 3 to 3 of 3.

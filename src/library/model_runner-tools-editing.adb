@@ -155,6 +155,87 @@ package body Model_Runner.Tools.Editing is
       return (if E.Is_Ok (Status) then Revision (U.To_String (Text)) else "");
    end Revision_Of;
 
+   --  Of an Ada passage, the blocks its lines open less the ones they end:
+   --  an if, case, loop, begin or declare opens, an end ends. Strings and
+   --  comments are not counted.
+   function Ada_Blocks_Open (Passage : String) return Integer is
+      Open  : Integer := 0;
+      Start : Positive := Passage'First;
+
+      procedure Count (Line : String) is
+         Lower : String := Ada.Characters.Handling.To_Lower (Line);
+         Quoted : Boolean := False;
+      begin
+         for Index in Lower'Range loop
+            if Lower (Index) = '"' then
+               Quoted := not Quoted;
+            elsif Quoted then
+               Lower (Index) := ' ';
+            elsif Index < Lower'Last and then Lower (Index .. Index + 1) = "--" then
+               Lower (Index .. Lower'Last) := [others => ' '];
+               exit;
+            end if;
+         end loop;
+         declare
+            Word : constant String := Ada.Strings.Fixed.Trim (Lower, Ada.Strings.Both);
+
+            function Starts (Key : String) return Boolean
+            is (Word'Length >= Key'Length
+                and then Word (Word'First .. Word'First + Key'Length - 1) = Key
+                and then (Word'Length = Key'Length
+                          or else Word (Word'First + Key'Length) in ' ' | ';' | '('));
+         begin
+            if Starts ("end") then
+               Open := Open - 1;
+            elsif Starts ("if") or else Starts ("case") or else Starts ("begin") or else Starts ("declare")
+              or else (Word'Length >= 4 and then Word (Word'Last - 3 .. Word'Last) = "loop"
+                       and then not Starts ("exit"))
+            then
+               Open := Open + 1;
+            end if;
+         end;
+      end Count;
+   begin
+      for Index in Passage'First .. Passage'Last + 1 loop
+         if Index > Passage'Last or else Passage (Index) = ASCII.LF then
+            Count (Passage (Start .. Index - 1));
+            Start := Index + 1;
+         end if;
+      end loop;
+      return Open;
+   end Ada_Blocks_Open;
+
+   -----------------------------
+   -- Only_Inside_Indentation --
+   -----------------------------
+
+   function Only_Inside_Indentation (Path, Passage : String; Base : String := "") return Boolean is
+      Held   : U.Unbounded_String;
+      Status : E.Error_Info;
+      Found  : Boolean := False;
+   begin
+      if Passage = "" or else Passage (Passage'First) /= ' ' then
+         return False;
+      end if;
+      Read_Text (Path, Held, Status, Base);
+      if E.Is_Error (Status) then
+         return False;
+      end if;
+      declare
+         Text : constant String := U.To_String (Held);
+         At_It : Natural := Ada.Strings.Fixed.Index (Text, Passage);
+      begin
+         while At_It > 0 loop
+            if At_It = Text'First or else Text (At_It - 1) = ASCII.LF then
+               return False;
+            end if;
+            Found := True;
+            At_It := (if At_It >= Text'Last then 0 else Ada.Strings.Fixed.Index (Text, Passage, At_It + 1));
+         end loop;
+      end;
+      return Found;
+   end Only_Inside_Indentation;
+
    --  What a failed read is said as, to a model.
    --  Each line of a file too large to read whole, read a slice at a time
    --  -- what read_range and search_file give of one: refused, each sent
@@ -1252,6 +1333,19 @@ package body Model_Runner.Tools.Editing is
             elsif Old_Text = New_Text then
                return (Text => U.To_Unbounded_String ("unchanged: old_text and new_text are the same"),
                        others => <>);
+            --  An Ada block's first line given as old_text, a whole block
+            --  as new_text: the file's own elsif, else and end after it
+            --  would be left over. qwen3-8b replaced its if's first line
+            --  with a whole if, and spent ten calls on the elsif and end if
+            --  left standing under it.
+            elsif Path'Length > 4
+              and then Ada.Characters.Handling.To_Lower (Path (Path'Last - 3 .. Path'Last)) in ".adb" | ".ads"
+              and then Ada_Blocks_Open (Old_Text) > 0 and then Ada_Blocks_Open (New_Text) = 0
+            then
+               return Failing ("old_text opens a block -- an if, loop, case or begin -- that the file ends after"
+                               & " it, and new_text is whole, ending what it opens: the old block's elsif, else"
+                               & " and end would be left over after it. Give old_text through the end that"
+                               & " closes it");
             end if;
             declare
                --  Where the line the passage starts on starts, and whether
@@ -1288,9 +1382,12 @@ package body Model_Runner.Tools.Editing is
                --  keep where they stood from it. Lines that already stand at
                --  or right of the line's indentation, after a first line that
                --  has none, are as the model meant them, and put in as given;
-               --  so are all of them where old_text has lines after its first:
-               --  matched exactly, those stand as the file has them, and the
-               --  new ones were given in the same layout.
+               --  so are all of them where old_text has lines after its first
+               --  and none of the new stands left of them: matched exactly,
+               --  those stand as the file has them, and the new ones were
+               --  given in the same layout. qwen3-8b's new body for a
+               --  three-line return stood three columns short, under the
+               --  begin, and the style check refused it six times over.
                Moved   : U.Unbounded_String;
                Shifted : Boolean := False;
 
@@ -1304,15 +1401,28 @@ package body Model_Runner.Tools.Editing is
                function Blank (Line : String) return Boolean
                is (for all C of Line => C in ' ' | ASCII.HT | ASCII.CR);
 
-               --  Whether old_text has a line after its first with more than
-               --  blanks on it.
-               function Old_Laid_Out return Boolean is
-                  Break : constant Natural := Ada.Strings.Fixed.Index (Old_Text, [1 => ASCII.LF]);
+               --  The least indentation of old_text's lines after its first
+               --  with more than blanks on them; Natural'Last where it has
+               --  none.
+               function Old_Leftmost return Natural is
+                  Least : Natural := Natural'Last;
+                  Start : Natural := Ada.Strings.Fixed.Index (Old_Text, [1 => ASCII.LF]);
                begin
-                  return Break > 0
-                    and then (for some C of Old_Text (Break + 1 .. Old_Text'Last) =>
-                                C not in ' ' | ASCII.HT | ASCII.CR | ASCII.LF);
-               end Old_Laid_Out;
+                  while Start > 0 loop
+                     declare
+                        Break : constant Natural :=
+                          Ada.Strings.Fixed.Index (Old_Text (Start + 1 .. Old_Text'Last), [1 => ASCII.LF]);
+                        Line  : constant String :=
+                          Old_Text (Start + 1 .. (if Break = 0 then Old_Text'Last else Break - 1));
+                     begin
+                        if not Blank (Line) then
+                           Least := Natural'Min (Least, Indent_Of (Line));
+                        end if;
+                        Start := Break;
+                     end;
+                  end loop;
+                  return Least;
+               end Old_Leftmost;
 
                procedure Lay_Out is
                   package Text_Lines is new Ada.Containers.Indefinite_Vectors (Positive, String);
@@ -1335,7 +1445,7 @@ package body Model_Runner.Tools.Editing is
                      end if;
                   end loop;
                   if First_Indent = 0
-                    and then (Leftmost = Natural'Last or else Leftmost >= Target or else Old_Laid_Out)
+                    and then (Leftmost = Natural'Last or else Leftmost >= Natural'Min (Target, Old_Leftmost))
                   then
                      return;
                   end if;

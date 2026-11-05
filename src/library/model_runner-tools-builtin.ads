@@ -418,6 +418,11 @@ private
       --  is written over what it saw, not over a middle it never read.
       Whole  : Revisions;
 
+      --  Each file's old_text in the last edit of it this runner's agent
+      --  made: given again, it is the agent's view of a file it has since
+      --  changed.
+      Replaced : Revisions;
+
       --  What retrieve embeds with, or null to rank by words alone.
       Embed  : Embedder_Reference := null;
 
