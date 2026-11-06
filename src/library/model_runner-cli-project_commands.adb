@@ -1462,6 +1462,20 @@ package body Model_Runner.CLI.Project_Commands is
             Self.Tool_Ns := Self.Tool_Ns + Took;
          end if;
       end Count;
+
+      --  Where the files stand as the checks last failed on them: said
+      --  after the tool's answer, with what failed there, and Then_Said.
+      procedure Tell_Failed (Then_Said : String) is
+         Failure : constant String := Self.Tried.Failed_Here;
+         Said    : constant String :=
+           (if Failure = "" then ""
+            else ASCII.LF & "The files are now as they were when run_checks failed on them: " & Failure & Then_Said);
+      begin
+         if Said /= "" and then Last + Said'Length <= Result'Last then
+            Result (Last + 1 .. Last + Said'Length) := Said;
+            Last := Last + Said'Length;
+         end if;
+      end Tell_Failed;
    begin
       Run_Call (Self, Named, Arguments, Result, Last, Outcome, Status);
       Count;
@@ -1474,21 +1488,19 @@ package body Model_Runner.CLI.Project_Commands is
               Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Named_Path);
          begin
             Self.Tried.Now_At (Path, String (Outcome.After_Revision));
-            declare
-               Failure : constant String := Self.Tried.Failed_Here;
-               --  Said as the tool's answer: the files are back where the
-               --  checks refused them, and how.
-               Said    : constant String :=
-                 (if Failure = "" then ""
-                  else ASCII.LF & "The files are now as they were when run_checks failed on them: "
-                       & Failure & " -- this version was tried and fails so; make a different change.");
-            begin
-               if Said /= "" and then Last + Said'Length <= Result'Last then
-                  Result (Last + 1 .. Last + Said'Length) := Said;
-                  Last := Last + Said'Length;
-               end if;
-            end;
+            --  Said as the tool's answer: the files are back where the
+            --  checks refused them, and how.
+            Tell_Failed (" -- this version was tried and fails so; make a different change.");
          end;
+      elsif Named in "edit_file" | "write_file" and then Outcome.Answer = Model_Runner.Tools.Runner.Answered
+        and then not Outcome.Changed and then Last >= Result'First + 9
+        and then Result (Result'First .. Result'First + 9) = "unchanged:"
+      then
+         --  A change already made, made again: what it wrote is in the
+         --  file, and is what fails. Told only that it changed nothing, a
+         --  model took edit_file for broken and made it four times more.
+         Tell_Failed (" -- what you wrote is in the file already, and that is what fails: change it to something"
+                      & " else.");
       end if;
    exception
       when others =>

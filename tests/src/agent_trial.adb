@@ -1368,7 +1368,10 @@ package body Agent_Trial is
                               & "its messages came out as their names");
                            Halted := True;
                         end if;
-                        if not Worked or else Ada.Strings.Fixed.Index (To_String (Outcome), "complete") = 0 then
+                        --  Complete by how the line begins: "the task failed: it
+                        --  could not be completed" counted a failed run done.
+                        if not Worked or else Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") /= 1
+                        then
                            Clean := False;
                         else
                            Completed (Which) := Completed (Which) + 1;
@@ -1464,10 +1467,10 @@ package body Agent_Trial is
                                               (Screen (Report_At .. Record_At), To_String (One.Expect)) > 0
                                  then ", right" else ", wrong");
                               Ending : constant String :=
-                                (if Ada.Strings.Fixed.Index (Text, "complete") > 0 then "complete" & Answer
+                                (if Ada.Strings.Fixed.Index (Text, "the task is complete") = 1 then "complete" & Answer
                                  elsif Ada.Strings.Fixed.Index (Text, "ran out of time") > 0 then "out of time"
-                                 elsif Ada.Strings.Fixed.Index (Text, "blocked") > 0 then "blocked"
-                                 elsif Ada.Strings.Fixed.Index (Text, "failed") > 0 then "failed"
+                                 elsif Ada.Strings.Fixed.Index (Text, "the task is blocked") = 1 then "blocked"
+                                 elsif Ada.Strings.Fixed.Index (Text, "the task failed") = 1 then "failed"
                                  else "other");
                            begin
                               Answered := To_Unbounded_String (Answer);
