@@ -20436,7 +20436,7 @@ package body Tests.Framework_Cases is
                             ["src/head.adb"]);
       begin
          --  Right under line 1, the edit given swaps the two.
-         Assert (Ada.Strings.Fixed.Index (Header, "goes before this one, as line 1") > 0
+         Assert (Ada.Strings.Fixed.Index (Header, ASCII.LF & "The line it asks for goes before that one, as line 1") > 0
                  and then Ada.Strings.Fixed.Index
                             (Header, """old_text"": ""package body Head is\n--  Licensed"", ""new_text"": ""--  Licensed\n"
                                      & "package body Head is""") > 0

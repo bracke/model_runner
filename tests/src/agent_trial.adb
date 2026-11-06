@@ -1368,6 +1368,33 @@ package body Agent_Trial is
                               & "its messages came out as their names");
                            Halted := True;
                         end if;
+                        --  The test is the trial's measure, not the work's: a
+                        --  run that changed it -- past the license line a
+                        --  convention asks of each changed file -- passed its
+                        --  own test. A helper of qwen3-8b's cut the overflow
+                        --  cases out of test_add, and the run counted done.
+                        if One.Tested
+                          and then Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") = 1
+                        then
+                           declare
+                              Same : Hostkit.Process.Process_Outcome;
+                           begin
+                              Same := Hostkit.Process.Run_Captured
+                                ("sh",
+                                 [To_Unbounded_String ("-c"),
+                                  To_Unbounded_String
+                                    ("git -C """ & Root & """ show trial-start:src/test_add.adb"
+                                     & " | grep -vxF -- '" & License_Line & "' > """ & Root & "/.trial-test"""
+                                     & " && grep -vxF -- '" & License_Line & "' """ & Root & "/src/test_add.adb"""
+                                     & " | cmp -s """ & Root & "/.trial-test"" -")],
+                                 Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Hostkit.Fs.Null_Device);
+                              if Same.Started and then Same.Exit_Status /= 0 then
+                                 Outcome := To_Unbounded_String
+                                   ("the task failed: it changed src/test_add.adb, the test it is measured by ("
+                                    & To_String (Outcome) & ")");
+                              end if;
+                           end;
+                        end if;
                         --  Complete by how the line begins: "the task failed: it
                         --  could not be completed" counted a failed run done.
                         if not Worked or else Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") /= 1

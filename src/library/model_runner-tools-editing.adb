@@ -1463,6 +1463,25 @@ package body Model_Runner.Tools.Editing is
                return Failing ("new_text ends with """ & Last_Words (New_Text) & """, and the file already ends the"
                                & " block old_text stands in with that line, after it: it would end twice. Give"
                                & " old_text through that line, or leave it, and what opens it, out of new_text");
+            --  new_text is old_text with lines put before it, and the file
+            --  has those lines right before it already: the same insert made
+            --  again would put them in twice. qwen3-8b put a license line
+            --  before "with Calc;" three times, one call after another.
+            elsif New_Text'Length > Old_Text'Length
+              and then New_Text (New_Text'Last - Old_Text'Length + 1 .. New_Text'Last) = Old_Text
+              and then New_Text (New_Text'Last - Old_Text'Length) = ASCII.LF
+              and then At_Text - Text'First >= New_Text'Length - Old_Text'Length
+              and then Text (At_Text - (New_Text'Length - Old_Text'Length) .. At_Text - 1)
+                         = New_Text (New_Text'First .. New_Text'Last - Old_Text'Length)
+              and then (At_Text - (New_Text'Length - Old_Text'Length) = Text'First
+                        or else Text (At_Text - (New_Text'Length - Old_Text'Length) - 1) = ASCII.LF)
+            then
+               return Failing ("new_text puts lines before old_text that " & Path & " has right before it already,"
+                               & " from line"
+                               & Natural'Image (Ada.Strings.Fixed.Count
+                                   (Text (Text'First .. At_Text - (New_Text'Length - Old_Text'Length) - 1),
+                                    [1 => ASCII.LF]) + 1)
+                               & ": the file reads as new_text there now, and the edit would put them in twice");
             end if;
             declare
                --  Where the line the passage starts on starts, and whether

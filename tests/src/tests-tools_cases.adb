@@ -3227,6 +3227,20 @@ package body Tests.Tools_Cases is
                      & " ""new_text"": ""   declare\n   begin\n      return 2;\n   end;""}", Room, Last, Ended, Status);
          Assert (Ended.Changed, "a block of its own put in a statement's place was refused: "
                  & Room (Room'First .. Last));
+         --  A line put before old_text is taken once; the same edit again,
+         --  the line there already, is refused and the file left as it is.
+         Placed.Run ("write_file", "{""path"": ""head.txt"", ""content"": ""with Calc;\nbody;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""head.txt"", ""old_text"": ""with Calc;"","
+                     & " ""new_text"": ""-- MIT\nwith Calc;""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed, "a line put before old_text was refused: " & Room (Room'First .. Last));
+         Placed.Run ("edit_file", "{""path"": ""head.txt"", ""old_text"": ""with Calc;"","
+                     & " ""new_text"": ""-- MIT\nwith Calc;""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed
+                 and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "put them in twice") > 0
+                 and then Whole_File (Tree & "/head.txt") = "-- MIT" & ASCII.LF & "with Calc;" & ASCII.LF & "body;"
+                                                          & ASCII.LF,
+                 "the same insert made again was not refused: " & Room (Room'First .. Last));
          --  An old_text given with a listing's line numbers on it is found
          --  without them, and new_text's numbers go too.
          Placed.Run ("write_file", "{""path"": ""listed.adb"", ""content"": ""a;\n   b;\nc;\n""}",
@@ -3819,10 +3833,13 @@ package body Tests.Tools_Cases is
             Assert (Tree /= "" and then Runner.Stamp ("find", "{""kind"": ""text"", ""query"": ""x""}") /= Tree,
                     "a tree with a file changed in it kept its stamp");
             --  A file change is stamped too, by the file it would change: one
-            --  that failed may run again once that has moved.
+            --  that failed may run again once that has moved, or once it
+            --  has been read whole -- the read said after the file's stamp.
             Assert (Runner.Stamp ("calculator", "{}") = ""
-                    and then Runner.Stamp ("write_file", Args) = Runner.Stamp ("read_file", Args)
-                    and then Runner.Stamp ("edit_file", Args) = Runner.Stamp ("read_file", Args),
+                    and then Ada.Strings.Fixed.Index
+                               (Runner.Stamp ("write_file", Args), Runner.Stamp ("read_file", Args)) = 1
+                    and then Ada.Strings.Fixed.Index
+                               (Runner.Stamp ("edit_file", Args), Runner.Stamp ("read_file", Args)) = 1,
                     "a call that touches no files was given a stamp, or a file change none");
          end;
          Ada.Directories.Delete_File (Path);

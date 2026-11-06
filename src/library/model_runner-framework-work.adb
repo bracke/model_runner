@@ -2734,12 +2734,15 @@ package body Model_Runner.Framework.Work is
                                           --  qwen3-8b still put the line
                                           --  after this one, three times.
                                           --  Right under it, the two swap.
+                                          --  On a line of its own: after
+                                          --  the file's line, qwen3-8b
+                                          --  copied it into old_text.
                                           declare
                                              Under : constant Boolean := Holds = 2;
                                              Old_T : constant String :=
                                                Quoted (Line) & (if Under then "\n" & Quoted (Wanted) else "");
                                           begin
-                                             Append (Said, " -- the line it asks for goes before this one, as line 1;"
+                                             Append (Said, ASCII.LF & "The line it asks for goes before that one, as line 1;"
                                                      & " the edit: edit_file with ""old_text"": """ & Old_T
                                                      & """, ""new_text"": """ & Quoted (Wanted) & "\n"
                                                      & Quoted (Line) & """"

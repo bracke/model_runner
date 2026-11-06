@@ -33,6 +33,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **An edit that puts lines before old_text, made again with those lines already there, is refused.** qwen3-8b put the license line before `with Calc;` three times, one call after another; the second is now refused, saying the file reads as new_text there and from which line.
+- **The edit that puts a file's required first line in is told on a line of its own.** Said after the quoted line, qwen3-8b copied the hint into old_text and the edit was not found.
+- **agent-trial counts a run that changed its test as failed.** A helper cut the overflow cases out of `src/test_add.adb` and the run counted complete; the test, the license line aside, must stay as the trial wrote it.
 - **An Ada edit whose new_text ends with the end the file already closes its block with is refused.** qwen3-8b gave `return A + B;` a new_text from `begin` to `end Add;`, Add's own begin and end stayed, and the function ended twice; the refusal names the line and says to take it into old_text or leave it out of new_text.
 - **An Ada edit that would put the file's elsif or else after its own else is refused.** edit_file reads the file as the edit would leave it and refuses where an elsif or else follows an else of the same block, which the file did not have before; qwen3-8b replaced an if's first line with a whole if, its end if left off, and spent its steps on GNAT's "elsif cannot appear after else".
 - **A file that must begin with a line is told the edit that puts it there.** `run_checks` gives the edit_file call itself -- old_text line 1, new_text the wanted line then line 1, or the two swapped where the wanted line stands right under it; told it in words, qwen3-8b put its license line under line 1 three times.
