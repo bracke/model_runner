@@ -2361,6 +2361,21 @@ package body Model_Runner.Framework.Work is
       Seen  : Name_Lists.Vector;
       Index : Natural := Text'First;
 
+      --  A line as a JSON string's text: its quotes, backslashes and tabs
+      --  escaped.
+      function Quoted (Line : String) return String is
+         Kept : Unbounded_String;
+      begin
+         for C of Line loop
+            case C is
+               when '"' | '\' => Append (Kept, '\' & C);
+               when ASCII.HT  => Append (Kept, "\t");
+               when others    => Append (Kept, C);
+            end case;
+         end loop;
+         return To_String (Kept);
+      end Quoted;
+
       function Name_Char (C : Character) return Boolean
       is (C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '.' | '/' | '-');
 
@@ -2714,12 +2729,25 @@ package body Model_Runner.Framework.Work is
                                                 exit;
                                              end if;
                                           end loop;
-                                          Append (Said, " -- the line it asks for goes before this one, as line 1:"
-                                                  & " old_text this line, new_text that line, a line end, then"
-                                                  & " this line"
-                                                  & (if Holds = 0 then ""
-                                                     else "; line" & Natural'Image (Holds)
-                                                          & " holds it now, after it, and does not count there"));
+                                          --  Said as the call to make, in
+                                          --  JSON: told it in words,
+                                          --  qwen3-8b still put the line
+                                          --  after this one, three times.
+                                          --  Right under it, the two swap.
+                                          declare
+                                             Under : constant Boolean := Holds = 2;
+                                             Old_T : constant String :=
+                                               Quoted (Line) & (if Under then "\n" & Quoted (Wanted) else "");
+                                          begin
+                                             Append (Said, " -- the line it asks for goes before this one, as line 1;"
+                                                     & " the edit: edit_file with ""old_text"": """ & Old_T
+                                                     & """, ""new_text"": """ & Quoted (Wanted) & "\n"
+                                                     & Quoted (Line) & """"
+                                                     & (if Holds = 0 or else Under then ""
+                                                        else "; line" & Natural'Image (Holds)
+                                                             & " holds it now, after it, and does not count"
+                                                             & " there"));
+                                          end;
                                        end if;
                                     end;
                                  end if;

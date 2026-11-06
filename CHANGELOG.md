@@ -33,6 +33,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A file that must begin with a line is told the edit that puts it there.** `run_checks` gives the edit_file call itself -- old_text line 1, new_text the wanted line then line 1, or the two swapped where the wanted line stands right under it; told it in words, qwen3-8b put its license line under line 1 three times.
 - **A write refused for a file not read whole runs once the file is read whole.** The call memory judged a refused change by the file's contents alone, so the same write_file after the read it asked for was answered "this exact call was already made" with the old refusal; qwen3-8b read the file three times and was refused each time, until its steps ran out.
 - **A /work edit that puts the files back where the checks failed is told how they failed there.** The answer to the change names the failing check, its first line and the evidence record, and says that version was tried; before, only "back to a version it had earlier" was said, and qwen3-8b went round four versions of one function -- each failing as before -- until its steps ran out. An edit that changes nothing, while the files stand as the checks last failed on them, is told that what it wrote is in the file and is what fails: told only "unchanged", qwen3-8b took edit_file for broken and made one edit four times more.
 - **agent-trial counts a run complete by how its outcome begins.** "the task failed: ... could not be completed" was counted complete, in the summary and the history.

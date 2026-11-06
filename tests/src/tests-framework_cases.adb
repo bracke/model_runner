@@ -20431,12 +20431,21 @@ package body Tests.Framework_Cases is
          Begun : constant String :=
            Wk.Quoted_Lines ("src/head.adb:1:1: error: a file must begin with the line 'package body Head is'",
                             Root, ["src/head.adb"]);
+         Absent : constant String :=
+           Wk.Quoted_Lines ("src/head.adb:1:1: error: a file must begin with the line '--  Other'", Root,
+                            ["src/head.adb"]);
       begin
+         --  Right under line 1, the edit given swaps the two.
          Assert (Ada.Strings.Fixed.Index (Header, "goes before this one, as line 1") > 0
-                 and then Ada.Strings.Fixed.Index (Header, "line 2 holds it now") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Header, """old_text"": ""package body Head is\n--  Licensed"", ""new_text"": ""--  Licensed\n"
+                                     & "package body Head is""") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Absent, """old_text"": ""package body Head is"", ""new_text"": ""--  Other\n"
+                                     & "package body Head is""") > 0
                  and then Ada.Strings.Fixed.Index (Begun, "goes before") = 0,
                  "a line a file must begin with was not said where it goes, or said where it stood: "
-                 & Header & " / " & Begun);
+                 & Header & " / " & Absent & " / " & Begun);
       end;
       --  An exception raised with a message and no place said with where
       --  the project raises it, under the condition it is raised under.
