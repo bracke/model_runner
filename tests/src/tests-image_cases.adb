@@ -384,14 +384,18 @@ package body Tests.Image_Cases is
       is (Long_Float (Written.Constant_Reference (Name) (N.Element_Count (Index))));
 
       --  Out := Name's matrix (Out_Width rows of In_Width) times each row of In.
+      --  The matrix looked up once: by name for each product, the lookup
+      --  was most of a case's minute and a half.
       function Linear (Name : String; Source : Matrix; Out_Width : Natural) return Matrix is
          In_Width : constant Natural := Source'Length (2);
          Result   : Matrix (Source'Range (1), 0 .. Out_Width - 1) := [others => [others => 0.0]];
+         Held     : constant Weight_Maps.Constant_Reference_Type := Written.Constant_Reference (Name);
       begin
          for R in Source'Range (1) loop
             for O in 0 .. Out_Width - 1 loop
                for I in 0 .. In_Width - 1 loop
-                  Result (R, O) := Result (R, O) + Weight (Name, O * In_Width + I) * Source (R, I);
+                  Result (R, O) := Result (R, O)
+                    + Long_Float (Held (N.Element_Count (O * In_Width + I))) * Source (R, I);
                end loop;
             end loop;
          end loop;

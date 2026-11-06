@@ -27,6 +27,7 @@ with AUnit.Test_Results;
 with Suite_Filter;
 with Case_Timing;
 with Device_Bench;
+with Ada.Environment_Variables;
 with AUnit.Options;
 with AUnit.Run;
 with AUnit.Test_Filters;
@@ -350,10 +351,31 @@ begin
          Suite_Failed : Boolean := False;
          None_Matched : Boolean := False;
       begin
+         --  The driver's compiled shaders kept where they were found:
+         --  cases that point XDG_CACHE_HOME at a fresh folder took Mesa's
+         --  cache with it, and each device open there compiled every
+         --  shader again -- three minutes of a case of 0.3 s, and half
+         --  of the suite's time.
+         if not Ada.Environment_Variables.Exists ("MESA_SHADER_CACHE_DIR") then
+            if Ada.Environment_Variables.Exists ("XDG_CACHE_HOME") then
+               Ada.Environment_Variables.Set
+                 ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("XDG_CACHE_HOME"));
+            elsif Ada.Environment_Variables.Exists ("HOME") then
+               Ada.Environment_Variables.Set
+                 ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("HOME") & "/.cache");
+            end if;
+         end if;
          if Only /= "" then
             AUnit.Test_Filters.Set_Name (Filter, Only);
             Chosen.Filter := Filter'Unchecked_Access;
          end if;
+         --  Each case's time beside its name: the suite had grown from 140
+         --  to 500 s of the machine's, and nothing said which cases.
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            if Ada.Command_Line.Argument (Index) = "--timed" then
+               Chosen.Test_Case_Timer := True;
+            end if;
+         end loop;
          for Turn in 1 .. Times loop
             declare
                Results : AUnit.Test_Results.Result;

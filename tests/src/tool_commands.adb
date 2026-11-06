@@ -264,8 +264,8 @@ package body Tool_Commands is
      " --model --threads --backend --anyway --wait --trace --report "
      & "--chat-template --context-size --arith ";
 
-   Takes_Test : aliased constant String := "[--only PREFIX] [--times N]";
-   Opts_Test  : aliased constant String := " --only --times ";
+   Takes_Test : aliased constant String := "[--only PREFIX] [--times N] [--timed]";
+   Opts_Test  : aliased constant String := " --only --times --timed ";
 
    Says_Cross  : aliased constant String :=
      "set a chat template beside Python's jinja2, conversation for "

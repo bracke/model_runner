@@ -33,6 +33,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **The test suite takes half the machine's time it did: 509 s to 259.** Cases that point XDG_CACHE_HOME at a fresh folder took Mesa's shader cache with it, and the prefill-cache case compiled every shader again (181 s, now 0.3); the test program keeps the driver's cache where it was. The image reference computation looked each weight up by name for every product (a case of 99 s, now 9). `tests test --timed` gives each case's time.
 - **An old_text not found that the file has but for a line or two is told which lines differ.** qwen3-8b fixed its `elif` to `elsif`, then gave old_text with its own `elif` line four times more, shown the passage but not the difference, and gave up.
 - **An edit that puts lines before old_text, made again with those lines already there, is refused.** qwen3-8b put the license line before `with Calc;` three times, one call after another; the second is now refused, saying the file reads as new_text there and from which line.
 - **The edit that puts a file's required first line in is told on a line of its own.** Said after the quoted line, qwen3-8b copied the hint into old_text and the edit was not found.
