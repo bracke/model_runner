@@ -116,6 +116,30 @@ procedure Tests_Main is
 
    Reporter : AUnit.Reporter.Text.Text_Reporter;
 
+   --  What the suite runs under, by `tests test` and by the gate alike --
+   --  set in the first only, the gate's suite still cost 260 s of the
+   --  machine's against the 101 the other took.
+   --
+   --  The driver's compiled shaders kept where they were found: cases that
+   --  point XDG_CACHE_HOME at a fresh folder took Mesa's cache with it, and
+   --  each device open there compiled every shader again -- three minutes
+   --  of a case of 0.3 s. And syncs taken as done: the suite's files are
+   --  thrown away, and put on the device they cost a tenth of its time.
+   procedure Ready_For_The_Suite is
+   begin
+      if not Ada.Environment_Variables.Exists ("MESA_SHADER_CACHE_DIR") then
+         if Ada.Environment_Variables.Exists ("XDG_CACHE_HOME") then
+            Ada.Environment_Variables.Set
+              ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("XDG_CACHE_HOME"));
+         elsif Ada.Environment_Variables.Exists ("HOME") then
+            Ada.Environment_Variables.Set
+              ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("HOME") & "/.cache");
+         end if;
+      end if;
+      Model_Runner.Durable_Syncs.Skip_Syncs (True);
+   end Ready_For_The_Suite;
+
+
    --  The token the probe's interrupt handling is bound to: here, as the
    --  handler outlives the call that installed it.
    Probe_Token : aliased Model_Runner.Cancellation.Token;
@@ -352,23 +376,7 @@ begin
          Suite_Failed : Boolean := False;
          None_Matched : Boolean := False;
       begin
-         --  The driver's compiled shaders kept where they were found:
-         --  cases that point XDG_CACHE_HOME at a fresh folder took Mesa's
-         --  cache with it, and each device open there compiled every
-         --  shader again -- three minutes of a case of 0.3 s, and half
-         --  of the suite's time.
-         if not Ada.Environment_Variables.Exists ("MESA_SHADER_CACHE_DIR") then
-            if Ada.Environment_Variables.Exists ("XDG_CACHE_HOME") then
-               Ada.Environment_Variables.Set
-                 ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("XDG_CACHE_HOME"));
-            elsif Ada.Environment_Variables.Exists ("HOME") then
-               Ada.Environment_Variables.Set
-                 ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("HOME") & "/.cache");
-            end if;
-         end if;
-         --  The suite's files are thrown away: put on the device, they
-         --  cost a tenth of its time.
-         Model_Runner.Durable_Syncs.Skip_Syncs (True);
+         Ready_For_The_Suite;
          if Only /= "" then
             AUnit.Test_Filters.Set_Name (Filter, Only);
             Chosen.Filter := Filter'Unchecked_Access;
@@ -1356,6 +1364,9 @@ begin
          --  hundred and sixty-four tests were a command somebody had to
          --  remember was the same mistake as leaving conformance outside,
          --  made in the sentence that fixed it.
+         if not Repository_Only then
+            Ready_For_The_Suite;
+         end if;
          if not Repository_Only
            and then Run_Suite (Reporter) /= AUnit.Success
          then
