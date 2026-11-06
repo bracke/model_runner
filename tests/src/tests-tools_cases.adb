@@ -1143,6 +1143,17 @@ package body Tests.Tools_Cases is
          end;
          Assert (not Has (Ed.Edit (Gone_Path, "Q := 7;", "x", ""), "the file reads"),
                  "a passage none of whose lines is there was said with lines");
+         --  One line of it otherwise there: that line named, and the file's.
+         declare
+            Near : constant Ed.Said :=
+              Ed.Edit (Gone_Path, "begin" & ASCII.LF & "   X := 1;" & ASCII.LF & "   Y := 3;", "x", "");
+         begin
+            Assert (Near.Failed
+                    and then Has (Near, "old_text's line 3, ""Y := 3;"", is not the file's line 3, ""Y := 2;"""
+                                        & " -- the rest of it matches"),
+                    "the one line of a passage the file has otherwise was not named: "
+                    & Ada.Strings.Unbounded.To_String (Near.Text));
+         end;
       end;
 
       --  There twice, exactly or loosely: edited where it starts within

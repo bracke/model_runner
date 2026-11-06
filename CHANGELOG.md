@@ -33,6 +33,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **An old_text not found that the file has but for a line or two is told which lines differ.** qwen3-8b fixed its `elif` to `elsif`, then gave old_text with its own `elif` line four times more, shown the passage but not the difference, and gave up.
 - **An edit that puts lines before old_text, made again with those lines already there, is refused.** qwen3-8b put the license line before `with Calc;` three times, one call after another; the second is now refused, saying the file reads as new_text there and from which line.
 - **The edit that puts a file's required first line in is told on a line of its own.** Said after the quoted line, qwen3-8b copied the hint into old_text and the edit was not found.
 - **agent-trial counts a run that changed its test as failed.** A helper cut the overflow cases out of `src/test_add.adb` and the run counted complete; the test, the license line aside, must stay as the trial wrote it.

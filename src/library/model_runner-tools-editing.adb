@@ -959,7 +959,29 @@ package body Model_Runner.Tools.Editing is
                      First : constant Positive := Natural'Max (1, At_Line - Offset + 1);
                      Last  : constant Natural :=
                        Natural'Min (Natural (File.Length), First + Natural (Given.Length) + 1);
+                     --  The lines of it the file has otherwise there, named:
+                     --  shown the passage, qwen3-8b gave its own "elif" line
+                     --  four times more after an edit had made it "elsif".
+                     Start : constant Integer := At_Line - Offset + 1;
+                     Wrong : Natural := 0;
+                     Named : U.Unbounded_String;
                   begin
+                     if Start >= 1 and then Start + Natural (Given.Length) - 1 <= Natural (File.Length) then
+                        for Index in 1 .. Natural (Given.Length) loop
+                           if Bare (Given (Index)) /= Bare (File (Start + Index - 1)) then
+                              Wrong := Wrong + 1;
+                              if Wrong <= 3 then
+                                 U.Append (Named, "; old_text's line" & Natural'Image (Index) & ", """
+                                           & Bare (Given (Index)) & """, is not the file's line"
+                                           & Natural'Image (Start + Index - 1) & ", """
+                                           & Bare (Without_CR (File (Start + Index - 1))) & """");
+                              end if;
+                           end if;
+                        end loop;
+                        if Wrong > 0 and then Wrong * 2 <= Natural (Given.Length) then
+                           U.Append (Said, U.To_String (Named) & " -- the rest of it matches");
+                        end if;
+                     end if;
                      U.Append (Said, "; where its line" & Natural'Image (Offset) & " is, the file reads:");
                      for Index in First .. Last loop
                         U.Append (Said, ASCII.LF & Ada.Strings.Fixed.Trim (Natural'Image (Index), Ada.Strings.Left)
