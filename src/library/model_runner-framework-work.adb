@@ -2742,7 +2742,8 @@ package body Model_Runner.Framework.Work is
                                              Old_T : constant String :=
                                                Quoted (Line) & (if Under then "\n" & Quoted (Wanted) else "");
                                           begin
-                                             Append (Said, ASCII.LF & "The line it asks for goes before that one, as line 1;"
+                                             Append (Said, ASCII.LF
+                                                     & "The line it asks for goes before that one, as line 1;"
                                                      & " the edit: edit_file with ""old_text"": """ & Old_T
                                                      & """, ""new_text"": """ & Quoted (Wanted) & "\n"
                                                      & Quoted (Line) & """"

@@ -20438,7 +20438,8 @@ package body Tests.Framework_Cases is
          --  Right under line 1, the edit given swaps the two.
          Assert (Ada.Strings.Fixed.Index (Header, ASCII.LF & "The line it asks for goes before that one, as line 1") > 0
                  and then Ada.Strings.Fixed.Index
-                            (Header, """old_text"": ""package body Head is\n--  Licensed"", ""new_text"": ""--  Licensed\n"
+                            (Header, """old_text"": ""package body Head is\n--  Licensed"","
+                                     & " ""new_text"": ""--  Licensed\n"
                                      & "package body Head is""") > 0
                  and then Ada.Strings.Fixed.Index
                             (Absent, """old_text"": ""package body Head is"", ""new_text"": ""--  Other\n"

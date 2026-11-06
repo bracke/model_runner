@@ -796,7 +796,7 @@ package body Model_Runner.Framework.Invocations is
 
    --  A numbered entry, Prefix then the next number, whole up to
    --  Reply_Most bytes.
-      procedure Note_Numbered
+   procedure Note_Numbered
      (Item   : Stores.Store;
       Change : in out Stores.Transaction;
       Id     : String;
