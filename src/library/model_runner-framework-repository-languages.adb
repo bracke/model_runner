@@ -48,6 +48,24 @@ package body Model_Runner.Framework.Repository.Languages is
    Known_Symbols : Natural := Natural'Last;
    Known_Ends    : Ada.Strings.Unbounded.Unbounded_String;
 
+   --  And the symbols, by the same rule: those a use can name, by their
+   --  last part, and every one by the file that declares it -- each file's
+   --  references walked the whole graph's symbols, and a scan of two
+   --  thousand C files was a hundred million searches of their names.
+   package Index_Lists is new Ada.Containers.Vectors (Positive, Positive);
+   package Index_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (String, Index_Lists.Vector, Ada.Strings.Hash, "=", Index_Lists."=");
+   Usable_By_Last : Index_Maps.Map;
+   Declared_In    : Index_Maps.Map;
+
+   procedure Note (Into : in out Index_Maps.Map; Key : String; Index : Positive) is
+   begin
+      if not Into.Contains (Key) then
+         Into.Insert (Key, Index_Lists.Empty_Vector);
+      end if;
+      Into (Key).Append (Index);
+   end Note;
+
    package Token_Vectors is new Ada.Containers.Vectors
      (Index_Type => Positive, Element_Type => Token);
 
@@ -386,19 +404,34 @@ package body Model_Runner.Framework.Repository.Languages is
                end;
             end if;
          end loop;
+         Usable_By_Last.Clear;
+         Declared_In.Clear;
+         for Index in 1 .. Natural (Into.Symbols.Length) loop
+            declare
+               Item : Symbol renames Into.Symbols.Constant_Reference (Index);
+               Full : constant String := To_String (Item.Name);
+            begin
+               --  A module is used by importing it, which is a dependency:
+               --  a variable of the same name is not a use of it.
+               if Last_Part_At (Full) > 0 and then To_String (Item.Kind) not in "module" | "unit" then
+                  Note (Usable_By_Last, Last_Part (Full), Index);
+               end if;
+               Note (Declared_In, To_String (Item.Path), Index);
+            end;
+         end loop;
          Known_Symbols := Natural (Into.Symbols.Length);
          Known_Ends := (if Into.Symbols.Is_Empty then Ada.Strings.Unbounded.Null_Unbounded_String
                         else Into.Symbols.First_Element.Name & "|" & Into.Symbols.Last_Element.Name);
       end if;
-      for Item of Into.Symbols loop
-         if To_String (Item.Path) = Path then
+      if Declared_In.Contains (Path) then
+         for Index of Declared_In.Constant_Reference (Path) loop
             declare
-               Full : constant String := To_String (Item.Name);
+               Full : constant String := To_String (Into.Symbols (Index).Name);
             begin
-               Declared.Append (Last_Part (Full) & "@" & Image (Item.Line));
+               Declared.Append (Last_Part (Full) & "@" & Image (Into.Symbols (Index).Line));
             end;
-         end if;
-      end loop;
+         end loop;
+      end if;
       Seen.Append (Unit);
       Catch_Up (Into);
       if Into.Depends_By_Unit.Contains (Unit) then
@@ -423,42 +456,55 @@ package body Model_Runner.Framework.Repository.Languages is
          end if;
       end loop;
 
-      for Item of Into.Symbols loop
-         declare
-            Full  : constant String := To_String (Item.Name);
-            Dot   : constant Natural := Last_Part_At (Full);
-            Owner : constant String := Owner_Part (Full);
-            Last  : constant String := Last_Part (Full);
-         begin
-            --  A module is used by importing it, which is a dependency:
-            --  a variable of the same name is not a use of it.
-            if Dot > 0 and then To_String (Item.Kind) not in "module" | "unit" and then Places.Contains (Last) then
-               for At_Index of Places (Last) loop
-                  if Is_Word (Tokens (At_Index), Last)
-                    and then not Declaring (Last, Tokens (At_Index).Line)
-                    and then Receiver_Fits (At_Index, Owner)
-                    and then (Visible (Owner) or else To_String (Item.Path) = Path
-                              or else (To_String (Item.Kind) = "method" and then Called_On (At_Index)))
-                  then
-                     Found.Append
-                       (Relation'(Kind => References, From => U (Path), To => Item.Name,
-                         Source => (if On_Import_Line (At_Index) then Explicit else Heuristic),
-                         Sure   => (if On_Import_Line (At_Index) then Certain else Probable),
-                         Where => Where (Path, Tokens (At_Index).Line), Origin => <>));
-                     if To_String (Item.Kind) in "function" | "method" | "macro"
-                       and then At_Index < Count and then Is_Mark (Tokens (At_Index + 1), "(")
-                       and then (At_Index = 1 or else Before_A_Call (Tokens (At_Index - 1)))
+      --  The symbols a word of this file can name, in the graph's order,
+      --  so the relations come out as they did when every one was asked.
+      declare
+         package Index_Sorting is new Index_Lists.Generic_Sorting;
+         Named : Index_Lists.Vector;
+         Word  : Word_Places.Cursor := Places.First;
+      begin
+         while Word_Places.Has_Element (Word) loop
+            if Usable_By_Last.Contains (Word_Places.Key (Word)) then
+               Named.Append (Usable_By_Last.Constant_Reference (Word_Places.Key (Word)));
+            end if;
+            Word_Places.Next (Word);
+         end loop;
+         Index_Sorting.Sort (Named);
+         for Symbol_At of Named loop
+            declare
+               Item  : Symbol renames Into.Symbols.Constant_Reference (Symbol_At);
+               Full  : constant String := To_String (Item.Name);
+               Owner : constant String := Owner_Part (Full);
+               Last  : constant String := Last_Part (Full);
+            begin
+               if Places.Contains (Last) then
+                  for At_Index of Places (Last) loop
+                     if Is_Word (Tokens (At_Index), Last)
+                       and then not Declaring (Last, Tokens (At_Index).Line)
+                       and then Receiver_Fits (At_Index, Owner)
+                       and then (Visible (Owner) or else To_String (Item.Path) = Path
+                                 or else (To_String (Item.Kind) = "method" and then Called_On (At_Index)))
                      then
                         Found.Append
-                          (Relation'(Kind => Calls, From => U (Unit), To => Item.Name,
-                            Source => Heuristic, Sure => Probable,
+                          (Relation'(Kind => References, From => U (Path), To => Item.Name,
+                            Source => (if On_Import_Line (At_Index) then Explicit else Heuristic),
+                            Sure   => (if On_Import_Line (At_Index) then Certain else Probable),
                             Where => Where (Path, Tokens (At_Index).Line), Origin => <>));
+                        if To_String (Item.Kind) in "function" | "method" | "macro"
+                          and then At_Index < Count and then Is_Mark (Tokens (At_Index + 1), "(")
+                          and then (At_Index = 1 or else Before_A_Call (Tokens (At_Index - 1)))
+                        then
+                           Found.Append
+                             (Relation'(Kind => Calls, From => U (Unit), To => Item.Name,
+                               Source => Heuristic, Sure => Probable,
+                               Where => Where (Path, Tokens (At_Index).Line), Origin => <>));
+                        end if;
                      end if;
-                  end if;
-               end loop;
-            end if;
-         end;
-      end loop;
+                  end loop;
+               end if;
+            end;
+         end loop;
+      end;
       for Link of Found loop
          Add_Relation (Into, Link);
       end loop;

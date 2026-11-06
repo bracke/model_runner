@@ -232,13 +232,21 @@ package body Tests.Framework_Cases is
    end Fresh;
 
    --  A file holding exactly these bytes.
+   --  Made with one open: Stream_IO's Create looked at the path eight
+   --  times first, and a case writing fifty-four thousand files spent its
+   --  kernel time there.
    procedure Put_File (Path, Content : String) is
-      File : Ada.Streams.Stream_IO.File_Type;
+      File    : constant GNAT.OS_Lib.File_Descriptor := GNAT.OS_Lib.Create_File (Path, GNAT.OS_Lib.Binary);
+      Written : Integer;
    begin
-      Ada.Streams.Stream_IO.Create
-        (File, Ada.Streams.Stream_IO.Out_File, Path);
-      String'Write (Ada.Streams.Stream_IO.Stream (File), Content);
-      Ada.Streams.Stream_IO.Close (File);
+      if GNAT.OS_Lib."=" (File, GNAT.OS_Lib.Invalid_FD) then
+         raise Ada.Streams.Stream_IO.Name_Error with Path;
+      end if;
+      Written := (if Content'Length = 0 then 0 else GNAT.OS_Lib.Write (File, Content'Address, Content'Length));
+      GNAT.OS_Lib.Close (File);
+      if Written /= Content'Length then
+         raise Ada.Streams.Stream_IO.Use_Error with Path;
+      end if;
    end Put_File;
 
    --  A whole file, or nothing when it is not there.

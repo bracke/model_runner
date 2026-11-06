@@ -47,6 +47,9 @@ package body Model_Runner.Framework.Repository is
 
    Link_Not_Followed : constant String := "a link to a directory, not followed";
 
+   package Kind_Maps is new Ada.Containers.Indefinite_Hashed_Maps
+     (String, Ada.Directories.File_Kind, Ada.Strings.Hash, "=", Ada.Directories."=");
+
    --  Files larger than this are recorded and not read.
    Largest_Read : constant := 4 * 1024 * 1024;
 
@@ -1661,6 +1664,9 @@ package body Model_Runner.Framework.Repository is
          Search : Dirs.Search_Type;
          Found  : Dirs.Directory_Entry_Type;
          Names  : Name_Lists.Vector;
+         --  What each entry is, as the search found it: asked again by
+         --  path, each was three more looks at the file.
+         Kinds  : Kind_Maps.Map;
       begin
          Dirs.Start_Search (Search, Directory, "");
          while Dirs.More_Entries (Search) loop
@@ -1670,6 +1676,7 @@ package body Model_Runner.Framework.Repository is
                (if Prefix = "" then "" else Prefix & "/") & Dirs.Simple_Name (Found), Within)
             then
                Names.Append (Dirs.Simple_Name (Found));
+               Kinds.Include (Dirs.Simple_Name (Found), Dirs.Kind (Found));
             end if;
          end loop;
          Dirs.End_Search (Search);
@@ -1680,12 +1687,11 @@ package body Model_Runner.Framework.Repository is
                Full     : constant String := Hostkit.Fs.Join (Directory, Name);
                Relative : constant String :=
                  (if Prefix = "" then Name else Prefix & "/" & Name);
-               --  Asked once, each asking a look at the file -- and asked
-               --  here, in the statements, so a file gone as it is asked of
-               --  is this entry's to say, not its directory's.
+               --  As the search found it; a file gone since is this entry's
+               --  to say, when it is read, not its directory's.
                Kind     : Dirs.File_Kind;
             begin
-               Kind := Dirs.Kind (Full);
+               Kind := Kinds (Name);
                if Kind = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
                   --  A link to a directory is not followed, as version
                   --  control does not follow one: it may lead out of the
@@ -1906,6 +1912,9 @@ package body Model_Runner.Framework.Repository is
          Search : Dirs.Search_Type;
          Found  : Dirs.Directory_Entry_Type;
          Names  : Name_Lists.Vector;
+         --  What each entry is, as the search found it: asked again by
+         --  path, each was three more looks at the file.
+         Kinds  : Kind_Maps.Map;
       begin
          Dirs.Start_Search (Search, Directory, "");
          while Dirs.More_Entries (Search) loop
@@ -1915,6 +1924,7 @@ package body Model_Runner.Framework.Repository is
                (if Prefix = "" then "" else Prefix & "/") & Dirs.Simple_Name (Found), Within)
             then
                Names.Append (Dirs.Simple_Name (Found));
+               Kinds.Include (Dirs.Simple_Name (Found), Dirs.Kind (Found));
             end if;
          end loop;
          Dirs.End_Search (Search);
@@ -1923,12 +1933,11 @@ package body Model_Runner.Framework.Repository is
                Full     : constant String := Hostkit.Fs.Join (Directory, Name);
                Relative : constant String :=
                  (if Prefix = "" then Name else Prefix & "/" & Name);
-               --  Asked once, each asking a look at the file -- and asked
-               --  here, in the statements, so a file gone as it is asked of
-               --  is this entry's to say, not its directory's.
+               --  As the search found it; a file gone since is this entry's
+               --  to say, when it is read, not its directory's.
                Kind     : Dirs.File_Kind;
             begin
-               Kind := Dirs.Kind (Full);
+               Kind := Kinds (Name);
                if Kind = Dirs.Directory and then Hostkit.Fs.Is_Link (Full) then
                   Result.Unread.Append (Relative & ": " & Link_Not_Followed);
                elsif Kind = Dirs.Directory then
