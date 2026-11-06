@@ -3212,6 +3212,21 @@ package body Tests.Tools_Cases is
          Placed.Run ("edit_file", "{""path"": ""lone.adb"", ""old_text"": ""   X;"","
                      & " ""new_text"": ""   X;\nelse\n   W;""}", Room, Last, Ended, Status);
          Assert (Ended.Changed, "an else added to an if with none was refused: " & Room (Room'First .. Last));
+         --  A statement given a new_text that ends with the end the file
+         --  already ends its block with is refused: the block would end
+         --  twice. One whose end is its own block's is taken.
+         Placed.Run ("write_file",
+                     "{""path"": ""twice.adb"", ""content"": ""function Add return Integer is\nbegin\n   return 1;\n"
+                     & "end Add;\n""}", Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""twice.adb"", ""old_text"": ""   return 1;"","
+                     & " ""new_text"": ""begin\n   return 2;\nend Add;""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed
+                 and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "it would end twice") > 0,
+                 "an edit that ended a block twice was not refused: " & Room (Room'First .. Last));
+         Placed.Run ("edit_file", "{""path"": ""twice.adb"", ""old_text"": ""   return 1;"","
+                     & " ""new_text"": ""   declare\n   begin\n      return 2;\n   end;""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed, "a block of its own put in a statement's place was refused: "
+                 & Room (Room'First .. Last));
          --  An old_text given with a listing's line numbers on it is found
          --  without them, and new_text's numbers go too.
          Placed.Run ("write_file", "{""path"": ""listed.adb"", ""content"": ""a;\n   b;\nc;\n""}",

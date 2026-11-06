@@ -33,6 +33,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **An Ada edit whose new_text ends with the end the file already closes its block with is refused.** qwen3-8b gave `return A + B;` a new_text from `begin` to `end Add;`, Add's own begin and end stayed, and the function ended twice; the refusal names the line and says to take it into old_text or leave it out of new_text.
 - **An Ada edit that would put the file's elsif or else after its own else is refused.** edit_file reads the file as the edit would leave it and refuses where an elsif or else follows an else of the same block, which the file did not have before; qwen3-8b replaced an if's first line with a whole if, its end if left off, and spent its steps on GNAT's "elsif cannot appear after else".
 - **A file that must begin with a line is told the edit that puts it there.** `run_checks` gives the edit_file call itself -- old_text line 1, new_text the wanted line then line 1, or the two swapped where the wanted line stands right under it; told it in words, qwen3-8b put its license line under line 1 three times.
 - **A write refused for a file not read whole runs once the file is read whole.** The call memory judged a refused change by the file's contents alone, so the same write_file after the read it asked for was answered "this exact call was already made" with the old refusal; qwen3-8b read the file three times and was refused each time, until its steps ran out.

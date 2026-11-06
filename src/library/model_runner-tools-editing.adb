@@ -215,6 +215,53 @@ package body Model_Runner.Tools.Editing is
       return Open;
    end Ada_Blocks_Open;
 
+   --  The words of the line that ends the block an Ada passage stands in:
+   --  the first end it comes to that it opened nothing for. "" where there
+   --  is none.
+   function Closing_End (Passage : String) return String is
+      Depth : Natural := 0;
+      Start : Positive := Passage'First;
+   begin
+      for Index in Passage'First .. Passage'Last + 1 loop
+         if Index > Passage'Last or else Passage (Index) = ASCII.LF then
+            declare
+               Word : constant String := Ada_Words (Passage (Start .. Index - 1));
+            begin
+               Start := Index + 1;
+               if Starts (Word, "end") then
+                  if Depth = 0 then
+                     return Word;
+                  end if;
+                  Depth := Depth - 1;
+               elsif Opens_Block (Word) then
+                  Depth := Depth + 1;
+               end if;
+            end;
+         end if;
+      end loop;
+      return "";
+   end Closing_End;
+
+   --  An Ada passage's last line with words, as its words.
+   function Last_Words (Passage : String) return String is
+      Kept  : U.Unbounded_String;
+      Start : Positive := Passage'First;
+   begin
+      for Index in Passage'First .. Passage'Last + 1 loop
+         if Index > Passage'Last or else Passage (Index) = ASCII.LF then
+            declare
+               Word : constant String := Ada_Words (Passage (Start .. Index - 1));
+            begin
+               if Word /= "" then
+                  Kept := U.To_Unbounded_String (Word);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return U.To_String (Kept);
+   end Last_Words;
+
    --  Whether an Ada passage has an elsif or else after an else of the
    --  same block -- what GNAT refuses as "elsif cannot appear after
    --  else". Read until an end closes a block the passage did not open.
@@ -1402,6 +1449,20 @@ package body Model_Runner.Tools.Editing is
                return Failing ("new_text has an else, and the file goes on after old_text with that block's own"
                                & " elsif or else: they would come after your else, which Ada does not allow."
                                & " Give old_text through the end that closes the block, and new_text whole");
+            --  new_text ending in the end that the file already ends
+            --  old_text's block with, a name to it: the block ended twice.
+            --  qwen3-8b gave "return A + B;" a new_text from begin to
+            --  end Add;, and Add's own begin and end Add; stayed.
+            elsif Path'Length > 4
+              and then Ada.Characters.Handling.To_Lower (Path (Path'Last - 3 .. Path'Last)) in ".adb" | ".ads"
+              and then Ada_Blocks_Open (Old_Text) = 0
+              and then Last_Words (New_Text) not in "" | "end;" | "end if;" | "end loop;" | "end case;" | "end record;"
+              and then Starts (Last_Words (New_Text), "end")
+              and then Last_Words (New_Text) = Closing_End (Text (At_Text + Old_Text'Length .. Text'Last))
+            then
+               return Failing ("new_text ends with """ & Last_Words (New_Text) & """, and the file already ends the"
+                               & " block old_text stands in with that line, after it: it would end twice. Give"
+                               & " old_text through that line, or leave it, and what opens it, out of new_text");
             end if;
             declare
                --  Where the line the passage starts on starts, and whether
