@@ -139,7 +139,6 @@ procedure Tests_Main is
       Model_Runner.Durable_Syncs.Skip_Syncs (True);
    end Ready_For_The_Suite;
 
-
    --  The token the probe's interrupt handling is bound to: here, as the
    --  handler outlives the call that installed it.
    Probe_Token : aliased Model_Runner.Cancellation.Token;
