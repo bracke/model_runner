@@ -606,6 +606,10 @@ package body Model_Runner.CLI.Project_Commands is
       Check_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
       Helper_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
       Tool_Ns       : Model_Runner.Clocks.Nanoseconds := 0;
+
+      --  The files' versions its checks failed on: a change back to one
+      --  is told what failed there.
+      Tried         : Model_Runner.Agent.Recall.Failed_Versions;
    end record;
 
    --  Those, in a line; Now is when the line is written.
@@ -1442,6 +1446,7 @@ package body Model_Runner.CLI.Project_Commands is
       Status    : out Model_Runner.Errors.Error_Info)
    is
       use type Model_Runner.Clocks.Nanoseconds;
+      use type Model_Runner.Tools.Runner.Answer_Kind;
       Clock : aliased Model_Runner.Clocks.System_Clock;
       From  : constant Model_Runner.Clocks.Nanoseconds := Model_Runner.Clocks.Read (Clock'Unchecked_Access);
 
@@ -1460,6 +1465,31 @@ package body Model_Runner.CLI.Project_Commands is
    begin
       Run_Call (Self, Named, Arguments, Result, Last, Outcome, Status);
       Count;
+      if Named = "run_checks" and then Outcome.Answer = Model_Runner.Tools.Runner.Answered then
+         Self.Tried.Checked (Result (Result'First .. Last));
+      elsif Outcome.Changed and then Outcome.After_Revision /= Model_Runner.Tools.Runner.No_Revision then
+         declare
+            Named_Path : Boolean;
+            Path       : constant String :=
+              Model_Runner.Tools.Builtin.Text_Argument (Arguments, "path", Named_Path);
+         begin
+            Self.Tried.Now_At (Path, String (Outcome.After_Revision));
+            declare
+               Failure : constant String := Self.Tried.Failed_Here;
+               --  Said as the tool's answer: the files are back where the
+               --  checks refused them, and how.
+               Said    : constant String :=
+                 (if Failure = "" then ""
+                  else ASCII.LF & "The files are now as they were when run_checks failed on them: "
+                       & Failure & " -- this version was tried and fails so; make a different change.");
+            begin
+               if Said /= "" and then Last + Said'Length <= Result'Last then
+                  Result (Last + 1 .. Last + Said'Length) := Said;
+                  Last := Last + Said'Length;
+               end if;
+            end;
+         end;
+      end if;
    exception
       when others =>
          Count;

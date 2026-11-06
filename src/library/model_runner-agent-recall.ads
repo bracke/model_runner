@@ -1,5 +1,6 @@
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Containers.Vectors;
 with Ada.Strings.Hash;
 with Ada.Strings.Unbounded;
@@ -170,6 +171,45 @@ package Model_Runner.Agent.Recall is
    --  what was written to it -- kept across every change, so that an answer
    --  the same as one before a change, or a file put back as an earlier
    --  write left it, is noticed.
+   --  The versions of the work's files its checks failed on, and how they
+   --  failed: a change that puts the files back as they all stood at a
+   --  failure is told what failed there, rather than run again to find
+   --  out. A model mending a check went round four versions of one
+   --  function, each refused as before, until its steps ran out.
+   type Failed_Versions is tagged limited private;
+
+   --  A file changed: it holds this revision now.
+   --
+   --  @param Self The versions.
+   --  @param Path The file.
+   --  @param Revision Its revision after the change.
+   procedure Now_At (Self : in out Failed_Versions; Path : String; Revision : String);
+
+   --  The checks answered: where they failed, the files as they stand now
+   --  are kept as failing so. A failure kept already stays as first said.
+   --
+   --  @param Self The versions.
+   --  @param Report What run_checks answered.
+   procedure Checked (Self : in out Failed_Versions; Report : String);
+
+   --  What failed when the files last stood as they stand now; "" where
+   --  they never did, or the checks passed there.
+   --
+   --  @param Self The versions.
+   --  @return The failure, said as Failure_Of says it.
+   function Failed_Here (Self : Failed_Versions) return String;
+
+   --  A run_checks answer's first failing check, with the first line it
+   --  gave and the evidence named: "build failed (VER-000003):
+   --  calc.adb:5:48: error: ...". "" where no check failed.
+   --
+   --  @param Report What run_checks answered.
+   --  @return The failure, at most Failure_Most characters.
+   function Failure_Of (Report : String) return String;
+
+   --  The longest failure Failure_Of says.
+   Failure_Most : constant := 200;
+
    type Sightings is tagged limited private;
 
    --  Whether a pair was seen before; it is seen from now on either way.
@@ -251,6 +291,16 @@ private
    --  so two pairs are the same only where they are.
    package Pair_Sets is new Ada.Containers.Indefinite_Hashed_Sets
      (String, Ada.Strings.Hash, Equivalent_Elements => "=");
+
+   package Text_Maps is new Ada.Containers.Indefinite_Ordered_Maps (String, String);
+
+   type Failed_Versions is tagged limited record
+      --  Each file changed, by its revision now; in path order, so the
+      --  files' state is one text however they came to it.
+      Current : Text_Maps.Map;
+      --  Each state the checks failed at, by what failed there.
+      Failed  : Text_Maps.Map;
+   end record;
 
    type Sightings is tagged limited record
       Held : Pair_Sets.Set;

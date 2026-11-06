@@ -2748,6 +2748,33 @@ package body Tests.Tools_Cases is
                  "a pair seen before was not noticed, or a new one was taken for it");
       end;
 
+      --  The files put back as they stood when the checks failed are told
+      --  what failed there; the same file at that version beside another
+      --  changed since is not, nor is a state the checks never failed at.
+      declare
+         Tried  : Rc.Failed_Versions;
+         Report : constant String :=
+           "checks failed, VER-000003" & ASCII.LF & "build: failed" & ASCII.LF & ASCII.LF
+           & "calc.adb:5:48: error: mixed logical operators in expression" & ASCII.LF
+           & "test: failed" & ASCII.LF & "calc.adb:5:48: error: again";
+      begin
+         Assert (Rc.Failure_Of (Report)
+                   = "build failed (VER-000003): calc.adb:5:48: error: mixed logical operators in expression"
+                 and then Rc.Failure_Of ("checks passed, VER-000004" & ASCII.LF & "build: passed") = ""
+                 and then Rc.Failure_Of ("scope: full -- x" & ASCII.LF & "run: failed") = "run failed",
+                 "a failing check was not said with its first line: " & Rc.Failure_Of (Report));
+         Tried.Now_At ("src/calc.adb", "aaaa");
+         Tried.Checked (Report);
+         Tried.Now_At ("src/calc.adb", "bbbb");
+         Assert (Tried.Failed_Here = "", "a version never checked was said to have failed");
+         Tried.Checked ("checks passed, VER-000004" & ASCII.LF & "build: passed");
+         Tried.Now_At ("src/calc.adb", "aaaa");
+         Assert (Ada.Strings.Fixed.Index (Tried.Failed_Here, "mixed logical operators") > 0,
+                 "a change back to a version the checks failed on was not told so");
+         Tried.Now_At ("src/other.adb", "cccc");
+         Assert (Tried.Failed_Here = "", "a version that failed beside another file's old version was said to fail");
+      end;
+
       --  A thought is open where the reply opened it, or the prompt did,
       --  and it is not closed; a prompt that closed an empty one leaves none.
       Assert (Model_Runner.Agent.Thought_Open ("<think>\nmulling", "<|im_start|>assistant\n")

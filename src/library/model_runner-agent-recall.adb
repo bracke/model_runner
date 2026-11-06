@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+
 with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
@@ -272,6 +274,115 @@ package body Model_Runner.Agent.Recall is
       return (if Length (Said) <= Record_Most then To_String (Said)
               else Slice (Said, 1, Record_Most - 4) & " ..." & ASCII.LF);
    end Record_Text;
+
+   ------------
+   -- Now_At --
+   ------------
+
+   procedure Now_At (Self : in out Failed_Versions; Path : String; Revision : String) is
+   begin
+      if Path /= "" and then Revision /= "" then
+         Self.Current.Include (Path, Revision);
+      end if;
+   end Now_At;
+
+   --  The files' state: each changed file and its revision, in path order.
+   function State_Of (Self : Failed_Versions) return String is
+      Said : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      for Position in Self.Current.Iterate loop
+         Ada.Strings.Unbounded.Append
+           (Said, Text_Maps.Key (Position) & ASCII.NUL & Text_Maps.Element (Position) & ASCII.LF);
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Said);
+   end State_Of;
+
+   -------------
+   -- Checked --
+   -------------
+
+   procedure Checked (Self : in out Failed_Versions; Report : String) is
+      Failure : constant String := Failure_Of (Report);
+      State   : constant String := State_Of (Self);
+   begin
+      if Failure /= "" and then State /= "" and then not Self.Failed.Contains (State) then
+         Self.Failed.Insert (State, Failure);
+      end if;
+   end Checked;
+
+   -----------------
+   -- Failed_Here --
+   -----------------
+
+   function Failed_Here (Self : Failed_Versions) return String is
+      State : constant String := State_Of (Self);
+   begin
+      return (if Self.Failed.Contains (State) then Self.Failed.Element (State) else "");
+   end Failed_Here;
+
+   ----------------
+   -- Failure_Of --
+   ----------------
+
+   function Failure_Of (Report : String) return String is
+      use Ada.Strings.Unbounded;
+
+      --  How a check's line says it ended -- "build: failed" -- or "" for
+      --  a line that is no check's: its name one word, its ending another.
+      function Ending (Line : String) return String is
+         Colon : constant Natural := Ada.Strings.Fixed.Index (Line, ": ");
+      begin
+         if Colon <= Line'First or else Colon + 2 > Line'Last
+           or else Ada.Strings.Fixed.Index (Line (Line'First .. Colon - 1), " ") > 0
+           or else Ada.Strings.Fixed.Index (Line (Colon + 2 .. Line'Last), " ") > 0
+           or else Line (Line'First .. Colon - 1) = "scope"
+         then
+            return "";
+         end if;
+         return Line (Colon + 2 .. Line'Last);
+      end Ending;
+
+      Evidence : Unbounded_String;
+      Failing  : Unbounded_String;
+      From     : Positive := Report'First;
+   begin
+      declare
+         At_Ver : constant Natural := Ada.Strings.Fixed.Index (Report, "VER-");
+         Stop   : Natural := At_Ver + 4;
+      begin
+         if At_Ver > 0 then
+            while Stop <= Report'Last and then Report (Stop) in '0' .. '9' loop
+               Stop := Stop + 1;
+            end loop;
+            Evidence := To_Unbounded_String (" (" & Report (At_Ver .. Stop - 1) & ")");
+         end if;
+      end;
+      while From <= Report'Last loop
+         declare
+            Ends : constant Natural := Ada.Strings.Fixed.Index (Report (From .. Report'Last), [ASCII.LF]);
+            Last : constant Natural := (if Ends = 0 then Report'Last else Ends - 1);
+            Line : constant String := Ada.Strings.Fixed.Trim (Report (From .. Last), Ada.Strings.Both);
+            How  : constant String := Ending (Line);
+         begin
+            if Length (Failing) = 0 then
+               if How not in "" | "passed" | "skipped" then
+                  Failing := To_Unbounded_String
+                    (Line (Line'First .. Line'Last - How'Length - 2) & " " & How & To_String (Evidence));
+               end if;
+            elsif Line /= "" then
+               --  Its first line said: what it failed on.
+               declare
+                  Said : constant String := To_String (Failing) & ": " & Line;
+               begin
+                  return (if Said'Length <= Failure_Most then Said
+                          else Said (Said'First .. Said'First + Failure_Most - 4) & "...");
+               end;
+            end if;
+            From := Last + 2;
+         end;
+      end loop;
+      return To_String (Failing);
+   end Failure_Of;
 
    ----------------
    -- Seen_Again --
