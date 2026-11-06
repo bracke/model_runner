@@ -3199,6 +3199,19 @@ package body Tests.Tools_Cases is
          Placed.Run ("edit_file", "{""path"": ""block.adb"", ""old_text"": ""if A then"","
                      & " ""new_text"": ""if C then""}", Room, Last, Ended, Status);
          Assert (Ended.Changed, "an if's first line was not edited alone: " & Room (Room'First .. Last));
+         --  An if's first line given as an if with an else, and no end if,
+         --  is refused where the old if's elsif would follow that else; an
+         --  else the file's block has none of after it is taken.
+         Placed.Run ("edit_file", "{""path"": ""block.adb"", ""old_text"": ""if C then"","
+                     & " ""new_text"": ""if C then\n   Z;\nelse\n   W;""}", Room, Last, Ended, Status);
+         Assert (not Ended.Changed
+                 and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "come after your else") > 0,
+                 "an edit that put the file's elsif after an else was not refused: " & Room (Room'First .. Last));
+         Placed.Run ("write_file", "{""path"": ""lone.adb"", ""content"": ""if A then\n   X;\nend if;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""lone.adb"", ""old_text"": ""   X;"","
+                     & " ""new_text"": ""   X;\nelse\n   W;""}", Room, Last, Ended, Status);
+         Assert (Ended.Changed, "an else added to an if with none was refused: " & Room (Room'First .. Last));
          --  An old_text given with a listing's line numbers on it is found
          --  without them, and new_text's numbers go too.
          Placed.Run ("write_file", "{""path"": ""listed.adb"", ""content"": ""a;\n   b;\nc;\n""}",

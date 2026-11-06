@@ -155,6 +155,40 @@ package body Model_Runner.Tools.Editing is
       return (if E.Is_Ok (Status) then Revision (U.To_String (Text)) else "");
    end Revision_Of;
 
+   --  An Ada line's words: lower case, its strings and comment blanked,
+   --  trimmed.
+   function Ada_Words (Line : String) return String is
+      Lower  : String := Ada.Characters.Handling.To_Lower (Line);
+      Quoted : Boolean := False;
+   begin
+      for Index in Lower'Range loop
+         if Lower (Index) = '"' then
+            Quoted := not Quoted;
+         elsif Quoted then
+            Lower (Index) := ' ';
+         elsif Index < Lower'Last and then Lower (Index .. Index + 1) = "--" then
+            Lower (Index .. Lower'Last) := [others => ' '];
+            exit;
+         end if;
+      end loop;
+      return Ada.Strings.Fixed.Trim (Lower, Ada.Strings.Both);
+   end Ada_Words;
+
+   --  Whether an Ada line's words begin with a keyword.
+   function Starts (Word : String; Key : String) return Boolean
+   is (Word'Length >= Key'Length
+       and then Word (Word'First .. Word'First + Key'Length - 1) = Key
+       and then (Word'Length = Key'Length
+                 or else Word (Word'First + Key'Length) in ' ' | ';' | '('));
+
+   --  Whether an Ada line opens a block: an if, case, loop, begin or
+   --  declare.
+   function Opens_Block (Word : String) return Boolean
+   is (Starts (Word, "if") or else Starts (Word, "case") or else Starts (Word, "begin")
+       or else Starts (Word, "declare")
+       or else (Word'Length >= 4 and then Word (Word'Last - 3 .. Word'Last) = "loop"
+                and then not Starts (Word, "exit")));
+
    --  Of an Ada passage, the blocks its lines open less the ones they end:
    --  an if, case, loop, begin or declare opens, an end ends. Strings and
    --  comments are not counted.
@@ -163,37 +197,13 @@ package body Model_Runner.Tools.Editing is
       Start : Positive := Passage'First;
 
       procedure Count (Line : String) is
-         Lower : String := Ada.Characters.Handling.To_Lower (Line);
-         Quoted : Boolean := False;
+         Word : constant String := Ada_Words (Line);
       begin
-         for Index in Lower'Range loop
-            if Lower (Index) = '"' then
-               Quoted := not Quoted;
-            elsif Quoted then
-               Lower (Index) := ' ';
-            elsif Index < Lower'Last and then Lower (Index .. Index + 1) = "--" then
-               Lower (Index .. Lower'Last) := [others => ' '];
-               exit;
-            end if;
-         end loop;
-         declare
-            Word : constant String := Ada.Strings.Fixed.Trim (Lower, Ada.Strings.Both);
-
-            function Starts (Key : String) return Boolean
-            is (Word'Length >= Key'Length
-                and then Word (Word'First .. Word'First + Key'Length - 1) = Key
-                and then (Word'Length = Key'Length
-                          or else Word (Word'First + Key'Length) in ' ' | ';' | '('));
-         begin
-            if Starts ("end") then
-               Open := Open - 1;
-            elsif Starts ("if") or else Starts ("case") or else Starts ("begin") or else Starts ("declare")
-              or else (Word'Length >= 4 and then Word (Word'Last - 3 .. Word'Last) = "loop"
-                       and then not Starts ("exit"))
-            then
-               Open := Open + 1;
-            end if;
-         end;
+         if Starts (Word, "end") then
+            Open := Open - 1;
+         elsif Opens_Block (Word) then
+            Open := Open + 1;
+         end if;
       end Count;
    begin
       for Index in Passage'First .. Passage'Last + 1 loop
@@ -204,6 +214,40 @@ package body Model_Runner.Tools.Editing is
       end loop;
       return Open;
    end Ada_Blocks_Open;
+
+   --  Whether an Ada passage has an elsif or else after an else of the
+   --  same block -- what GNAT refuses as "elsif cannot appear after
+   --  else". Read until an end closes a block the passage did not open.
+   function Else_Then_More (Passage : String) return Boolean is
+      Most  : constant := 64;
+      Had   : array (0 .. Most) of Boolean := [others => False];
+      Depth : Natural := 0;
+      Start : Positive := Passage'First;
+   begin
+      for Index in Passage'First .. Passage'Last + 1 loop
+         if Index > Passage'Last or else Passage (Index) = ASCII.LF then
+            declare
+               Word : constant String := Ada_Words (Passage (Start .. Index - 1));
+            begin
+               Start := Index + 1;
+               if Starts (Word, "end") then
+                  exit when Depth = 0;
+                  Depth := Depth - 1;
+               elsif Opens_Block (Word) then
+                  exit when Depth = Most;
+                  Depth := Depth + 1;
+                  Had (Depth) := False;
+               elsif Starts (Word, "elsif") or else Starts (Word, "else") then
+                  if Had (Depth) then
+                     return True;
+                  end if;
+                  Had (Depth) := Starts (Word, "else");
+               end if;
+            end;
+         end if;
+      end loop;
+      return False;
+   end Else_Then_More;
 
    -----------------------------
    -- Only_Inside_Indentation --
@@ -1346,6 +1390,18 @@ package body Model_Runner.Tools.Editing is
                                & " it, and new_text is whole, ending what it opens: the old block's elsif, else"
                                & " and end would be left over after it. Give old_text through the end that"
                                & " closes it");
+            --  new_text's else with the file's own elsif or else after it:
+            --  qwen3-8b gave a whole if, its end if left off, for an if's
+            --  first line, and the old block's elsif and else followed its
+            --  else -- then made the same edit four times more.
+            elsif Path'Length > 4
+              and then Ada.Characters.Handling.To_Lower (Path (Path'Last - 3 .. Path'Last)) in ".adb" | ".ads"
+              and then Else_Then_More (New_Text & ASCII.LF & Text (At_Text + Old_Text'Length .. Text'Last))
+              and then not Else_Then_More (Old_Text & ASCII.LF & Text (At_Text + Old_Text'Length .. Text'Last))
+            then
+               return Failing ("new_text has an else, and the file goes on after old_text with that block's own"
+                               & " elsif or else: they would come after your else, which Ada does not allow."
+                               & " Give old_text through the end that closes the block, and new_text whole");
             end if;
             declare
                --  Where the line the passage starts on starts, and whether
