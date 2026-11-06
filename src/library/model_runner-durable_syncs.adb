@@ -4,6 +4,14 @@ package body Model_Runner.Durable_Syncs is
    --  Natural'Last, none is to.
    Ahead : array (Kind) of Natural := [others => Natural'Last];
 
+   --  Whether syncs are taken as done.
+   Skipped : Boolean := False;
+
+   procedure Skip_Syncs (Skipping : Boolean) is
+   begin
+      Skipped := Skipping;
+   end Skip_Syncs;
+
    procedure Fail_Next (Which : Kind; Passing : Natural := 0) is
    begin
       Ahead (Which) := Passing;
@@ -24,9 +32,13 @@ package body Model_Runner.Durable_Syncs is
    end Fails;
 
    function Sync_File (Path : String) return Hostkit.Durability.Outcome is
-     (if Fails (File) then Hostkit.Durability.Failed else Hostkit.Durability.Sync_File (Path));
+     (if Fails (File) then Hostkit.Durability.Failed
+      elsif Skipped then Hostkit.Durability.Synced
+      else Hostkit.Durability.Sync_File (Path));
 
    function Sync_Directory (Path : String) return Hostkit.Durability.Outcome is
-     (if Fails (Folder) then Hostkit.Durability.Failed else Hostkit.Durability.Sync_Directory (Path));
+     (if Fails (Folder) then Hostkit.Durability.Failed
+      elsif Skipped then Hostkit.Durability.Synced
+      else Hostkit.Durability.Sync_Directory (Path));
 
 end Model_Runner.Durable_Syncs;

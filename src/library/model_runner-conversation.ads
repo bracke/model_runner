@@ -408,6 +408,9 @@ private
       Used     : Natural := 0;
       Storage  : Storage_Access := null;
       Filled   : Natural := 0;
+      --  The furthest the storage has been written, which Filled can fall
+      --  back from: what is cleared before the storage is given back.
+      Reached  : Natural := 0;
       Calls     : Call_Array := [others => <>];
       Call_Used : Natural := 0;
    end record;

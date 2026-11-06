@@ -2595,6 +2595,9 @@ package body Tests.Vision_Cases is
       Second_Kind : Boolean := False;
       Third_Kind : Boolean := False)
    is
+      --  A reference computed and compared in long loops: a validity check on
+      --  every float read was most of its time, and the values are its own.
+      pragma Validity_Checks (Off);
       Paired : constant Boolean := Second.Pixels /= null;
       subtype WR is N.Wide_Real;
       type Matrix is array (0 .. Patches_Q - 1, 0 .. Width_Q - 1) of WR;

@@ -59,6 +59,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Limits;
 with Model_Runner.Text;
 with Model_Runner.Errors;
+with Model_Runner.Durable_Syncs;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
@@ -365,6 +366,9 @@ begin
                  ("MESA_SHADER_CACHE_DIR", Ada.Environment_Variables.Value ("HOME") & "/.cache");
             end if;
          end if;
+         --  The suite's files are thrown away: put on the device, they
+         --  cost a tenth of its time.
+         Model_Runner.Durable_Syncs.Skip_Syncs (True);
          if Only /= "" then
             AUnit.Test_Filters.Set_Name (Filter, Only);
             Chosen.Filter := Filter'Unchecked_Access;

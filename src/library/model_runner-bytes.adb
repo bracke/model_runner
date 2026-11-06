@@ -41,10 +41,13 @@ package body Model_Runner.Bytes is
 
    procedure Allocate
      (Length : Byte_Count;
-      Result : out Byte_Array_Access) is
+      Result : out Byte_Array_Access;
+      Zeroed : Boolean := True) is
    begin
       Result := new Byte_Array (1 .. Length);
-      Result.all := [others => 0];
+      if Zeroed then
+         Result.all := [others => 0];
+      end if;
    exception
       when Storage_Error =>
          Result := null;

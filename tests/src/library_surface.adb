@@ -21,6 +21,10 @@ package body Library_Surface is
       --  the device will not take it, and nothing else.
       new String'("Fail_Next"),
 
+      --  Taking syncs as done: for the test suite, whose files are thrown
+      --  away, and nothing else.
+      new String'("Skip_Syncs"),
+
       --  How many stacks fetched ahead wait untaken: for the test that a
       --  paired mixture's read-ahead is taken, which nothing else asks.
       new String'("Prefetches_Held"),

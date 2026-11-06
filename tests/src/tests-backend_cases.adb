@@ -11371,6 +11371,9 @@ package body Tests.Backend_Cases is
    procedure A_Token_Attends_Out_Of_The_Copy_As_A_Host_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
+      --  A reference computed and compared in long loops: a validity check on
+      --  every float read was most of its time, and the values are its own.
+      pragma Validity_Checks (Off);
       pragma Unreferenced (T_Case);
 
       Groups  : constant := 2;
@@ -13199,6 +13202,9 @@ package body Tests.Backend_Cases is
    procedure A_Latent_Attends_As_The_Host_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
+      --  A reference computed and compared in long loops: a validity check on
+      --  every float read was most of its time, and the values are its own.
+      pragma Validity_Checks (Off);
       pragma Unreferenced (T_Case);
 
       Heads     : constant := 16;

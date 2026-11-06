@@ -17,6 +17,13 @@ package Model_Runner.Durable_Syncs is
    --  @param Passing How many of that kind are done first.
    procedure Fail_Next (Which : Kind; Passing : Natural := 0);
 
+   --  Take syncs as done without asking the device, or ask it again: for a
+   --  test suite, whose files are thrown away -- 27,000 of them were a
+   --  tenth of its time. A sync set to fail still fails.
+   --
+   --  @param Skipping Whether syncs are skipped.
+   procedure Skip_Syncs (Skipping : Boolean);
+
    --  Hostkit.Durability.Sync_File, or Failed where a test said so.
    --
    --  @param Path The file.

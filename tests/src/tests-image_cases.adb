@@ -349,6 +349,9 @@ package body Tests.Image_Cases is
       Refs  : Q.Reference_List := Q.No_References;
       Slots : Q.Slot_List := Q.No_Slots)
    is
+      --  A reference computed and compared in long loops: a validity check on
+      --  every float read was most of its time, and the values are its own.
+      pragma Validity_Checks (Off);
       use Ada.Numerics.Long_Elementary_Functions;
       type Matrix is array (Natural range <>, Natural range <>) of Long_Float;
       Image : constant Natural := Rows * Columns;

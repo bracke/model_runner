@@ -17,4 +17,11 @@ package Spec_Conformance is
    --  @return The first problem found, or "".
    function Problem (Root : String) return String;
 
+   --  Whether Pattern stands anywhere in Text; an empty pattern does.
+   --
+   --  @param Text What is searched.
+   --  @param Pattern What is looked for.
+   --  @return Whether Pattern is in Text.
+   function Contains (Text, Pattern : String) return Boolean;
+
 end Spec_Conformance;

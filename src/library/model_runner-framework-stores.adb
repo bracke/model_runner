@@ -12,6 +12,7 @@ with Hostkit.Host;
 with Hostkit.Process;
 with System.Multiprocessors;
 
+with Model_Runner.Durable_Syncs;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
 with Model_Runner.Framework.Schemas;
@@ -987,8 +988,8 @@ package body Model_Runner.Framework.Stores is
    is
       use type Hostkit.Durability.Outcome;
       Got : constant Hostkit.Durability.Outcome :=
-        (if Directory then Hostkit.Durability.Sync_Directory (Path)
-         else Hostkit.Durability.Sync_File (Path));
+        (if Directory then Model_Runner.Durable_Syncs.Sync_Directory (Path)
+         else Model_Runner.Durable_Syncs.Sync_File (Path));
    begin
       if E.Is_Ok (Status) and then Got = Hostkit.Durability.Failed then
          Write_Failed (Path, Status);

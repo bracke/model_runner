@@ -39,13 +39,17 @@ package Model_Runner.Bytes is
    --  @param Item Reference to release.
    procedure Free (Item : in out Byte_Array_Access);
 
-   --  Allocate a zero-filled byte buffer.
+   --  Allocate a zero-filled byte buffer, or one left as it comes for a
+   --  caller that reads only what it writes: zeroing a buffer of sixteen
+   --  mebibytes touches every page of it, used or not.
    --
    --  @param Length Number of bytes.
    --  @param Result Allocated buffer, or null when allocation failed.
+   --  @param Zeroed Whether the buffer is filled with zeros.
    procedure Allocate
      (Length : Byte_Count;
-      Result : out Byte_Array_Access);
+      Result : out Byte_Array_Access;
+      Zeroed : Boolean := True);
 
    --  Overwrite a buffer with zeros.
    --

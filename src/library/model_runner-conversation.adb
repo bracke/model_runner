@@ -46,6 +46,7 @@ package body Model_Runner.Conversation is
       Item.Storage :=
         new String (1 .. Natural'Max (Bounds.Max_Rendered_Bytes, 1));
       Item.Filled := 0;
+      Item.Reached := 0;
       Item.Used := 0;
       Item.Call_Used := 0;
       Status := E.Success;
@@ -65,9 +66,12 @@ package body Model_Runner.Conversation is
       if Item.Storage /= null then
          --  Clear the content before releasing it: a conversation may hold
          --  sensitive prompt text and nothing else in the process needs it.
-         Item.Storage.all := [others => ' '];
+         --  What was written, not the whole room: clearing sixteen
+         --  mebibytes touched every page of storage never used.
+         Item.Storage.all (1 .. Natural'Min (Item.Reached, Item.Storage.all'Length)) := [others => ' '];
          Free_Storage (Item.Storage);
       end if;
+      Item.Reached := 0;
       Item.Used := 0;
       Item.Filled := 0;
       Item.Call_Used := 0;
@@ -113,6 +117,7 @@ package body Model_Runner.Conversation is
          Item.Storage.all (Item.Filled + 1 .. Item.Filled + Content'Length) :=
            Content;
          Item.Filled := Item.Filled + Content'Length;
+         Item.Reached := Natural'Max (Item.Reached, Item.Filled);
       end if;
    end Store;
 
@@ -1513,12 +1518,15 @@ package body Model_Runner.Conversation is
             end if;
          end loop;
 
+         --  The old storage cleared before it is given back, as Close does.
+         Item.Storage.all (1 .. Natural'Min (Item.Reached, Item.Storage.all'Length)) := [others => ' '];
          Free_Storage (Item.Storage);
          Item.Storage   := New_Storage;
          Item.Messages  := New_Messages;
          Item.Calls     := New_Calls;
          Item.Used      := M;
          Item.Filled    := Fill;
+         Item.Reached   := Fill;
          Item.Call_Used := Call_Fill;
       end;
    end Compact;

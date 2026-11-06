@@ -1,7 +1,14 @@
+with Ada.Containers.Indefinite_Hashed_Maps;
+with Ada.Strings.Hash;
 with Ada.Unchecked_Conversion;
 with Model_Runner.Arithmetic;
 
 package body Fixtures is
+
+   --  The encoders are arithmetic over values they made themselves, and a
+   --  validity check on every float they read was a fifth of their time --
+   --  the suite's largest single cost after the searches themselves.
+   pragma Validity_Checks (Off);
 
    use type Interfaces.Unsigned_64;
    use type Interfaces.Integer_64;
@@ -9,6 +16,57 @@ package body Fixtures is
    use type B.Byte_Array_Access;
    use type N.Element_Count;
    use type N.Real;
+
+   --  The grid formats' encodings, kept for the inputs they were made of:
+   --  each searches its whole codebook a group at a time, and the suite
+   --  encoded the same tensors anew in every fixture written -- a sixth of
+   --  its time. Keyed by the format and the input's own bytes, so nothing
+   --  but an equal input finds one.
+   package Encodings is new Ada.Containers.Indefinite_Hashed_Maps
+     (Key_Type => String, Element_Type => B.Byte_Array, Hash => Ada.Strings.Hash, Equivalent_Keys => "=",
+      "=" => B."=");
+
+   protected Kept_Encodings is
+      function Find (Key : String; Found : out Boolean) return B.Byte_Array;
+      procedure Keep (Key : String; Bytes : B.Byte_Array);
+   private
+      Held : Encodings.Map;
+   end Kept_Encodings;
+
+   protected body Kept_Encodings is
+      function Find (Key : String; Found : out Boolean) return B.Byte_Array is
+         At_Key : constant Encodings.Cursor := Held.Find (Key);
+      begin
+         Found := Encodings.Has_Element (At_Key);
+         return (if Found then Encodings.Element (At_Key) else B.Byte_Array'(1 .. 0 => 0));
+      end Find;
+
+      procedure Keep (Key : String; Bytes : B.Byte_Array) is
+      begin
+         Held.Include (Key, Bytes);
+      end Keep;
+   end Kept_Encodings;
+
+   type Encoder is access function (Values : N.Real_Array) return B.Byte_Array;
+
+   function Encoded_Once (Format : String; Values : N.Real_Array; Fresh : Encoder) return B.Byte_Array is
+      subtype These is N.Real_Array (Values'Range);
+      subtype Image is String (1 .. These'Size / Character'Size);
+      function Raw is new Ada.Unchecked_Conversion (These, Image);
+      Key   : constant String := Format & ":" & Raw (Values);
+      Found : Boolean;
+      Kept  : constant B.Byte_Array := Kept_Encodings.Find (Key, Found);
+   begin
+      if Found then
+         return Kept;
+      end if;
+      declare
+         Made : constant B.Byte_Array := Fresh (Values);
+      begin
+         Kept_Encodings.Keep (Key, Made);
+         return Made;
+      end;
+   end Encoded_Once;
 
    --  The IQ3_S grid: 512 entries, each four small odd magnitudes packed as
    --  the four bytes of a thirty-two bit word, low byte first. A nine-bit
@@ -3017,7 +3075,29 @@ package body Fixtures is
       16#010101010101FFFF#, 16#010101010101FF01#, 16#01010101010101FF#, 16#0101010101010101#
      ];
 
-   function Encode_IQ3_S (Values : N.Real_Array) return B.Byte_Array is
+   --  The grid's eight values a row, unpacked once: the encoders below
+   --  compare every group against all 2048 rows, and unpacking a row's
+   --  bytes each time was a fifth of the suite's fixture time.
+   type IQ1S_Rows is array (IQ1S_Grid'Range, 0 .. 7) of N.Real;
+
+   function Unpacked_IQ1S return IQ1S_Rows is
+      Rows : IQ1S_Rows;
+   begin
+      for Index in IQ1S_Grid'Range loop
+         for J in 0 .. 7 loop
+            declare
+               SB : constant Interfaces.Unsigned_64 := Interfaces.Shift_Right (IQ1S_Grid (Index), 8 * J) and 16#FF#;
+            begin
+               Rows (Index, J) := N.Real (if SB < 128 then Integer (SB) else Integer (SB) - 256);
+            end;
+         end loop;
+      end loop;
+      return Rows;
+   end Unpacked_IQ1S;
+
+   IQ1S_Values : constant IQ1S_Rows := Unpacked_IQ1S;
+
+   function Fresh_IQ3_S (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_32;
 
@@ -3159,9 +3239,12 @@ package body Fixtures is
       end loop;
 
       return Result;
-   end Encode_IQ3_S;
+   end Fresh_IQ3_S;
 
-   function Encode_IQ2_XXS (Values : N.Real_Array) return B.Byte_Array is
+   function Encode_IQ3_S (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ3_S", Values, Fresh_IQ3_S'Access));
+
+   function Fresh_IQ2_XXS (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_32;
 
@@ -3310,12 +3393,15 @@ package body Fixtures is
       end loop;
 
       return Result;
-   end Encode_IQ2_XXS;
+   end Fresh_IQ2_XXS;
+
+   function Encode_IQ2_XXS (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ2_XXS", Values, Fresh_IQ2_XXS'Access));
 
    --  IQ2_XS: two four-bit sub-scales in a byte -- one for a sub-block's
    --  first two lanes, one for its last two -- and a lane's nine-bit grid
    --  index and seven-bit sign index share a sixteen-bit word.
-   function Encode_IQ2_XS (Values : N.Real_Array) return B.Byte_Array is
+   function Fresh_IQ2_XS (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_16;
       function Grid_Byte (Index : Natural; J : Natural) return N.Real
@@ -3443,11 +3529,14 @@ package body Fixtures is
          end;
       end loop;
       return Result;
-   end Encode_IQ2_XS;
+   end Fresh_IQ2_XS;
+
+   function Encode_IQ2_XS (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ2_XS", Values, Fresh_IQ2_XS'Access));
 
    --  IQ2_S: as IQ2_XS, but the grid is larger, its top two index bits come
    --  from a high-bit byte, and each lane carries a whole eight-bit sign.
-   function Encode_IQ2_S (Values : N.Real_Array) return B.Byte_Array is
+   function Fresh_IQ2_S (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_16;
       function Grid_Byte (Index : Natural; J : Natural) return N.Real
@@ -3554,12 +3643,15 @@ package body Fixtures is
          end;
       end loop;
       return Result;
-   end Encode_IQ2_S;
+   end Fresh_IQ2_S;
+
+   function Encode_IQ2_S (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ2_S", Values, Fresh_IQ2_S'Access));
 
    --  IQ3_XXS: eight three-byte-per-lane sub-blocks -- two grid indices a
    --  lane into a four-value grid -- with a four-bit scale and four seven-bit
    --  sign indices packed in a word past the indices.
-   function Encode_IQ3_XXS (Values : N.Real_Array) return B.Byte_Array is
+   function Fresh_IQ3_XXS (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_32;
       function Grid_Byte (Index : Natural; J : Natural) return N.Real
@@ -3701,19 +3793,16 @@ package body Fixtures is
          end;
       end loop;
       return Result;
-   end Encode_IQ3_XXS;
+   end Fresh_IQ3_XXS;
+
+   function Encode_IQ3_XXS (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ3_XXS", Values, Fresh_IQ3_XXS'Access));
 
    --  IQ1_S: a signed grid of values in minus-one to one, a three-bit scale
    --  and a delta sign per sub-block in a high-bit word, the low index bits a
    --  byte a lane and the high three from that word.
-   function Encode_IQ1_S (Values : N.Real_Array) return B.Byte_Array is
+   function Fresh_IQ1_S (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_16;
-      function Grid_Value (Index : Natural; J : Natural) return N.Real is
-         SB : constant Interfaces.Unsigned_64 :=
-           Interfaces.Shift_Right (IQ1S_Grid (Index), 8 * J) and 16#FF#;
-      begin
-         return N.Real (if SB < 128 then Integer (SB) else Integer (SB) - 256);
-      end Grid_Value;
       Blocks : constant N.Element_Count := Values'Length / 256;
       Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 50 - 1) :=
         [others => 0];
@@ -3790,18 +3879,20 @@ package body Fixtures is
                              First + N.Element_Count (Sub * 32 + L * 8);
                            Best_Grid : Natural := 0;
                            Best_Cost : N.Real := N.Real'Last;
+                           Targets : array (0 .. 7) of N.Real;
                         begin
+                           for J in 0 .. 7 loop
+                              Targets (J) :=
+                                (if DL = 0.0 then 0.0 else Values (Base + N.Element_Count (J)) / DL);
+                           end loop;
                            for Cand in IQ1S_Grid'Range loop
                               declare
                                  Cost : N.Real := 0.0;
                               begin
                                  for J in 0 .. 7 loop
                                     declare
-                                       Target : constant N.Real :=
-                                         (if DL = 0.0 then 0.0
-                                          else Values (Base + N.Element_Count (J)) / DL);
                                        Diff : constant N.Real :=
-                                         (Grid_Value (Cand, J) + Delta_V) - Target;
+                                         (IQ1S_Values (Cand, J) + Delta_V) - Targets (J);
                                     begin
                                        Cost := Cost + Diff * Diff;
                                     end;
@@ -3831,21 +3922,18 @@ package body Fixtures is
          end;
       end loop;
       return Result;
-   end Encode_IQ1_S;
+   end Fresh_IQ1_S;
+
+   function Encode_IQ1_S (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ1_S", Values, Fresh_IQ1_S'Access));
 
    --  IQ1_M: like IQ1_S, but no scale field of its own -- the half is spread
    --  four bits at a time across four scale words -- and each sub-block has
    --  two three-bit scales and, in a byte of high bits, two index bits and a
    --  delta sign for each of its two halves.
-   function Encode_IQ1_M (Values : N.Real_Array) return B.Byte_Array is
+   function Fresh_IQ1_M (Values : N.Real_Array) return B.Byte_Array is
       use type Interfaces.Unsigned_8;
       use type Interfaces.Unsigned_16;
-      function Grid_Value (Index : Natural; J : Natural) return N.Real is
-         SB : constant Interfaces.Unsigned_64 :=
-           Interfaces.Shift_Right (IQ1S_Grid (Index), 8 * J) and 16#FF#;
-      begin
-         return N.Real (if SB < 128 then Integer (SB) else Integer (SB) - 256);
-      end Grid_Value;
       Blocks : constant N.Element_Count := Values'Length / 256;
       Result : B.Byte_Array (0 .. B.Byte_Count (Blocks) * 56 - 1) :=
         [others => 0];
@@ -3909,7 +3997,12 @@ package body Fixtures is
                         Best_Neg : Boolean := False;
                         Best_DCost : N.Real := N.Real'Last;
                         Best_Grid : Natural := 0;
+                        Targets : array (0 .. 7) of N.Real;
                      begin
+                        for J in 0 .. 7 loop
+                           Targets (J) :=
+                             (if DL = 0.0 then 0.0 else Values (Base + N.Element_Count (J)) / DL);
+                        end loop;
                         for Neg in Boolean loop
                            declare
                               Delta_V : constant N.Real :=
@@ -3922,12 +4015,8 @@ package body Fixtures is
                                  begin
                                     for J in 0 .. 7 loop
                                        declare
-                                          Target : constant N.Real :=
-                                            (if DL = 0.0 then 0.0
-                                             else Values (Base + N.Element_Count (J))
-                                                  / DL);
                                           Diff : constant N.Real :=
-                                            (Grid_Value (Cand, J) + Delta_V) - Target;
+                                            (IQ1S_Values (Cand, J) + Delta_V) - Targets (J);
                                        begin
                                           Cost := Cost + Diff * Diff;
                                        end;
@@ -3992,7 +4081,10 @@ package body Fixtures is
          end;
       end loop;
       return Result;
-   end Encode_IQ1_M;
+   end Fresh_IQ1_M;
+
+   function Encode_IQ1_M (Values : N.Real_Array) return B.Byte_Array
+   is (Encoded_Once ("IQ1_M", Values, Fresh_IQ1_M'Access));
 
    --  The ternary digit a value takes against a scale: minus one, nought or
    --  one, lifted to nought, one or two as the formats store it.

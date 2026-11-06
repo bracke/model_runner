@@ -333,6 +333,16 @@ package body Tests.Gate_Cases is
       Assert (Ada.Strings.Fixed.Index (Spec_Conformance.Problem (Root), "has changed") > 0,
               "a specification changed since its rows were made passed");
 
+      --  The search the rows are found by: at either end, in the middle,
+      --  after a near miss, and not where only part of it stands.
+      Assert (Spec_Conformance.Contains ("abcab", "abc") and then Spec_Conformance.Contains ("xxabc", "abc")
+              and then Spec_Conformance.Contains ("aabaab", "aab")
+              and then Spec_Conformance.Contains ("aaaab", "aab")
+              and then Spec_Conformance.Contains ("a", "")
+              and then not Spec_Conformance.Contains ("abab", "abb")
+              and then not Spec_Conformance.Contains ("ab", "abc")
+              and then not Spec_Conformance.Contains ("", "a"),
+              "the search the rows are found by found the wrong places");
       Assert (Spec_Conformance.Problem ("..") = "",
               "the project does not meet its specification: " & Spec_Conformance.Problem (".."));
    end The_Specification_Is_A_Gate;

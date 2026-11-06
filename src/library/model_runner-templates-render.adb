@@ -172,9 +172,12 @@ is
       Free_Pool (Holder.Text);
    end Finalize;
 
+   --  Left unfilled: only what the template assigns is read, and filling
+   --  sixteen mebibytes a render -- the room a prompt's opening is given --
+   --  touched every page of it, five million faults in four test cases.
    Pool_Held : constant Pool_Holder :=
      (Ada.Finalization.Limited_Controlled with
-      Text => new String'(1 .. Pool_Size => ' '));
+      Text => new String (1 .. Pool_Size));
    Pool      : String renames Pool_Held.Text.all;
    Pool_Used : Natural := 0;
 
@@ -4169,7 +4172,9 @@ is
    procedure Execute is separate;
 
 begin
-   Target := [others => ' '];
+   --  Target is the caller's room, read to Last and no further: filling
+   --  it all touched every page of the sixteen mebibytes a prompt's
+   --  opening is rendered into, every render.
    Last := 0;
    Status := E.Success;
 

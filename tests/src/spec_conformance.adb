@@ -111,6 +111,31 @@ package body Spec_Conformance is
       return "";
    end Field;
 
+   --  Whether Pattern stands in Text, skipping by the pattern's own last
+   --  characters (Horspool): Index compared at every place of the whole
+   --  test sources, a row at a time, and took twenty seconds.
+   function Contains (Text, Pattern : String) return Boolean is
+      Skip : array (Character) of Positive := [others => Positive'Max (1, Pattern'Length)];
+      At_End : Natural;
+   begin
+      if Pattern'Length = 0 or else Pattern'Length > Text'Length then
+         return Pattern'Length = 0;
+      end if;
+      for Index in Pattern'First .. Pattern'Last - 1 loop
+         Skip (Pattern (Index)) := Pattern'Last - Index;
+      end loop;
+      At_End := Text'First + Pattern'Length - 1;
+      while At_End <= Text'Last loop
+         if Text (At_End) = Pattern (Pattern'Last)
+           and then Text (At_End - Pattern'Length + 1 .. At_End) = Pattern
+         then
+            return True;
+         end if;
+         At_End := At_End + Skip (Text (At_End));
+      end loop;
+      return False;
+   end Contains;
+
    --  Whether one of a row's tests -- several may be named, by ; or | --
    --  is said in the test sources.
    function Named (Tests, Text : String) return Boolean is
@@ -125,7 +150,7 @@ package body Spec_Conformance is
                  (if One'Length >= 2 and then One (One'First) = '"' and then One (One'Last) = '"'
                   then One (One'First + 1 .. One'Last - 1) else One);
             begin
-               if Bare /= "" and then Ada.Strings.Fixed.Index (Text, Bare) > 0 then
+               if Bare /= "" and then Contains (Text, Bare) then
                   return True;
                end if;
             end;

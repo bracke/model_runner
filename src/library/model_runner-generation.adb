@@ -1379,9 +1379,10 @@ package body Model_Runner.Generation is
       end if;
 
       if Item.Retain_Text then
+         --  Read to Text_Length and no further, so not zeroed.
          B.Allocate
            (B.Byte_Count (Natural'Max (Bounds.Max_Retained_Bytes, 1)),
-            Outcome.Text);
+            Outcome.Text, Zeroed => False);
          if Outcome.Text = null then
             Conclude (Runtime_Error, E.Make (E.Memory_Allocation_Failed));
             Cleanup;
