@@ -2507,6 +2507,20 @@ package body Model_Runner.Tools.Builtin is
         Model_Runner.Tools.Editing.On_Disk
           (U.To_String (Self.Base),
            (if Taken /= "" then Taken elsif Has_Path and then Path /= "" then Path else "."));
+
+      --  For a change, what the agent has read of the file as well: a write
+      --  refused for a file not read whole runs once it is. Stamped by the
+      --  file alone, qwen3-8b read it whole as told and was answered "this
+      --  exact call was already made", the old refusal, three times.
+      function Read_Of return String is
+         Key : constant String := Seen_Key (Path);
+      begin
+         if Rg.Kind_Of (Named) /= Model_Runner.Tools.Runner.Changes or else not Has_Path then
+            return "";
+         end if;
+         return " whole " & (if Self.Whole.Has (Key) then Self.Whole.Get (Key) else "")
+           & " part " & (if Self.Read_At.Has (Key) then Self.Read_At.Get (Key) else "");
+      end Read_Of;
    begin
       --  Of what a file tool reads, or would change: a change that failed
       --  is stamped too, and may run again once what it found has moved.
@@ -2529,7 +2543,7 @@ package body Model_Runner.Tools.Builtin is
             --  one stamp "file ", and a growing log was answered from
             --  memory as it first was.
             if Revision /= "" then
-               return "file " & Revision;
+               return "file " & Revision & Read_Of;
             elsif Available then
                return "file " & Changed & Ada.Directories.File_Size'Image (Ada.Directories.Size (Where));
             end if;

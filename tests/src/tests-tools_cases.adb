@@ -3068,6 +3068,16 @@ package body Tests.Tools_Cases is
                  and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "you read lines 1 to 2 of it") > 0
                  and then Ada.Strings.Fixed.Index (Room (Room'First .. Last), "with no first_line or last_line") > 0,
                  "a file read in part was refused without saying which part: " & Room (Room'First .. Last));
+         --  The refused write's stamp moves with what was read of the file:
+         --  read whole as told, the same write is let run, not answered
+         --  from memory with its refusal.
+         declare
+            Refused : constant String := Placed.Stamp ("write_file", "{""path"": ""part.txt"", ""content"": ""z\n""}");
+         begin
+            Placed.Run ("read_file", "{""path"": ""part.txt""}", Room, Last, Ended, Status);
+            Assert (Refused /= Placed.Stamp ("write_file", "{""path"": ""part.txt"", ""content"": ""z\n""}"),
+                    "a write refused for a part read kept its stamp once the file was read whole");
+         end;
 
          --  A passage there twice is edited where the lines it last read
          --  hold it.
