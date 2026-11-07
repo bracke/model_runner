@@ -2435,6 +2435,36 @@ package body Model_Runner.Framework.Work is
                end if;
             end loop;
          end;
+         --  Standard's own types named as a library unit's part: they need
+         --  no with. gpt-oss wrote with Ada.Numerics.Long_Long_Integer, told
+         --  only that it is not a predefined unit, and spent the rest of its
+         --  replies guessing at that name until they ran out.
+         if Ada.Strings.Fixed.Index (Text, "is not a predefined library unit") > 0 then
+            declare
+               Standard_Names : constant String :=
+                 "Long_Long_Integer Long_Integer Short_Integer Integer Natural Positive Long_Long_Float"
+                 & " Long_Float Float Boolean Character Wide_Character String Duration ";
+               From : Positive := Standard_Names'First;
+            begin
+               for Index in Standard_Names'Range loop
+                  if Standard_Names (Index) = ' ' then
+                     declare
+                        Name   : constant String := Standard_Names (From .. Index - 1);
+                        Dotted : constant String := "." & Ada.Characters.Handling.To_Lower (Name);
+                        At_It  : constant Natural := Ada.Strings.Fixed.Index (Lower, Dotted);
+                        After  : constant Natural := At_It + Dotted'Length;
+                     begin
+                        if At_It > 0 and then (After > Lower'Last or else not Name_Char (Lower (After))) then
+                           Say (Name & " is a type of Standard, seen everywhere with no with clause and no"
+                                & " package name: leave out the with that names it, and write " & Name & " alone");
+                           exit;
+                        end if;
+                     end;
+                     From := Index + 1;
+                  end if;
+               end loop;
+            end;
+         end if;
          if Has_Word ("elif") or else Has_Word ("elseif") then
             Say ("elsif, not elif");
          end if;

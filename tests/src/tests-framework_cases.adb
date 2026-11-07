@@ -20360,6 +20360,7 @@ package body Tests.Framework_Cases is
       Ada.Text_IO.Put_Line (Out_File, "      if B > 0 and then A > Integer'Last - B then");
       Ada.Text_IO.Put_Line (Out_File, "      if A + B > Integer'Last then");
       Ada.Text_IO.Put_Line (Out_File, "      elsif X - Y <= Integer'First then");
+      Ada.Text_IO.Put_Line (Out_File, "with Ada.Numerics.Long_Long_Integer;");
       Ada.Text_IO.Close (Out_File);
       declare
          Said : constant String := Wk.Quoted_Lines
@@ -20417,6 +20418,20 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Calm, "worked out") = 0,
                  "a sum compared with its type's bound was not said to overflow first, or was where nothing"
                  & " overflowed: " & Plus & " / " & Minus & " / " & Calm);
+      end;
+      --  A type of Standard named as a unit's part is said to need no with.
+      declare
+         Unit : constant String :=
+           Wk.Quoted_Lines ("calc.adb:10:06: error: ""Ada.Numerics.Long_Long_Integer"" is not a predefined"
+                            & " library unit", Root, ["src/calc.adb"]);
+         Calm : constant String := Wk.Quoted_Lines ("calc.adb:10:06: warning: x", Root, ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index
+                   (Unit, "Long_Long_Integer is a type of Standard, seen everywhere with no with clause and no"
+                    & " package name: leave out the with that names it, and write Long_Long_Integer alone") > 0
+                 and then Ada.Strings.Fixed.Index (Calm, "Standard") = 0,
+                 "a type of Standard named as a unit was not said to need no with, or was where nothing failed: "
+                 & Unit & " / " & Calm);
       end;
       --  A line a style check calls too long at a column is said with its
       --  length and the most a line may be; another diagnostic is not.
