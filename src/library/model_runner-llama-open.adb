@@ -417,6 +417,12 @@ begin
          T.Allocate (Width, Item.Kept_Input);
       end if;
 
+      --  Gemma4's mixture's two rows beside the dense one's.
+      if Source.Settings.Kind = Gemma4 and then Source.Settings.Experts > 0 then
+         T.Allocate (Width, Item.Shared_Answer);
+         T.Allocate (Width, Item.Expert_Input);
+      end if;
+
       --  Gemma4's embedding a layer, its room and a layer's gate.
       if Source.Settings.Layer_Input > 0 then
          T.Allocate

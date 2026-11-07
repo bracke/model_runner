@@ -1,3 +1,4 @@
+with Model_Runner.Heap_Buffers;
 separate (Model_Runner.Templates)
 procedure Render
   (Item                  : Compiled;
@@ -241,7 +242,12 @@ is
 
    --  The with blocks in progress: what every name held when each
    --  began and where the pool stood, put back at its end.
-   Scopes      : array (1 .. Max_Depth) of Slot_Table;
+   --  On the heap, as the loops' below are: sixteen tables of every name
+   --  a template may use are sixty-four kilobytes.
+   type Scope_Stack is array (1 .. Max_Depth) of Slot_Table;
+   package Scope_Rooms is new Model_Runner.Heap_Buffers.Holders (Scope_Stack);
+   Scope_Room  : Scope_Rooms.Holder;
+   Scopes      : Scope_Stack renames Scope_Room.Data.all;
    Scope_Floor : array (1 .. Max_Depth) of Natural := [others => 0];
    Scope_Depth : Natural := 0;
 
@@ -1310,7 +1316,13 @@ is
    end record;
 
    Max_Loops : constant := 4 * Max_Depth;
-   Loops     : array (1 .. Max_Loops) of Loop_State;
+   --  On the heap: each loop keeps every name aside, and sixty-four of
+   --  them at two hundred and fifty-six names were a frame of a third of
+   --  a megabyte, past what a task's stack is let hold.
+   type Loop_Stack is array (1 .. Max_Loops) of Loop_State;
+   package Loop_Rooms is new Model_Runner.Heap_Buffers.Holders (Loop_Stack);
+   Loop_Room : Loop_Rooms.Holder;
+   Loops     : Loop_Stack renames Loop_Room.Data.all;
    Loop_Depth : Natural := 0;
 
    --  Past the room for loops a template is refused: a loop not pushed

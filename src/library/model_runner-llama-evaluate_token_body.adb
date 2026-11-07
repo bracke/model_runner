@@ -1960,7 +1960,14 @@ begin
             --  own, not the model's -- Jamba has both -- so the per-layer
             --  presence of experts decides, which is the model's answer
             --  for every architecture whose layers are all of one kind.
-            if Current.Experts /= null then
+            if Current.Experts /= null and then Settings.Kind = Gemma4 then
+               Gemma4_Mixture (Item, Current, Status);
+               exit when E.Is_Error (Status);
+               Joined
+                 (Item.Mixture, Current.Post_Feed_Norm,
+                  Current.Post_Feed_Norm_Bias, Status);
+               exit when E.Is_Error (Status);
+            elsif Current.Experts /= null then
                Mixture
                  (Item, Current, Item.Normalized, Item.Mixture, Status);
 

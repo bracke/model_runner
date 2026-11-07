@@ -44,6 +44,7 @@ is
      (if Settings.Experts > 0
          and then not Is_Jamba (Settings.Kind)
          and then not Is_MLA (Settings.Kind)
+         and then Settings.Kind /= Gemma4
       then 0
       else Element_Count (Settings.Feed_Forward));
    Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
@@ -3117,7 +3118,24 @@ begin
             --  block that runs a token at a time however many were handed
             --  in. Everything before it -- the projections, the attention,
             --  the output -- still goes through the batch.
-            if Current.Experts /= null then
+            if Current.Experts /= null and then Settings.Kind = Gemma4 then
+               --  Gemma4's dense feed-forward beside its mixture, a row at
+               --  a time as Gemma4_Mixture takes it: the row's residual and
+               --  its feed-normalized input in, the two answers' sum back
+               --  where the join reads it.
+               for Which in 0 .. Count - 1 loop
+                  declare
+                     Origin : constant Element_Count := Slot (Which, Width);
+                  begin
+                     Item.Activation.all := Acts.all (Origin .. Origin + Width - 1);
+                     Item.Normalized.all := Norm.all (Origin .. Origin + Width - 1);
+                     Gemma4_Mixture (Item, Current, Status);
+                     exit when E.Is_Error (Status);
+                     Norm.all (Origin .. Origin + Width - 1) := Item.Mixture.all;
+                  end;
+               end loop;
+               exit when E.Is_Error (Status);
+            elsif Current.Experts /= null then
                --  Gathered by expert, which is what makes an expert's
                --  matrices cross once a layer instead of once for every
                --  position that chose them. This used to be the device's

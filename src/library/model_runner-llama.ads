@@ -938,7 +938,7 @@ package Model_Runner.Llama is
    --  @param Settings Configuration to inspect.
    --  @return Width in elements.
    function Feed_Width (Settings : Configuration) return Natural
-   is (if Is_Jamba (Settings.Kind) or else Is_MLA (Settings.Kind)
+   is (if Is_Jamba (Settings.Kind) or else Is_MLA (Settings.Kind) or else Settings.Kind = Gemma4
        then Natural'Max (Settings.Expert_Feed, Settings.Feed_Forward)
        elsif Settings.Experts > 0
        then Settings.Expert_Feed
@@ -3168,6 +3168,22 @@ private
       --  The one number Gemma4 multiplies the whole residual by at the
       --  layer's end, where the file carries it; null otherwise.
       Output_Scale    : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Gemma4's mixture beside its dense feed-forward: the dense one's
+      --  answer normalized by Post_Feed_Norm_1, the experts' input by
+      --  Pre_Feed_Norm_2 and their sum by Post_Feed_Norm_2, the two
+      --  added and normalized by Post_Feed_Norm. An expert's answer is
+      --  multiplied by its own Expert_Down_Scale. The router reads the
+      --  experts' input, its columns folded at load by what makes that
+      --  input the router's own (Fold_Router). Null for every other
+      --  architecture.
+      Pre_Feed_Norm_2   : Model_Runner.Tensors.Real_Array_Access;
+      Post_Feed_Norm_1  : Model_Runner.Tensors.Real_Array_Access;
+      Post_Feed_Norm_2  : Model_Runner.Tensors.Real_Array_Access;
+      Expert_Down_Scale : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The router's folded columns, in binary32, that Router views.
+      Router_Folded     : Model_Runner.Bytes.Byte_Array_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -3741,6 +3757,12 @@ private
       Layer_Inputs : Model_Runner.Tensors.Real_Array_Access := null;
       Layer_Room   : Model_Runner.Tensors.Real_Array_Access := null;
       Layer_Gate   : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Gemma4's mixture: its dense feed-forward's answer, kept while the
+      --  experts run, and the experts' own input. Null for every other
+      --  model.
+      Shared_Answer : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Input  : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Row : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  Room for every chosen expert's two arms at once.

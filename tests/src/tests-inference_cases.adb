@@ -21531,6 +21531,13 @@ package body Tests.Inference_Cases is
       Settings.Expert_Feed := 100;
       Settings.Feed_Forward := 50;
       Assert (L.Feed_Width (Settings) = 100, "a hybrid's feed was not its wider one");
+      --  Gemma4's 26B: a dense feed-forward wider than its experts' beside
+      --  them, so the room is the dense one's.
+      Settings.Kind := L.Gemma4;
+      Settings.Experts := 128;
+      Settings.Expert_Feed := 704;
+      Settings.Feed_Forward := 2112;
+      Assert (L.Feed_Width (Settings) = 2112, "gemma4's mixture's feed was not its dense one's");
       Assert (L.Stores_Pair (L.Eighth, L.Value_Fourth) and then L.Stores_Pair (L.Exact, L.Same_As_Keys)
               and then not L.Stores_Pair (L.Exact, L.Value_Fourth),
               "a cache and values pair was let open that cannot be, or refused that can");

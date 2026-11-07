@@ -200,6 +200,15 @@ begin
       end loop;
    end if;
 
+   --  Gemma4's scale an expert, on its share, as Mixture_Batch takes it.
+   if Current.Expert_Down_Scale /= null then
+      for Slot in Share'Range loop
+         Share (Slot) := Share (Slot)
+           * Current.Expert_Down_Scale.all
+               (Current.Expert_Down_Scale.all'First + Element_Count (Chosen (Slot)));
+      end loop;
+   end if;
+
    Result.all := [others => 0.0];
 
    --  Gathered, where the device holds the stacks: the chosen experts'

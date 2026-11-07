@@ -694,8 +694,12 @@ package body Model_Runner.Llama is
         --  layer and left empty where a layer has none, since Add skips an
         --  empty view.
         + (if Is_MLA (Item.Settings.Kind) then 6 else 0)
-        --  Gemma4's embedding a layer adds its gate and its projection.
-        + (if Item.Settings.Layer_Input > 0 then 2 else 0);
+        --  Gemma4's embedding a layer adds its gate and its projection,
+        --  and its mixture layer keeps a dense feed-forward's three beside
+        --  the experts.
+        + (if Item.Settings.Layer_Input > 0 then 2 else 0)
+        + (if Item.Settings.Kind = Gemma4 and then Item.Settings.Experts > 0
+           then 3 else 0);
 
       --  Four beside the layers -- the embedding table, the output
       --  projection, the positions and the segments -- though no
@@ -1241,6 +1245,29 @@ package body Model_Runner.Llama is
 
       Gates, Ups, Downs : T.View;
 
+      --  Whether gate and up are one stack, an expert's gate rows and then
+      --  its up rows, as Gemma4 writes them.
+      Fused : Boolean := False;
+
+      --  Rows From .. From + Rows - 1 of a stack.
+      procedure Rows_Of
+        (Whole  : T.View;
+         From   : Element_Count;
+         Rows   : Element_Count;
+         Result : out T.View;
+         Status : out E.Error_Info) is
+      begin
+         T.Make
+           (Format  => Whole.Format,
+            Rows    => Rows,
+            Columns => Whole.Columns,
+            Base    => Whole.Base,
+            Span    => Whole.Span,
+            Offset  => Whole.Offset + B.Byte_Count (From) * T.Row_Bytes (Whole),
+            Result  => Result,
+            Status  => Status);
+      end Rows_Of;
+
       --  An expert stack's biases, every expert's run of Each end to end:
       --  one vector as an earlier conversion wrote them, or a row an
       --  expert, as llama.cpp's converter writes them -- the same numbers
@@ -1267,18 +1294,32 @@ package body Model_Runner.Llama is
          return;
       end if;
 
-      Resolve
-        (Item, Source, Layer_Key (Index, "ffn_gate_exps.weight"),
-         Feed * Count, Width, Gates, Status, Repack);
-      if E.Is_Error (Status) then
-         return;
-      end if;
+      --  Gemma4's gate and up as one stack, each expert's gate rows then
+      --  its up rows: the two stacks are that one, and an expert's gate
+      --  and up are its first and second half (Fused, below).
+      if Containers.Find_Tensor (Source, Layer_Key (Index, "ffn_gate_up_exps.weight")) /= 0 then
+         Resolve
+           (Item, Source, Layer_Key (Index, "ffn_gate_up_exps.weight"),
+            2 * Feed * Count, Width, Gates, Status, Repack);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Ups := Gates;
+         Fused := True;
+      else
+         Resolve
+           (Item, Source, Layer_Key (Index, "ffn_gate_exps.weight"),
+            Feed * Count, Width, Gates, Status, Repack);
+         if E.Is_Error (Status) then
+            return;
+         end if;
 
-      Resolve
-        (Item, Source, Layer_Key (Index, "ffn_up_exps.weight"),
-         Feed * Count, Width, Ups, Status, Repack);
-      if E.Is_Error (Status) then
-         return;
+         Resolve
+           (Item, Source, Layer_Key (Index, "ffn_up_exps.weight"),
+            Feed * Count, Width, Ups, Status, Repack);
+         if E.Is_Error (Status) then
+            return;
+         end if;
       end if;
 
       Resolve
@@ -1356,29 +1397,52 @@ package body Model_Runner.Llama is
             end loop;
          end Mark;
       begin
-         Mark (Gates, Feed);
-         Mark (Ups, Feed);
+         if not Fused then
+            Mark (Gates, Feed);
+            Mark (Ups, Feed);
+         end if;
          Mark (Downs, Width);
       end;
 
       Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
-      Current.Gate_Stack := Gates;
-      Current.Up_Stack := Ups;
+
+      --  The stacks as the device gathers from them; a fused stack is not
+      --  one it reads, so the experts are read a slice at a time.
+      if not Fused then
+         Current.Gate_Stack := Gates;
+         Current.Up_Stack := Ups;
+      end if;
       Current.Down_Stack := Downs;
 
       for Which in Current.Experts.all'Range loop
-         Slice
-           (Gates, Element_Count (Which), Feed,
-            Current.Experts.all (Which).Gate, Status);
-         if E.Is_Error (Status) then
-            return;
-         end if;
+         if Fused then
+            Rows_Of
+              (Gates, Element_Count (Which) * 2 * Feed, Feed,
+               Current.Experts.all (Which).Gate, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
 
-         Slice
-           (Ups, Element_Count (Which), Feed,
-            Current.Experts.all (Which).Up, Status);
-         if E.Is_Error (Status) then
-            return;
+            Rows_Of
+              (Gates, Element_Count (Which) * 2 * Feed + Feed, Feed,
+               Current.Experts.all (Which).Up, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         else
+            Slice
+              (Gates, Element_Count (Which), Feed,
+               Current.Experts.all (Which).Gate, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+
+            Slice
+              (Ups, Element_Count (Which), Feed,
+               Current.Experts.all (Which).Up, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
          end if;
 
          Slice
@@ -7822,6 +7886,15 @@ package body Model_Runner.Llama is
             B.Free (Which.KV_B_Built);
             T.Free (Which.KV_B_Dense);
             B.Free (Which.KV_B_Absorb_Bytes);
+            B.Free (Which.Router_Folded);
+            --  Gemma4's vectors a layer, which went with nothing as the
+            --  router biases once did.
+            T.Free (Which.Input_Post_Norm);
+            T.Free (Which.Output_Scale);
+            T.Free (Which.Pre_Feed_Norm_2);
+            T.Free (Which.Post_Feed_Norm_1);
+            T.Free (Which.Post_Feed_Norm_2);
+            T.Free (Which.Expert_Down_Scale);
             T.Free (Which.Next_ENorm);
             T.Free (Which.Next_HNorm);
             T.Free (Which.Next_Head_Norm);
@@ -7848,6 +7921,7 @@ package body Model_Runner.Llama is
 
       T.Free (Item.Output_Norm);
       T.Free (Item.Output_Norm_Bias);
+      T.Free (Item.Layer_Projection_Norm);
       T.Free (Item.Output_Bias);
       T.Free (Item.Rope_Factors);
       T.Free (Item.Rope_Long);
@@ -8867,6 +8941,8 @@ package body Model_Runner.Llama is
       T.Free (Item.Up);
       T.Free (Item.Head_Row);
       T.Free (Item.Layer_Inputs);
+      T.Free (Item.Shared_Answer);
+      T.Free (Item.Expert_Input);
       T.Free (Item.Layer_Room);
       T.Free (Item.Layer_Gate);
       T.Free (Item.Query_Full);
@@ -11308,6 +11384,53 @@ package body Model_Runner.Llama is
       First  : Natural;
       Status : out E.Error_Info)
    is separate;
+
+   --  Gemma4's feed-forward on a layer with a mixture, for one position:
+   --  its dense feed-forward on Item.Normalized (the residual through the
+   --  layer's feed norm), normalized by Post_Feed_Norm_1; the residual
+   --  normalized by Pre_Feed_Norm_2 for the experts, routed and run
+   --  (Mixture) and their sum normalized by Post_Feed_Norm_2; the two
+   --  added into Item.Mixture, which the caller joins as a mixture's.
+   --
+   --  @param Item Session whose buffers are used.
+   --  @param Current The layer.
+   --  @param Status Success, or why not.
+   procedure Gemma4_Mixture
+     (Item    : in out Session;
+      Current : Layer;
+      Status  : out E.Error_Info)
+   is
+      Epsilon : constant Real := Item.Owner.Settings.Epsilon;
+   begin
+      Product_Group
+        (Item, [Current.Gate, Current.Up], Item.Normalized, [Item.Gate, Item.Up], Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      declare
+         Feed : constant Element_Count := Current.Gate.Rows;
+         Gate : Real_Array renames Item.Gate.all (Item.Gate.all'First .. Item.Gate.all'First + Feed - 1);
+         Up   : Real_Array renames Item.Up.all (Item.Up.all'First .. Item.Up.all'First + Feed - 1);
+      begin
+         K.GELU (Gate);
+         K.Multiply (Gate, Up);
+      end;
+      Product (Item, Current.Down, Item.Gate, Item.Shared_Answer, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      K.RMS_Norm (Item.Shared_Answer.all, Current.Post_Feed_Norm_1.all, Epsilon, Item.Post_Room.all);
+      Item.Shared_Answer.all := Item.Post_Room.all;
+
+      K.RMS_Norm (Item.Activation.all, Current.Pre_Feed_Norm_2.all, Epsilon, Item.Expert_Input.all);
+      Mixture (Item, Current, Item.Expert_Input, Item.Mixture, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      K.RMS_Norm (Item.Mixture.all, Current.Post_Feed_Norm_2.all, Epsilon, Item.Post_Room.all);
+      Item.Mixture.all := Item.Post_Room.all;
+      K.Add (Item.Mixture.all, Item.Shared_Answer.all);
+   end Gemma4_Mixture;
 
    --  Gemma4's embedding a layer for one position, worked out from the
    --  token's row of the table (Inputs) and the position's embedded row

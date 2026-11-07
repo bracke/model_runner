@@ -2161,6 +2161,110 @@ begin
                return;
             end if;
 
+            --  Gemma4's dense feed-forward beside its mixture, the three
+            --  normalizations around the two, each expert's scale, and
+            --  the router folded to read what the experts read: it is
+            --  given the residual normalized, scaled by one over the root
+            --  of the width and by its own scale a column; the experts
+            --  the same normalized residual by pre_ffw_norm_2. The ratio
+            --  of the two, a column, folded into the router's columns,
+            --  routes from the experts' input exactly.
+            if Item.Settings.Kind = Gemma4 then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "ffn_gate.weight"),
+                  Feed, Width, Current.Gate, Status, Repack);
+               if E.Is_Ok (Status) then
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_up.weight"),
+                     Feed, Width, Current.Up, Status, Repack);
+               end if;
+               if E.Is_Ok (Status) then
+                  Resolve
+                    (Item, Source, Layer_Key (Index, "ffn_down.weight"),
+                     Width, Feed, Current.Down, Status, Repack);
+               end if;
+               if E.Is_Ok (Status) then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "pre_ffw_norm_2.weight"), Width,
+                     Current.Pre_Feed_Norm_2, Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "post_ffw_norm_1.weight"), Width,
+                     Current.Post_Feed_Norm_1, Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "post_ffw_norm_2.weight"), Width,
+                     Current.Post_Feed_Norm_2, Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  Resolve_Norm
+                    (Item, Source, Layer_Key (Index, "ffn_down_exps.scale"),
+                     Element_Count (Item.Settings.Experts), Current.Expert_Down_Scale, Status);
+               end if;
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               declare
+                  Count  : constant Element_Count := Element_Count (Item.Settings.Experts);
+                  Table  : T.Real_Array_Access;
+                  Scale  : T.Real_Array_Access;
+                  Root   : constant Real := Real (N.Sqrt (N.Wide_Real (Width)));
+               begin
+                  Resolve_Table
+                    (Item, Source, Layer_Key (Index, "ffn_gate_inp.weight"), Count, Width, Table, Status);
+                  if E.Is_Ok (Status) then
+                     Resolve_Norm
+                       (Item, Source, Layer_Key (Index, "ffn_gate_inp.scale"), Width, Scale, Status);
+                  end if;
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Current.Router_Folded := new B.Byte_Array (1 .. B.Byte_Count (Count * Width) * 4);
+                  declare
+                     Folded : T.Real_Array (0 .. Count * Width - 1)
+                       with Import, Address => Current.Router_Folded (1)'Address;
+                  begin
+                     for Column in 0 .. Width - 1 loop
+                        declare
+                           Gain : constant Real :=
+                             Current.Pre_Feed_Norm_2 (Current.Pre_Feed_Norm_2'First + Column);
+                        begin
+                           --  A gain of nought would take the column out of
+                           --  the experts' input and leave no ratio to
+                           --  fold; a file with one is refused.
+                           if abs Gain < 1.0E-30 then
+                              Status := E.Make (E.Arch_Invalid_Dimensions);
+                              E.Add_Text (Status, "tensor", Layer_Key (Index, "pre_ffw_norm_2.weight"),
+                                          E.Param_Identifier);
+                              return;
+                           end if;
+                           for Row in 0 .. Count - 1 loop
+                              Folded (Row * Width + Column) :=
+                                Table (Table'First + Row * Width + Column)
+                                * Scale (Scale'First + Column) / (Root * Gain);
+                           end loop;
+                        end;
+                     end loop;
+                  end;
+                  T.Free (Table);
+                  T.Free (Scale);
+                  T.Make
+                    (Format  => Model_Runner.GGUF.Type_F32,
+                     Rows    => Count,
+                     Columns => Width,
+                     Data    => Current.Router_Folded,
+                     Offset  => 0,
+                     Result  => Current.Router,
+                     Status  => Status);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+               end;
+            end if;
+
             --  And the expert every position goes through as well,
             --  where the mixture has one, with the row that gates
             --  it.

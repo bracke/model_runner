@@ -418,6 +418,19 @@ begin
       end loop;
    end if;
 
+   --  Gemma4's scale an expert on what the expert projects down, taken on
+   --  its share where the share meets it, so the sum below is the same
+   --  sum of the same terms.
+   if Current.Expert_Down_Scale /= null then
+      for Index in 0 .. Count * Element_Count (Used) - 1 loop
+         Item.Pick_Share.all (Item.Pick_Share.all'First + Index) :=
+           Item.Pick_Share.all (Item.Pick_Share.all'First + Index)
+           * Current.Expert_Down_Scale.all
+               (Current.Expert_Down_Scale.all'First
+                + Element_Count (Item.Pick_Which.all (Natural (Index))));
+      end loop;
+   end if;
+
    --  On the pool, an expert to a worker rather than a row to a worker.
    --
    --  An expert's product on a prompt is a handful of vectors by a few
