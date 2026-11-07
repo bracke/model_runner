@@ -2390,7 +2390,10 @@ package body Model_Runner.Framework.Work is
       --  What an Ada line holds of another language's spelling, said as Ada
       --  spells it: qwen3-8b wrote elif, then else if, ten edits running,
       --  told only that elif is undefined.
-      function Ada_Slips (Path, Line : String) return String is
+      --  Under is the if or elsif line the line stands under, where the
+      --  caller found one: what it says of an operand's sign is known on
+      --  the line too.
+      function Ada_Slips (Path, Line : String; Under : String := "") return String is
          --  What the output says went wrong: an overflow or a range check,
          --  where a guard that does not stop the sum it guards is the
          --  usual cause.
@@ -2550,8 +2553,39 @@ package body Model_Runner.Framework.Work is
                               when 5 => "T'Last - (-" & Operand & ") is T'Last + " & Operand & ", and ",
                               when 6 => "T'First - (-" & Operand & ") is T'First + " & Operand & ", and ",
                               when others => "");
+
+                        --  What the branch the line stands under says of
+                        --  the operand's sign. qwen3-8b wrote A > T'Last - B
+                        --  under elsif B < 0 and A < T'First - B under
+                        --  if B > 0, and was told to test the sign first --
+                        --  the opposite of the branch it was in.
+                        Above      : constant String := Ada.Characters.Handling.To_Lower (Under);
+                        Known_Up   : constant Boolean :=
+                          Low /= "" and then (Ada.Strings.Fixed.Index (Above, Low & " > 0") > 0
+                                              or else Ada.Strings.Fixed.Index (Above, Low & " >= 0") > 0);
+                        Known_Down : constant Boolean :=
+                          Low /= "" and then (Ada.Strings.Fixed.Index (Above, Low & " < 0") > 0
+                                              or else Ada.Strings.Fixed.Index (Above, Low & " <= 0") > 0);
                      begin
-                        if Low /= ""
+                        if Bound in 1 | 2
+                          and then ((Bound = 1 and then Known_Down) or else (Bound = 2 and then Known_Up))
+                        then
+                           Say ("this line stands under """
+                                & Ada.Strings.Fixed.Trim (Under, Ada.Strings.Both) & """, where "
+                                & (if Bound = 1 then "T'Last - " else "T'First - ") & Operand
+                                & " always overflows, and a sum with a " & Wrong & " " & Operand & " can never "
+                                & (if Bound = 1 then "pass T'Last" else "fall below T'First")
+                                & ": leave this test out here; what can happen under it is the sum "
+                                & (if Bound = 1 then "falling below T'First, where the other is below T'First - "
+                                   else "passing T'Last, where the other is above T'Last - ")
+                                & Operand);
+                        elsif Bound in 1 | 2
+                          and then ((Bound = 1 and then Known_Up) or else (Bound = 2 and then Known_Down))
+                        then
+                           --  Safe where it stands: its sign is the one
+                           --  that keeps it in range.
+                           null;
+                        elsif Low /= ""
                           and then Ada.Strings.Fixed.Index (Lower, Low & Sign) = 0
                           and then Ada.Strings.Fixed.Index (Lower, Low & " >= 0") = 0
                           and then Ada.Strings.Fixed.Index (Lower, Low & " <= 0") = 0
@@ -2815,6 +2849,39 @@ package body Model_Runner.Framework.Work is
          end;
       end Line_Of;
 
+      --  The if or elsif line a project file's line Number stands under:
+      --  the nearest line above it indented less, where that one opens
+      --  with if or elsif; "" where it is anything else or there is none
+      --  within thirty lines.
+      function Enclosing_Line (Path : String; Number : Positive) return String is
+         function Indent (Text : String) return Natural is
+            Count : Natural := 0;
+         begin
+            for C of Text loop
+               exit when C /= ' ';
+               Count := Count + 1;
+            end loop;
+            return Count;
+         end Indent;
+
+         Own : constant Natural := Indent (Line_Of (Path, Number));
+      begin
+         for Above in reverse Natural'Max (1, Number - 30) .. Number - 1 loop
+            declare
+               Text : constant String := Line_Of (Path, Above);
+               Bare : constant String :=
+                 Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
+            begin
+               if Bare /= "" and then Indent (Text) < Own then
+                  return (if (Bare'Length > 3 and then Bare (Bare'First .. Bare'First + 2) = "if ")
+                            or else (Bare'Length > 6 and then Bare (Bare'First .. Bare'First + 5) = "elsif ")
+                          then Text else "");
+               end if;
+            end;
+         end loop;
+         return "";
+      end Enclosing_Line;
+
       --  What a guard X > T'Last + Y or X < T'First + Y in Line asks, said
       --  where it holds one: of the difference X - Y, not the sum. qwen3-8b
       --  guarded A + B for a negative B with A > Integer'Last + B, saw in
@@ -2941,7 +3008,8 @@ package body Model_Runner.Framework.Work is
                         end if;
                         if Line /= "" then
                            Append (Said, ASCII.LF & Path & " line " & Number & " is: "
-                                   & Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both) & Ada_Slips (Path, Line));
+                                   & Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both)
+                                   & Ada_Slips (Path, Line, Enclosing_Line (Path, Natural'Value (Number))));
                            --  Told only "this line is too long" at column 80,
                            --  Steelman-14B wrote its if, elsif and else on one
                            --  line again: how long it is, and how long a line

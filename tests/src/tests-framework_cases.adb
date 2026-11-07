@@ -20574,6 +20574,32 @@ package body Tests.Framework_Cases is
                  & " A < Integer'First - B",
                  "an exception's message was not said with where it is raised: " & Raised);
       end;
+      --  A guard under a branch that fixes its operand's sign: said to
+      --  overflow always where the branch makes it so, and nothing said
+      --  where the branch makes it safe.
+      Ada.Text_IO.Create (Out_File, Ada.Text_IO.Out_File, Root & "/src/branch.adb");
+      Ada.Text_IO.Put_Line (Out_File, "   function Add (A, B : Integer) return Integer is");
+      Ada.Text_IO.Put_Line (Out_File, "   begin");
+      Ada.Text_IO.Put_Line (Out_File, "      if B > 0 then");
+      Ada.Text_IO.Put_Line (Out_File, "         if A > Integer'Last - B then");
+      Ada.Text_IO.Put_Line (Out_File, "         elsif A < Integer'First - B then");
+      Ada.Text_IO.Put_Line (Out_File, "      elsif B < 0 then");
+      Ada.Text_IO.Put_Line (Out_File, "         if A > Integer'Last - B then");
+      Ada.Text_IO.Close (Out_File);
+      declare
+         Safe   : constant String := Wk.Quoted_Lines ("branch.adb:4 overflow check failed", Root, ["src/branch.adb"]);
+         Up     : constant String := Wk.Quoted_Lines ("branch.adb:5 overflow check failed", Root, ["src/branch.adb"]);
+         Down   : constant String := Wk.Quoted_Lines ("branch.adb:7 overflow check failed", Root, ["src/branch.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Safe, "in Ada") = 0
+                 and then Ada.Strings.Fixed.Index
+                            (Up, "this line stands under ""if B > 0 then"", where T'First - B always overflows") > 0
+                 and then Ada.Strings.Fixed.Index (Up, "where the other is above T'Last - B") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Down, "this line stands under ""elsif B < 0 then"", where T'Last - B always overflows")
+                          > 0,
+                 "a guard's branch was not read for its operand's sign: " & Safe & " / " & Up & " / " & Down);
+      end;
       --  A step that raised after an earlier one failed ran a program
       --  built before the failure: said so, and no line quoted for it.
       declare
