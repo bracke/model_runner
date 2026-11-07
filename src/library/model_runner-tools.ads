@@ -131,7 +131,8 @@ package Model_Runner.Tools is
       Mistral_Call,     --  [TOOL_CALLS]name[ARGS]{"a": 1}, Mistral's own
       DeepSeek_Fenced,  --  DeepSeek R1's: function, the name, a ```json fence
       DeepSeek_Plain,   --  DeepSeek V3.1's: the name, the object
-      Harmony_Call);    --  to=functions.name ...<|message|>{"a": 1}, gpt-oss's
+      Harmony_Call,     --  to=functions.name ...<|message|>{"a": 1}, gpt-oss's
+      Gemma4_Call);     --  <|tool_call>call:name{a:1,b:<|"|>x<|"|>}<tool_call|>, Gemma4's
 
    --  gpt-oss's harmony markers: what names a call's recipient in a
    --  message's header, what opens a message's body, and the channels a
@@ -179,6 +180,14 @@ package Model_Runner.Tools is
    --  Mistral's: what opens each call, and what parts its name from its
    --  arguments.
    Mistral_Calls : constant String := "[TOOL_CALLS]";
+
+   --  Gemma4's call markers: what opens a call -- the token, then "call:"
+   --  and the name -- what closes it, and what stands either side of a
+   --  string among its arguments, which are written as an object with
+   --  bare keys rather than as JSON.
+   Gemma4_Call_Open  : constant String := "<|tool_call>call:";
+   Gemma4_Call_Close : constant String := "<tool_call|>";
+   Gemma4_Quote      : constant String := "<|""|>";
    Mistral_Args  : constant String := "[ARGS]";
 
    --  Read every call a reply carries.

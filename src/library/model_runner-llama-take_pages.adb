@@ -85,8 +85,7 @@ begin
    --  layer of this token or batch has taken its matrices.
    Room_For_Cache (Item.all, Natural (Element_Count'Min (Upto, Element_Count (Item.Context))));
 
-   V_Width := Element_Count (Item.Owner.Settings.KV_Heads
-                             * Item.Owner.Settings.Value_Size);
+   V_Width := Element_Count (Value_Row_Width (Item.Owner.Settings));
    KV_Width := Page_Row (Item.all)
                - (if Item.Values_In_Keys then 0 else V_Width);
 

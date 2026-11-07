@@ -5,9 +5,9 @@ procedure Make_Room
    Upto     : Element_Count)
 is
    KV_Width : constant Element_Count :=
-     Element_Count (Settings.KV_Heads * Settings.Head_Size);
+     Element_Count (Key_Row_Width (Settings));
    V_Width  : constant Element_Count :=
-     Element_Count (Settings.KV_Heads * Settings.Value_Size);
+     Element_Count (Value_Row_Width (Settings));
    Width    : constant Element_Count :=
      Element_Count (Settings.Window);
 

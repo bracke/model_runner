@@ -834,6 +834,15 @@ package body Model_Runner.Tools.Constraint is
          return;
       end if;
 
+      if Syntax = Model_Runner.Tools.Gemma4_Call then
+         --  Gemma4's form: its calls open with a token it was trained to
+         --  place, and their arguments are an object no JSON grammar
+         --  describes; held by none here, the reader takes the calls out
+         --  of what it wrote.
+         Model_Runner.Grammar.Compile (Into, Free_Text, Status);
+         return;
+      end if;
+
       if Syntax = Model_Runner.Tools.Harmony_Call then
          --  gpt-oss's harmony form: its calls and its channels are written
          --  in special tokens the model was trained to place, and held by

@@ -186,10 +186,10 @@ begin
          Room := Room + Item.Cells.all (Layer);
          Keys := Keys
            + Item.Cells.all (Layer)
-             * Element_Count (Settings.KV_Heads * Settings.Head_Size);
+             * Element_Count (Key_Row_Width (Settings));
          Vals := Vals
            + Item.Cells.all (Layer)
-             * Element_Count (Settings.KV_Heads * Settings.Value_Size);
+             * Element_Count (Value_Row_Width (Settings));
       end loop;
 
       --  A session dealt its cache in pages rather than one block: how
@@ -248,9 +248,9 @@ begin
       Blend : constant Element_Count :=
         Element_Count (Settings.Heads * Settings.Value_Size);
       KV    : constant Element_Count :=
-        Element_Count (Settings.KV_Heads * Settings.Head_Size);
+        Element_Count (Key_Row_Width (Settings));
       KV_Out : constant Element_Count :=
-        Element_Count (Settings.KV_Heads * Settings.Value_Size);
+        Element_Count (Value_Row_Width (Settings));
       --  What the geometry above added up to: the positions every layer
       --  holds between them, which is the whole context a layer only
       --  where no layer slides a window.

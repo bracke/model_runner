@@ -282,6 +282,10 @@ package Model_Runner.Templates is
    --  function in their header.
    Harmony_Shape        : constant String := "harmony";
 
+   --  And Gemma4's, whose calls open with <|tool_call>call: and carry their
+   --  arguments as an object with bare keys.
+   Gemma4_Shape         : constant String := "gemma4";
+
    --  The shape a model rendered with a carried format writes tool calls in.
    --
    --  The chat format and the call syntax are one choice: the format tells

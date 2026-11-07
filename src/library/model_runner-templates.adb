@@ -771,6 +771,10 @@ package body Model_Runner.Templates is
          --  channel. Before the turn markers, since its <|start|> and
          --  <|end|> are the ones Phi3's template shares.
          return Harmony_Shape;
+      elsif Has (Model_Runner.Tools.Gemma4_Call_Open) then
+         --  Gemma4's: a call is <|tool_call>call:NAME{..}<tool_call|>, its
+         --  turns <|turn>; no carried format stands in for it.
+         return Gemma4_Shape;
       elsif Has (Model_Runner.Tools.DeepSeek_Sep) then
          return (if Has ("function" & Model_Runner.Tools.DeepSeek_Sep)
                    or else Has ("tool['type'] + '"
@@ -807,6 +811,7 @@ package body Model_Runner.Templates is
        elsif Name = DeepSeek_Shape then Model_Runner.Tools.DeepSeek_Fenced
        elsif Name = DeepSeek_Plain_Shape then Model_Runner.Tools.DeepSeek_Plain
        elsif Name = Harmony_Shape then Model_Runner.Tools.Harmony_Call
+       elsif Name = Gemma4_Shape then Model_Runner.Tools.Gemma4_Call
        elsif Name = Format_Name (Format_Qwen3_Coder)
        then Model_Runner.Tools.Qwen_XML
        elsif Name = Format_Name (Format_MiniCPM)

@@ -316,6 +316,16 @@ begin
          if E.Is_Ok (Listed) and then Length > 0 then
             for Layer in 1 .. Length loop
                Containers.Get_Integer_Element (Source, Key, Layer, Each, Listed);
+               --  Gemma4's counts differ layer to layer, its windowed
+               --  layers' from its global ones', and are kept a layer.
+               if E.Is_Ok (Listed) and then Settings.Kind = Gemma4
+                 and then Each in 1 .. Long_Long_Integer (Settings.Heads)
+                 and then Long_Long_Integer (Settings.Heads) mod Each = 0
+                 and then Layer <= Max_Block_Count
+               then
+                  Settings.KV_Counts (Layer - 1) := Natural (Each);
+                  Each := (if Common = 0 then Each else Common);
+               end if;
                if E.Is_Error (Listed)
                  or else Each < 1 or else Each > Long_Long_Integer (Settings.Heads)
                  or else (Common /= 0 and then Each /= Common)

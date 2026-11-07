@@ -7,6 +7,7 @@ with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
 
+with Model_Runner.Text;
 with Model_Runner.Tools.Python_Calls;
 
 package body Model_Runner.Tools is
@@ -490,7 +491,7 @@ package body Model_Runner.Tools is
       end if;
 
       if Syntax in Function_XML | Qwen_XML | Mistral_Call
-                  | DeepSeek_Fenced | DeepSeek_Plain
+                  | DeepSeek_Fenced | DeepSeek_Plain | Gemma4_Call
       then
          --  The prose before the first call as this syntax opens one: the
          --  <tool_call> envelope, or -- where a model writes its element
@@ -514,6 +515,8 @@ package body Model_Runner.Tools is
                           and then Marks_At (Start, "<function name="))
                  or else (Syntax = Mistral_Call
                           and then Marks_At (Start, Mistral_Calls))
+                 or else (Syntax = Gemma4_Call
+                          and then Marks_At (Start, "<|tool_call>"))
                  or else (Syntax in DeepSeek_Fenced | DeepSeek_Plain
                           and then (Marks_At (Start, DeepSeek_Calls_Begin)
                                     or else Marks_At
@@ -2356,6 +2359,199 @@ package body Model_Runner.Tools is
                      end if;
                   end;
                end;
+            end loop;
+         end;
+
+      when Gemma4_Call =>
+         --  Gemma4's: <|tool_call>call:, the name, the arguments as an
+         --  object with bare keys -- strings between <|"|> marks, numbers,
+         --  true, false, null, lists and objects as JSON writes them --
+         --  and <tool_call|>, as llama.cpp reads them. The object is
+         --  written again as JSON and stored as every other call is.
+         declare
+            Built : Ada.Strings.Unbounded.Unbounded_String;
+
+            procedure Skip (P : in out Natural) is
+            begin
+               while P <= Reply'Last
+                 and then Reply (P) in ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+               loop
+                  P := P + 1;
+               end loop;
+            end Skip;
+
+            --  One value from P, written as JSON onto Built; P past it.
+            procedure Read_Value (P : in out Natural; Ok : out Boolean);
+
+            procedure Read_Value (P : in out Natural; Ok : out Boolean) is
+               use Ada.Strings.Unbounded;
+            begin
+               Ok := False;
+               Skip (P);
+               if P > Reply'Last then
+                  return;
+               elsif Marks (P, Gemma4_Quote) then
+                  declare
+                     Close : constant Natural :=
+                       Ada.Strings.Fixed.Index
+                         (Reply (P + Gemma4_Quote'Length .. Reply'Last), Gemma4_Quote);
+                  begin
+                     if Close = 0 then
+                        return;
+                     end if;
+                     Append (Built, Model_Runner.Text.JSON_Quoted
+                                      (Reply (P + Gemma4_Quote'Length .. Close - 1)));
+                     P := Close + Gemma4_Quote'Length;
+                     Ok := True;
+                  end;
+               elsif Reply (P) in '{' | '[' then
+                  declare
+                     Is_Object : constant Boolean := Reply (P) = '{';
+                     Shut      : constant Character := (if Is_Object then '}' else ']');
+                  begin
+                     Append (Built, Reply (P));
+                     P := P + 1;
+                     Skip (P);
+                     if P <= Reply'Last and then Reply (P) = Shut then
+                        Append (Built, Shut);
+                        P := P + 1;
+                        Ok := True;
+                        return;
+                     end if;
+                     loop
+                        Skip (P);
+                        if Is_Object then
+                           --  A bare key, up to its colon; or one between
+                           --  marks, as a model writes now and then.
+                           declare
+                              Key_First : constant Natural := P;
+                           begin
+                              while P <= Reply'Last and then Reply (P) not in ':' | '}' loop
+                                 P := P + 1;
+                              end loop;
+                              if P > Reply'Last or else Reply (P) /= ':' then
+                                 return;
+                              end if;
+                              declare
+                                 Key : constant String := Trimmed (Reply (Key_First .. P - 1));
+                                 Q   : constant Natural := Gemma4_Quote'Length;
+                              begin
+                                 if Key'Length >= 2 * Q
+                                   and then Key (Key'First .. Key'First + Q - 1) = Gemma4_Quote
+                                   and then Key (Key'Last - Q + 1 .. Key'Last) = Gemma4_Quote
+                                 then
+                                    Append (Built, Model_Runner.Text.JSON_Quoted
+                                                     (Key (Key'First + Q .. Key'Last - Q)) & ":");
+                                 else
+                                    Append (Built, Model_Runner.Text.JSON_Quoted (Key) & ":");
+                                 end if;
+                              end;
+                              P := P + 1;
+                           end;
+                        end if;
+                        Read_Value (P, Ok);
+                        if not Ok then
+                           return;
+                        end if;
+                        Ok := False;
+                        Skip (P);
+                        if P <= Reply'Last and then Reply (P) = ',' then
+                           Append (Built, ",");
+                           P := P + 1;
+                        elsif P <= Reply'Last and then Reply (P) = Shut then
+                           Append (Built, Shut);
+                           P := P + 1;
+                           Ok := True;
+                           return;
+                        else
+                           return;
+                        end if;
+                     end loop;
+                  end;
+               else
+                  --  A number, true, false or null, to the next of what may
+                  --  follow a value; a word that is none of them is taken
+                  --  as the text it is.
+                  declare
+                     First : constant Natural := P;
+                  begin
+                     while P <= Reply'Last
+                       and then Reply (P) not in ',' | '}' | ']' | ' ' | ASCII.LF | ASCII.CR | ASCII.HT
+                       and then not Marks (P, Gemma4_Call_Close)
+                     loop
+                        P := P + 1;
+                     end loop;
+                     declare
+                        Word : constant String := Reply (First .. P - 1);
+                     begin
+                        if Word = "" then
+                           return;
+                        elsif Word in "true" | "false" | "null"
+                          or else (Word (Word'First) in '-' | '0' .. '9'
+                                   and then (for all C of Word => C in '0' .. '9' | '-' | '+' | '.' | 'e' | 'E'))
+                        then
+                           Append (Built, Word);
+                        else
+                           Append (Built, Model_Runner.Text.JSON_Quoted (Word));
+                        end if;
+                        Ok := True;
+                     end;
+                  end;
+               end if;
+            end Read_Value;
+         begin
+            Index := Reply'First;
+            while Index <= Reply'Last loop
+               if Marks (Index, Gemma4_Call_Open) then
+                  declare
+                     Name_First : constant Natural := Index + Gemma4_Call_Open'Length;
+                     P          : Natural := Name_First;
+                     Ok         : Boolean := False;
+                  begin
+                     while P <= Reply'Last and then Reply (P) /= '{'
+                       and then not Marks (P, Gemma4_Call_Close)
+                       and then not Marks (P, Gemma4_Call_Open)
+                     loop
+                        P := P + 1;
+                     end loop;
+                     declare
+                        Name : constant String := Trimmed (Reply (Name_First .. P - 1));
+                     begin
+                        if P <= Reply'Last and then Reply (P) = '{' and then Name /= "" then
+                           Built := Ada.Strings.Unbounded.Null_Unbounded_String;
+                           Read_Value (P, Ok);
+                        end if;
+                        if Ok then
+                           Store_Object (Name, Ada.Strings.Unbounded.To_String (Built));
+                           if not Read_On then
+                              return;
+                           end if;
+                           Skip (P);
+                           if Marks (P, Gemma4_Call_Close) then
+                              P := P + Gemma4_Call_Close'Length;
+                           end if;
+                           Index := P;
+                        else
+                           --  Passed to the next call, and said after; with
+                           --  none after, the reply was cut in it.
+                           declare
+                              Next : constant Natural :=
+                                Ada.Strings.Fixed.Index
+                                  (Reply (Name_First .. Reply'Last), Gemma4_Call_Open);
+                           begin
+                              if Next = 0 then
+                                 Malformed;
+                                 return;
+                              end if;
+                              Lose;
+                              Index := Next;
+                           end;
+                        end if;
+                     end;
+                  end;
+               else
+                  Index := Index + 1;
+               end if;
             end loop;
          end;
 

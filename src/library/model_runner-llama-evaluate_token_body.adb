@@ -9,16 +9,12 @@ procedure Evaluate_Token_Body
    Status : out E.Error_Info)
 is
    Settings  : constant Configuration := Source.Settings;
-   Head_Size : constant Element_Count := Element_Count (Settings.Head_Size);
-   Value_Size : constant Element_Count :=
-     Element_Count (Settings.Value_Size);
    Heads     : constant Element_Count := Element_Count (Settings.Heads);
-   KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
-   KV_Width  : constant Element_Count := KV_Heads * Head_Size;
+   KV_Width  : constant Element_Count := Element_Count (Key_Row_Width (Settings));
 
    --  The values are their own width, so they are their own cache. The
    --  two were one number until a model stated them apart.
-   V_Width   : constant Element_Count := KV_Heads * Value_Size;
+   V_Width   : constant Element_Count := Element_Count (Value_Row_Width (Settings));
 
    --  And from one position's values to the next's: a value's width, or a
    --  key's where the values are the keys' rows (Values_In_Keys).
@@ -367,6 +363,9 @@ is
          --  Gemma4's windowed layers (Head_Of).
          Head_Size  : Element_Count := 0;
          Value_Size : Element_Count := 0;
+
+         --  And how many query heads share a key-value head there.
+         Group_Size : Element_Count := 1;
       end record;
 
    overriding procedure Run
@@ -401,7 +400,7 @@ is
             Item.Key_Scales.all, Item.Value_Scales.all,
             Share.Base, Share.V_Base, Share.Rows_Base, KV_Width,
             V_Width, Heads, Share.Head_Size, Share.Value_Size,
-            Element_Count (Settings.Group_Size),
+            Share.Group_Size,
             Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
             Settings.Max_Bias, Share.Upto, Share.Sinks,
             From, To, Item.Score_Room,
@@ -419,7 +418,7 @@ is
          --  sixty-four, which Blend_Exact sums otherwise.
          declare
             Group_Size : constant Element_Count :=
-              Element_Count (Settings.Group_Size);
+              Share.Group_Size;
             Blocks     : constant Boolean :=
               Settings.Max_Bias = 0.0
               and then Share.Sinks = null
@@ -770,6 +769,11 @@ begin
            Element_Count (Value_Of (Settings, Natural (Index)));
          Rotary     : constant Element_Count :=
            Element_Count (Rotary_Of (Settings, Natural (Index)));
+
+         --  And its key-value heads, which Gemma4's 12B has eight of on its
+         --  windowed layers and one of on its global ones (KV_Heads_Of).
+         KV_Heads   : constant Element_Count :=
+           Element_Count (KV_Heads_Of (Settings, Natural (Index)));
 
          --  The layer whose keys and values this one attends over: its
          --  own, but for Gemma4's last layers, which keep none and read an
@@ -1715,7 +1719,8 @@ begin
                   Sinks    => Current.Sinks,
                   Ok       => True,
                   Head_Size  => Head_Size,
-                  Value_Size => Value_Size);
+                  Value_Size => Value_Size,
+                  Group_Size => Element_Count (Group_Of (Settings, Natural (Index))));
                Shared : E.Error_Info;
             begin
 

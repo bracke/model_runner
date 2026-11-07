@@ -372,6 +372,11 @@ package body Tests.Template_Cases is
         (Tmpl.Recognise ("[INST] {{ m.content }} [/INST]") = "",
          "a template in no carried format is not recognised as one");
       Assert (Tmpl.Recognise ("") = "", "an empty template is not recognised");
+      --  Gemma4's own template, by the call it writes, read in its form.
+      Assert (Tmpl.Recognise ("{{- '<|turn>model' -}}{{- '<|tool_call>call:' + name -}}") = Tmpl.Gemma4_Shape
+              and then Model_Runner.Tools."=" (Tmpl.Syntax_Of (Tmpl.Gemma4_Shape),
+                                               Model_Runner.Tools.Gemma4_Call),
+              "a Gemma4 template was not recognised by its call, or not read in its form");
 
       Assert (Tmpl.Syntax_Of ("qwen3-coder") = Model_Runner.Tools.Qwen_XML,
               "qwen3-coder calls are read as <function=..>");

@@ -730,7 +730,7 @@ begin
             then Element_Count (Item.Settings.Heads) * Head else Wide);
          Own_KV    : constant Element_Count :=
            (if Item.Settings.Kind = Gemma4
-            then Element_Count (Item.Settings.KV_Heads) * Head else KV);
+            then Element_Count (KV_Heads_Of (Item.Settings, Index)) * Head else KV);
          Own_Blend : constant Element_Count :=
            (if Item.Settings.Kind = Gemma4
             then Element_Count (Item.Settings.Heads)
@@ -1701,7 +1701,7 @@ begin
                Resolve
                  (Item, Source, Layer_Key (Index, "attn_v.weight"),
                   (if Item.Settings.Kind = Gemma4
-                   then Element_Count (Item.Settings.KV_Heads)
+                   then Element_Count (KV_Heads_Of (Item.Settings, Index))
                         * Element_Count (Value_Of (Item.Settings, Index))
                    else KV_Out),
                   Width, Current.Value, Status, Repack);

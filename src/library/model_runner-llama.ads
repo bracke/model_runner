@@ -374,6 +374,9 @@ package Model_Runner.Llama is
    --  ask without the file in hand.
    type Layer_Flags is array (0 .. Max_Block_Count - 1) of Boolean;
 
+   --  A count a layer, nought where the layer takes the model's.
+   type Layer_Counts is array (0 .. Max_Block_Count - 1) of Natural;
+
    --
    --  Every field is read from metadata through a typed accessor and range
    --  checked; the derived fields are checked for exact divisibility so that
@@ -744,6 +747,12 @@ package Model_Runner.Llama is
       --  layers, gated into each layer's output. Nought where there is
       --  none.
       Layer_Input      : Natural := 0;
+
+      --  Gemma4's key-value heads a layer, where they differ from layer to
+      --  layer: eight on the 12B's windowed layers and one on its global
+      --  ones. Nought where a layer has the model's KV_Heads, which is
+      --  every layer of every other architecture.
+      KV_Counts        : Layer_Counts := [others => 0];
    end record;
 
    --  A layer's key width, as the layer reads it: the windowed layers'
@@ -774,6 +783,41 @@ package Model_Runner.Llama is
    function Rotary_Of (Settings : Configuration; Index : Natural) return Natural
    is (if Settings.Local_Rotary > 0 and then Settings.Window_Layers (Index)
        then Settings.Local_Rotary else Settings.Rotary);
+
+   --  A layer's key-value heads: its own count where the file states them
+   --  a layer and they differ (KV_Counts), the model's otherwise.
+   --
+   --  @param Settings Configuration to read.
+   --  @param Index Layer to ask about.
+   --  @return The count.
+   function KV_Heads_Of (Settings : Configuration; Index : Natural) return Natural
+   is (if Settings.KV_Counts (Index) > 0 then Settings.KV_Counts (Index) else Settings.KV_Heads);
+
+   --  How many query heads share a layer's key-value head.
+   --
+   --  @param Settings Configuration to read.
+   --  @param Index Layer to ask about.
+   --  @return The count.
+   function Group_Of (Settings : Configuration; Index : Natural) return Natural
+   is (if KV_Heads_Of (Settings, Index) = 0 then Settings.Group_Size
+       else Settings.Heads / KV_Heads_Of (Settings, Index));
+
+   --  The width of a row of the key cache and of the value cache: a
+   --  layer's key-value heads by its head width, at the widest layer --
+   --  every layer's rows are that wide, and a narrower layer uses the
+   --  front of each. KV_Heads by Head_Size and by Value_Size everywhere
+   --  but Gemma4.
+   --
+   --  @param Settings Configuration to read.
+   --  @return The width.
+   function Key_Row_Width (Settings : Configuration) return Natural;
+
+   --  The width of a row of the value cache, as Key_Row_Width says the
+   --  key cache's.
+   --
+   --  @param Settings Configuration to read.
+   --  @return The width.
+   function Value_Row_Width (Settings : Configuration) return Natural;
 
    --  The layer whose keys and values a layer attends over: its own, or
    --  for a layer past Shared_KV_From the last layer before that of its

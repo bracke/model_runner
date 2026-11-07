@@ -50,9 +50,8 @@ is
    Value_Size : constant Element_Count :=
      Element_Count (Settings.Value_Size);
    Heads     : constant Element_Count := Element_Count (Settings.Heads);
-   KV_Heads  : constant Element_Count := Element_Count (Settings.KV_Heads);
-   KV_Width  : constant Element_Count := KV_Heads * Head_Size;
-   V_Width   : constant Element_Count := KV_Heads * Value_Size;
+   KV_Width  : constant Element_Count := Element_Count (Key_Row_Width (Settings));
+   V_Width   : constant Element_Count := Element_Count (Value_Row_Width (Settings));
 
    --  And from one position's cached values to the next's: a value's
    --  width, or a key's where the values are the keys' rows
@@ -1073,6 +1072,10 @@ begin
            (if Settings.Kind = Gemma4 then Heads * Head_Size else Evaluate_Batch_Body.Wide);
          Blend      : constant Element_Count :=
            (if Settings.Kind = Gemma4 then Heads * Value_Size else Evaluate_Batch_Body.Blend);
+         --  And its key-value heads, which Gemma4's 12B has eight of on its
+         --  windowed layers and one of on its global ones (KV_Heads_Of).
+         KV_Heads   : constant Element_Count :=
+           Element_Count (KV_Heads_Of (Settings, Natural (Index)));
          Row_KV     : constant Element_Count := KV_Heads * Head_Size;
          Row_V      : constant Element_Count := KV_Heads * Value_Size;
 
@@ -2875,7 +2878,7 @@ begin
                                  Item'Unchecked_Access.Value_Scales.all,
                                  Base, V_Base, Rows_Base, KV_Width, V_Width,
                                  Heads, Head_Size, Value_Size,
-                                 Element_Count (Settings.Group_Size),
+                                 Element_Count (Group_Of (Settings, Natural (Index))),
                                  First_Cell, Last_Cell, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
                                  Query_Cell, Current.Sinks,
@@ -2889,7 +2892,7 @@ begin
                                  Item'Unchecked_Access.Values.all,
                                  Base, V_Base, KV_Width, V_Stride, Heads,
                                  Head_Size, Value_Size,
-                                 Element_Count (Settings.Group_Size),
+                                 Element_Count (Group_Of (Settings, Natural (Index))),
                                  First_Cell, Last_Cell, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
                                  Query_Cell, Current.Sinks,
@@ -2903,7 +2906,7 @@ begin
                                  Item'Unchecked_Access.Half_Values.all,
                                  Base, V_Base, KV_Width, V_Stride, Heads,
                                  Head_Size, Value_Size,
-                                 Element_Count (Settings.Group_Size),
+                                 Element_Count (Group_Of (Settings, Natural (Index))),
                                  First_Cell, Last_Cell, Scale,
                                  Settings.Attention_Cap, Settings.Max_Bias,
                                  Query_Cell, Current.Sinks,
@@ -2949,7 +2952,7 @@ begin
                                        Item'Unchecked_Access.Values.all,
                                        Base, V_Base, KV_Width, V_Stride,
                                        Head_Size, Value_Size,
-                                       Element_Count (Settings.Group_Size),
+                                       Element_Count (Group_Of (Settings, Natural (Index))),
                                        Heads, Firsts, Lasts, Queries, Scale,
                                        Settings.Attention_Cap,
                                        Settings.Max_Bias, Current.Sinks,
@@ -2964,7 +2967,7 @@ begin
                                        Item'Unchecked_Access.Half_Values.all,
                                        Base, V_Base, KV_Width, V_Stride,
                                        Head_Size, Value_Size,
-                                       Element_Count (Settings.Group_Size),
+                                       Element_Count (Group_Of (Settings, Natural (Index))),
                                        Heads, Firsts, Lasts, Queries, Scale,
                                        Settings.Attention_Cap,
                                        Settings.Max_Bias, Current.Sinks,

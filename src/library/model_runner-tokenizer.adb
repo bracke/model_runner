@@ -3714,6 +3714,15 @@ package body Model_Runner.Tokenizer is
       --  stand-ins: a character in one that is also a stand-in for a byte
       --  -- U+00A1 to U+0143 -- turned into that byte, which is no UTF-8.
       --  llama.cpp copies them as written.
+      --  Gemma4's reasoning opens with <|channel> and closes with
+      --  <channel|>, each a token of its own: read as the <think> and
+      --  </think> every reader of a reply here knows reasoning by.
+      if Item.Raw_Pieces and then Raw = "<|channel>" then
+         return "<think>";
+      elsif Item.Raw_Pieces and then Raw = "<channel|>" then
+         return "</think>";
+      end if;
+
       if Item.Model = Kind_BPE
         and then Class_Of (Item, Token) in Class_Control | Class_User_Defined
       then

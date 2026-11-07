@@ -4376,6 +4376,22 @@ package body Tests.Tools_Cases is
             "edit({""count"": 1})edit({""count"": 2})",
             "a call whose close was missing took the next call with it");
 
+      --  Gemma4's calls: bare keys, strings between its marks, numbers,
+      --  truth, lists and objects, each written again as JSON; the words
+      --  before the first call are what it said.
+      declare
+         Q     : constant String := Tools.Gemma4_Quote;
+         Reply : constant String :=
+           "Let me edit." & Tools.Gemma4_Call_Open & "edit{count:2,text:" & Q & "a, b: {c}" & Q
+           & ",tags:[" & Q & "x" & Q & ",3],deep:{on:true,off:null}}" & Tools.Gemma4_Call_Close;
+      begin
+         Same (Read_Kept (Reply, Tools.Gemma4_Call),
+               "edit({""count"": 2, ""text"": ""a, b: {c}"", ""tags"": [""x"", 3], ""deep"": "
+               & "{""on"": true, ""off"": null}}) | NO_ERROR",
+               "a Gemma4 call was not read as the JSON it means");
+         Same (Span (Reply, Tools.Gemma4_Call), "Let me edit.", "a Gemma4 reply's words were not cut at its call");
+      end;
+
       --  In every syntax a call that will not read leaves the calls after
       --  it, and is said: stopped at it, the rest were dropped and the
       --  model told the others ran.
@@ -4409,6 +4425,10 @@ package body Tests.Tools_Cases is
          Same (Read_Kept (">>>edit" & LF & "{""count"": 1" & LF & ">>>edit" & LF & "{""count"": 2}",
                           Tools.Recipient_JSON),
                Kept, "a recipient call that would not read dropped the next");
+         Same (Read_Kept (Tools.Gemma4_Call_Open & "edit{count:}" & Tools.Gemma4_Call_Close
+                          & Tools.Gemma4_Call_Open & "edit{count:2}" & Tools.Gemma4_Call_Close,
+                          Tools.Gemma4_Call),
+               Kept, "a Gemma4 call that would not read dropped the next");
          Same (Read_Kept ("<|channel|>commentary " & Tools.Harmony_Recipient & "edit" & Tools.Harmony_Message
                           & "{""count"": 1" & "<|call|>"
                           & "<|channel|>commentary " & Tools.Harmony_Recipient & "edit"

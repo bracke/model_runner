@@ -12,9 +12,9 @@ is
      Element_Count (Settings.Head_Size);
    KV_Heads  : constant Element_Count :=
      Element_Count (Settings.KV_Heads);
-   KV_Width  : constant Element_Count := KV_Heads * Head_Size;
-   V_Width   : constant Element_Count :=
-     KV_Heads * Element_Count (Settings.Value_Size);
+   --  A row of the cache, at the widest layer's width (Key_Row_Width).
+   KV_Width  : constant Element_Count := Element_Count (Key_Row_Width (Settings));
+   V_Width   : constant Element_Count := Element_Count (Value_Row_Width (Settings));
 
    Moved : Natural;
 begin
@@ -177,9 +177,16 @@ begin
                         end loop;
                      end if;
 
+                     --  The layer's own heads, widths and rotation, over
+                     --  as much of the row as they fill: the rotation turns
+                     --  nothing in a row of another width.
                      K.Apply_Rotary
-                       (Item.Key_Row.all, KV_Heads, Head_Size,
-                        Element_Count (Settings.Rotary), Drop,
+                       (Item.Key_Row.all
+                          (0 .. Element_Count (KV_Heads_Of (Settings, Natural (Index))
+                                               * Head_Of (Settings, Natural (Index))) - 1),
+                        Element_Count (KV_Heads_Of (Settings, Natural (Index))),
+                        Element_Count (Head_Of (Settings, Natural (Index))),
+                        Element_Count (Rotary_Of (Settings, Natural (Index))), Drop,
                         Turn_Base (Settings, Natural (Index)),
                         Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
                         Settings.Pairing, Backwards => True);

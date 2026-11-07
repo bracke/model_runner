@@ -142,8 +142,8 @@ package body Model_Runner.Llama is
    function Value_Stride (Item : Session) return Element_Count
    is (Element_Count
          (if Item.Values_In_Keys
-          then Item.Owner.Settings.KV_Heads * Item.Owner.Settings.Head_Size
-          else Item.Owner.Settings.KV_Heads * Item.Owner.Settings.Value_Size));
+          then Key_Row_Width (Item.Owner.Settings)
+          else Value_Row_Width (Item.Owner.Settings)));
 
    function Rows_At (Item : Session; Layer : Natural) return Element_Count
    is (if Item.At_Rows = null then 0 else Item.At_Rows.all (Layer));
@@ -193,6 +193,30 @@ package body Model_Runner.Llama is
    use type Model_Runner.Bytes.Byte;
    use type Model_Runner.Tensors.Real_Array_Access;
    use type Model_Runner.Tensors.Half_Array_Access;
+
+   function Key_Row_Width (Settings : Configuration) return Natural is
+      Widest : Natural :=
+        (if Settings.Kind = Gemma4 then 0 else Settings.KV_Heads * Settings.Head_Size);
+   begin
+      if Settings.Kind = Gemma4 then
+         for Index in 0 .. Settings.Layers - 1 loop
+            Widest := Natural'Max (Widest, KV_Heads_Of (Settings, Index) * Head_Of (Settings, Index));
+         end loop;
+      end if;
+      return Widest;
+   end Key_Row_Width;
+
+   function Value_Row_Width (Settings : Configuration) return Natural is
+      Widest : Natural :=
+        (if Settings.Kind = Gemma4 then 0 else Settings.KV_Heads * Settings.Value_Size);
+   begin
+      if Settings.Kind = Gemma4 then
+         for Index in 0 .. Settings.Layers - 1 loop
+            Widest := Natural'Max (Widest, KV_Heads_Of (Settings, Index) * Value_Of (Settings, Index));
+         end loop;
+      end if;
+      return Widest;
+   end Value_Row_Width;
 
    function Score_Scale (Settings : Configuration) return Real
    is (if Settings.Kind in Granite | Granite_MoE and then Settings.Attention_Mul /= 0.0
@@ -4864,9 +4888,7 @@ package body Model_Runner.Llama is
       Halves : constant Element_Count :=
         (if Item.Owner = null or else Item.Cells = null then 0
          else Element_Count
-                (Item.Owner.Settings.KV_Heads
-                 * (Item.Owner.Settings.Head_Size
-                    + Item.Owner.Settings.Value_Size))
+                ((Key_Row_Width (Item.Owner.Settings) + Value_Row_Width (Item.Owner.Settings)))
               * Widest_Cells (Item.Cells.all));
    begin
       return (Key_Words       => Key_Words,
@@ -4892,11 +4914,9 @@ package body Model_Runner.Llama is
    --  storages, so each region is sized by its own.
    function Packed_Page_Layout (Item : Session) return Packed_Block is
       KV_Width : constant Element_Count :=
-        Element_Count (Item.Owner.Settings.KV_Heads
-                       * Item.Owner.Settings.Head_Size);
+        Element_Count (Key_Row_Width (Item.Owner.Settings));
       V_Width  : constant Element_Count :=
-        Element_Count (Item.Owner.Settings.KV_Heads
-                       * Item.Owner.Settings.Value_Size);
+        Element_Count (Value_Row_Width (Item.Owner.Settings));
       Rows : constant Element_Count := Element_Count (Page_Positions);
 
       Key_Words : constant Element_Count :=
@@ -4950,9 +4970,7 @@ package body Model_Runner.Llama is
    is (if Item.Held = Exact then Block_Span_Of (Item)
        elsif Item.Held in Eighth | Fourth
        then Element_Count
-              (Item.Owner.Settings.KV_Heads
-               * (Item.Owner.Settings.Head_Size
-                  + Item.Owner.Settings.Value_Size))
+              ((Key_Row_Width (Item.Owner.Settings) + Value_Row_Width (Item.Owner.Settings)))
             * (if Item.Cells = null then 0 else Widest_Cells (Item.Cells.all))
        else 0);
 
@@ -5115,9 +5133,9 @@ package body Model_Runner.Llama is
             Settings : Configuration renames Item.Owner.Settings;
 
             KV_Width : constant Element_Count :=
-              Element_Count (Settings.KV_Heads * Settings.Head_Size);
+              Element_Count (Key_Row_Width (Settings));
             V_Width  : constant Element_Count :=
-              Element_Count (Settings.KV_Heads * Settings.Value_Size);
+              Element_Count (Value_Row_Width (Settings));
 
             Layers : constant Natural :=
               (if Item.Cells = null then 0 else Item.Cells.all'Length);
@@ -5247,9 +5265,9 @@ package body Model_Runner.Llama is
          Settings : Configuration renames Item.Owner.Settings;
 
          KV_Width : constant Element_Count :=
-           Element_Count (Settings.KV_Heads * Settings.Head_Size);
+           Element_Count (Key_Row_Width (Settings));
          V_Width  : constant Element_Count :=
-           Element_Count (Settings.KV_Heads * Settings.Value_Size);
+           Element_Count (Value_Row_Width (Settings));
       begin
          for Layer in 0 .. Block_Layers (Item.all) - 1 loop
             declare
@@ -5913,8 +5931,7 @@ package body Model_Runner.Llama is
        then Element_Count (Item.Owner.Settings.Head_Size
                            - Item.Owner.Settings.Value_Size)
        else Element_Count (Page_Positions)
-            * Element_Count (Item.Owner.Settings.KV_Heads
-                             * Item.Owner.Settings.Head_Size));
+            * Element_Count (Key_Row_Width (Item.Owner.Settings)));
 
    ------------------
    -- Holds_Block --
@@ -6188,9 +6205,9 @@ package body Model_Runner.Llama is
          Settings : constant Configuration := Source.Settings;
 
          KV_Width : constant Element_Count :=
-           Element_Count (Settings.KV_Heads * Settings.Head_Size);
+           Element_Count (Key_Row_Width (Settings));
          V_Width  : constant Element_Count :=
-           Element_Count (Settings.KV_Heads * Settings.Value_Size);
+           Element_Count (Value_Row_Width (Settings));
 
          Owed  : constant Element_Count := Element_Count (Item.Owed_Count);
          First : constant Element_Count := Element_Count (Item.Owed_At);
@@ -8419,7 +8436,7 @@ package body Model_Runner.Llama is
       subtype U64 is Interfaces.Unsigned_64;
 
       Row   : constant U64 :=
-        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size)
+        U64 (Key_Row_Width (Settings))
         + U64 (Stored_Values (Settings, Held));
       Sinks : constant U64 := U64 (Sink_Footprint (Settings));
       Cells : U64 := 0;
@@ -8594,7 +8611,7 @@ package body Model_Runner.Llama is
       subtype U64 is Interfaces.Unsigned_64;
 
       Row   : constant U64 :=
-        U64 (Settings.KV_Heads) * U64 (Settings.Head_Size)
+        U64 (Key_Row_Width (Settings))
         + U64 (Stored_Values (Settings, Held));
       Sinks : constant U64 := U64 (Sink_Footprint (Settings));
 

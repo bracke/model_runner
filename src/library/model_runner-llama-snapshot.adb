@@ -9,17 +9,17 @@ is
 
    Held     : constant B.Byte_Count := B.Byte_Count (Item.Committed);
    KV_Width : constant B.Byte_Count :=
-     B.Byte_Count (Settings.KV_Heads * Settings.Head_Size);
+     B.Byte_Count (Key_Row_Width (Settings));
    --  A position's values as stored: none where they are the keys' rows.
    V_Width  : constant B.Byte_Count :=
      (if Item.Values_In_Keys then 0
-      else B.Byte_Count (Settings.KV_Heads * Settings.Value_Size));
+      else B.Byte_Count (Value_Row_Width (Settings)));
 
    --  And the block past the stack's, which keeps its own values whole
    --  where it keeps its own rows.
    Block_V  : constant B.Byte_Count :=
      (if Item.Next_Keys /= null
-      then B.Byte_Count (Settings.KV_Heads * Settings.Value_Size)
+      then B.Byte_Count (Value_Row_Width (Settings))
       else V_Width);
    Layers   : constant B.Byte_Count := B.Byte_Count (Settings.Layers);
 

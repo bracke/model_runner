@@ -15309,6 +15309,19 @@ package body Tests.Inference_Cases is
                  and then L.Cache_Layer (Shaped, 3) = 3 and then L.Cache_Layer (Shaped, 4) = 2
                  and then L.Cache_Layer (Shaped, 5) = 3,
                  "a gemma4 layer's widths or the cache it reads were not its own");
+         --  Key-value heads a layer: eight on the windowed layers, one on
+         --  the global ones, as the 12B states them; the cache's rows the
+         --  widest layer's.
+         Shaped.Heads := 16;
+         Shaped.KV_Heads := 8;
+         Shaped.Group_Size := 2;
+         Shaped.KV_Counts := [3 | 5 => 1, others => 8];
+         Assert (L.KV_Heads_Of (Shaped, 0) = 8 and then L.KV_Heads_Of (Shaped, 3) = 1
+                 and then L.Group_Of (Shaped, 0) = 2 and then L.Group_Of (Shaped, 3) = 16
+                 and then L.Key_Row_Width (Shaped) = 8 * 256
+                 and then L.Value_Row_Width (Shaped) = 8 * 256,
+                 "a gemma4 layer's key-value heads, its group or the cache's row were not its own: "
+                 & Natural'Image (L.Key_Row_Width (Shaped)));
       end;
 
       --  OLMo-3 windows the layers its list marks, and not by its period.
