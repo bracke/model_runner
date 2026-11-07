@@ -6542,7 +6542,8 @@ package body Model_Runner.Backend.Device is
                         Model_Runner.Bytes.Byte_Count (Slots * Gate_Rows) * 4, 0,
                         Natural (Slots), Natural (Gate_Rows),
                         Products.Length (Steps), 0, Added,
-                        Kept => False, Multiply => True, Per_Member => True);
+                        Kept => False, Multiply => True, Per_Member => True,
+                        Fresh => True);
                      if not Added then
                         return;
                      end if;

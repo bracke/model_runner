@@ -13720,7 +13720,8 @@ package body Model_Runner.Platform.Device.Products is
       Cap           : Model_Runner.Numerics.Real := 0.0;
       Fold          : Boolean := False;
       Multiply      : Boolean := False;
-      Per_Member    : Boolean := False) is
+      Per_Member    : Boolean := False;
+      Fresh         : Boolean := False) is
 
       use type Model_Runner.Numerics.Real;
 
@@ -13776,6 +13777,12 @@ package body Model_Runner.Platform.Device.Products is
                  and then (Sliced or else Route_Step /= 0 or else Count /= 0
                            or else Cap_Only or else Cap /= 0.0 or else Fold))
         or else (Per_Member and then not Multiply)
+        --  A fresh weight is a projection's, read where it lies each run.
+        or else (Fresh
+                 and then (Base = System.Null_Address
+                           or else Key /= System.Null_Address
+                           or else Sliced or else Route_Step /= 0 or else Count /= 0
+                           or else Cap /= 0.0 or else Fold))
         --  A gather the host chose: as many members as the source has.
         or else (Count > 0
                  and then Steps.Items (Source_Step).Gathers /= Count)
@@ -13807,7 +13814,7 @@ package body Model_Runner.Platform.Device.Products is
          Key => Key,
          Chained => True, Reads => Source_Step, Reads_Two => Route_Step,
          Kept => Kept, Biases => True, Cap => Cap,
-         Scales => Multiply, Per_Member => Per_Member,
+         Scales => Multiply, Per_Member => Per_Member, Fresh => Fresh,
          Stack => (if Cap_Only then 0 else Experts), Each => Each,
          Used => (if Count > 0 then Count
                   elsif Route_Step = 0 then 0
@@ -15545,6 +15552,11 @@ package body Model_Runner.Platform.Device.Products is
       --  Room the angles need, which the widest rotating step decides.
       Turn_Room : Interfaces.Unsigned_64 := 0;
 
+      --  And the fresh weights' room after the widest table (Add_Bias's
+      --  Fresh), and where it begins.
+      Fresh_Room : Interfaces.Unsigned_64 := 0;
+      Fresh_At   : Interfaces.Unsigned_64 := 0;
+
       --  The clock reading a sequence's matrices are pinned from, so that
       --  acquiring the last of them cannot release the first.
       Pinned : Interfaces.Unsigned_64 := Interfaces.Unsigned_64'Last;
@@ -15825,6 +15837,13 @@ package body Model_Runner.Platform.Device.Products is
 
                Places (Index).Weight :=
                  Interfaces.Unsigned_64 (This.Stack * This.Each) * 4;
+
+               --  A fresh weight's place beside the angle tables, counted
+               --  from the end of the widest of them once all are known.
+               if This.Fresh then
+                  Places (Index).Base := Fresh_Room;
+                  Fresh_Room := Fresh_Room + (Places (Index).Weight + 15) / 16 * 16;
+               end if;
             elsif This.Attends then
                --  An attention step carries no matrix either, and reads a
                --  cache rather than a weight. What it needs that the shape
@@ -16299,6 +16318,7 @@ package body Model_Runner.Platform.Device.Products is
               or else (This.Routes and then This.Base = System.Null_Address)
               or else (This.Readies and then This.Base = System.Null_Address)
               or else (This.Biases and then This.Base = System.Null_Address)
+              or else (This.Biases and then This.Fresh)
             then
                goto Next_Step;
             end if;
@@ -16541,6 +16561,17 @@ package body Model_Runner.Platform.Device.Products is
          end if;
       end if;
 
+      --  The fresh weights after the angles, a line apart.
+      if Fresh_Room > 0 then
+         Fresh_At := (Turn_Room + 255) / 256 * 256;
+         Turn_Room := Fresh_At + Fresh_Room;
+         for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).Biases and then Steps.Items (Index).Fresh then
+               Places (Index).Base := Places (Index).Base + Fresh_At;
+            end if;
+         end loop;
+      end if;
+
       --  And the angles, where anything turns: written into a standing
       --  mapping as the activation is, because they change every call.
       if Turn_Room > 0 then
@@ -16599,6 +16630,27 @@ package body Model_Runner.Platform.Device.Products is
 
                   Into : Model_Runner.Bytes.Byte_Array (1 .. Span)
                     with Import, Address => Item.Turn_At;
+               begin
+                  Into := From;
+               end;
+            end if;
+         end loop;
+
+         --  And each fresh weight at its place.
+         for Index in 1 .. Steps.Held loop
+            if Steps.Items (Index).Biases and then Steps.Items (Index).Fresh then
+               declare
+                  use type System.Storage_Elements.Storage_Offset;
+                  Span : constant Model_Runner.Bytes.Byte_Count :=
+                    Model_Runner.Bytes.Byte_Count (Places (Index).Weight);
+                  From : Model_Runner.Bytes.Byte_Array (1 .. Span)
+                    with Import, Address => Steps.Items (Index).Base;
+                  Into : Model_Runner.Bytes.Byte_Array (1 .. Span)
+                    with Import,
+                         Address =>
+                           Item.Turn_At
+                           + System.Storage_Elements.Storage_Offset
+                               (Places (Index).Base);
                begin
                   Into := From;
                end;
@@ -17027,6 +17079,9 @@ package body Model_Runner.Platform.Device.Products is
                Told (1) :=
                  (if Steps.Items (Index).Base = System.Null_Address
                   then Told (2)
+                  elsif Steps.Items (Index).Fresh
+                  then (Buffer => Item.Turn_Buffer, Offset => 0,
+                        Extent => Item.Turn_Bytes)
                   else (Buffer => Places (Index).Buffer, Offset => 0,
                         Extent =>
                           Places (Index).Base + Places (Index).Weight));

@@ -15,6 +15,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Gemma 4 E4B on the device: 20.9 tokens a second generated and 400 read, from 17.7 and 290.** Its embedding a layer, a row a position that changes every run, went over as a weight borrowed for the run, and a run that borrows waits for itself to finish: every layer of every token waited on its own fence. A bias step's weight can now be fresh, copied beside the angle tables as they are and given back with nothing, and the layers run chained as any model's do. llama.cpp: 21.0 generated at the same depth, 423 read.
 - **A `/work` answer of status: blocked is taken as done where the task's checks pass on what it changed.** With files changed and no parts asked for, the task's own checks are run on the work; where they pass and run more than the command `true`, the task completes, its summary saying the agent said blocked and why. Where they fail, or check nothing, it stays blocked as before. Steelman-14B made the change a task asked for and said it was blocked, needing the harness to run the checks -- which then passed.
 
 - **GNAT's other layout complaints are quoted with what they ask for.** `(style) misplaced "then"` is followed by where `then` goes; `(style) incorrect layout` by how statements and `begin`, `elsif`, `else` and `end` stand, and the column the line starts in; a token or `end` "should be in column N" by the column the line starts in.

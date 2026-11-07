@@ -1396,6 +1396,11 @@ package Model_Runner.Platform.Device.Products is
    --  @param Per_Member With Multiply, a projection's weight that holds a
    --    slice of Each for every position rather than one for all of them;
    --    Experts is then how many positions, which the run's must be.
+   --  @param Fresh A projection's weight that changes every run, read out
+   --    of Base when the run is recorded and carried beside the angle
+   --    tables rather than kept: nothing is acquired or given back for it,
+   --    so it leaves the run as free of waiting as a step without one.
+   --    Key is then null.
    procedure Add_Bias
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -1415,7 +1420,8 @@ package Model_Runner.Platform.Device.Products is
       Cap           : Model_Runner.Numerics.Real := 0.0;
       Fold          : Boolean := False;
       Multiply      : Boolean := False;
-      Per_Member    : Boolean := False);
+      Per_Member    : Boolean := False;
+      Fresh         : Boolean := False);
 
    --  What an RWKV6 step does: see Add_Rwkv.
    type Rwkv_Mode is (Shift, Decay, Tanh, Squared_Relu, Finish, Save);
@@ -4820,6 +4826,7 @@ private
       --  a position (Per_Member); see Add_Bias.
       Scales     : Boolean := False;
       Per_Member : Boolean := False;
+      Fresh      : Boolean := False;
 
       --  A picking step, as Add_Pick describes it: of every Among
       --  stretches of Each in the step in Reads, the Which'th, written

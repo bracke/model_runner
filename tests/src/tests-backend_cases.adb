@@ -3579,10 +3579,11 @@ package body Tests.Backend_Cases is
    ------------------------------------------------------------
 
    --  Add_Bias's weight that multiplies rather than adds: one a position
-   --  (Gemma4's embedding a layer on its gate), uploaded for the run, and
-   --  then one for every position, kept (its scale on the layer's answer).
-   --  A projection first, so the two read a step's answer as a layer's do;
-   --  held against the host's arithmetic.
+   --  (Gemma4's embedding a layer on its gate), fresh -- read anew each run
+   --  -- and then one for every position, kept (its scale on the layer's
+   --  answer). A projection first, so the two read a step's answer as a
+   --  layer's do; held against the host's arithmetic, twice, the rows
+   --  changed between the two runs of the one sequence.
    procedure A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3634,9 +3635,6 @@ package body Tests.Backend_Cases is
                  Role => T.Role_Other, Length => B.Byte_Count (Weights.all'Length));
 
       T.Allocate (Count * Width, Rows);
-      for I in Rows'Range loop
-         Rows (I) := N.Real ((I * 5) mod 17) / 17.0 - 0.4;
-      end loop;
       T.Allocate (Width, Scale);
       Scale.all := [others => 0.75];
       for I in Input'Range loop
@@ -3649,7 +3647,7 @@ package body Tests.Backend_Cases is
       if Added then
          Products.Add_Bias (Steps, Rows.all (Rows'First)'Address, B.Byte_Count (Count * Width) * 4, 0,
                             Natural (Count), Natural (Width), Projected, 0, Added,
-                            Kept => False, Multiply => True, Per_Member => True);
+                            Kept => False, Multiply => True, Per_Member => True, Fresh => True);
       end if;
       if Added then
          Products.Add_Bias (Steps, Scale.all (Scale'First)'Address, B.Byte_Count (Width) * 4, 0, 1,
@@ -3657,21 +3655,26 @@ package body Tests.Backend_Cases is
                             Key => Scale.all (Scale'First)'Address, Kept => True, Multiply => True);
       end if;
       Assert (Added, "the sequence was refused");
-      Model_Runner.Backend.Device.Run_Steps (Steps, Input, Positive (Count), Answer (0)'Address, Status);
-      Assert (E.Is_Ok (Status), "the sequence would not run: " & Status.Code'Image);
+      for Round in N.Element_Count range 1 .. 2 loop
+         for I in Rows'Range loop
+            Rows (I) := N.Real ((I * 5 + Round * 3) mod 17) / 17.0 - 0.4;
+         end loop;
+         Model_Runner.Backend.Device.Run_Steps (Steps, Input, Positive (Count), Answer (0)'Address, Status);
+         Assert (E.Is_Ok (Status), "the sequence would not run: " & Status.Code'Image);
 
-      for P in 0 .. Count - 1 loop
-         for R in 0 .. Width - 1 loop
-            declare
-               Made : N.Wide_Real := 0.0;
-            begin
-               for C in 0 .. Width - 1 loop
-                  Made := Made + N.Wide_Real (Weight (R, C)) * N.Wide_Real (Input (P * Width + C));
-               end loop;
-               Made := Made * N.Wide_Real (Rows (P * Width + R)) * 0.75;
-               Worst := N.Wide_Real'Max (Worst, abs (Made - N.Wide_Real (Answer (P * Width + R))));
-               Largest := N.Wide_Real'Max (Largest, abs Made);
-            end;
+         for P in 0 .. Count - 1 loop
+            for R in 0 .. Width - 1 loop
+               declare
+                  Made : N.Wide_Real := 0.0;
+               begin
+                  for C in 0 .. Width - 1 loop
+                     Made := Made + N.Wide_Real (Weight (R, C)) * N.Wide_Real (Input (P * Width + C));
+                  end loop;
+                  Made := Made * N.Wide_Real (Rows (P * Width + R)) * 0.75;
+                  Worst := N.Wide_Real'Max (Worst, abs (Made - N.Wide_Real (Answer (P * Width + R))));
+                  Largest := N.Wide_Real'Max (Largest, abs Made);
+               end;
+            end loop;
          end loop;
       end loop;
 
