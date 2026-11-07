@@ -3574,6 +3574,116 @@ package body Tests.Backend_Cases is
               & " away from the host's, of" & N.Wide_Real'Image (Largest));
    end A_Join_Folded_Over_A_Later_Residual_Reads_Its_Own_Operand;
 
+   ------------------------------------------------------------------
+   -- An_Interleaved_Stack_Gathers_Each_Arm_At_Its_Own_Rows --
+   ------------------------------------------------------------------
+
+   --  Gemma4's experts' gate and up kept as one stack, each expert's gate
+   --  rows then its up rows: a gather of the gate arm and one of the up
+   --  arm, both over the one stack -- its slices twice an arm's rows apart,
+   --  the up arm a slice's rows in -- answer as each expert's own rows do
+   --  on the host.
+   procedure An_Interleaved_Stack_Gathers_Each_Arm_At_Its_Own_Rows
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      use type N.Wide_Real;
+
+      Width   : constant N.Element_Count := 128;
+      Feed    : constant N.Element_Count := 32;
+      Experts : constant N.Element_Count := 6;
+      Chosen  : constant Products.Member_List := [4, 1, 5, others => 0];
+      Used    : constant := 3;
+
+      Ready, Added : Boolean := False;
+      Status : E.Error_Info;
+      Steps  : Products.Sequence;
+
+      Weights : B.Byte_Array_Access;
+      Input   : N.Real_Array (0 .. Width - 1);
+      Answer  : N.Real_Array (0 .. 2 * Used * Feed - 1) := [others => 0.0];
+      Worst, Largest : N.Wide_Real := 0.0;
+      Row_Bytes : constant N.Element_Count := Width / 32 * 18;
+      Stack     : T.View;
+      Row_Of    : N.Real_Array (0 .. Width - 1);
+
+      function Weight (Row, Column : N.Element_Count) return N.Real is
+        (N.To_Real (N.To_Half (N.Real ((Row * 7 + Column * 3) mod 29) / 29.0 / 8.0 - 0.0625)));
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+      if not Ready then
+         Device_Notes.Skip ("for an interleaved stack's arms to be gathered");
+         return;
+      end if;
+
+      declare
+         Values : N.Real_Array (0 .. 2 * Feed * Experts * Width - 1);
+      begin
+         for Row in 0 .. 2 * Feed * Experts - 1 loop
+            for Column in 0 .. Width - 1 loop
+               Values (Row * Width + Column) := Weight (Row, Column);
+            end loop;
+         end loop;
+         declare
+            Encoded : constant B.Byte_Array := Fixtures.Encode_Q4_0 (Values);
+         begin
+            B.Allocate (Encoded'Length, Weights);
+            Weights.all := Encoded;
+         end;
+      end;
+      Stack := (Format => G.Type_Q4_0, Rows => 2 * Feed * Experts, Columns => Width,
+                Base => Weights.all'Address, Span => B.Byte_Count (Weights.all'Length),
+                Offset => 0, Interleaved => False, Role => T.Role_Other,
+                Length => B.Byte_Count (Weights.all'Length));
+      for I in Input'Range loop
+         Input (I) := N.Real ((I * 13) mod 37) / 37.0 - 0.5;
+      end loop;
+
+      --  An arm a sequence, each its answer's own room: the one stack
+      --  uploaded once and read by both.
+      for Arm in 0 .. 1 loop
+         Products.Open_Sequence (Steps);
+         Products.Add_Gathered_Product
+           (Steps, Weights.all'Address, B.Byte_Count (Weights.all'Length), 0,
+            Products.Packed_Q4_0, Natural (2 * Feed * Experts), Natural (Feed),
+            Natural (Width), Chosen, Used, Added,
+            Key => Weights.all'Address, Kept => True,
+            Region_At => Arm * Natural (Feed * Row_Bytes),
+            Slice_Rows => Natural (2 * Feed));
+         Assert (Added, "the sequence was refused");
+         Model_Runner.Backend.Device.Run_Steps
+           (Steps, Input, 1, Answer (N.Element_Count (Arm) * Used * Feed)'Address, Status);
+         Assert (E.Is_Ok (Status), "the sequence would not run: " & Status.Code'Image);
+      end loop;
+
+      for Arm in N.Element_Count range 0 .. 1 loop
+         for M in N.Element_Count range 0 .. Used - 1 loop
+            for R in 0 .. Feed - 1 loop
+               declare
+                  Expert : constant N.Element_Count := N.Element_Count (Chosen (Natural (M) + 1));
+                  Row    : constant N.Element_Count := Expert * 2 * Feed + Arm * Feed + R;
+                  Made   : N.Wide_Real := 0.0;
+               begin
+                  T.Dequantize_Row (Stack, Row, Row_Of, Status);
+                  for C in 0 .. Width - 1 loop
+                     Made := Made + N.Wide_Real (Row_Of (C)) * N.Wide_Real (Input (C));
+                  end loop;
+                  Worst := N.Wide_Real'Max
+                    (Worst, abs (Made - N.Wide_Real (Answer (Arm * Used * Feed + M * Feed + R))));
+                  Largest := N.Wide_Real'Max (Largest, abs Made);
+               end;
+            end loop;
+         end loop;
+      end loop;
+
+      B.Free (Weights);
+      Model_Runner.Backend.Device.Close;
+      Assert (Largest > 0.0 and then Worst <= 1.0E-2 * Largest,
+              "an interleaved stack's arms answer" & N.Wide_Real'Image (Worst)
+              & " away from the host's, of" & N.Wide_Real'Image (Largest));
+   end An_Interleaved_Stack_Gathers_Each_Arm_At_Its_Own_Rows;
+
    ------------------------------------------------------------
    -- A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row --
    ------------------------------------------------------------
@@ -15503,6 +15613,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, A_Join_Folded_Over_A_Later_Residual_Reads_Its_Own_Operand'Access,
          "a join folded over a residual made after the product's operand reads that operand's halves");
+      Register_Routine
+        (T, An_Interleaved_Stack_Gathers_Each_Arm_At_Its_Own_Rows'Access,
+         "an interleaved stack's gate and up arms are gathered each at its own rows");
       Register_Routine
         (T, A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row'Access,
          "a weight that multiplies scales each position by its own row, then all by one kept");

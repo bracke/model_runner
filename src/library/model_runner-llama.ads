@@ -3190,6 +3190,13 @@ private
 
       --  The router's folded columns, in binary32, that Router views.
       Router_Folded     : Model_Runner.Bytes.Byte_Array_Access := null;
+
+      --  Gemma4's experts' gate and up as the file keeps them, one stack
+      --  of each expert's gate rows then its up rows, for the device's
+      --  whole layer; and each expert's scale a row of the model's width,
+      --  as the device multiplies its answer by. Empty and null otherwise.
+      Fused_Stack       : Model_Runner.Tensors.View;
+      Expert_Scale_Rows : Model_Runner.Tensors.Real_Array_Access := null;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;

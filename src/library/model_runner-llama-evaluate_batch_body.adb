@@ -283,8 +283,8 @@ is
                  and then Count >= Element_Count (Stream_Least)))
        and then L.Experts /= null
        and then T.Is_Present (L.Router)
-       and then T.Is_Present (L.Gate_Stack)
-       and then T.Is_Present (L.Up_Stack)
+       and then ((T.Is_Present (L.Gate_Stack) and then T.Is_Present (L.Up_Stack))
+                 or else T.Is_Present (L.Fused_Stack))
        and then T.Is_Present (L.Down_Stack)
        --  The expert biases go as steps of the sequence, the two
        --  arms' together: one arm biased and the other not is a
@@ -476,7 +476,8 @@ is
                  or else (L.Up_Bias = null and then L.Down_Bias = null))
        and then (L.Post_Feed_Norm = null
                  or else Settings.Experts = 0
-                 or else Normalizes_After (Settings.Kind)));
+                 or else Normalizes_After (Settings.Kind)
+                 or else Settings.Kind = Gemma4));
 
    --  Whichever of the two a layer is: what the carry from the layer
    --  before asks of the layer after.
@@ -2016,7 +2017,7 @@ begin
                      --  Not Gemma4's: its router reads the experts' own input, which
                      --  a front half that routed would not have made.
                      Router     =>
-                       (if Settings.Experts > 0 and then Settings.Kind /= Gemma4
+                       (if Settings.Experts > 0 and then (Settings.Kind /= Gemma4 or else not Half)
                         then Current.Router
                         else T.Empty_View),
                      Router_Bias => Current.Router_Bias,
@@ -2124,7 +2125,15 @@ begin
                      Input_Post_Norm => Current.Input_Post_Norm,
                      Layer_Input     => Layer_Slices (Natural (Index)),
                      Output_Scale    =>
-                       (if Half then null else Current.Scale_Row));
+                       (if Half then null else Current.Scale_Row),
+                     Fused_Stack      => Current.Fused_Stack,
+                     Expert_Norm      =>
+                       (if Settings.Kind = Gemma4 and then Settings.Experts > 0
+                          and then not Half
+                        then Current.Pre_Feed_Norm_2 else null),
+                     Dense_Post_Norm  => Current.Post_Feed_Norm_1,
+                     Expert_Post_Norm => Current.Post_Feed_Norm_2,
+                     Expert_Scales    => Current.Expert_Scale_Rows);
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.
                   if Model_Runner.Backend.Device.Carry_Lost then

@@ -137,6 +137,7 @@ is
          for L of Item.Layers.all loop
             Count (L.Gate_Stack);
             Count (L.Up_Stack);
+            Count (L.Fused_Stack);
             Count (L.Down_Stack);
             Count (L.Router);
             Count (L.Shared_Gate);
@@ -2207,6 +2208,17 @@ begin
                   return;
                end if;
 
+               --  For the device, each expert's scale a row of the width.
+               T.Allocate
+                 (Element_Count (Item.Settings.Experts) * Width, Current.Expert_Scale_Rows);
+               for Which in 0 .. Element_Count (Item.Settings.Experts) - 1 loop
+                  Current.Expert_Scale_Rows.all
+                    (Current.Expert_Scale_Rows.all'First + Which * Width
+                     .. Current.Expert_Scale_Rows.all'First + Which * Width + Width - 1) :=
+                    [others => Current.Expert_Down_Scale.all
+                                 (Current.Expert_Down_Scale.all'First + Which)];
+               end loop;
+
                declare
                   Count  : constant Element_Count := Element_Count (Item.Settings.Experts);
                   Table  : T.Real_Array_Access;
@@ -3088,14 +3100,8 @@ begin
             Budget := Budget - Beside;
          end if;
          Mixture_Bytes (Total, Feed);
-         --  Gemma4's mixture is split wherever it is: its dense
-         --  feed-forward beside the experts and its gate and up kept as one
-         --  stack an expert are not shapes the device's mixture takes, so
-         --  the device runs each layer's front half and the processor the
-         --  rest, as for a mixture the device does not hold.
          Mixture_Split :=
-           (Splits (Total, Feed, Budget)
-            or else Item.Settings.Kind = Gemma4)
+           Splits (Total, Feed, Budget)
            and then Panels_Unasked
                       (Feed, Bounds.Max_Allocation_Bytes,
                        Model_Runner.Panel_Cache.Room_Now);
@@ -4187,6 +4193,11 @@ begin
                if T.Is_Present (Current.Gate_Stack) then
                   Model_Runner.Backend.Device.Hold_Pair
                     (Current.Gate_Stack, Current.Up_Stack, Ignored);
+                  Model_Runner.Backend.Device.Hold
+                    (Current.Down_Stack, Ignored);
+               elsif T.Is_Present (Current.Fused_Stack) then
+                  Model_Runner.Backend.Device.Hold
+                    (Current.Fused_Stack, Ignored);
                   Model_Runner.Backend.Device.Hold
                     (Current.Down_Stack, Ignored);
                end if;

@@ -2160,6 +2160,19 @@ package Model_Runner.Backend.Device is
    --  @param Output_Scale Gemma4's scale on the layer's answer, as a row of
    --    the model's width every element of which is the scale, multiplied
    --    in last; null for none.
+   --  @param Fused_Stack Gemma4's experts' gate and up as one stack, each
+   --    expert's gate rows then its up rows, read in place of Gate_Stack
+   --    and Up_Stack; empty for none.
+   --  @param Expert_Norm Gemma4's mixture: the experts' own normalization
+   --    of the residual, which the router and the experts read, beside the
+   --    dense feed-forward (Gate, Up, Down) that reads Feed_Norm's. Its
+   --    dense answer is normalized by Dense_Post_Norm, the experts' sum --
+   --    each expert's answer scaled by its row of Expert_Scales (a width a
+   --    row) -- by Expert_Post_Norm, the two added and normalized by
+   --    Post_Feed_Norm, then joined. Null for any other mixture.
+   --  @param Dense_Post_Norm See Expert_Norm.
+   --  @param Expert_Post_Norm See Expert_Norm.
+   --  @param Expert_Scales See Expert_Norm.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -2283,7 +2296,13 @@ package Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Input_Post_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       Layer_Input    : Model_Runner.Tensors.Real_Array_Access := null;
-      Output_Scale   : Model_Runner.Tensors.Real_Array_Access := null);
+      Output_Scale   : Model_Runner.Tensors.Real_Array_Access := null;
+      Fused_Stack    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Expert_Norm    : Model_Runner.Tensors.Real_Array_Access := null;
+      Dense_Post_Norm  : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Post_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Scales  : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  Whether the last Whole_Layer refused a layer it was carried into and
    --  could not bring that layer's input home from the device. A caller

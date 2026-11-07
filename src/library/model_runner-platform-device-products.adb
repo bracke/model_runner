@@ -13360,10 +13360,14 @@ package body Model_Runner.Platform.Device.Products is
       Apart     : Natural := 0;
       Routed    : Natural := 0;
       Region_At : Natural := 0;
-      Transposed : Boolean := False)
+      Transposed : Boolean := False;
+      Slice_Rows : Natural := 0)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
+
+      --  Rows from one expert's slice to the next's.
+      Apart_Rows : constant Natural := (if Slice_Rows = 0 then Each else Slice_Rows);
 
       --  How wide a member's vector is: a row's width, or read down the
       --  columns a slice's rows.
@@ -13385,12 +13389,18 @@ package body Model_Runner.Platform.Device.Products is
         or else (Apart > 0
                  and then (if Transposed then Apart < Each
                            else Apart /= Reads_Wide))
-        or else (Transposed and then (Routed /= 0 or else Region_At /= 0))
+        or else (Transposed and then (Routed /= 0 or else Region_At /= 0
+                                      or else Slice_Rows /= 0))
+        or else (Slice_Rows /= 0 and then Slice_Rows < Each)
+        --  A region of a pair's layout, or -- with Slice_Rows -- of any
+        --  format, rows being rows.
         or else (Region_At /= 0
-                 and then (Packing not in Packed_Q4_K | Packed_MXFP4
+                 and then ((Slice_Rows = 0
+                            and then Packing not in Packed_Q4_K | Packed_MXFP4)
                            or else Model_Runner.Bytes.Byte_Count (Region_At)
                                    >= Model_Runner.Bytes.Byte_Count (Stack)
-                                      * Pair_Row_Bytes (Packing, Columns)))
+                                      * Model_Runner.Bytes.Byte_Count
+                                          (Row_Bytes (Packing, Columns))))
         or else (Chained
                  and then (Steps.Held = 0
                            or else Source not in 1 .. Steps.Held
@@ -13408,16 +13418,21 @@ package body Model_Runner.Platform.Device.Products is
 
       if Routed = 0 then
          declare
-            --  Rows of the region before the stack's own, whole or not.
+            --  Rows of the region before the stack's own, whole or not:
+            --  a pair's layout's rows, or -- with Slice_Rows -- the
+            --  format's own.
+            Row : constant Model_Runner.Bytes.Byte_Count :=
+              (if Slice_Rows /= 0
+               then Model_Runner.Bytes.Byte_Count (Row_Bytes (Packing, Columns))
+               else Pair_Row_Bytes (Packing, Columns));
             Lead : constant Natural :=
               (if Region_At = 0 then 0
                else Natural
-                      ((Model_Runner.Bytes.Byte_Count (Region_At)
-                        + Pair_Row_Bytes (Packing, Columns) - 1)
-                       / Pair_Row_Bytes (Packing, Columns)));
+                      ((Model_Runner.Bytes.Byte_Count (Region_At) + Row - 1)
+                       / Row));
          begin
             for Index in 1 .. Count loop
-               if Lead + (Members (Index) + 1) * Each > Stack then
+               if Lead + Members (Index) * Apart_Rows + Each > Stack then
                   return;
                end if;
             end loop;
@@ -13436,6 +13451,7 @@ package body Model_Runner.Platform.Device.Products is
          Gathers => Count, Members => Members, Stack => Stack,
          Each => Each, Apart => Apart, Routed => Routed,
          Region_At => Region_At, Transposed => Transposed,
+         Slice_Rows => Slice_Rows,
          others => <>);
       Added := True;
    end Add_Gathered_Product;
@@ -13593,8 +13609,11 @@ package body Model_Runner.Platform.Device.Products is
       From_Step   : Natural := 0;
       By_Slot     : Boolean := False;
       Chained     : Boolean := True;
-      Region_At   : Natural := 0)
+      Region_At   : Natural := 0;
+      Slice_Rows  : Natural := 0)
    is
+      Apart_Rows : constant Natural := (if Slice_Rows = 0 then Each else Slice_Rows);
+
       Source : constant Natural :=
         (if not Chained then 0
          elsif From_Step = 0 then Steps.Held else From_Step);
@@ -13613,13 +13632,14 @@ package body Model_Runner.Platform.Device.Products is
         or else Base = System.Null_Address
         or else Each = 0
         or else Experts = 0
-        or else Each * Experts > Stack
+        or else (Slice_Rows /= 0 and then Slice_Rows < Each)
+        or else Apart_Rows * (Experts - 1) + Each > Stack
         or else Model_Runner.Bytes.Byte_Count (Region_At)
-                + Model_Runner.Bytes.Byte_Count (Each * Experts)
-                  * Pair_Row_Bytes (Packing, Columns)
+                + Model_Runner.Bytes.Byte_Count (Apart_Rows * (Experts - 1) + Each)
+                  * Model_Runner.Bytes.Byte_Count (Row_Bytes (Packing, Columns))
                 > Model_Runner.Bytes.Byte_Count (Stack)
-                  * Pair_Row_Bytes (Packing, Columns)
-        or else (Region_At /= 0
+                  * Model_Runner.Bytes.Byte_Count (Row_Bytes (Packing, Columns))
+        or else (Region_At /= 0 and then Slice_Rows = 0
                  and then Packing not in Packed_Q4_K | Packed_Q8_0 | Packed_MXFP4)
         or else (Chained
                  and then (Source not in 1 .. Steps.Held
@@ -13645,7 +13665,7 @@ package body Model_Runner.Platform.Device.Products is
          Gathers => Experts, Stack => Stack, Each => Each,
          Routed => Invert_Step, Used => Used,
          Listed => True, By_Slot => By_Slot,
-         Region_At => Region_At,
+         Region_At => Region_At, Slice_Rows => Slice_Rows,
          others => <>);
       Added := True;
    end Add_Listed_Product;
@@ -13771,10 +13791,15 @@ package body Model_Runner.Platform.Device.Products is
         or else (not Sliced and then Route_Step = 0 and then Count = 0
                  and then ((Experts /= 1 and then not Per_Member)
                            or else Steps.Items (Source_Step).Rows /= Each))
-        --  A weight a position, or one that multiplies, is a projection's
-        --  alone, uncapped and unfolded.
-        or else ((Multiply or else Per_Member)
+        --  A weight a position is a projection's alone, uncapped and
+        --  unfolded; one that multiplies is a projection's or an expert's
+        --  by its routing -- Gemma4's scale an expert -- unsliced,
+        --  uncapped and unfolded.
+        or else (Per_Member
                  and then (Sliced or else Route_Step /= 0 or else Count /= 0
+                           or else Cap_Only or else Cap /= 0.0 or else Fold))
+        or else (Multiply
+                 and then (Sliced or else Count /= 0
                            or else Cap_Only or else Cap /= 0.0 or else Fold))
         or else (Per_Member and then not Multiply)
         --  A fresh weight is a projection's, read where it lies each run.
@@ -15512,7 +15537,10 @@ package body Model_Runner.Platform.Device.Products is
       --  gather of one begins: the tile kernel and the single-member row
       --  product both read that slice as a matrix of its own.
       function Slice_Bytes (Which : Positive) return Interfaces.Unsigned_64
-      is (Interfaces.Unsigned_64 (Steps.Items (Which).Each)
+      is (Interfaces.Unsigned_64
+            (if Steps.Items (Which).Slice_Rows /= 0
+             then Steps.Items (Which).Slice_Rows
+             else Steps.Items (Which).Each)
           * Row_Bytes (Steps.Items (Which).Packing,
                        Steps.Items (Which).Columns));
 

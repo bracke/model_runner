@@ -1406,9 +1406,12 @@ package body Model_Runner.Llama is
 
       Current.Experts := new Expert_Array (0 .. Item.Settings.Experts - 1);
 
-      --  The stacks as the device gathers from them; a fused stack is not
-      --  one it reads, so the experts are read a slice at a time.
-      if not Fused then
+      --  The stacks as the device gathers from them; a fused stack is read
+      --  by the device's whole layer alone (Fused_Stack), an arm at a time,
+      --  and everything else reads its experts a slice at a time.
+      if Fused then
+         Current.Fused_Stack := Gates;
+      else
          Current.Gate_Stack := Gates;
          Current.Up_Stack := Ups;
       end if;
@@ -7896,6 +7899,7 @@ package body Model_Runner.Llama is
             T.Free (Which.Output_Scale);
             T.Free (Which.Scale_Row);
             T.Free (Which.Value_Gain);
+            T.Free (Which.Expert_Scale_Rows);
             T.Free (Which.Pre_Feed_Norm_2);
             T.Free (Which.Post_Feed_Norm_1);
             T.Free (Which.Post_Feed_Norm_2);
@@ -11291,6 +11295,7 @@ package body Model_Runner.Llama is
       Add (L.Shared_Down);
       Add (L.Gate_Stack, Used);
       Add (L.Up_Stack, Used);
+      Add (L.Fused_Stack, Used);
       Add (L.Down_Stack, Used);
       return Total;
    end Layer_Bytes;

@@ -136,7 +136,9 @@ void main() {
         uint at = member * shape.each;
 
         for (uint c = start; c < shape.each; c += step_by) {
-            y[at + c] = x[at + c] + b[shape.base + expert * shape.each + c];
+            y[at + c] = (shape.no_bias & 2u) != 0u
+                ? x[at + c] * b[shape.base + expert * shape.each + c]
+                : x[at + c] + b[shape.base + expert * shape.each + c];
         }
         return;
     }
@@ -149,7 +151,9 @@ void main() {
         uint at = member * shape.each;
 
         for (uint c = start; c < shape.each; c += step_by) {
-            y[at + c] = x[at + c] + b[shape.base + expert * shape.each + c];
+            y[at + c] = (shape.no_bias & 2u) != 0u
+                ? x[at + c] * b[shape.base + expert * shape.each + c]
+                : x[at + c] + b[shape.base + expert * shape.each + c];
         }
         return;
     }
@@ -175,8 +179,9 @@ void main() {
     uint at = member * shape.each;
 
     for (uint c = start; c < shape.each; c += step_by) {
-        y[at + c] = x[at + c]
-                    + (expert < shape.experts
-                       ? b[shape.base + expert * shape.each + c] : 0.0);
+        float w = expert < shape.experts
+                  ? b[shape.base + expert * shape.each + c]
+                  : ((shape.no_bias & 2u) != 0u ? 1.0 : 0.0);
+        y[at + c] = (shape.no_bias & 2u) != 0u ? x[at + c] * w : x[at + c] + w;
     }
 }

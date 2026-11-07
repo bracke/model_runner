@@ -3600,7 +3600,13 @@ package body Model_Runner.Backend.Device is
         Model_Runner.Tensors.Empty_View;
       Input_Post_Norm : Model_Runner.Tensors.Real_Array_Access := null;
       Layer_Input    : Model_Runner.Tensors.Real_Array_Access := null;
-      Output_Scale   : Model_Runner.Tensors.Real_Array_Access := null)
+      Output_Scale   : Model_Runner.Tensors.Real_Array_Access := null;
+      Fused_Stack    : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Expert_Norm    : Model_Runner.Tensors.Real_Array_Access := null;
+      Dense_Post_Norm  : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Post_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Expert_Scales  : Model_Runner.Tensors.Real_Array_Access := null)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -3632,6 +3638,30 @@ package body Model_Runner.Backend.Device is
          Tail : constant Boolean :=
            T.Is_Present (Input_Gate) or else Output_Scale /= null;
 
+         --  Whether the mixture is Gemma4's, its dense feed-forward beside
+         --  the experts, and whether its experts' gate and up are one stack.
+         Gemma_Mix   : constant Boolean := Expert_Norm /= null;
+         Interleaved : constant Boolean := T.Is_Present (Fused_Stack);
+
+         --  The stacks the experts are gathered from: the two, or the one
+         --  read twice, an arm at a time.
+         Gate_Stack : constant T.View :=
+           (if Interleaved then Fused_Stack else Whole_Layer.Gate_Stack);
+         Up_Stack   : constant T.View :=
+           (if Interleaved then Fused_Stack else Whole_Layer.Up_Stack);
+
+         --  How far apart an arm's experts begin in the one stack, and
+         --  where the up arm's rows begin within each.
+         Arm_Rows : constant Natural := (if Interleaved then 2 * Feed else 0);
+         Up_At    : constant Natural :=
+           (if Interleaved
+            then Natural (Model_Runner.Bytes.Byte_Count (Feed)
+                          * T.Row_Bytes (Fused_Stack))
+            else 0);
+
+         --  The dense feed-forward's own packings, beside the stacks'.
+         Dense_Gate_P, Dense_Up_P, Dense_Down_P : Products.Weight_Packing;
+
          --  Whether the second half is a mixture, and the step numbers that
          --  move when the head normalizations and the mixture are in: the
          --  recipe below used to be seventeen fixed steps and is now counted
@@ -3650,6 +3680,9 @@ package body Model_Runner.Backend.Device is
          Step_Norm_In, Step_Q, Step_K, Step_V, Step_Q_Turned, Step_K_Turned,
          Step_Attend, Step_Out, Step_Join, Step_Norm_Feed,
          Step_Router, Step_Route, Step_Downs, Step_Gates, Step_Mix : Natural := 0;
+
+         --  Gemma4's mixture: its dense answer, and what the experts read.
+         Step_Dense, Step_Expert_In : Natural := 0;
 
          --  Whether Step_Q is turned already: an absorbed latent's queries,
          --  whose rotated slices are turned before the heads are laid out,
@@ -3754,7 +3787,8 @@ package body Model_Runner.Backend.Device is
 
          --  Where a mixture's gate and up stacks lie as one region, held
          --  and read as one; see Pair_Of.
-         Pair : constant Stack_Pair := Pair_Of (Gate_Stack, Up_Stack);
+         Pair : constant Stack_Pair :=
+           (if Interleaved then (others => <>) else Pair_Of (Gate_Stack, Up_Stack));
 
          --  Whether a token's gate and up went as one gated gather.
          Fused_Pair : Boolean := False;
@@ -3928,6 +3962,29 @@ package body Model_Runner.Backend.Device is
             Step_Downs := Products.Length (Steps);
             Step_Room (Room);
          end Add_Down_Bias;
+
+         --  Gemma4's scale an expert, a width a row, on what each projects
+         --  down, by the routing the downs were gathered by.
+         procedure Add_Down_Scale
+           (Room  : Model_Runner.Numerics.Element_Count;
+            Added : out Boolean) is
+         begin
+            Added := True;
+            if Expert_Scales = null then
+               return;
+            end if;
+            Products.Add_Bias
+              (Steps, Expert_Scales.all (Expert_Scales.all'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Expert_Scales.all'Length) * 4, 0,
+               Experts, Natural (Width), Step_Downs, Step_Route, Added,
+               Key => Expert_Scales.all (Expert_Scales.all'First)'Address,
+               Kept => False, Multiply => True);
+            if not Added then
+               return;
+            end if;
+            Step_Downs := Products.Length (Steps);
+            Step_Room (Room);
+         end Add_Down_Scale;
       begin
          Ok := False;
 
@@ -4072,8 +4129,30 @@ package body Model_Runner.Backend.Device is
                               or else Layer_Input.all'Length
                                       < Slots * Input_Gate.Rows))
            or else ((T.Is_Present (Input_Gate) or else Output_Scale /= null)
-                    and then (No_Feed or else Mixed or else After or else Shifted
+                    and then (No_Feed or else (Mixed and then not Gemma_Mix)
+                              or else After or else Shifted
                               or else Linear_Layer))
+           --  Gemma4's mixture: all its norms, a scale an expert, and the
+           --  dense feed-forward gated beside the experts.
+           or else (Gemma_Mix
+                    and then (not Mixed or else No_Feed or else After
+                              or else Shifted or else Shared
+                              or else Feed_Norm = null
+                              or else Expert_Norm.all'Length /= Width
+                              or else Dense_Post_Norm = null
+                              or else Dense_Post_Norm.all'Length /= Width
+                              or else Expert_Post_Norm = null
+                              or else Expert_Post_Norm.all'Length /= Width
+                              or else Post_Feed_Norm = null
+                              or else (Expert_Scales /= null
+                                       and then Natural (Expert_Scales.all'Length)
+                                                /= Experts * Natural (Width))
+                              or else not Gated
+                              or else not T.Is_Present (Up)
+                              or else not T.Is_Present (Down)
+                              or else Gate_Bias /= null or else Up_Bias /= null
+                              or else Down_Bias /= null))
+           or else (Interleaved and then not Gemma_Mix)
            or else (Output_Scale /= null
                     and then Output_Scale.all'Length /= Width)
            --  A post-norm is a gain of the width; and a mixture's sum joins
@@ -4084,7 +4163,8 @@ package body Model_Runner.Backend.Device is
            or else (not No_Feed
                     and then Post_Feed_Norm /= null
                     and then (Post_Feed_Norm.all'Length /= Norm_Span
-                              or else (Experts > 0 and then not After)))
+                              or else (Experts > 0 and then not After
+                                       and then not Gemma_Mix)))
            --  The expert biases are a mixture's; a plain feed-forward's
            --  are the one slice each on its projections, a gated one's on
            --  both arms or neither.
@@ -4175,6 +4255,21 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
+            if Gemma_Mix then
+               Packing_Of (Gate.Format, Dense_Gate_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (Up.Format, Dense_Up_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (Down.Format, Dense_Down_P, Known);
+               if not Known then
+                  return;
+               end if;
+            end if;
+
             if Shared then
                Packing_Of (Shared_Gate.Format, Shared_Gate_P, Known);
                if not Known then
@@ -4197,8 +4292,10 @@ package body Model_Runner.Backend.Device is
               or else Gate_Stack.Columns /= Width
               or else Up_Stack.Columns /= Width
               or else Natural (Down_Stack.Columns) /= Feed
-              or else Natural (Gate_Stack.Rows) /= Experts * Feed
-              or else Natural (Up_Stack.Rows) /= Experts * Feed
+              or else Natural (Gate_Stack.Rows)
+                      /= (if Interleaved then 2 else 1) * Experts * Feed
+              or else Natural (Up_Stack.Rows)
+                      /= (if Interleaved then 2 else 1) * Experts * Feed
               or else Down_Stack.Rows /= Model_Runner.Numerics.Element_Count
                                              (Experts) * Width
               or else (Router_Bias /= null
@@ -5854,6 +5951,68 @@ package body Model_Runner.Backend.Device is
          end if;
 
          if Mixed then
+            --  Gemma4's dense feed-forward on the feed norm's answer, under
+            --  its own post-norm and kept for the sum below, and the
+            --  experts' own normalization of the residual, which the router
+            --  and the experts read. Any other mixture's experts read the
+            --  feed norm's.
+            if Gemma_Mix then
+               Products.Add_Chained_Product
+                 (Steps, Gate.Base, Gate.Span, Gate.Offset, Dense_Gate_P,
+                  Natural (Gate.Rows), Natural (Gate.Columns), Added,
+                  Key => At_Offset (Gate.Base, Gate.Offset), Kept => False,
+                  From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Gate.Rows);
+               Products.Add_Chained_Product
+                 (Steps, Up.Base, Up.Span, Up.Offset, Dense_Up_P,
+                  Natural (Up.Rows), Natural (Up.Columns), Added,
+                  Key => At_Offset (Up.Base, Up.Offset), Kept => False,
+                  From_Step => Step_Norm_Feed);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Up.Rows);
+               Products.Add_Combination (Steps, Unit, Added, Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Room (Up.Rows);
+               Products.Add_Chained_Product
+                 (Steps, Down.Base, Down.Span, Down.Offset, Dense_Down_P,
+                  Natural (Down.Rows), Natural (Down.Columns), Added,
+                  Key => At_Offset (Down.Base, Down.Offset), Kept => False);
+               if not Added then
+                  return;
+               end if;
+               Step_Dense := Products.Length (Steps);
+               Step_Room (Down.Rows);
+               Add_Post_Norm (Dense_Post_Norm, Width, Step_Dense, Added);
+               if not Added then
+                  return;
+               end if;
+
+               declare
+                  At_Gain : constant System.Address :=
+                    Expert_Norm.all (Expert_Norm.all'First)'Address;
+               begin
+                  Products.Add_Norm
+                    (Steps, At_Gain,
+                     Model_Runner.Bytes.Byte_Count (Expert_Norm.all'Length) * 4, 0,
+                     Natural (Width), Epsilon, Added,
+                     From_Step => Step_Join, Key => At_Gain, Kept => False);
+               end;
+               if not Added then
+                  return;
+               end if;
+               Step_Expert_In := Products.Length (Steps);
+               Step_Room (Width);
+            else
+               Step_Expert_In := Step_Norm_Feed;
+            end if;
+
             --  The router, the choosing, the chosen experts' three
             --  projections gathered, the unit between them, and the sum by
             --  shares with the residual added: a mixture layer, whole.
@@ -5861,7 +6020,7 @@ package body Model_Runner.Backend.Device is
               (Steps, Router.Base, Router.Span, Router.Offset, Router_P,
                Natural (Router.Rows), Natural (Router.Columns), Added,
                Key => At_Offset (Router.Base, Router.Offset), Kept => False,
-               From_Step => Step_Norm_Feed);
+               From_Step => Step_Expert_In);
             if not Added then
                return;
             end if;
@@ -5922,8 +6081,8 @@ package body Model_Runner.Backend.Device is
                      Key =>
                        (if Pair.Paired then Pair.Key
                         else At_Offset (Gate_Stack.Base, Gate_Stack.Offset)),
-                     Kept => False, From_Step => Step_Norm_Feed,
-                     Region_At => Pair.Pad);
+                     Kept => False, From_Step => Step_Expert_In,
+                     Region_At => Pair.Pad, Slice_Rows => Arm_Rows);
                   if not Added then
                      return;
                   end if;
@@ -5942,10 +6101,11 @@ package body Model_Runner.Backend.Device is
                      Key =>
                        (if Pair.Paired then Pair.Key
                         else At_Offset (Up_Stack.Base, Up_Stack.Offset)),
-                     Kept => False, From_Step => Step_Norm_Feed,
+                     Kept => False, From_Step => Step_Expert_In,
                      Region_At =>
                        (if Pair.Paired then Pair.Pad + Natural (Pair.Pair_At)
-                        else 0));
+                        else Up_At),
+                     Slice_Rows => Arm_Rows);
                   if not Added then
                      return;
                   end if;
@@ -5987,6 +6147,12 @@ package body Model_Runner.Backend.Device is
                   if not Added then
                      return;
                   end if;
+
+                  Add_Down_Scale
+                    (Model_Runner.Numerics.Element_Count (Padded) * Width, Added);
+                  if not Added then
+                     return;
+                  end if;
                end;
             else
                if Pair.Paired
@@ -6013,7 +6179,7 @@ package body Model_Runner.Backend.Device is
                      Pair.Pair_At, Gate_P, Natural (Gate_Stack.Rows), Feed,
                      Natural (Width), Used, Step_Route, Added,
                      Key => Pair.Key, Kept => False,
-                     From_Step => Step_Norm_Feed, Unit => Unit,
+                     From_Step => Step_Expert_In, Unit => Unit,
                      Lead => Pair.Lead,
                      Gate_Bias_Back =>
                        (if Gate_Bias = null then 0 else Pair.Lead),
@@ -6042,8 +6208,9 @@ package body Model_Runner.Backend.Device is
                      Key =>
                        (if Pair.Paired then Pair.Key
                         else At_Offset (Gate_Stack.Base, Gate_Stack.Offset)),
-                     Kept => False, Chained => True, From_Step => Step_Norm_Feed,
-                     Routed => Step_Route, Region_At => Pair.Pad);
+                     Kept => False, Chained => True, From_Step => Step_Expert_In,
+                     Routed => Step_Route, Region_At => Pair.Pad,
+                     Slice_Rows => Arm_Rows);
                   if not Added then
                      return;
                   end if;
@@ -6062,11 +6229,12 @@ package body Model_Runner.Backend.Device is
                      Key =>
                        (if Pair.Paired then Pair.Key
                         else At_Offset (Up_Stack.Base, Up_Stack.Offset)),
-                     Kept => False, Chained => True, From_Step => Step_Norm_Feed,
+                     Kept => False, Chained => True, From_Step => Step_Expert_In,
                      Routed => Step_Route,
                      Region_At =>
                        (if Pair.Paired then Pair.Pad + Natural (Pair.Pair_At)
-                        else 0));
+                        else Up_At),
+                     Slice_Rows => Arm_Rows);
                   if not Added then
                      return;
                   end if;
@@ -6106,18 +6274,60 @@ package body Model_Runner.Backend.Device is
                if not Added then
                   return;
                end if;
+
+               Add_Down_Scale
+                 (Model_Runner.Numerics.Element_Count (Used) * Width, Added);
+               if not Added then
+                  return;
+               end if;
             end if;
 
             Products.Add_Mix
               (Steps, Natural (Width), Used, Step_Downs, Step_Route, Added,
-               Residual_Step => Step_Join,
-               Kept => not Carry_Out and then not After and then not Shared);
+               Residual_Step => (if Gemma_Mix then 0 else Step_Join),
+               Kept => not Carry_Out and then not After and then not Shared
+                       and then not Gemma_Mix and then not Tail);
             if not Added then
                return;
             end if;
             Step_Mix := Products.Length (Steps);
             At_Out := Wanted;
             Step_Room (Width);
+
+            --  Gemma4's: the experts' sum under its post-norm, the dense
+            --  answer added, the two under the feed-forward's post-norm,
+            --  and the residual joined.
+            if Gemma_Mix then
+               declare
+                  Step_Sum : Natural;
+               begin
+                  Add_Post_Norm (Expert_Post_Norm, Width, Step_Mix, Added);
+                  if not Added then
+                     return;
+                  end if;
+                  Products.Add_Join
+                    (Steps, Added, From_Step => Step_Mix,
+                     Residual_Step => Step_Dense, Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Sum := Products.Length (Steps);
+                  Step_Room (Width);
+                  Add_Post_Norm (Post_Feed_Norm, Width, Step_Sum, Added);
+                  if not Added then
+                     return;
+                  end if;
+                  At_Out := Wanted;
+                  Products.Add_Join
+                    (Steps, Added, From_Step => Step_Sum,
+                     Residual_Step => Step_Join,
+                     Kept => not Carry_Out and then not Tail);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Width);
+               end;
+            end if;
 
             --  And the shared expert, where the mixture has one: the same
             --  gated block an expert is, over the normalized input every
@@ -6188,7 +6398,7 @@ package body Model_Runner.Backend.Device is
                        (Steps, G.Base, G.Span, Start, Pair_At,
                         Shared_Gate_P, Natural (G.Rows), Natural (G.Columns),
                         Added, Key => Pair_Key, Kept => False,
-                        From_Step => Step_Norm_Feed, Unit => 0);
+                        From_Step => Step_Expert_In, Unit => 0);
                      if not Added then
                         return;
                      end if;
@@ -6201,7 +6411,7 @@ package body Model_Runner.Backend.Device is
                         Key =>
                           (if Paired then Pair_Key
                            else At_Offset (G.Base, G.Offset)),
-                        Kept => False, From_Step => Step_Norm_Feed,
+                        Kept => False, From_Step => Step_Expert_In,
                         Region_Rows => Region, Region_At => Pad);
                      if not Added then
                         return;
@@ -6213,7 +6423,7 @@ package body Model_Runner.Backend.Device is
                           (Steps, G.Base, G.Span, Start, Shared_Up_P,
                            Natural (U.Rows), Natural (U.Columns), Added,
                            Key => Pair_Key, Kept => False,
-                           From_Step => Step_Norm_Feed,
+                           From_Step => Step_Expert_In,
                            Region_Rows => Region,
                            Region_At => Pad + Natural (Pair_At));
                      else
@@ -6221,7 +6431,7 @@ package body Model_Runner.Backend.Device is
                           (Steps, U.Base, U.Span, U.Offset, Shared_Up_P,
                            Natural (U.Rows), Natural (U.Columns), Added,
                            Key => At_Offset (U.Base, U.Offset),
-                           Kept => False, From_Step => Step_Norm_Feed);
+                           Kept => False, From_Step => Step_Expert_In);
                      end if;
                      if not Added then
                         return;
@@ -6263,7 +6473,7 @@ package body Model_Runner.Backend.Device is
                        (Steps, At_Row,
                         Model_Runner.Bytes.Byte_Count (Shared_Router.all'Length) * 4,
                         0, Products.Values_F32, 1, Natural (Width), Added,
-                        Key => At_Row, Kept => False, From_Step => Step_Norm_Feed);
+                        Key => At_Row, Kept => False, From_Step => Step_Expert_In);
                      if not Added then
                         return;
                      end if;
@@ -6496,101 +6706,101 @@ package body Model_Runner.Backend.Device is
             end if;
             At_Out := Wanted;
             Step_Room (Width);
+         end if;
 
-            --  Gemma4's end of a layer: its embedding a layer gated in and
-            --  joined, then the scale on the whole answer, the last step
-            --  and so the one carried out.
-            if Tail then
-               declare
-                  Step_Res  : Natural := Products.Length (Steps);
-                  Gate_Rows : constant Model_Runner.Numerics.Element_Count :=
-                    Input_Gate.Rows;
-                  Gate_P, Proj_P : Products.Weight_Packing;
-                  Step_Proj : Natural;
-               begin
-                  if T.Is_Present (Input_Gate) then
-                     Packing_Of (Input_Gate.Format, Gate_P, Known);
-                     if not Known then
-                        return;
-                     end if;
-                     Packing_Of (Input_Proj.Format, Proj_P, Known);
-                     if not Known then
-                        return;
-                     end if;
-
-                     Products.Add_Chained_Product
-                       (Steps, Input_Gate.Base, Input_Gate.Span, Input_Gate.Offset,
-                        Gate_P, Natural (Gate_Rows), Natural (Input_Gate.Columns),
-                        Added, Key => At_Offset (Input_Gate.Base, Input_Gate.Offset),
-                        Kept => False, From_Step => Step_Res);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Room (Gate_Rows);
-
-                     --  The unit alone on the gate, as an ungated
-                     --  feed-forward's.
-                     Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Room (Gate_Rows);
-
-                     --  By the position's own row, uploaded for this run.
-                     Products.Add_Bias
-                       (Steps, Layer_Input.all (Layer_Input.all'First)'Address,
-                        Model_Runner.Bytes.Byte_Count (Slots * Gate_Rows) * 4, 0,
-                        Natural (Slots), Natural (Gate_Rows),
-                        Products.Length (Steps), 0, Added,
-                        Kept => False, Multiply => True, Per_Member => True,
-                        Fresh => True);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Room (Gate_Rows);
-
-                     Products.Add_Chained_Product
-                       (Steps, Input_Proj.Base, Input_Proj.Span, Input_Proj.Offset,
-                        Proj_P, Natural (Input_Proj.Rows), Natural (Input_Proj.Columns),
-                        Added, Key => At_Offset (Input_Proj.Base, Input_Proj.Offset),
-                        Kept => False);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Proj := Products.Length (Steps);
-                     Step_Room (Width);
-
-                     Add_Post_Norm (Input_Post_Norm, Width, Step_Proj, Added);
-                     if not Added then
-                        return;
-                     end if;
-
-                     At_Out := Wanted;
-                     Products.Add_Join
-                       (Steps, Added, From_Step => Step_Proj, Residual_Step => Step_Res,
-                        Kept => not Carry_Out and then Output_Scale = null);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Res := Products.Length (Steps);
-                     Step_Room (Width);
+         --  Gemma4's end of a layer: its embedding a layer gated in and
+         --  joined, then the scale on the whole answer, the last step
+         --  and so the one carried out.
+         if Tail then
+            declare
+               Step_Res  : Natural := Products.Length (Steps);
+               Gate_Rows : constant Model_Runner.Numerics.Element_Count :=
+                 Input_Gate.Rows;
+               Gate_P, Proj_P : Products.Weight_Packing;
+               Step_Proj : Natural;
+            begin
+               if T.Is_Present (Input_Gate) then
+                  Packing_Of (Input_Gate.Format, Gate_P, Known);
+                  if not Known then
+                     return;
+                  end if;
+                  Packing_Of (Input_Proj.Format, Proj_P, Known);
+                  if not Known then
+                     return;
                   end if;
 
-                  if Output_Scale /= null then
-                     At_Out := Wanted;
-                     Products.Add_Bias
-                       (Steps, Output_Scale.all (Output_Scale.all'First)'Address,
-                        Model_Runner.Bytes.Byte_Count (Width) * 4, 0,
-                        1, Natural (Width), Step_Res, 0, Added,
-                        Key => Output_Scale.all (Output_Scale.all'First)'Address,
-                        Kept => not Carry_Out, Multiply => True);
-                     if not Added then
-                        return;
-                     end if;
-                     Step_Room (Width);
+                  Products.Add_Chained_Product
+                    (Steps, Input_Gate.Base, Input_Gate.Span, Input_Gate.Offset,
+                     Gate_P, Natural (Gate_Rows), Natural (Input_Gate.Columns),
+                     Added, Key => At_Offset (Input_Gate.Base, Input_Gate.Offset),
+                     Kept => False, From_Step => Step_Res);
+                  if not Added then
+                     return;
                   end if;
-               end;
-            end if;
+                  Step_Room (Gate_Rows);
+
+                  --  The unit alone on the gate, as an ungated
+                  --  feed-forward's.
+                  Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Gate_Rows);
+
+                  --  By the position's own row, uploaded for this run.
+                  Products.Add_Bias
+                    (Steps, Layer_Input.all (Layer_Input.all'First)'Address,
+                     Model_Runner.Bytes.Byte_Count (Slots * Gate_Rows) * 4, 0,
+                     Natural (Slots), Natural (Gate_Rows),
+                     Products.Length (Steps), 0, Added,
+                     Kept => False, Multiply => True, Per_Member => True,
+                     Fresh => True);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Gate_Rows);
+
+                  Products.Add_Chained_Product
+                    (Steps, Input_Proj.Base, Input_Proj.Span, Input_Proj.Offset,
+                     Proj_P, Natural (Input_Proj.Rows), Natural (Input_Proj.Columns),
+                     Added, Key => At_Offset (Input_Proj.Base, Input_Proj.Offset),
+                     Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Proj := Products.Length (Steps);
+                  Step_Room (Width);
+
+                  Add_Post_Norm (Input_Post_Norm, Width, Step_Proj, Added);
+                  if not Added then
+                     return;
+                  end if;
+
+                  At_Out := Wanted;
+                  Products.Add_Join
+                    (Steps, Added, From_Step => Step_Proj, Residual_Step => Step_Res,
+                     Kept => not Carry_Out and then Output_Scale = null);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Res := Products.Length (Steps);
+                  Step_Room (Width);
+               end if;
+
+               if Output_Scale /= null then
+                  At_Out := Wanted;
+                  Products.Add_Bias
+                    (Steps, Output_Scale.all (Output_Scale.all'First)'Address,
+                     Model_Runner.Bytes.Byte_Count (Width) * 4, 0,
+                     1, Natural (Width), Step_Res, 0, Added,
+                     Key => Output_Scale.all (Output_Scale.all'First)'Address,
+                     Kept => not Carry_Out, Multiply => True);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Room (Width);
+               end if;
+            end;
          end if;
 
          --  Bert's second, over the sum the join or the mix made: the

@@ -946,6 +946,11 @@ package Model_Runner.Platform.Device.Products is
    --    vector the front of its stretch. An absorbed
    --    latent's queries folded through the up projection's key rows as
    --    they lie in the file. Where Folds_Down says so.
+   --  @param Slice_Rows How far apart two experts' slices begin, in rows,
+   --    where it is not Each: Gemma4 keeps an expert's gate rows and then
+   --    its up rows as one stack, so each arm's slices are twice Each
+   --    apart, the up arm's Region_At its gate rows' bytes in. Zero for
+   --    Each.
    procedure Add_Gathered_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -965,7 +970,8 @@ package Model_Runner.Platform.Device.Products is
       Apart     : Natural := 0;
       Routed    : Natural := 0;
       Region_At : Natural := 0;
-      Transposed : Boolean := False);
+      Transposed : Boolean := False;
+      Slice_Rows : Natural := 0);
 
    --  Whether the engine takes a gather read down its columns -- see
    --  Add_Gathered_Product's Transposed -- for a batch of Count, of slices
@@ -1304,7 +1310,8 @@ package Model_Runner.Platform.Device.Products is
       From_Step   : Natural := 0;
       By_Slot     : Boolean := False;
       Chained     : Boolean := True;
-      Region_At   : Natural := 0);
+      Region_At   : Natural := 0;
+      Slice_Rows  : Natural := 0);
 
    --  Name a mixture's weighted sum for a sequence to perform.
    --
@@ -4827,6 +4834,10 @@ private
       Scales     : Boolean := False;
       Per_Member : Boolean := False;
       Fresh      : Boolean := False;
+
+      --  A gathered or listed product's rows between two experts' slices,
+      --  where it is not Each (Add_Gathered_Product's Slice_Rows).
+      Slice_Rows : Natural := 0;
 
       --  A picking step, as Add_Pick describes it: of every Among
       --  stretches of Each in the step in Reads, the Which'th, written
