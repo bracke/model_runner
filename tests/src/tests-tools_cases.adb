@@ -1155,6 +1155,27 @@ package body Tests.Tools_Cases is
                     & Ada.Strings.Unbounded.To_String (Near.Text));
          end;
       end;
+      --  Copied from a check's quotation, its front and its hint with it:
+      --  taken off, and the edit made.
+      declare
+         Quoted_Path : constant String := Dir & "/quoted.adb";
+         Text        : Ada.Strings.Unbounded.Unbounded_String;
+         Got         : E.Error_Info;
+      begin
+         Put (Quoted_Path, "   if A = B then" & ASCII.LF & "      X := 1;");
+         declare
+            Done : constant Ed.Said :=
+              Ed.Edit (Quoted_Path, "src/quoted.adb line 1 is: if A = B then -- in Ada: =, not ==",
+                       "if A /= B then", "");
+         begin
+            Ed.Read_Text (Quoted_Path, Text, Got);
+            Assert (not Done.Failed and then Has (Done, "was taken off old_text")
+                    and then Ada.Strings.Unbounded.To_String (Text)
+                             = "   if A /= B then" & ASCII.LF & "      X := 1;" & ASCII.LF,
+                    "old_text copied with a check's quotation was not edited: "
+                    & Ada.Strings.Unbounded.To_String (Done.Text) & " / " & Ada.Strings.Unbounded.To_String (Text));
+         end;
+      end;
       --  Spelled in an Ada file as another language spells it: read as
       --  Ada, new_text written so too, strings and comments left as given.
       declare

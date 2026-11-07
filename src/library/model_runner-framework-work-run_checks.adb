@@ -259,30 +259,42 @@ begin
             elsif Passed then " passed" else " failed") & ", "
          & To_String (Evidence));
    end;
-   for Index in 1 .. Records.Field_Count (Value) loop
-      declare
-         Field : constant String := Records.Field_Name (Value, Index);
-         Parts : constant Name_Lists.Vector :=
-           (if Field'Length > 6 and then Field (Field'First .. Field'First + 5) = "check."
-            then Fields_Of (Records.Get (Value, Field)) else Name_Lists.Empty_Vector);
-      begin
-         if Natural (Parts.Length) >= 7 then
-            Append (Report, ASCII.LF & Parts (1) & ": " & Parts (5));
-            if Parts (5) /= "passed" and then Parts (6) = "required" then
-               declare
-                  Log  : Results.Result;
-                  Held : E.Error_Info;
-               begin
-                  Results.Read (Host.Item.all, Parts (7), Log, Held);
-                  if E.Is_Ok (Held) and then Length (Log.Retired) > 0 then
-                     Append (Report, ASCII.LF & "(its log is retired under " & To_String (Log.Retired) & ")");
-                  elsif E.Is_Ok (Held) then
-                     Append (Report, ASCII.LF & Tail (To_String (Log.Payload), 30)
-                             & Quoted_Lines (Tail (To_String (Log.Payload), 30), To_String (Project_Dir), Known));
+   declare
+      --  The first required step that did not pass, by its label: a
+      --  program a later step runs was built before it, and is not the
+      --  sources as they are. gemma-3 was shown its run's overflow under
+      --  line 5 as it had rewritten it -- a line that never compiled --
+      --  and said the checks reported wrong errors.
+      Failed_Before : Unbounded_String;
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Field : constant String := Records.Field_Name (Value, Index);
+            Parts : constant Name_Lists.Vector :=
+              (if Field'Length > 6 and then Field (Field'First .. Field'First + 5) = "check."
+               then Fields_Of (Records.Get (Value, Field)) else Name_Lists.Empty_Vector);
+         begin
+            if Natural (Parts.Length) >= 7 then
+               Append (Report, ASCII.LF & Parts (1) & ": " & Parts (5));
+               if Parts (5) /= "passed" and then Parts (6) = "required" then
+                  declare
+                     Log  : Results.Result;
+                     Held : E.Error_Info;
+                  begin
+                     Results.Read (Host.Item.all, Parts (7), Log, Held);
+                     if E.Is_Ok (Held) and then Length (Log.Retired) > 0 then
+                        Append (Report, ASCII.LF & "(its log is retired under " & To_String (Log.Retired) & ")");
+                     elsif E.Is_Ok (Held) then
+                        Append (Report, Step_Output (Tail (To_String (Log.Payload), 30), To_String (Failed_Before),
+                                                     To_String (Project_Dir), Known));
+                     end if;
+                  end;
+                  if Failed_Before = Null_Unbounded_String then
+                     Failed_Before := To_Unbounded_String (Parts (1));
                   end if;
-               end;
+               end if;
             end if;
-         end if;
-      end;
-   end loop;
+         end;
+      end loop;
+   end;
 end Run_Checks;

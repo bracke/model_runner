@@ -33,6 +33,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **A check that raised after an earlier step failed is said to have run the program built before the failure.** Its output no longer has the sources' current lines quoted under it, which showed gemma-3 an overflow at a line it had rewritten and that never compiled.
+- **`find used_by` and `depends_on` asked of a name declared in a unit answer for that unit.** Asked who uses `Times`, a function of `Calc`, it said no unit uses `Times` though `Main` calls it; it now says what `Times` is, which units use `Calc`, and where `Calc.Times` is referred to.
+- **A report's list that says none is empty.** `proposed_tasks: none`, `decisions: none`, `specifications: none` and `waits_for: none` each became a record titled none; a claim of `none`, `n/a`, `nothing`, `-` or `[]` is now no claim.
+- **An edit whose `old_text` was copied from a check's quotation of a line is made.** The quotation's `PATH line N is: ` front and its ` -- in Ada: ...` hint are taken off `old_text` and `new_text` where the text is not found otherwise.
 - **`tests agent-trial --task` runs the tasks in the order it names them.** `--task styled,edit` ran edit first, the tasks' own order; it now runs styled first.
 - **A test of a type's limits that fails says which guards ask of a difference where a sum is meant.** With the test's line, the project's Ada lines holding `X > T'Last + Y` or `X < T'First + Y` are quoted, each said to ask whether `X - Y` passes the bound, and how the sum's guard reads (`X > T'Last - Y`). qwen3-8b guarded a negative `B` with `A > Integer'Last + B`, worked out in its own thinking that `Add (Integer'Last, Integer'First)` took that branch, and gave the work up as done, shown only the test.
 - **`T'First - (-B)` and `Integer'Valid (A + B)` are said with the check's lines.** The first is said to be `T'First + B`, overflowing for a negative `B`; the second, that `'Valid` takes no argument and the sum overflows before there is anything to ask of. qwen3-8b spent its last steps going between those two versions, told only that line 16 overflowed and that `Valid` had an unexpected argument.

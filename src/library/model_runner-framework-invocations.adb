@@ -468,8 +468,20 @@ package body Model_Runner.Framework.Invocations is
       end loop;
    end Hold;
 
-   function Claim (From : Claims; Name : String) return String
-   is (if From.Values.Contains (Name) then From.Values (Name) else "");
+   --  A claim that says there is nothing -- none, n/a, nothing, a dash, an
+   --  empty list -- is no claim: gemma-3 wrote proposed_tasks, decisions,
+   --  specifications and waits_for as none, and each became a record
+   --  titled none, a task waiting on one among them.
+   function Claim (From : Claims; Name : String) return String is
+      Given : constant String := (if From.Values.Contains (Name) then From.Values (Name) else "");
+      Bare  : constant String :=
+        Ada.Characters.Handling.To_Lower
+          (Ada.Strings.Fixed.Trim (Given, Ada.Strings.Maps.To_Set (" .`" & ASCII.HT & ASCII.LF & ASCII.CR),
+                                   Ada.Strings.Maps.To_Set (" .`" & ASCII.HT & ASCII.LF & ASCII.CR)));
+   begin
+      return (if Bare in "none" | "n/a" | "na" | "nothing" | "null" | "-" | "[]" | "(none)" then ""
+              else Given);
+   end Claim;
 
    -----------
    -- Start --

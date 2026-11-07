@@ -5087,6 +5087,17 @@ package body Tests.Framework_Cases is
             Assert (Has (Not_Used, "no unit of the project uses Extra; find kind depends_on"),
                     "a unit nothing uses was not said so: " & Not_Used);
          end;
+         --  A name declared in a unit, not a unit: its unit answered for,
+         --  not "no unit uses it".
+         declare
+            Failed_Member : Boolean;
+            Member : constant String := Cq.Find (Store, "used_by", "Next", Failed_Member);
+         begin
+            Assert (Has (Member, "Next is a procedure declared in the unit Parser, not a unit")
+                    and then Has (Member, "Parser is used by:") and then Has (Member, "Main")
+                    and then not Has (Member, "no unit of the project uses Next"),
+                    "a name declared in a unit was said to be used by nothing: " & Member);
+         end;
          Assert (Has (Asked ("dependents", "{""unit"": ""Parser""}"), "Extra"),
                  "an answer after a write was about the code before it: "
                  & Asked ("dependents", "{""unit"": ""Parser""}"));
@@ -6455,9 +6466,18 @@ package body Tests.Framework_Cases is
       Iv.Hold (Iv.Work_Claim,
                "status: done" & LF & "summary: found them" & LF & "changed_files: none" & LF
                & "findings:" & LF & "- Unit using Calc: Main (src/main.adb)", Said, Status);
-      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "changed_files") = "none",
-              "a field the contract does not name ran into the one before it: "
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "changed_files") = ""
+              and then Iv.Claim (Said, "summary") = "found them",
+              "a field the contract does not name ran into the one before it, or none was read as a file: "
               & Iv.Claim (Said, "changed_files"));
+      --  A list that says there is nothing is empty, not a list of one
+      --  called none.
+      Iv.Hold (Iv.Work_Claim,
+               "status: done" & LF & "summary: x" & LF & "proposed_tasks: none" & LF & "decisions: N/A."
+               & LF & "waits_for: -", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "proposed_tasks") = ""
+              and then Iv.Claim (Said, "decisions") = "" and then Iv.Claim (Said, "waits_for") = "",
+              "a claim of nothing was read as something: " & Iv.Claim (Said, "proposed_tasks"));
       --  Given as JSON, read as JSON means it: an escape decoded, a fence
       --  around it allowed; an object with more after it is no JSON answer.
       Iv.Hold (Iv.Work_Claim,
@@ -20553,6 +20573,19 @@ package body Tests.Framework_Cases is
                  & " then -- A < Integer'First + B asks whether A - B is below Integer'First; whether A + B is, is"
                  & " A < Integer'First - B",
                  "an exception's message was not said with where it is raised: " & Raised);
+      end;
+      --  A step that raised after an earlier one failed ran a program
+      --  built before the failure: said so, and no line quoted for it.
+      declare
+         Raised : constant String := "raised CONSTRAINT_ERROR : calc.adb:4 overflow check failed";
+         Stale  : constant String := Wk.Step_Output (Raised, "build", Root, ["src/calc.adb"]);
+         Fresh  : constant String := Wk.Step_Output (Raised, "", Root, ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Stale, "(this ran the program as it was built before build failed above") > 0
+                 and then Ada.Strings.Fixed.Index (Stale, "line 4 is:") = 0
+                 and then Ada.Strings.Fixed.Index (Fresh, "src/calc.adb line 4 is:") > 0,
+                 "a run after a failed build was quoted as the sources, or a run after none was not: "
+                 & Stale & " / " & Fresh);
       end;
       Remove_Tree (Root);
    end Check_Output_Quotes_Lines;

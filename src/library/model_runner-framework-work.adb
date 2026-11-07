@@ -2355,6 +2355,14 @@ package body Model_Runner.Framework.Work is
    -- Quoted_Lines --
    ------------------
 
+   function Step_Output
+     (Output, Failed_Before, Project : String; Known : Name_Lists.Vector) return String
+   is (if Failed_Before /= "" and then Ada.Strings.Fixed.Index (Output, "raised ") > 0
+       then ASCII.LF & Output
+            & ASCII.LF & "(this ran the program as it was built before " & Failed_Before
+            & " failed above: it is not your last change; make " & Failed_Before & " pass first)"
+       else ASCII.LF & Output & Quoted_Lines (Output, Project, Known));
+
    function Quoted_Lines (Text : String; Project : String; Known : Name_Lists.Vector) return String is
       Said  : Unbounded_String;
       Given : Natural := 0;

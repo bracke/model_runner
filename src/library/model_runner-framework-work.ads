@@ -342,6 +342,24 @@ package Model_Runner.Framework.Work is
    --    where none.
    function Quoted_Lines (Text : String; Project : String; Known : Name_Lists.Vector) return String;
 
+   --  What a failed check step's output is said with: its last lines and
+   --  the project's lines they name (Quoted_Lines) -- but where an
+   --  earlier step failed and this one raised, the program it ran was
+   --  built before that failure, so it is said to be that, and no line of
+   --  the sources is quoted for it. gemma-3 was shown its run's overflow
+   --  under line 5 as it had rewritten it -- a line that never compiled --
+   --  and said the checks reported wrong errors.
+   --
+   --  @param Output The step's log, its last lines.
+   --  @param Failed_Before The label of the first required step that
+   --    failed before this one, or "".
+   --  @param Project The project's directory.
+   --  @param Known The project's files, relative to it.
+   --  @return The text to say after the step's line, starting with a
+   --    line break.
+   function Step_Output
+     (Output, Failed_Before, Project : String; Known : Name_Lists.Vector) return String;
+
    --  What a task's agent is told after its context -- how to answer, the
    --  tools it holds and what it may do -- as /work would tell it now: the
    --  text /task context shows.

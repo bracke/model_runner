@@ -1318,6 +1318,46 @@ package body Model_Runner.Tools.Editing is
    --  A text with another language's spellings written as Ada writes them
    --  -- elif and elseif as elsif, && as and then, || as or else, != as /=,
    --  == as = -- outside strings and comments.
+   --  A text with what a check's quotation adds to a line taken off it:
+   --  the "PATH line N is: " in front, and the " -- in Ada: ..." hint after.
+   --  The text unchanged where it holds neither.
+   function Unquoted (Text : String) return String is
+      Result : U.Unbounded_String;
+      Start  : Positive := Text'First;
+   begin
+      for Index in Text'First .. Text'Last + 1 loop
+         if Index > Text'Last or else Text (Index) = ASCII.LF then
+            declare
+               Line  : constant String := Text (Start .. Index - 1);
+               Says  : constant Natural := Ada.Strings.Fixed.Index (Line, " line ");
+               Is_At : constant Natural :=
+                 (if Says = 0 then 0 else Ada.Strings.Fixed.Index (Line (Says .. Line'Last), " is: "));
+               Hint  : constant Natural := Ada.Strings.Fixed.Index (Line, " -- in Ada: ");
+               From  : Positive := Line'First;
+               Upto  : Natural := Line'Last;
+            begin
+               --  The quotation's front: a path with no blank in it, the
+               --  word line and a number.
+               if Says > Line'First and then Is_At > Says + 6
+                 and then Ada.Strings.Fixed.Index (Line (Line'First .. Says - 1), " ") = 0
+                 and then (for all C of Line (Says + 6 .. Is_At - 1) => C in '0' .. '9')
+               then
+                  From := Is_At + 5;
+               end if;
+               if Hint > 0 then
+                  Upto := Hint - 1;
+               end if;
+               U.Append (Result, Line (From .. Upto));
+               if Index <= Text'Last then
+                  U.Append (Result, ASCII.LF);
+               end if;
+            end;
+            Start := Index + 1;
+         end if;
+      end loop;
+      return U.To_String (Result);
+   end Unquoted;
+
    function As_Ada (Text : String) return String is
       Result  : U.Unbounded_String;
       At_C    : Positive := Text'First;
@@ -1503,6 +1543,25 @@ package body Model_Runner.Tools.Editing is
                      return Again;
                   end;
                end if;
+               --  Copied from a check's quotation of the line, its front and
+               --  its hint with it: taken off, of new_text too. gemma-3 gave
+               --  old_text as "... == Integer'Last -- in Ada: =, not ==; ..."
+               --  with the next quotation's "src/test_add.adb line 5 is: ".
+               if Unquoted (Old_Text) /= Old_Text then
+                  declare
+                     Again : Said :=
+                       Edit (Path, Unquoted (Old_Text), Unquoted (New_Text), Expected, Base, Near_First, Near_Last);
+                  begin
+                     if not Again.Failed then
+                        Again.Text := U.To_Unbounded_String
+                          ("(what a check's quotation adds to a line -- its ""PATH line N is: "" and its "" -- in Ada:"
+                           & " ..."" hint -- was taken off old_text and new_text: neither is in the file) "
+                           & U.To_String (Again.Text));
+                        return Again;
+                     end if;
+                  end;
+               end if;
+
                --  Spelled in an Ada file as another language spells it --
                --  elif where the file has elsif: read as Ada, new_text
                --  written so too. qwen3-8b fixed its elif to elsif, then

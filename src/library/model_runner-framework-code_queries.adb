@@ -234,6 +234,69 @@ package body Model_Runner.Framework.Code_Queries is
             end if;
          end;
       end if;
+      --  A name that is no unit but something declared in one: units are
+      --  what these follow, so its unit is answered for, and where the
+      --  name itself is referred to. Asked who uses Times, a function of
+      --  Calc, gemma-3 was told no unit uses Times -- Main calls it -- and
+      --  reported the task failed.
+      if Said = Null_Unbounded_String
+        and then Named in "dependencies" | "dependents"
+        and then not Is_File (Given)
+      then
+         declare
+            Matches : constant Name_Lists.Vector := Rp.Find_Symbols (Graph, Given);
+         begin
+            if not Matches.Is_Empty
+              and then (for all Match of Matches =>
+                          Ada.Characters.Handling.To_Lower (Match)
+                          /= Ada.Characters.Handling.To_Lower (Given))
+            then
+               declare
+                  Full  : constant String := Matches.First_Element;
+                  Dot   : constant Natural :=
+                    Ada.Strings.Fixed.Index (Full, ".", Ada.Strings.Backward);
+               begin
+                  if Dot > Full'First then
+                     declare
+                        Unit   : constant String := Full (Full'First .. Dot - 1);
+                        --  What it is, as its declaration says: a body
+                        --  is the same name a second time.
+                        function Kind return String is
+                        begin
+                           for Index in 1 .. Rp.Symbol_Count (Graph) loop
+                              declare
+                                 One : constant Rp.Symbol := Rp.Symbol_At (Graph, Index);
+                              begin
+                                 if To_String (One.Name) = Full and then Length (One.Kind) > 0
+                                   and then To_String (One.Kind) /= "body"
+                                 then
+                                    return To_String (One.Kind);
+                                 end if;
+                              end;
+                           end loop;
+                           return "name";
+                        end Kind;
+                        Linked : constant Name_Lists.Vector :=
+                          (if Named = "dependencies" then Rp.Dependencies_Of (Graph, Unit)
+                           else Rp.Dependents_Of (Graph, Unit));
+                        Places : constant Name_Lists.Vector := Rp.References_To (Store, Graph, Full);
+                     begin
+                        return Given & " is a " & Kind & " declared in the unit " & Unit
+                          & ", not a unit: used_by and depends_on follow units. "
+                          & (if Linked.Is_Empty
+                             then Unit & (if Named = "dependencies" then " uses no unit of the project"
+                                          else " is used by no unit of the project")
+                             else Unit & (if Named = "dependencies" then " uses:" else " is used by:")
+                                  & ASCII.LF & Listed (Linked, 100))
+                          & (if Places.Is_Empty then ""
+                             else ASCII.LF & Full & " is referred to at:" & ASCII.LF & Listed (Places, 100));
+                     end;
+                  end if;
+               end;
+            end if;
+         end;
+      end if;
+
       --  A unit the graph holds with nothing on the side asked is an
       --  answer, not an absence: said as one, with the other direction
       --  named. "Nothing in the graph for Calc", said of what Calc uses, a
