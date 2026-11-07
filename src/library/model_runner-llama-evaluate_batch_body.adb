@@ -431,6 +431,11 @@ is
        and then L.Second_Attention_Norm = null
        and then L.Query_Whole_Norm = null
 
+       --  Gemma4's layer is not yet a shape the sequence builds: its
+       --  layers' own head widths, its unscaled scores and normalized
+       --  values, its output scale and its embedding a layer.
+       and then Settings.Kind /= Gemma4
+
        --  The attention projections' biases go as steps of the
        --  sequence, all three or none, as the token's whole layer
        --  takes them.
