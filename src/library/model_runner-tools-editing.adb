@@ -192,17 +192,27 @@ package body Model_Runner.Tools.Editing is
    --  Of an Ada passage, the blocks its lines open less the ones they end:
    --  an if, case, loop, begin or declare opens, an end ends. Strings and
    --  comments are not counted.
+   --  A declare's begin is the same block's second part, not a block of
+   --  its own: counted as one, a whole function holding a declare block
+   --  was refused as opening one it did not end, and qwen3-8b's edit of
+   --  its own Add was refused four times.
    function Ada_Blocks_Open (Passage : String) return Integer is
-      Open  : Integer := 0;
-      Start : Positive := Passage'First;
+      Open     : Integer := 0;
+      Declared : Natural := 0;
+      Start    : Positive := Passage'First;
 
       procedure Count (Line : String) is
          Word : constant String := Ada_Words (Line);
       begin
          if Starts (Word, "end") then
             Open := Open - 1;
+         elsif Starts (Word, "begin") and then Declared > 0 then
+            Declared := Declared - 1;
          elsif Opens_Block (Word) then
             Open := Open + 1;
+            if Starts (Word, "declare") then
+               Declared := Declared + 1;
+            end if;
          end if;
       end Count;
    begin
@@ -219,8 +229,9 @@ package body Model_Runner.Tools.Editing is
    --  the first end it comes to that it opened nothing for. "" where there
    --  is none.
    function Closing_End (Passage : String) return String is
-      Depth : Natural := 0;
-      Start : Positive := Passage'First;
+      Depth    : Natural := 0;
+      Declared : Natural := 0;
+      Start    : Positive := Passage'First;
    begin
       for Index in Passage'First .. Passage'Last + 1 loop
          if Index > Passage'Last or else Passage (Index) = ASCII.LF then
@@ -233,8 +244,15 @@ package body Model_Runner.Tools.Editing is
                      return Word;
                   end if;
                   Depth := Depth - 1;
+
+               --  A declare's begin, as Ada_Blocks_Open counts it.
+               elsif Starts (Word, "begin") and then Declared > 0 then
+                  Declared := Declared - 1;
                elsif Opens_Block (Word) then
                   Depth := Depth + 1;
+                  if Starts (Word, "declare") then
+                     Declared := Declared + 1;
+                  end if;
                end if;
             end;
          end if;
@@ -270,6 +288,9 @@ package body Model_Runner.Tools.Editing is
       Had   : array (0 .. Most) of Boolean := [others => False];
       Depth : Natural := 0;
       Start : Positive := Passage'First;
+
+      --  Declares whose begin has not come: that begin is the same block.
+      Declared : Natural := 0;
    begin
       for Index in Passage'First .. Passage'Last + 1 loop
          if Index > Passage'Last or else Passage (Index) = ASCII.LF then
@@ -280,10 +301,15 @@ package body Model_Runner.Tools.Editing is
                if Starts (Word, "end") then
                   exit when Depth = 0;
                   Depth := Depth - 1;
+               elsif Starts (Word, "begin") and then Declared > 0 then
+                  Declared := Declared - 1;
                elsif Opens_Block (Word) then
                   exit when Depth = Most;
                   Depth := Depth + 1;
                   Had (Depth) := False;
+                  if Starts (Word, "declare") then
+                     Declared := Declared + 1;
+                  end if;
                elsif Starts (Word, "elsif") or else Starts (Word, "else") then
                   if Had (Depth) then
                      return True;

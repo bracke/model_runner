@@ -3252,6 +3252,19 @@ package body Tests.Tools_Cases is
          Placed.Run ("edit_file", "{""path"": ""block.adb"", ""old_text"": ""if A then"","
                      & " ""new_text"": ""if C then""}", Room, Last, Ended, Status);
          Assert (Ended.Changed, "an if's first line was not edited alone: " & Room (Room'First .. Last));
+         --  A whole function holding a declare block, given whole: the
+         --  declare's begin is the same block, so nothing is left open.
+         Placed.Run ("write_file",
+                     "{""path"": ""declared.adb"", ""content"": ""function Add return Integer is\nbegin\n"
+                     & "   declare\n      S : Integer := 1;\n   begin\n      return S;\n   end;\nend Add;\n""}",
+                     Room, Last, Ended, Status);
+         Placed.Run ("edit_file", "{""path"": ""declared.adb"", ""old_text"": ""function Add return Integer is\nbegin\n"
+                     & "   declare\n      S : Integer := 1;\n   begin\n      return S;\n   end;\nend Add;"","
+                     & " ""new_text"": ""function Add return Integer is\nbegin\n   return 2;\nend Add;""}",
+                     Room, Last, Ended, Status);
+         Assert (Ended.Changed,
+                 "a whole function holding a declare block was refused as leaving a block open: "
+                 & Room (Room'First .. Last));
          --  An if's first line given as an if with an else, and no end if,
          --  is refused where the old if's elsif would follow that else; an
          --  else the file's block has none of after it is taken.

@@ -34,6 +34,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **An edit whose `old_text` is a whole block holding a `declare` is no longer refused as leaving a block open.** A `declare` and its `begin` were counted as two blocks against one `end`, so a whole function with a declare block in it read as one block short; qwen3-8b's edit of its own `Add` was refused four times so. A `declare`'s `begin` is now the same block's, wherever the edit counts blocks.
 - **A check that raised after an earlier step failed is said to have run the program built before the failure.** Its output no longer has the sources' current lines quoted under it, which showed gemma-3 an overflow at a line it had rewritten and that never compiled.
 - **`find used_by` and `depends_on` asked of a name declared in a unit answer for that unit.** Asked who uses `Times`, a function of `Calc`, it said no unit uses `Times` though `Main` calls it; it now says what `Times` is, which units use `Calc`, and where `Calc.Times` is referred to.
 - **A report's list that says none is empty.** `proposed_tasks: none`, `decisions: none`, `specifications: none` and `waits_for: none` each became a record titled none; a claim of `none`, `n/a`, `nothing`, `-` or `[]` is now no claim.
