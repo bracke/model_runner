@@ -1315,6 +1315,72 @@ package body Model_Runner.Tools.Editing is
       return U.To_String (Result);
    end Unnumbered;
 
+   --  A text with another language's spellings written as Ada writes them
+   --  -- elif and elseif as elsif, && as and then, || as or else, != as /=,
+   --  == as = -- outside strings and comments.
+   function As_Ada (Text : String) return String is
+      Result  : U.Unbounded_String;
+      At_C    : Positive := Text'First;
+      Quoted  : Boolean := False;
+      Comment : Boolean := False;
+
+      function Name_Char (C : Character) return Boolean
+      is (C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_');
+
+      function Starts (Word : String) return Boolean
+      is (At_C + Word'Length - 1 <= Text'Last
+          and then Ada.Characters.Handling.To_Lower (Text (At_C .. At_C + Word'Length - 1)) = Word);
+
+      function Word_At (Word : String) return Boolean
+      is (Starts (Word)
+          and then (At_C = Text'First or else not Name_Char (Text (At_C - 1)))
+          and then (At_C + Word'Length > Text'Last or else not Name_Char (Text (At_C + Word'Length))));
+
+      procedure Put (Spelled : String; Given : Positive) is
+      begin
+         U.Append (Result, Spelled);
+         At_C := At_C + Given;
+      end Put;
+   begin
+      while At_C <= Text'Last loop
+         if Text (At_C) = ASCII.LF then
+            Quoted := False;
+            Comment := False;
+            Put ([1 => ASCII.LF], 1);
+         elsif Comment then
+            Put ([1 => Text (At_C)], 1);
+         --  A character literal: '"' opens no string.
+         elsif not Quoted and then Text (At_C) = ''' and then At_C + 2 <= Text'Last
+           and then Text (At_C + 2) = '''
+         then
+            Put (Text (At_C .. At_C + 2), 3);
+         elsif Text (At_C) = '"' then
+            Quoted := not Quoted;
+            Put ([1 => '"'], 1);
+         elsif Quoted then
+            Put ([1 => Text (At_C)], 1);
+         elsif Starts ("--") then
+            Comment := True;
+            Put ("--", 2);
+         elsif Word_At ("elif") then
+            Put ("elsif", 4);
+         elsif Word_At ("elseif") then
+            Put ("elsif", 6);
+         elsif Starts ("&&") then
+            Put ("and then", 2);
+         elsif Starts ("||") then
+            Put ("or else", 2);
+         elsif Starts ("!=") then
+            Put ("/=", 2);
+         elsif Starts ("==") then
+            Put ("=", 2);
+         else
+            Put ([1 => Text (At_C)], 1);
+         end if;
+      end loop;
+      return U.To_String (Result);
+   end As_Ada;
+
    ----------
    -- Edit --
    ----------
@@ -1435,6 +1501,28 @@ package body Model_Runner.Tools.Editing is
                            & " listing's, not the file's) " & U.To_String (Again.Text));
                      end if;
                      return Again;
+                  end;
+               end if;
+               --  Spelled in an Ada file as another language spells it --
+               --  elif where the file has elsif: read as Ada, new_text
+               --  written so too. qwen3-8b fixed its elif to elsif, then
+               --  gave old_text with elif seven times running, told each
+               --  time that line 3 was not the file's line.
+               if Path'Length > 4
+                 and then Ada.Characters.Handling.To_Lower (Path (Path'Last - 3 .. Path'Last)) in ".adb" | ".ads"
+                 and then As_Ada (Old_Text) /= Old_Text
+               then
+                  declare
+                     Again : Said :=
+                       Edit (Path, As_Ada (Old_Text), As_Ada (New_Text), Expected, Base, Near_First, Near_Last);
+                  begin
+                     if not Again.Failed then
+                        Again.Text := U.To_Unbounded_String
+                          ("(old_text was read as Ada spells it -- elsif, not elif; and then, not &&; or else,"
+                           & " not ||; /=, not !=; =, not == -- and new_text written so too) "
+                           & U.To_String (Again.Text));
+                        return Again;
+                     end if;
                   end;
                end if;
                return Failing ("old_text is not in " & Path & " as it is now (revision " & Now

@@ -2503,6 +2503,89 @@ package body Model_Runner.Framework.Work is
                end;
             end loop;
          end if;
+         --  A sum held up against its type's own bound: X + Y > T'Last is
+         --  never True, the sum overflowing before it is compared.
+         --  qwen3-8b began with if A + B > Integer'Last, twice in three
+         --  runs, and was told only that line 5 overflowed.
+         if Overflowed then
+            for Bound in 1 .. 2 loop
+               declare
+                  Mark  : constant String := (if Bound = 1 then "'last" else "'first");
+                  At_It : Natural := Ada.Strings.Fixed.Index (Lower, Mark);
+
+                  --  As the line spells it: Lower numbers from one.
+                  function Spelled (From, To : Positive) return String
+                  is (Line (Line'First + (From - Lower'First) .. Line'First + (To - Lower'First)));
+
+                  function Before_Spaces (Index : Natural) return Natural is
+                     Back : Natural := Index;
+                  begin
+                     while Back >= Lower'First and then Lower (Back) = ' ' loop
+                        Back := Back - 1;
+                     end loop;
+                     return Back;
+                  end Before_Spaces;
+
+                  --  Where the name ending at Index starts; Index + 1 where
+                  --  none ends there.
+                  function Name_From (Index : Natural) return Positive is
+                     Back : Natural := Index;
+                  begin
+                     while Back >= Lower'First and then Name_Char (Lower (Back)) loop
+                        Back := Back - 1;
+                     end loop;
+                     return Back + 1;
+                  end Name_From;
+               begin
+                  while At_It > 0 loop
+                     declare
+                        Type_From : constant Positive := Name_From (At_It - 1);
+                        Compared  : Natural := Before_Spaces (Type_From - 1);
+                        Y_Last, X_Last, Sign_At : Natural := 0;
+                        Y_From, X_From          : Positive := Lower'First;
+                        Fits : Boolean := Type_From < At_It and then Compared >= Lower'First;
+                     begin
+                        if Fits and then Lower (Compared) = '=' then
+                           Compared := Compared - 1;
+                        end if;
+                        Fits := Fits and then Compared >= Lower'First
+                          and then Lower (Compared) = (if Bound = 1 then '>' else '<');
+                        if Fits then
+                           Y_Last := Before_Spaces (Compared - 1);
+                           Y_From := Name_From (Y_Last);
+                           Sign_At := Before_Spaces (Y_From - 1);
+                           Fits := Y_From <= Y_Last and then Sign_At >= Lower'First
+                             and then Lower (Sign_At) in '+' | '-';
+                        end if;
+                        if Fits then
+                           X_Last := Before_Spaces (Sign_At - 1);
+                           X_From := Name_From (X_Last);
+                           Fits := X_From <= X_Last;
+                        end if;
+                        if Fits then
+                           declare
+                              X     : constant String := Spelled (X_From, X_Last);
+                              Y     : constant String := Spelled (Y_From, Y_Last);
+                              Plus  : constant Boolean := Lower (Sign_At) = '+';
+                              Limit : constant String := Spelled (Type_From, At_It + Mark'Length - 1);
+                              --  Which sign of Y carries the sum past the
+                              --  bound, and the bound with Y moved over.
+                              Y_Sign : constant String := (if Plus = (Bound = 1) then " > 0" else " < 0");
+                              Moved  : constant String := Limit & (if Plus then " - " else " + ") & Y;
+                           begin
+                              Say (X & (if Plus then " + " else " - ") & Y & " is worked out in its type before it"
+                                   & " is compared, so it overflows rather than come out "
+                                   & (if Bound = 1 then "above " else "below ") & Limit
+                                   & "; compare without working it out: " & Y & Y_Sign & " and then " & X
+                                   & (if Bound = 1 then " > " else " < ") & Moved);
+                           end;
+                        end if;
+                     end;
+                     At_It := Ada.Strings.Fixed.Index (Lower, Mark, At_It + 1);
+                  end loop;
+               end;
+            end loop;
+         end if;
          if Ada.Strings.Fixed.Index (Lower, "+=") > 0 or else Ada.Strings.Fixed.Index (Lower, "-=") > 0
            or else Ada.Strings.Fixed.Index (Lower, "++") > 0
          then

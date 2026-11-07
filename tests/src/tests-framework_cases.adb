@@ -20358,6 +20358,8 @@ package body Tests.Framework_Cases is
       Ada.Text_IO.Put_Line (Out_File, "      elif A /= 0 && B /= 0 then  -- not ""elif"" here");
       Ada.Text_IO.Put_Line (Out_File, "      if B > 0 and A > Integer'Last - B then");
       Ada.Text_IO.Put_Line (Out_File, "      if B > 0 and then A > Integer'Last - B then");
+      Ada.Text_IO.Put_Line (Out_File, "      if A + B > Integer'Last then");
+      Ada.Text_IO.Put_Line (Out_File, "      elsif X - Y <= Integer'First then");
       Ada.Text_IO.Close (Out_File);
       declare
          Said : constant String := Wk.Quoted_Lines
@@ -20396,6 +20398,25 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Calm, "in Ada") = 0,
                  "a guard's plain and was not said where it overflowed, or said where it did not: "
                  & Plain & " / " & Guarded & " / " & Calm);
+      end;
+      --  A sum held up against its type's bound is said to overflow before
+      --  it is compared, with the comparison that does not work it out.
+      declare
+         Plus  : constant String := Wk.Quoted_Lines ("calc.adb:8 overflow check failed", Root, ["src/calc.adb"]);
+         Minus : constant String := Wk.Quoted_Lines ("calc.adb:9 overflow check failed", Root, ["src/calc.adb"]);
+         Calm  : constant String := Wk.Quoted_Lines ("calc.adb:8:4: warning: x", Root, ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index
+                   (Plus, "A + B is worked out in its type before it is compared, so it overflows rather than"
+                    & " come out above Integer'Last; compare without working it out: B > 0 and then"
+                    & " A > Integer'Last - B") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Minus, "X - Y is worked out in its type before it is compared, so it overflows rather"
+                             & " than come out below Integer'First; compare without working it out: Y > 0 and then"
+                             & " X < Integer'First + Y") > 0
+                 and then Ada.Strings.Fixed.Index (Calm, "worked out") = 0,
+                 "a sum compared with its type's bound was not said to overflow first, or was where nothing"
+                 & " overflowed: " & Plus & " / " & Minus & " / " & Calm);
       end;
       --  A line a style check calls too long at a column is said with its
       --  length and the most a line may be; another diagnostic is not.

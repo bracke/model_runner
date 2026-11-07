@@ -1155,6 +1155,27 @@ package body Tests.Tools_Cases is
                     & Ada.Strings.Unbounded.To_String (Near.Text));
          end;
       end;
+      --  Spelled in an Ada file as another language spells it: read as
+      --  Ada, new_text written so too, strings and comments left as given.
+      declare
+         Spelled_Path : constant String := Dir & "/spelled.adb";
+         Text         : Ada.Strings.Unbounded.Unbounded_String;
+         Got          : E.Error_Info;
+      begin
+         Put (Spelled_Path, "   if A then" & ASCII.LF & "      X := 1;" & ASCII.LF & "   elsif B /= C then");
+         declare
+            Done : constant Ed.Said :=
+              Ed.Edit (Spelled_Path, "   elif B != C then", "   elif B == C && D then  -- not ""elif""", "");
+         begin
+            Ed.Read_Text (Spelled_Path, Text, Got);
+            Assert (not Done.Failed and then Has (Done, "read as Ada spells it")
+                    and then Ada.Strings.Unbounded.To_String (Text)
+                             = "   if A then" & ASCII.LF & "      X := 1;" & ASCII.LF
+                               & "   elsif B = C and then D then  -- not ""elif""" & ASCII.LF,
+                    "old_text spelled as another language was not read as Ada: "
+                    & Ada.Strings.Unbounded.To_String (Done.Text) & " / " & Ada.Strings.Unbounded.To_String (Text));
+         end;
+      end;
 
       --  There twice, exactly or loosely: edited where it starts within
       --  the lines last read, where only one place does; refused without.
