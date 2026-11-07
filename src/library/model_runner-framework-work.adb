@@ -2497,11 +2497,16 @@ package body Model_Runner.Framework.Work is
          --  The guard's own sum overflowing: T'Last - X for a negative X,
          --  T'First - X for a positive one. qwen3-8b guarded the sum with
          --  A > Integer'Last - B, and seven rewrites kept that guard, each
-         --  told only that line 5 overflowed.
+         --  told only that line 5 overflowed. And T'First + X for a negative
+         --  X, T'Last + X for a positive one: qwen3-8b guarded a negative
+         --  sum with B < 0 and then A < Integer'First + B, which overflows
+         --  wherever it is reached.
          if Overflowed then
-            for Bound in 1 .. 2 loop
+            for Bound in 1 .. 4 loop
                declare
-                  Mark  : constant String := (if Bound = 1 then "'last - " else "'first - ");
+                  Mark  : constant String :=
+                    (case Bound is
+                        when 1 => "'last - ", when 2 => "'first - ", when 3 => "'last + ", when others => "'first + ");
                   At_It : constant Natural := Ada.Strings.Fixed.Index (Lower, Mark);
                   Last  : Natural := At_It + Mark'Length - 1;
                begin
@@ -2515,23 +2520,73 @@ package body Model_Runner.Framework.Work is
                         Operand : constant String :=
                           Line (Line'First + (At_It + Mark'Length - Lower'First)
                                 .. Line'First + (Last - Lower'First));
-                        Sign    : constant String := (if Bound = 1 then " > 0" else " < 0");
+                        --  The sign that keeps it from overflowing.
+                        Sign    : constant String := (if Bound in 1 | 4 then " > 0" else " < 0");
+                        Wrong   : constant String := (if Bound in 1 | 4 then "negative" else "positive");
                      begin
                         if Low /= ""
                           and then Ada.Strings.Fixed.Index (Lower, Low & Sign) = 0
                           and then Ada.Strings.Fixed.Index (Lower, Low & " >= 0") = 0
                           and then Ada.Strings.Fixed.Index (Lower, Low & " <= 0") = 0
                         then
-                           Say ((if Bound = 1 then "T'Last - " & Operand & " itself overflows where "
-                                   & Operand & " is negative"
-                                 else "T'First - " & Operand & " itself overflows where " & Operand
-                                   & " is positive")
-                                & "; test its sign first: " & Operand & Sign & " and then the comparison");
+                           case Bound is
+                              when 1 | 2 =>
+                                 Say ((if Bound = 1 then "T'Last - " else "T'First - ") & Operand
+                                      & " itself overflows where " & Operand & " is " & Wrong
+                                      & "; test its sign first: " & Operand & Sign & " and then the comparison");
+                              when others =>
+                                 Say ((if Bound = 3 then "T'Last + " else "T'First + ") & Operand
+                                      & " itself overflows where " & Operand & " is " & Wrong & "; for a " & Wrong
+                                      & " " & Operand & ", a sum with it is "
+                                      & (if Bound = 3 then "above T'Last where the other is above T'Last - "
+                                         else "below T'First where the other is below T'First - ")
+                                      & Operand);
+                           end case;
                         end if;
                      end;
                   end if;
                end;
             end loop;
+         end if;
+         --  A sum given to a name in a line that overflowed: the sum is
+         --  worked out first, so no test of the name after it can see past
+         --  the type's bounds. qwen3-8b declared Sum : constant Integer :=
+         --  A + B, then tested Sum > Integer'Last, three rewrites running.
+         if Overflowed then
+            declare
+               Gives : constant Natural := Ada.Strings.Fixed.Index (Lower, ":=");
+               Ends  : constant Natural :=
+                 (if Gives = 0 then 0 else Ada.Strings.Fixed.Index (Lower (Gives .. Lower'Last), ";"));
+            begin
+               if Gives > 0 and then Ends > Gives + 2 then
+                  declare
+                     Given : constant String :=
+                       Ada.Strings.Fixed.Trim (Lower (Gives + 2 .. Ends - 1), Ada.Strings.Both);
+                     Plus  : constant Natural := Ada.Strings.Fixed.Index (Given, " + ");
+                     Minus : constant Natural := Ada.Strings.Fixed.Index (Given, " - ");
+                     Sign  : constant Natural := Natural'Max (Plus, Minus);
+                  begin
+                     if Given /= "" and then (Plus = 0 or else Minus = 0) and then Sign > Given'First
+                       and then (for all C of Given => Name_Char (C) or else C in ' ' | '+')
+                       and then Ada.Strings.Fixed.Index (Given (Sign + 3 .. Given'Last), " ") = 0
+                       and then Ada.Strings.Fixed.Index (Given (Given'First .. Sign - 1), " ") = 0
+                     then
+                        declare
+                           At_Given : constant Positive :=
+                             Ada.Strings.Fixed.Index_Non_Blank (Lower (Gives + 2 .. Ends - 1));
+                           --  As the line spells it.
+                           Sum : constant String :=
+                             Line (Line'First + (At_Given - Lower'First)
+                                   .. Line'First + (At_Given - Lower'First) + Given'Length - 1);
+                        begin
+                           Say (Sum & " is worked out before it is given, and overflows there: no test after it"
+                                & " can find it past the type's bounds; test before working it out -- for X + Y,"
+                                & " Y > 0 and then X > T'Last - Y, and Y < 0 and then X < T'First - Y");
+                        end;
+                     end if;
+                  end;
+               end if;
+            end;
          end if;
          --  A sum held up against its type's own bound: X + Y > T'Last is
          --  never True, the sum overflowing before it is compared.
@@ -2869,6 +2924,43 @@ package body Model_Runner.Framework.Work is
                                     end;
                                  end if;
                               end;
+                           end;
+                           --  A line the diagnostic names "at line N", in the
+                           --  same file: quoted too. Told missing "begin" for
+                           --  "declare" at line 6, qwen3-8b was shown lines 7
+                           --  and 14, and edited them five times over a
+                           --  declare left standing alone on line 6.
+                           declare
+                              Says  : constant String := Text (Last + 1 .. Ends - 1);
+                              Names : constant Natural := Ada.Strings.Fixed.Index (Says, " at line ");
+                              Upto  : Natural := Names + 8;
+                           begin
+                              if Names > 0 then
+                                 while Upto < Says'Last and then Says (Upto + 1) in '0' .. '9' loop
+                                    Upto := Upto + 1;
+                                 end loop;
+                              end if;
+                              if Names > 0 and then Upto > Names + 8 and then Upto - Names - 8 <= 7
+                                and then Natural'Value (Says (Names + 9 .. Upto)) > 0
+                                and then not Seen.Contains (Path & ":" & Says (Names + 9 .. Upto))
+                              then
+                                 declare
+                                    Other : constant String := Says (Names + 9 .. Upto);
+                                    Held  : constant String := Line_Of (Path, Natural'Value (Other));
+                                 begin
+                                    if Held /= "" then
+                                       Seen.Append (Path & ":" & Other);
+                                       Append (Said, ASCII.LF & Path & " line " & Other & " is: "
+                                               & Ada.Strings.Fixed.Trim (Held, Ada.Strings.Both)
+                                               & (if Ada.Strings.Fixed.Index (Says, "missing ""begin"" for ""declare""")
+                                                     > 0
+                                                  then " -- a declare opens a block: declare, what it declares,"
+                                                       & " begin, its statements, end; -- with nothing to declare,"
+                                                       & " leave the declare out"
+                                                  else ""));
+                                    end if;
+                                 end;
+                              end if;
                            end;
                            Given := Given + 1;
                         end if;

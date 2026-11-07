@@ -20361,6 +20361,9 @@ package body Tests.Framework_Cases is
       Ada.Text_IO.Put_Line (Out_File, "      if A + B > Integer'Last then");
       Ada.Text_IO.Put_Line (Out_File, "      elsif X - Y <= Integer'First then");
       Ada.Text_IO.Put_Line (Out_File, "with Ada.Numerics.Long_Long_Integer;");
+      Ada.Text_IO.Put_Line (Out_File, "      Sum : constant Integer := A + B;");
+      Ada.Text_IO.Put_Line (Out_File, "      elsif (A < 0 and then B < 0) and then (A < Integer'First + B) then");
+      Ada.Text_IO.Put_Line (Out_File, "   declare");
       Ada.Text_IO.Close (Out_File);
       declare
          Said : constant String := Wk.Quoted_Lines
@@ -20432,6 +20435,26 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Calm, "Standard") = 0,
                  "a type of Standard named as a unit was not said to need no with, or was where nothing failed: "
                  & Unit & " / " & Calm);
+      end;
+      --  A sum given to a name is said to overflow before any test of it;
+      --  T'First + B to overflow where B is negative; a line named "at line
+      --  N" is quoted too, a declare without its begin said as a block.
+      declare
+         Given  : constant String := Wk.Quoted_Lines ("calc.adb:11 overflow check failed", Root, ["src/calc.adb"]);
+         Bound  : constant String := Wk.Quoted_Lines ("calc.adb:12 overflow check failed", Root, ["src/calc.adb"]);
+         Named  : constant String :=
+           Wk.Quoted_Lines ("calc.adb:12:16: error: missing ""begin"" for ""declare"" at line 13", Root,
+                            ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Given, "A + B is worked out before it is given, and overflows there") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Bound, "T'First + B itself overflows where B is negative; for a negative B, a sum with"
+                             & " it is below T'First where the other is below T'First - B") > 0
+                 and then Ada.Strings.Fixed.Index
+                            (Named, "src/calc.adb line 13 is: declare -- a declare opens a block") > 0
+                 and then Ada.Strings.Fixed.Index (Named, "src/calc.adb line 12 is:") > 0,
+                 "a sum given, a bound plus a negative, or a line named at line N was not said: "
+                 & Given & " / " & Bound & " / " & Named);
       end;
       --  A line a style check calls too long at a column is said with its
       --  length and the most a line may be; another diagnostic is not.
