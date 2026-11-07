@@ -11401,7 +11401,7 @@ package body Model_Runner.Llama is
    --  @param Item Session whose buffers are used.
    --  @param Current The layer.
    --  @param Status Success, or why not.
-   procedure Gemma4_Mixture
+   procedure Gemma4_Mixture_Body
      (Item    : in out Session;
       Current : Layer;
       Status  : out E.Error_Info)
@@ -11436,6 +11436,25 @@ package body Model_Runner.Llama is
       K.RMS_Norm (Item.Mixture.all, Current.Post_Feed_Norm_2.all, Epsilon, Item.Post_Room.all);
       Item.Mixture.all := Item.Post_Room.all;
       K.Add (Item.Mixture.all, Item.Shared_Answer.all);
+   end Gemma4_Mixture_Body;
+
+   --  On the processor's pool where the device runs only the layers' front
+   --  halves, as Mixture is: the dense feed-forward's matrices are then the
+   --  processor's, in its own layout, as the experts' are.
+   procedure Gemma4_Mixture
+     (Item    : in out Session;
+      Current : Layer;
+      Status  : out E.Error_Info)
+   is
+      Was : constant Boolean := Item.Host_Feed;
+   begin
+      Item.Host_Feed := Was or else Item.Owner.all.Split_Feed;
+      Gemma4_Mixture_Body (Item, Current, Status);
+      Item.Host_Feed := Was;
+   exception
+      when others =>
+         Item.Host_Feed := Was;
+         raise;
    end Gemma4_Mixture;
 
    --  Gemma4's embedding a layer for one position, worked out from the

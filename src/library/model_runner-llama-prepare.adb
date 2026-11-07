@@ -3088,8 +3088,14 @@ begin
             Budget := Budget - Beside;
          end if;
          Mixture_Bytes (Total, Feed);
+         --  Gemma4's mixture is split wherever it is: its dense
+         --  feed-forward beside the experts and its gate and up kept as one
+         --  stack an expert are not shapes the device's mixture takes, so
+         --  the device runs each layer's front half and the processor the
+         --  rest, as for a mixture the device does not hold.
          Mixture_Split :=
-           Splits (Total, Feed, Budget)
+           (Splits (Total, Feed, Budget)
+            or else Item.Settings.Kind = Gemma4)
            and then Panels_Unasked
                       (Feed, Bounds.Max_Allocation_Bytes,
                        Model_Runner.Panel_Cache.Room_Now);

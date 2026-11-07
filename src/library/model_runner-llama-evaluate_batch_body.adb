@@ -435,19 +435,20 @@ is
        and then L.Second_Attention_Norm = null
        and then L.Query_Whole_Norm = null
 
-       --  Gemma4's layer goes whole where the device's attention holds
-       --  its heads -- the windowed layers' 256 in the ordinary kernels,
-       --  the global layers' 512 in the latent's -- and its feed-forward
-       --  is the dense one. A layer without a value projection gives its
-       --  key projection for the values, which are the keys as projected.
+       --  Gemma4's layer's front half goes to the device where its
+       --  attention holds its heads -- the windowed layers' 256 in the
+       --  ordinary kernels, the global layers' 512 in the latent's. A
+       --  layer without a value projection gives its key projection for
+       --  the values, which are the keys as projected. Its mixture, the
+       --  dense feed-forward beside the experts, stays the processor's
+       --  (Whole_Layer_Fits).
        and then (Settings.Kind /= Gemma4
                  or else ((Head_Of (Settings, Index)
                              <= Model_Runner.Backend.Device.Attention_Head_Room
                            or else Model_Runner.Backend.Device.Attends_Latent_Heads
                                      (Head_Of (Settings, Index),
                                       Value_Of (Settings, Index),
-                                      Group_Of (Settings, Index)))
-                          and then Settings.Experts = 0))
+                                      Group_Of (Settings, Index)))))
 
        --  The attention projections' biases go as steps of the
        --  sequence, all three or none, as the token's whole layer
@@ -2012,8 +2013,11 @@ begin
                      --  them, and the mixture where the layer is one.
                      Query_Norm => Current.Query_Norm,
                      Key_Norm   => Current.Key_Norm,
+                     --  Not Gemma4's: its router reads the experts' own input, which
+                     --  a front half that routed would not have made.
                      Router     =>
-                       (if Settings.Experts > 0 then Current.Router
+                       (if Settings.Experts > 0 and then Settings.Kind /= Gemma4
+                        then Current.Router
                         else T.Empty_View),
                      Router_Bias => Current.Router_Bias,
                      Gate_Stack  => Current.Gate_Stack,
@@ -2112,11 +2116,15 @@ begin
                      MLA_Expand_At => Expand_Here,
                      Value_Gain      => Current.Value_Gain,
                      Reads_Other     => not Own_Cache,
-                     Input_Gate      => Current.Input_Gate,
+                     --  Gemma4's end of a layer follows the feed-forward,
+                     --  which a front half leaves to the host.
+                     Input_Gate      =>
+                       (if Half then T.Empty_View else Current.Input_Gate),
                      Input_Proj      => Current.Input_Proj,
                      Input_Post_Norm => Current.Input_Post_Norm,
                      Layer_Input     => Layer_Slices (Natural (Index)),
-                     Output_Scale    => Current.Scale_Row);
+                     Output_Scale    =>
+                       (if Half then null else Current.Scale_Row));
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.
                   if Model_Runner.Backend.Device.Carry_Lost then

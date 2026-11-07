@@ -845,9 +845,13 @@ package body Model_Runner.CLI.Execute.Support is
          if Named_Device then
             null;
 
-         --  Gemma4's mixture runs on the processor until its dense
-         --  feed-forward beside the experts has a path of its own on the
-         --  device; its dense sizes go there as any model does.
+         --  Gemma4's mixture stays on the processor: the device takes only
+         --  its layers' front halves (its dense feed-forward beside the
+         --  experts and its gate and up kept as one stack an expert are
+         --  the processor's), and split so the 26B generated 18.1 tokens
+         --  a second against 17.7 on the processor alone and read its
+         --  prompt at 30 against 39. Its dense sizes go there as any
+         --  model does.
          elsif Seen.Measured and then L."=" (Seen.Settings.Kind, L.Gemma4)
            and then Seen.Settings.Experts > 0
          then
