@@ -20364,6 +20364,8 @@ package body Tests.Framework_Cases is
       Ada.Text_IO.Put_Line (Out_File, "      Sum : constant Integer := A + B;");
       Ada.Text_IO.Put_Line (Out_File, "      elsif (A < 0 and then B < 0) and then (A < Integer'First + B) then");
       Ada.Text_IO.Put_Line (Out_File, "   declare");
+      Ada.Text_IO.Put_Line (Out_File, "      elsif A < Integer'First - (-B) then");
+      Ada.Text_IO.Put_Line (Out_File, "      if Integer'Valid (A + B) then");
       Ada.Text_IO.Close (Out_File);
       declare
          Said : constant String := Wk.Quoted_Lines
@@ -20455,6 +20457,19 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Named, "src/calc.adb line 12 is:") > 0,
                  "a sum given, a bound plus a negative, or a line named at line N was not said: "
                  & Given & " / " & Bound & " / " & Named);
+      end;
+      --  T'First - (-B) said as T'First + B; 'Valid given an argument said
+      --  to take none.
+      declare
+         Negated : constant String := Wk.Quoted_Lines ("calc.adb:14 overflow check failed", Root, ["src/calc.adb"]);
+         Valid   : constant String :=
+           Wk.Quoted_Lines ("calc.adb:15:27: error: unexpected argument for ""Valid"" attribute", Root,
+                            ["src/calc.adb"]);
+      begin
+         Assert (Ada.Strings.Fixed.Index
+                   (Negated, "T'First - (-B) is T'First + B, and it overflows where B is negative") > 0
+                 and then Ada.Strings.Fixed.Index (Valid, "X'Valid takes no argument") > 0,
+                 "a negated bound or an argument to 'Valid was not said: " & Negated & " / " & Valid);
       end;
       --  A line a style check calls too long at a column is said with its
       --  length and the most a line may be; another diagnostic is not.

@@ -2439,6 +2439,17 @@ package body Model_Runner.Framework.Work is
          --  no with. gpt-oss wrote with Ada.Numerics.Long_Long_Integer, told
          --  only that it is not a predefined unit, and spent the rest of its
          --  replies guessing at that name until they ran out.
+         --  'Valid given an argument: it asks of an object, and the sum it
+         --  was meant to ask of overflows before there is one. qwen3-8b
+         --  wrote Integer'Valid (A + B) four times, told only "unexpected
+         --  argument".
+         if Ada.Strings.Fixed.Index (Text, "unexpected argument for ""Valid"" attribute") > 0
+           and then Ada.Strings.Fixed.Index (Lower, "'valid") > 0
+         then
+            Say ("X'Valid takes no argument: it asks whether an object holds a value of its type, and a sum given"
+                 & " to it overflows before there is one; test before working the sum out -- for X + Y, Y > 0 and then"
+                 & " X > T'Last - Y, and Y < 0 and then X < T'First - Y");
+         end if;
          if Ada.Strings.Fixed.Index (Text, "is not a predefined library unit") > 0 then
             declare
                Standard_Names : constant String :=
@@ -2502,11 +2513,14 @@ package body Model_Runner.Framework.Work is
          --  sum with B < 0 and then A < Integer'First + B, which overflows
          --  wherever it is reached.
          if Overflowed then
-            for Bound in 1 .. 4 loop
+            for Bound in 1 .. 6 loop
                declare
+                  --  5 and 6 are 3 and 4 spelled T'Last - (-X): qwen3-8b
+                  --  wrote Integer'First - (-B), told T'First + B overflows.
                   Mark  : constant String :=
                     (case Bound is
-                        when 1 => "'last - ", when 2 => "'first - ", when 3 => "'last + ", when others => "'first + ");
+                        when 1 => "'last - ", when 2 => "'first - ", when 3 => "'last + ", when 4 => "'first + ",
+                        when 5 => "'last - (-", when others => "'first - (-");
                   At_It : constant Natural := Ada.Strings.Fixed.Index (Lower, Mark);
                   Last  : Natural := At_It + Mark'Length - 1;
                begin
@@ -2521,8 +2535,13 @@ package body Model_Runner.Framework.Work is
                           Line (Line'First + (At_It + Mark'Length - Lower'First)
                                 .. Line'First + (Last - Lower'First));
                         --  The sign that keeps it from overflowing.
-                        Sign    : constant String := (if Bound in 1 | 4 then " > 0" else " < 0");
-                        Wrong   : constant String := (if Bound in 1 | 4 then "negative" else "positive");
+                        Sign    : constant String := (if Bound in 1 | 4 | 6 then " > 0" else " < 0");
+                        Wrong   : constant String := (if Bound in 1 | 4 | 6 then "negative" else "positive");
+                        Spelled : constant String :=
+                          (case Bound is
+                              when 5 => "T'Last - (-" & Operand & ") is T'Last + " & Operand & ", and ",
+                              when 6 => "T'First - (-" & Operand & ") is T'First + " & Operand & ", and ",
+                              when others => "");
                      begin
                         if Low /= ""
                           and then Ada.Strings.Fixed.Index (Lower, Low & Sign) = 0
@@ -2534,6 +2553,12 @@ package body Model_Runner.Framework.Work is
                                  Say ((if Bound = 1 then "T'Last - " else "T'First - ") & Operand
                                       & " itself overflows where " & Operand & " is " & Wrong
                                       & "; test its sign first: " & Operand & Sign & " and then the comparison");
+                              when 5 | 6 =>
+                                 Say (Spelled & "it overflows where " & Operand & " is " & Wrong & "; for a " & Wrong
+                                      & " " & Operand & ", a sum with it is "
+                                      & (if Bound = 5 then "above T'Last where the other is above T'Last - "
+                                         else "below T'First where the other is below T'First - ")
+                                      & Operand);
                               when others =>
                                  Say ((if Bound = 3 then "T'Last + " else "T'First + ") & Operand
                                       & " itself overflows where " & Operand & " is " & Wrong & "; for a " & Wrong
