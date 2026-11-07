@@ -13718,7 +13718,9 @@ package body Model_Runner.Platform.Device.Products is
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0;
       Cap           : Model_Runner.Numerics.Real := 0.0;
-      Fold          : Boolean := False) is
+      Fold          : Boolean := False;
+      Multiply      : Boolean := False;
+      Per_Member    : Boolean := False) is
 
       use type Model_Runner.Numerics.Real;
 
@@ -13763,10 +13765,17 @@ package body Model_Runner.Platform.Device.Products is
                            or else Route_Step /= 0
                            or else Source_Stride /= Steps.Items (Source_Step).Rows
                            or else Source_At + Each > Source_Stride))
-        --  A projection's bias: one slice, over a product of Each rows.
+        --  A projection's bias: one slice, over a product of Each rows --
+        --  or, a slice a position, as many as the positions.
         or else (not Sliced and then Route_Step = 0 and then Count = 0
-                 and then (Experts /= 1
+                 and then ((Experts /= 1 and then not Per_Member)
                            or else Steps.Items (Source_Step).Rows /= Each))
+        --  A weight a position, or one that multiplies, is a projection's
+        --  alone, uncapped and unfolded.
+        or else ((Multiply or else Per_Member)
+                 and then (Sliced or else Route_Step /= 0 or else Count /= 0
+                           or else Cap_Only or else Cap /= 0.0 or else Fold))
+        or else (Per_Member and then not Multiply)
         --  A gather the host chose: as many members as the source has.
         or else (Count > 0
                  and then Steps.Items (Source_Step).Gathers /= Count)
@@ -13798,6 +13807,7 @@ package body Model_Runner.Platform.Device.Products is
          Key => Key,
          Chained => True, Reads => Source_Step, Reads_Two => Route_Step,
          Kept => Kept, Biases => True, Cap => Cap,
+         Scales => Multiply, Per_Member => Per_Member,
          Stack => (if Cap_Only then 0 else Experts), Each => Each,
          Used => (if Count > 0 then Count
                   elsif Route_Step = 0 then 0
@@ -19050,7 +19060,10 @@ package body Model_Runner.Platform.Device.Products is
                         --  bias to add before it.
                         Stride  => Bits (This.Cap),
                         Apart   =>
-                          (if This.Base = System.Null_Address then 1 else 0),
+                          C.unsigned
+                            (Natural'(if This.Base = System.Null_Address then 1 else 0)
+                             + (if This.Scales then 2 else 0)
+                             + (if This.Per_Member then 4 else 0)),
                         others  => <>);
 
                      --  Few members are spread down the second axis, a

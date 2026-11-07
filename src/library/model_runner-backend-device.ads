@@ -2144,6 +2144,22 @@ package Model_Runner.Backend.Device is
    --    Qwen2.5-VL's windows of a picture -- or zero for one attending
    --    over First .. Last. Refused but both ways, without a window, and
    --    where the short span's kernel would not take the batch.
+   --  @param Value_Gain Where the values are normalized a head, Gemma4's
+   --    way, the gain (ones, one head wide); null for no normalization.
+   --  @param Reads_Other Whether the layer keeps no keys or values and
+   --    attends another layer's, which K_Base and V_Base then name: no key
+   --    or value projection, and nothing placed. Key and Value are unread.
+   --  @param Input_Gate Gemma4's embedding a layer, at the layer's end:
+   --    the layer's answer gated down through Input_Gate and the Gaussian
+   --    unit, multiplied by Layer_Input (a row of the gate's rows a
+   --    position), projected back up by Input_Proj, normalized by
+   --    Input_Post_Norm and joined to the answer. Empty for none.
+   --  @param Input_Proj See Input_Gate.
+   --  @param Input_Post_Norm See Input_Gate.
+   --  @param Layer_Input See Input_Gate; read for this run alone.
+   --  @param Output_Scale Gemma4's scale on the layer's answer, as a row of
+   --    the model's width every element of which is the scale, multiplied
+   --    in last; null for none.
    procedure Whole_Layer
      (Residual       : Model_Runner.Tensors.Real_Array;
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
@@ -2258,7 +2274,16 @@ package Model_Runner.Backend.Device is
       MLA_Absorb     : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
       MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0;
-      Segments_At    : Natural := 0);
+      Segments_At    : Natural := 0;
+      Value_Gain     : Model_Runner.Tensors.Real_Array_Access := null;
+      Reads_Other    : Boolean := False;
+      Input_Gate     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Input_Proj     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Input_Post_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Layer_Input    : Model_Runner.Tensors.Real_Array_Access := null;
+      Output_Scale   : Model_Runner.Tensors.Real_Array_Access := null);
 
    --  Whether the last Whole_Layer refused a layer it was carried into and
    --  could not bring that layer's input home from the device. A caller

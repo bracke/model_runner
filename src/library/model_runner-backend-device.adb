@@ -3591,7 +3591,16 @@ package body Model_Runner.Backend.Device is
       MLA_Absorb     : Model_Runner.Tensors.View :=
         Model_Runner.Tensors.Empty_View;
       MLA_Expand_At  : Model_Runner.Numerics.Element_Count := 0;
-      Segments_At    : Natural := 0)
+      Segments_At    : Natural := 0;
+      Value_Gain     : Model_Runner.Tensors.Real_Array_Access := null;
+      Reads_Other    : Boolean := False;
+      Input_Gate     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Input_Proj     : Model_Runner.Tensors.View :=
+        Model_Runner.Tensors.Empty_View;
+      Input_Post_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Layer_Input    : Model_Runner.Tensors.Real_Array_Access := null;
+      Output_Scale   : Model_Runner.Tensors.Real_Array_Access := null)
    is
       --  Whether this is a hybrid's linear layer rather than attention.
       Linear_Layer : constant Boolean := T.Is_Present (Linear_Mix);
@@ -3619,6 +3628,10 @@ package body Model_Runner.Backend.Device is
       procedure Attempt;
 
       procedure Attempt is
+         --  Whether Gemma4's end of a layer follows the feed-forward's join.
+         Tail : constant Boolean :=
+           T.Is_Present (Input_Gate) or else Output_Scale /= null;
+
          --  Whether the second half is a mixture, and the step numbers that
          --  move when the head normalizations and the mixture are in: the
          --  recipe below used to be seventeen fixed steps and is now counted
@@ -4020,15 +4033,51 @@ package body Model_Runner.Backend.Device is
            or else Residual'Length < Slots * Width
            or else (not Linear_Layer
                     and then (Query.Columns /= Width
-                              or else Key.Columns /= Width
-                              or else Value.Columns /= Width
+                              or else (not Reads_Other
+                                       and then (Key.Columns /= Width
+                                                 or else Value.Columns /= Width
+                                                 or else Keys.all'Length
+                                                         < Slots * Key.Rows
+                                                 or else Values.all'Length
+                                                         < Slots * Value.Rows))
                               or else Turns'Length
                                       /= Slots
                                          * Model_Runner.Numerics.Element_Count
-                                             (Rotary)
-                              or else Keys.all'Length < Slots * Key.Rows
-                              or else Values.all'Length < Slots * Value.Rows))
+                                             (Rotary)))
            or else Into.all'Length < Slots * Width
+           --  Gemma4's: a layer reading another's cache mirrors nothing,
+           --  turns and has the heads kernel, which readies its queries
+           --  alone; its values' gain is a head of the value width; its
+           --  embedding a layer is the three or none, the row a gate's a
+           --  position, at a dense layer's end; its scale is a row of the
+           --  width.
+           or else (Reads_Other
+                    and then (Linear_Layer or else Mirror or else Rotary = 0
+                              or else Head_Size > 256
+                              or else not Products.Readies_Heads (Engine)
+                              or else Packed.K_Bits /= 0
+                              or else Head_Gates
+                              or else T.Is_Present (MLA_Up)))
+           or else (Value_Gain /= null
+                    and then (Reads_Other or else Linear_Layer
+                              or else Natural (Value_Gain.all'Length) /= Value_Size
+                              or else Value_Size = 0
+                              or else Natural (Value.Rows) mod Value_Size /= 0))
+           or else (T.Is_Present (Input_Gate)
+                    and then (not T.Is_Present (Input_Proj)
+                              or else Input_Post_Norm = null
+                              or else Layer_Input = null
+                              or else Input_Gate.Columns /= Width
+                              or else Input_Proj.Rows /= Width
+                              or else Input_Proj.Columns /= Input_Gate.Rows
+                              or else Input_Post_Norm.all'Length /= Width
+                              or else Layer_Input.all'Length
+                                      < Slots * Input_Gate.Rows))
+           or else ((T.Is_Present (Input_Gate) or else Output_Scale /= null)
+                    and then (No_Feed or else Mixed or else After or else Shifted
+                              or else Linear_Layer))
+           or else (Output_Scale /= null
+                    and then Output_Scale.all'Length /= Width)
            --  A post-norm is a gain of the width; and a mixture's sum joins
            --  the residual as it sums, with no room for one before it --
            --  the one after the sum is Bert's, which the mix leaves for it.
@@ -4087,13 +4136,15 @@ package body Model_Runner.Backend.Device is
             if not Known then
                return;
             end if;
-            Packing_Of (Key.Format, K_P, Known);
-            if not Known then
-               return;
-            end if;
-            Packing_Of (Value.Format, V_P, Known);
-            if not Known then
-               return;
+            if not Reads_Other then
+               Packing_Of (Key.Format, K_P, Known);
+               if not Known then
+                  return;
+               end if;
+               Packing_Of (Value.Format, V_P, Known);
+               if not Known then
+                  return;
+               end if;
             end if;
          end if;
          Packing_Of (Weight.Format, Packing, Known);
@@ -4915,6 +4966,7 @@ package body Model_Runner.Backend.Device is
             --  make all three.
             Contiguous : constant Boolean :=
               not Head_Gates and then not Mirror
+              and then not Reads_Other and then Value_Gain = null
               and then Q_P = K_P and then K_P = V_P
               and then Query.Format = Key.Format
               and then Key.Format = Value.Format
@@ -5087,6 +5139,38 @@ package body Model_Runner.Backend.Device is
             end if;
          end if;
 
+         --  Gemma4's layer that reads another's cache: its queries made
+         --  ready alone, normalized and turned, and nothing projected or
+         --  placed for the keys and values the other layer wrote.
+         if Reads_Other then
+            declare
+               At_Turn : constant System.Address := Turns (Turns'First)'Address;
+               Span    : constant Model_Runner.Bytes.Byte_Count :=
+                 Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
+            begin
+               Products.Add_Heads
+                 (Steps, Step_Q, Natural (Q_Rows) / Head_Size, Head_Size,
+                  Rotary, (if Split then Products.Split else Products.Interleaved),
+                  At_Turn, Span, Epsilon, Added,
+                  Weight =>
+                    (if Query_Norm = null then System.Null_Address
+                     else Query_Norm.all (Query_Norm.all'First)'Address),
+                  Weight_Span =>
+                    (if Query_Norm = null then 0
+                     else Model_Runner.Bytes.Byte_Count (Query_Norm.all'Length) * 4),
+                  Key =>
+                    (if Query_Norm = null then System.Null_Address
+                     else Query_Norm.all (Query_Norm.all'First)'Address),
+                  Kept => False);
+            end;
+            if not Added then
+               return;
+            end if;
+            Step_Q_Turned := Products.Length (Steps);
+            Step_Room (Q_Rows);
+            goto Attend;
+         end if;
+
          --  The keys go back to a caller that wants them (Mirror) from the
          --  turning, or from here where there is none.
          At_Keys := Wanted;
@@ -5131,6 +5215,28 @@ package body Model_Runner.Backend.Device is
             if not Added then
                return;
             end if;
+         end if;
+
+         --  Gemma4's values, normalized a head by a gain of ones; the host
+         --  then reads them back from here.
+         if Value_Gain /= null then
+            declare
+               At_Gain : constant System.Address :=
+                 Value_Gain.all (Value_Gain.all'First)'Address;
+            begin
+               At_Values := Wanted;
+               Products.Add_Norm
+                 (Steps, At_Gain,
+                  Model_Runner.Bytes.Byte_Count (Value_Gain.all'Length) * 4, 0,
+                  Natural (Value.Rows), Epsilon, Added,
+                  From_Step => Step_V, Key => At_Gain, Kept => Mirror,
+                  Groups => Natural (Value.Rows) / Value_Size);
+            end;
+            if not Added then
+               return;
+            end if;
+            Step_V := Products.Length (Steps);
+            Step_Room (Value.Rows);
          end if;
 
          <<After_Projections>>
@@ -6356,12 +6462,106 @@ package body Model_Runner.Backend.Device is
 
             Products.Add_Join
               (Steps, Added, From_Step => Step_Downs, Residual_Step => Step_Join,
-               Kept => not Carry_Out and then not After);
+               Kept => not Carry_Out and then not After and then not Tail);
             if not Added then
                return;
             end if;
             At_Out := Wanted;
             Step_Room (Width);
+
+            --  Gemma4's end of a layer: its embedding a layer gated in and
+            --  joined, then the scale on the whole answer, the last step
+            --  and so the one carried out.
+            if Tail then
+               declare
+                  Step_Res  : Natural := Products.Length (Steps);
+                  Gate_Rows : constant Model_Runner.Numerics.Element_Count :=
+                    Input_Gate.Rows;
+                  Gate_P, Proj_P : Products.Weight_Packing;
+                  Step_Proj : Natural;
+               begin
+                  if T.Is_Present (Input_Gate) then
+                     Packing_Of (Input_Gate.Format, Gate_P, Known);
+                     if not Known then
+                        return;
+                     end if;
+                     Packing_Of (Input_Proj.Format, Proj_P, Known);
+                     if not Known then
+                        return;
+                     end if;
+
+                     Products.Add_Chained_Product
+                       (Steps, Input_Gate.Base, Input_Gate.Span, Input_Gate.Offset,
+                        Gate_P, Natural (Gate_Rows), Natural (Input_Gate.Columns),
+                        Added, Key => At_Offset (Input_Gate.Base, Input_Gate.Offset),
+                        Kept => False, From_Step => Step_Res);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (Gate_Rows);
+
+                     --  The unit alone on the gate, as an ungated
+                     --  feed-forward's.
+                     Products.Add_Combination (Steps, Unit + 4, Added, Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (Gate_Rows);
+
+                     --  By the position's own row, uploaded for this run.
+                     Products.Add_Bias
+                       (Steps, Layer_Input.all (Layer_Input.all'First)'Address,
+                        Model_Runner.Bytes.Byte_Count (Slots * Gate_Rows) * 4, 0,
+                        Natural (Slots), Natural (Gate_Rows),
+                        Products.Length (Steps), 0, Added,
+                        Kept => False, Multiply => True, Per_Member => True);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (Gate_Rows);
+
+                     Products.Add_Chained_Product
+                       (Steps, Input_Proj.Base, Input_Proj.Span, Input_Proj.Offset,
+                        Proj_P, Natural (Input_Proj.Rows), Natural (Input_Proj.Columns),
+                        Added, Key => At_Offset (Input_Proj.Base, Input_Proj.Offset),
+                        Kept => False);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Proj := Products.Length (Steps);
+                     Step_Room (Width);
+
+                     Add_Post_Norm (Input_Post_Norm, Width, Step_Proj, Added);
+                     if not Added then
+                        return;
+                     end if;
+
+                     At_Out := Wanted;
+                     Products.Add_Join
+                       (Steps, Added, From_Step => Step_Proj, Residual_Step => Step_Res,
+                        Kept => not Carry_Out and then Output_Scale = null);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Res := Products.Length (Steps);
+                     Step_Room (Width);
+                  end if;
+
+                  if Output_Scale /= null then
+                     At_Out := Wanted;
+                     Products.Add_Bias
+                       (Steps, Output_Scale.all (Output_Scale.all'First)'Address,
+                        Model_Runner.Bytes.Byte_Count (Width) * 4, 0,
+                        1, Natural (Width), Step_Res, 0, Added,
+                        Key => Output_Scale.all (Output_Scale.all'First)'Address,
+                        Kept => not Carry_Out, Multiply => True);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Room (Width);
+                  end if;
+               end;
+            end if;
          end if;
 
          --  Bert's second, over the sum the join or the mix made: the

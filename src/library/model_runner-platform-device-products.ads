@@ -1390,6 +1390,12 @@ package Model_Runner.Platform.Device.Products is
    --    answer biased. A run of more than one position, or on a device
    --    whose storage alignment the bias does not keep, refuses the
    --    sequence; the caller names it again without.
+   --  @param Multiply A projection's weight that multiplies each answer
+   --    rather than adding to it: Gemma4's scale on its residual, and its
+   --    embedding a layer on the gate that reads it.
+   --  @param Per_Member With Multiply, a projection's weight that holds a
+   --    slice of Each for every position rather than one for all of them;
+   --    Experts is then how many positions, which the run's must be.
    procedure Add_Bias
      (Steps       : in out Sequence;
       Base        : System.Address;
@@ -1407,7 +1413,9 @@ package Model_Runner.Platform.Device.Products is
       Source_At     : Natural := 0;
       Source_Stride : Natural := 0;
       Cap           : Model_Runner.Numerics.Real := 0.0;
-      Fold          : Boolean := False);
+      Fold          : Boolean := False;
+      Multiply      : Boolean := False;
+      Per_Member    : Boolean := False);
 
    --  What an RWKV6 step does: see Add_Rwkv.
    type Rwkv_Mode is (Shift, Decay, Tanh, Squared_Relu, Finish, Save);
@@ -4807,6 +4815,11 @@ private
       --  Span, At_Byte and Key, Stack slices of Each, added to the
       --  answers of the step in Reads by the routing in Reads_Two.
       Biases  : Boolean := False;
+
+      --  A biasing step whose weight multiplies (Scales) and holds a slice
+      --  a position (Per_Member); see Add_Bias.
+      Scales     : Boolean := False;
+      Per_Member : Boolean := False;
 
       --  A picking step, as Add_Pick describes it: of every Among
       --  stretches of Each in the step in Reads, the Which'th, written

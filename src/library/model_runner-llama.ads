@@ -3169,6 +3169,12 @@ private
       --  layer's end, where the file carries it; null otherwise.
       Output_Scale    : Model_Runner.Tensors.Real_Array_Access;
 
+      --  For the device: that scale a row of the model's width, and the
+      --  values' gain a head of ones where the layer keeps its own cache.
+      --  Null otherwise.
+      Scale_Row       : Model_Runner.Tensors.Real_Array_Access;
+      Value_Gain      : Model_Runner.Tensors.Real_Array_Access;
+
       --  Gemma4's mixture beside its dense feed-forward: the dense one's
       --  answer normalized by Post_Feed_Norm_1, the experts' input by
       --  Pre_Feed_Norm_2 and their sum by Post_Feed_Norm_2, the two
@@ -3757,6 +3763,10 @@ private
       Layer_Inputs : Model_Runner.Tensors.Real_Array_Access := null;
       Layer_Room   : Model_Runner.Tensors.Real_Array_Access := null;
       Layer_Gate   : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  One layer's slice of Layer_Inputs a position, laid end to end,
+      --  as the device's whole layer reads it. Null until asked.
+      Layer_Slice  : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  Gemma4's mixture: its dense feed-forward's answer, kept while the
       --  experts run, and the experts' own input. Null for every other

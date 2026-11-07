@@ -221,6 +221,10 @@ is
    --  and an architecture that states no local base states one of each.
    Angles_Base : N.Wide_Real := -1.0;
 
+   --  And the rotated width it was tabulated for, which Gemma4's layers
+   --  differ in.
+   Angles_Rotary : Element_Count := 0;
+
    --  And the stretch they were worked out with: OLMo-3 turns its windowed
    --  layers on the model's own base and unstretched, so a table kept by
    --  base alone handed a full layer the windowed layers' angles.
@@ -431,10 +435,16 @@ is
        and then L.Second_Attention_Norm = null
        and then L.Query_Whole_Norm = null
 
-       --  Gemma4's layer is not yet a shape the sequence builds: its
-       --  layers' own head widths, its unscaled scores and normalized
-       --  values, its output scale and its embedding a layer.
-       and then Settings.Kind /= Gemma4
+       --  Gemma4's layer goes whole where its heads are the narrow ones
+       --  the device's attention holds -- its windowed layers -- its
+       --  feed-forward is the dense one, and it projects its values (a
+       --  layer reading another's cache has none to project).
+       and then (Settings.Kind /= Gemma4
+                 or else (Head_Of (Settings, Index)
+                            <= Model_Runner.Backend.Device.Attention_Head_Room
+                          and then Settings.Experts = 0
+                          and then (Cache_Layer (Settings, Index) /= Index
+                                    or else T.Is_Present (L.Value))))
 
        --  The attention projections' biases go as steps of the
        --  sequence, all three or none, as the token's whole layer
@@ -443,8 +453,10 @@ is
        and then (L.Query_Bias = null) = (L.Value_Bias = null)
 
        --  A head normalization goes to the device, both or neither,
-       --  as the token's whole layer takes them.
-       and then (L.Query_Norm = null) = (L.Key_Norm = null));
+       --  as the token's whole layer takes them -- but for a Gemma4
+       --  layer reading another's cache, which has queries alone.
+       and then ((L.Query_Norm = null) = (L.Key_Norm = null)
+                 or else Cache_Layer (Settings, Index) /= Index));
 
    --  A layer goes whole where its front half does and the device takes
    --  its feed-forward too: a mixture whose stacks it holds, or a dense
@@ -540,6 +552,24 @@ is
    function Slot
      (Which : Element_Count; Stride : Element_Count) return Element_Count
    is (Which * Stride);
+
+   --  Gemma4's embedding a layer for the batch's positions at one layer,
+   --  laid end to end in Layer_Gates as the device's whole layer reads
+   --  them; null for a model without one.
+   function Layer_Slices (Index : Natural) return T.Real_Array_Access is
+      Inputs     : constant Element_Count := Element_Count (Settings.Layer_Input);
+      All_Layers : constant Element_Count := Inputs * Element_Count (Settings.Layers);
+   begin
+      if Inputs = 0 or else Layer_Rows = null or else Layer_Gates = null then
+         return null;
+      end if;
+      for Which in 0 .. Count - 1 loop
+         Layer_Gates.all (Which * Inputs .. Which * Inputs + Inputs - 1) :=
+           Layer_Rows.all (Which * All_Layers + Element_Count (Index) * Inputs
+                           .. Which * All_Layers + Element_Count (Index) * Inputs + Inputs - 1);
+      end loop;
+      return Layer_Gates;
+   end Layer_Slices;
 
    --  Gemma4's step at a layer's end, for every position of the batch:
    --  each position's state gated down to its embedding a layer's width
@@ -1085,6 +1115,12 @@ begin
          Row_KV     : constant Element_Count := KV_Heads * Head_Size;
          Row_V      : constant Element_Count := KV_Heads * Value_Size;
 
+         --  And the query heads a key-value head answers, the layer's own
+         --  for the device as for the host.
+         Group      : constant Natural :=
+           (if Settings.Kind = Gemma4 then Group_Of (Settings, Natural (Index))
+            else Settings.Group_Size);
+
          --  The layer whose keys and values this one attends over: its
          --  own, but for Gemma4's last layers, which keep none and read an
          --  earlier one's (Cache_Layer).
@@ -1619,7 +1655,8 @@ begin
             end;
 
             Deferred (Index) :=
-              Deferring and then (Whole_Layer_Done or else Half_Done);
+              Deferring and then (Whole_Layer_Done or else Half_Done)
+              and then Own_Cache;
 
             if Half_Done then
                --  The front half only: each member's ring reached the
@@ -1690,13 +1727,11 @@ begin
             --  that applies them knows nothing about any architecture --
             --  see Kernels.Rotary_Table.
             declare
-               Pairs : constant Element_Count :=
-                 Element_Count (Settings.Rotary) / 2;
-
+               Pairs : constant Element_Count := Rotary / 2;
                Turnable : constant Boolean :=
-                 Settings.Rotary > 0
-                 and then Element_Count (Settings.Rotary) <= Head_Size
-                 and then Element_Count (Settings.Rotary) mod 2 = 0;
+                 Rotary > 0
+                 and then Rotary <= Head_Size
+                 and then Rotary mod 2 = 0;
             begin
                if Turnable then
                   if Angles = null
@@ -1715,7 +1750,9 @@ begin
                     or else K."/="
                               (Angles_Scaling,
                                Turn_Scaling (Settings, Natural (Index)))
+                    or else Angles_Rotary /= Rotary
                   then
+                     Angles_Rotary := Rotary;
                      Angles_Base := Turn_Base (Settings, Natural (Index));
                      Angles_Scaling := Turn_Scaling (Settings, Natural (Index));
 
@@ -1725,7 +1762,7 @@ begin
                            Sines   : N.Wide_Real_Array (0 .. Pairs - 1);
                         begin
                            K.Rotary_Table
-                             (Element_Count (Settings.Rotary),
+                             (Rotary,
                               Natural (Sits_At (Which)),
                               Turn_Base (Settings, Natural (Index)),
                               Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
@@ -1767,9 +1804,8 @@ begin
                   --  wrote for every layer.
                   if Resident then
                      Paged_Table_At :=
-                       Item.Page_Table_At.all (Natural (Index));
+                       Item.Page_Table_At.all (Reads);
                   end if;
-
                   No_Block := not Resident;
                elsif Item.Held in Exact | Eighth | Fourth
                  and then Model_Runner.Backend."="
@@ -1879,20 +1915,20 @@ begin
                      (if Turnable
                       then Angles.all (0 .. Count * Pairs * 2 - 1)
                       else No_Turns),
-                     Natural (Head_Size), Settings.Rotary,
+                     Natural (Head_Size), Natural (Rotary),
                      K."=" (Settings.Pairing, K.Split),
                      (if Item.Paged then 0
                       else Block_Base (Item)
-                           + Cell_Of (Item, Natural (Index),
+                           + Cell_Of (Item, Reads,
                                       Reserved) * KV_Width
                            + Base),
                      (if Item.Paged then Page_Value_Base (Item)
                       else Block_Base (Item)
-                           + Cell_Of (Item, Natural (Index),
+                           + Cell_Of (Item, Reads,
                                       Reserved) * V_Stride
                            + Values_Front (Item) + V_Base),
                      Natural (Heads), Natural (Value_Size),
-                     Settings.Group_Size,
+                     Group,
                      --  The lowest and highest cached positions this
                      --  call reads. A round's rows each have their own
                      --  in the table and the kernel takes its span
@@ -1905,8 +1941,8 @@ begin
                      --  for the longest. A round of sixteen packed
                      --  sessions from 88 to 1,419 positions read 2.15
                      --  s against 1.23 for sixteen at 1,419.
-                     Natural (Lowest_Cell (Natural (Index))),
-                     Natural (Highest_Cell (Natural (Index))),
+                     Natural (Lowest_Cell (Reads)),
+                     Natural (Highest_Cell (Reads)),
                      (if Item.Paged then 0
                       else Block_Base (Item) + Base),
                      (if Item.Paged then Page_Value_Base (Item)
@@ -1943,7 +1979,7 @@ begin
                        (if Item.Paged then Page_Shift_Bits else 0),
                      First_Position =>
                        (if Item.Paged
-                        then Natural (Cell_Of (Item, Natural (Index),
+                        then Natural (Cell_Of (Item, Reads,
                                                Reserved))
                         else 0),
                      Cancel    => Item.Stopping,
@@ -1994,14 +2030,14 @@ begin
                      Pack_Keys   =>
                        Packing_Of
                          (Item,
-                          Base + Cell_Of (Item, Natural (Index),
+                          Base + Cell_Of (Item, Reads,
                                           Reserved) * KV_Width,
                           KV_Width, True, Seated => False,
                           Paged => Item.Paged),
                      Pack_Values =>
                        Packing_Of
                          (Item,
-                          V_Base + Cell_Of (Item, Natural (Index),
+                          V_Base + Cell_Of (Item, Reads,
                                             Reserved) * V_Width,
                           V_Width, False, Seated => False,
                           Paged => Item.Paged),
@@ -2016,7 +2052,7 @@ begin
                      Unpacked    =>
                        (Unpacking_Of
                                (Item, Base, V_Base, KV_Width, V_Width,
-                                Cell_Of (Item, Natural (Index), Reserved)
+                                Cell_Of (Item, Reads, Reserved)
                                 + Count,
                                 Paged => Item.Paged)),
                      Sinks_At    => Sinks_Ready (Current.Sinks, Natural (Index), Item.Paged),
@@ -2067,7 +2103,14 @@ begin
                      MLA_Absorb    =>
                        (if Settings.Latent_Attention then Current.KV_B_Absorb
                         else T.Empty_View),
-                     MLA_Expand_At => Expand_Here);
+                     MLA_Expand_At => Expand_Here,
+                     Value_Gain      => Current.Value_Gain,
+                     Reads_Other     => not Own_Cache,
+                     Input_Gate      => Current.Input_Gate,
+                     Input_Proj      => Current.Input_Proj,
+                     Input_Post_Norm => Current.Input_Post_Norm,
+                     Layer_Input     => Layer_Slices (Natural (Index)),
+                     Output_Scale    => Current.Scale_Row);
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.
                   if Model_Runner.Backend.Device.Carry_Lost then
@@ -2092,7 +2135,8 @@ begin
                end if;
 
                Deferred (Index) :=
-                 Deferring and then (Whole_Layer_Done or else Half_Done);
+                 Deferring and then (Whole_Layer_Done or else Half_Done)
+                 and then Own_Cache;
 
                --  The front half only: the keys and values are the
                --  device's as a whole layer's are, and the feed-forward
@@ -2709,7 +2753,7 @@ begin
                        (Query.all (0 .. Count * Wide - 1),
                         Acts.all (0 .. Count * Width - 1),
                         Natural (Heads), Natural (Head_Size),
-                        Natural (Value_Size), Settings.Group_Size,
+                        Natural (Value_Size), Group,
                         Natural (First_Step), Natural (Last_Step),
                         Seat_At + Base,
                         Seat_At + Values_Front (Item) + V_Base,

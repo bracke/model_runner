@@ -79,7 +79,11 @@ layout(push_constant) uniform Shape {
     uint members[16];
 
     //  The bound a projection's answers are taken to, by its bits, or
-    //  nought for none; and whether there is no bias to add before it.
+    //  nought for none; and, by its bits, how the weight meets the source:
+    //  one where there is no weight to add before the bound, two where the
+    //  weight multiplies rather than adds, four where it holds a slice a
+    //  member rather than one for all of them (Gemma4's embedding a layer,
+    //  a position's own).
     uint cap_bits;
     uint no_bias;
 } shape;
@@ -105,10 +109,17 @@ void main() {
 
         float cap = uintBitsToFloat(shape.cap_bits);
 
+        uint weight_at = shape.base
+                         + ((shape.no_bias & 4u) != 0u ? member * shape.each : 0u);
+
         for (uint c = start; c < shape.each; c += step_by) {
             float v = x[src_at + c];
-            if (shape.no_bias == 0u) {
-                v += b[shape.base + c];
+            if ((shape.no_bias & 1u) == 0u) {
+                if ((shape.no_bias & 2u) != 0u) {
+                    v *= b[weight_at + c];
+                } else {
+                    v += b[weight_at + c];
+                }
             }
             //  cap * tanh (v / cap), written as the host writes it: one
             //  exponential, and at either end it comes back at the bound.

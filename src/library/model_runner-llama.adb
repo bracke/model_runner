@@ -7891,6 +7891,8 @@ package body Model_Runner.Llama is
             --  router biases once did.
             T.Free (Which.Input_Post_Norm);
             T.Free (Which.Output_Scale);
+            T.Free (Which.Scale_Row);
+            T.Free (Which.Value_Gain);
             T.Free (Which.Pre_Feed_Norm_2);
             T.Free (Which.Post_Feed_Norm_1);
             T.Free (Which.Post_Feed_Norm_2);
@@ -8941,6 +8943,7 @@ package body Model_Runner.Llama is
       T.Free (Item.Up);
       T.Free (Item.Head_Row);
       T.Free (Item.Layer_Inputs);
+      T.Free (Item.Layer_Slice);
       T.Free (Item.Shared_Answer);
       T.Free (Item.Expert_Input);
       T.Free (Item.Layer_Room);

@@ -2363,6 +2363,18 @@ begin
                if E.Is_Error (Status) then
                   return;
                end if;
+
+               --  The device multiplies by a row: the scale a width long.
+               T.Allocate (Width, Current.Scale_Row);
+               Current.Scale_Row.all :=
+                 [others => Current.Output_Scale.all (Current.Output_Scale.all'First)];
+            end if;
+
+            --  The gain the device normalizes the values a head by.
+            if Cache_Layer (Item.Settings, Index) = Index then
+               T.Allocate
+                 (Element_Count (Value_Of (Item.Settings, Index)), Current.Value_Gain);
+               Current.Value_Gain.all := [others => 1.0];
             end if;
 
             if Item.Settings.Layer_Input > 0 then

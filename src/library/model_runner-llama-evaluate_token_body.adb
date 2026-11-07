@@ -22,6 +22,26 @@ is
    Reserved  : constant Element_Count := Element_Count (Item.Committed);
    Scale     : constant Real := Score_Scale (Settings);
 
+   --  Gemma4's embedding a layer for this position, the layer's slice of
+   --  Item.Layer_Inputs in a room of its own, as the device reads it; null
+   --  for a model without one.
+   function Layer_Slice (Index : Natural) return T.Real_Array_Access is
+      Width : constant Element_Count := Element_Count (Settings.Layer_Input);
+   begin
+      if Width = 0 or else Item.Layer_Inputs = null then
+         return null;
+      end if;
+      if Item.Layer_Slice = null or else Item.Layer_Slice.all'Length < Width then
+         T.Free (Item.Layer_Slice);
+         T.Allocate (Width, Item.Layer_Slice);
+      end if;
+      Item.Layer_Slice.all (Item.Layer_Slice.all'First .. Item.Layer_Slice.all'First + Width - 1) :=
+        Item.Layer_Inputs.all
+          (Item.Layer_Inputs.all'First + Element_Count (Index) * Width
+           .. Item.Layer_Inputs.all'First + Element_Count (Index) * Width + Width - 1);
+      return Item.Layer_Slice;
+   end Layer_Slice;
+
    --  Whether the layer before this one left its answer on the device,
    --  and which layers left their keys and values in the device's own
    --  cache without also sending them back. A token is twenty-two
@@ -152,8 +172,10 @@ is
 
        --  A head normalization goes to the device, both or neither:
        --  the sequence normalizes the queries and the keys as a pair
-       --  and an architecture states them as one.
-       and then (L.Query_Norm = null) = (L.Key_Norm = null)
+       --  and an architecture states them as one -- but for a Gemma4
+       --  layer reading another's cache, which has queries alone.
+       and then ((L.Query_Norm = null) = (L.Key_Norm = null)
+                 or else Cache_Layer (Settings, Index) /= Index)
 
        --  A dense feed-forward's two biases are steps of the
        --  sequence; a mixture's are its experts', named apart.
@@ -184,10 +206,16 @@ is
        and then L.Second_Attention_Norm = null
        and then L.Query_Whole_Norm = null
 
-       --  Gemma4's layer is not yet a shape the sequence builds: its
-       --  layers' own head widths, its unscaled scores and normalized
-       --  values, its output scale and its embedding a layer.
-       and then Settings.Kind /= Gemma4
+       --  Gemma4's layer goes whole where its heads are the narrow ones
+       --  the device's attention holds -- its windowed layers -- its
+       --  feed-forward is the dense one, and it projects its values (a
+       --  layer reading another's cache has none to project).
+       and then (Settings.Kind /= Gemma4
+                 or else (Head_Of (Settings, Index)
+                            <= Model_Runner.Backend.Device.Attention_Head_Room
+                          and then Settings.Experts = 0
+                          and then (Cache_Layer (Settings, Index) /= Index
+                                    or else T.Is_Present (L.Value))))
 
        --  DeepSeek's latent attention goes whole where its queries are
        --  one projection (V2-Lite's); a query through a latent of its
@@ -780,6 +808,12 @@ begin
          KV_Heads   : constant Element_Count :=
            Element_Count (KV_Heads_Of (Settings, Natural (Index)));
 
+         --  And the query heads a key-value head answers, the layer's own
+         --  for the device as for the host.
+         Group      : constant Natural :=
+           (if Settings.Kind = Gemma4 then Group_Of (Settings, Natural (Index))
+            else Settings.Group_Size);
+
          --  The layer whose keys and values this one attends over: its
          --  own, but for Gemma4's last layers, which keep none and read an
          --  earlier one's (Cache_Layer).
@@ -849,7 +883,7 @@ begin
          --  goes over as one: the table is what the device is handed
          --  instead of the architecture. Two numbers a pair.
          Pairs : constant Element_Count :=
-           Element_Count (Settings.Rotary) / 2;
+           Rotary / 2;
 
          Angles : N.Wide_Real_Array (0 .. Pairs * 2 - 1) :=
            [others => 0.0];
@@ -962,7 +996,7 @@ begin
                         No_Turns, Natural (Head_Size), 0,
                         K."=" (Settings.Pairing, K.Split),
                         0, 0, Natural (Heads), Natural (Value_Size),
-                        Settings.Group_Size, 0, 0, 0, 0,
+                        Group, 0, 0, 0, 0,
                         Natural (KV_Width), Natural (V_Width),
                         Scale, Settings.Attention_Cap,
                         Current.Linear_Out,
@@ -1141,7 +1175,7 @@ begin
             if Item.Seen = null
               and then not Item.On_Host
               and then Device_Held (Item)
-              and then Element_Count (Settings.Rotary) <= Head_Size
+              and then Rotary <= Head_Size
               and then (((Settings.Experts = 0
                           or else Dense_Among_Experts (Current)
                           or else Mixture_Whole (Current))
@@ -1167,7 +1201,7 @@ begin
                   Take_Pages (Item'Unchecked_Access, Reserved, Resident);
                   if Resident then
                      Paged_Table_At :=
-                       Item.Page_Table_At.all (Natural (Index));
+                       Item.Page_Table_At.all (Reads);
                   end if;
                else
                   Take_Block (Item'Unchecked_Access, Resident);
@@ -1175,9 +1209,9 @@ begin
                No_Block := not Resident;
 
                if Resident then
-                  if Settings.Rotary > 0 then
+                  if Rotary > 0 then
                      K.Rotary_Table
-                       (Element_Count (Settings.Rotary), Item.Committed,
+                       (Rotary, Item.Committed,
                         Turn_Base (Settings, Natural (Index)),
                         Turn_Scaling (Settings, Natural (Index)),
                         Turns (Source, Item, Natural (Index)),
@@ -1211,7 +1245,7 @@ begin
                      (if Is_MLA (Settings.Kind)
                       then MLA_Rows (Current.KV_A_MQA, V_Width)
                       else Current.Value),
-                     Angles, Natural (Head_Size), Settings.Rotary,
+                     Angles, Natural (Head_Size), Natural (Rotary),
                      K."=" (Settings.Pairing, K.Split),
                      (if Item.Paged then 0
                       else Block_Base (Item) + Slot),
@@ -1219,10 +1253,9 @@ begin
                       else Block_Base (Item)
                            + Values_Front (Item) + V_Slot),
                      Natural (Heads), Natural (Value_Size),
-                     Settings.Group_Size,
-                     Natural (Cell_Of (Item, Natural (Index),
-                                       Earliest (Settings, Reserved,
-                                                 Natural (Index)))),
+                     Group,
+                     Natural (Cell_Of (Item, Reads,
+                                       Earliest (Settings, Reserved, Reads))),
                      Natural (Cell),
                      (if Item.Paged then 0
                       else Block_Base (Item) + Base),
@@ -1356,7 +1389,14 @@ begin
                         else T.Empty_View),
                      MLA_Absorb    =>
                        (if Settings.Latent_Attention then Current.KV_B_Absorb
-                        else T.Empty_View));
+                        else T.Empty_View),
+                     Value_Gain      => Current.Value_Gain,
+                     Reads_Other     => not Own_Cache,
+                     Input_Gate      => Current.Input_Gate,
+                     Input_Proj      => Current.Input_Proj,
+                     Input_Post_Norm => Current.Input_Post_Norm,
+                     Layer_Input     => Layer_Slice (Natural (Index)),
+                     Output_Scale    => Current.Scale_Row);
                   --  Refused after a layer carried into it, and its input not
                   --  brought home: the host's copy is a layer old.
                   if Model_Runner.Backend.Device.Carry_Lost then
@@ -1410,7 +1450,10 @@ begin
                --  what lets a layer be handed over without waiting.
                --  A packed session's copy is the rows packed as the
                --  device packed them, the same bytes.
-               if Chaining then
+               --  A Gemma4 layer reading another's cache wrote none.
+               if not Own_Cache then
+                  null;
+               elsif Chaining then
                   Deferred (Index) := True;
                elsif Item.Held in Eighth | Fourth then
                   Pack_Row
@@ -1789,7 +1832,7 @@ begin
                   Model_Runner.Backend.Device.Attend_And_Feed
                     (Item.Query.all, Item.Activation.all,
                      Natural (Heads), Natural (Head_Size),
-                     Natural (Value_Size), Settings.Group_Size,
+                     Natural (Value_Size), Group,
                      Natural (Cell_Of (Item, Natural (Index), First)),
                      Natural (Cell),
                      Block_Base (Item) + Base,
@@ -1829,7 +1872,7 @@ begin
                   --  projection follows as it always did.
                   Model_Runner.Backend.Device.Attend_And_Project
                     (Item.Query.all, Natural (Heads), Natural (Head_Size),
-                     Natural (Value_Size), Settings.Group_Size,
+                     Natural (Value_Size), Group,
                      Natural (Cell_Of (Item, Natural (Index), First)),
                      Natural (Cell), Base,
                      Values_Front (Item) + V_Base,

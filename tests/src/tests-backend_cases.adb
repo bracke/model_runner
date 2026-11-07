@@ -3574,6 +3574,116 @@ package body Tests.Backend_Cases is
               & " away from the host's, of" & N.Wide_Real'Image (Largest));
    end A_Join_Folded_Over_A_Later_Residual_Reads_Its_Own_Operand;
 
+   ------------------------------------------------------------
+   -- A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row --
+   ------------------------------------------------------------
+
+   --  Add_Bias's weight that multiplies rather than adds: one a position
+   --  (Gemma4's embedding a layer on its gate), uploaded for the run, and
+   --  then one for every position, kept (its scale on the layer's answer).
+   --  A projection first, so the two read a step's answer as a layer's do;
+   --  held against the host's arithmetic.
+   procedure A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      use type N.Wide_Real;
+
+      Width : constant N.Element_Count := 128;
+      Count : constant N.Element_Count := 5;
+
+      Ready, Added : Boolean := False;
+      Status : E.Error_Info;
+      Steps  : Products.Sequence;
+
+      Weights : B.Byte_Array_Access;
+      Matrix  : T.View;
+      Rows, Scale : T.Real_Array_Access;
+      Input  : N.Real_Array (0 .. Count * Width - 1);
+      Answer : N.Real_Array (0 .. Count * Width - 1) := [others => 0.0];
+      Worst, Largest : N.Wide_Real := 0.0;
+      Projected : Natural := 0;
+
+      function Weight (Row, Column : N.Element_Count) return N.Real is
+        (N.To_Real (N.To_Half (N.Real ((Row * 7 + Column * 3) mod 29) / 29.0 / 8.0 - 0.0625)));
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+      if not Ready then
+         Device_Notes.Skip ("for a weight that multiplies a position by its own row");
+         return;
+      end if;
+
+      declare
+         Values : N.Real_Array (0 .. Width * Width - 1);
+      begin
+         for Row in 0 .. Width - 1 loop
+            for Column in 0 .. Width - 1 loop
+               Values (Row * Width + Column) := Weight (Row, Column);
+            end loop;
+         end loop;
+         declare
+            Encoded : constant B.Byte_Array := Fixtures.Encode_F16 (Values);
+         begin
+            B.Allocate (Encoded'Length, Weights);
+            Weights.all := Encoded;
+         end;
+      end;
+      Matrix := (Format => G.Type_F16, Rows => Width, Columns => Width, Base => Weights.all'Address,
+                 Span => B.Byte_Count (Weights.all'Length), Offset => 0, Interleaved => False,
+                 Role => T.Role_Other, Length => B.Byte_Count (Weights.all'Length));
+
+      T.Allocate (Count * Width, Rows);
+      for I in Rows'Range loop
+         Rows (I) := N.Real ((I * 5) mod 17) / 17.0 - 0.4;
+      end loop;
+      T.Allocate (Width, Scale);
+      Scale.all := [others => 0.75];
+      for I in Input'Range loop
+         Input (I) := N.Real ((I * 13) mod 37) / 37.0 - 0.5;
+      end loop;
+
+      Products.Open_Sequence (Steps);
+      Model_Runner.Backend.Device.Add_View_Product_At (Steps, Matrix, 0, Added);
+      Projected := Products.Length (Steps);
+      if Added then
+         Products.Add_Bias (Steps, Rows.all (Rows'First)'Address, B.Byte_Count (Count * Width) * 4, 0,
+                            Natural (Count), Natural (Width), Projected, 0, Added,
+                            Kept => False, Multiply => True, Per_Member => True);
+      end if;
+      if Added then
+         Products.Add_Bias (Steps, Scale.all (Scale'First)'Address, B.Byte_Count (Width) * 4, 0, 1,
+                            Natural (Width), Products.Length (Steps), 0, Added,
+                            Key => Scale.all (Scale'First)'Address, Kept => True, Multiply => True);
+      end if;
+      Assert (Added, "the sequence was refused");
+      Model_Runner.Backend.Device.Run_Steps (Steps, Input, Positive (Count), Answer (0)'Address, Status);
+      Assert (E.Is_Ok (Status), "the sequence would not run: " & Status.Code'Image);
+
+      for P in 0 .. Count - 1 loop
+         for R in 0 .. Width - 1 loop
+            declare
+               Made : N.Wide_Real := 0.0;
+            begin
+               for C in 0 .. Width - 1 loop
+                  Made := Made + N.Wide_Real (Weight (R, C)) * N.Wide_Real (Input (P * Width + C));
+               end loop;
+               Made := Made * N.Wide_Real (Rows (P * Width + R)) * 0.75;
+               Worst := N.Wide_Real'Max (Worst, abs (Made - N.Wide_Real (Answer (P * Width + R))));
+               Largest := N.Wide_Real'Max (Largest, abs Made);
+            end;
+         end loop;
+      end loop;
+
+      B.Free (Weights);
+      T.Free (Rows);
+      T.Free (Scale);
+      Model_Runner.Backend.Device.Close;
+      Assert (Largest > 0.0 and then Worst <= 1.0E-2 * Largest,
+              "the multiplied answers are" & N.Wide_Real'Image (Worst)
+              & " away from the host's, of" & N.Wide_Real'Image (Largest));
+   end A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row;
+
    ------------------------------------------
    -- Fused_Layer_Says_What_The_Parts_Say --
    ------------------------------------------
@@ -15225,6 +15335,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, A_Join_Folded_Over_A_Later_Residual_Reads_Its_Own_Operand'Access,
          "a join folded over a residual made after the product's operand reads that operand's halves");
+      Register_Routine
+        (T, A_Multiplying_Weight_Scales_Each_Position_By_Its_Own_Row'Access,
+         "a weight that multiplies scales each position by its own row, then all by one kept");
       Register_Routine
         (T, Joined_Pair_Says_What_Two_Steps_Say'Access,
          "attention and its projection named together say what the two "
