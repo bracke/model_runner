@@ -5121,6 +5121,9 @@ package body Model_Runner.Llama is
            and then not (Settings.Latent_Attention
                          and then Model_Runner.Backend.Device.Attends_Latent_Heads
                                     (Head_Size, Value_Size, Settings.Group_Size))
+           and then not (Settings.Kind = Gemma4
+                         and then Model_Runner.Backend.Device.Attends_Latent_Heads
+                                    (Head_Size, Value_Size, Settings.Heads))
          then
             Why := Heads_Past_Room;
             Asked := Interfaces.Unsigned_64 (Natural'Max (Head_Size, Value_Size));

@@ -4053,8 +4053,6 @@ package body Model_Runner.Backend.Device is
            --  width.
            or else (Reads_Other
                     and then (Linear_Layer or else Mirror or else Rotary = 0
-                              or else Head_Size > 256
-                              or else not Products.Readies_Heads (Engine)
                               or else Packed.K_Bits /= 0
                               or else Head_Gates
                               or else T.Is_Present (MLA_Up)))
@@ -5148,6 +5146,36 @@ package body Model_Runner.Backend.Device is
                Span    : constant Model_Runner.Bytes.Byte_Count :=
                  Model_Runner.Bytes.Byte_Count (Turns'Length) * 8;
             begin
+               --  Past the heads kernel's 256, or without it: normalized
+               --  a head and turned, as two steps.
+               if Head_Size > 256 or else not Products.Readies_Heads (Engine) then
+                  if Query_Norm /= null then
+                     Products.Add_Norm
+                       (Steps, Query_Norm.all (Query_Norm.all'First)'Address,
+                        Model_Runner.Bytes.Byte_Count (Query_Norm.all'Length) * 4, 0,
+                        Natural (Q_Rows), Epsilon, Added,
+                        From_Step => Step_Q,
+                        Key => Query_Norm.all (Query_Norm.all'First)'Address,
+                        Kept => False, Groups => Natural (Q_Rows) / Head_Size);
+                     if not Added then
+                        return;
+                     end if;
+                     Step_Q := Products.Length (Steps);
+                     Step_Room (Q_Rows);
+                  end if;
+                  Products.Add_Rotation
+                    (Steps, At_Turn, Span, 0, Natural (Q_Rows),
+                     Natural (Q_Rows) / Head_Size, Rotary,
+                     (if Split then Products.Split else Products.Interleaved),
+                     Added, From_Step => Step_Q, Kept => False);
+                  if not Added then
+                     return;
+                  end if;
+                  Step_Q_Turned := Products.Length (Steps);
+                  Step_Room (Q_Rows);
+                  goto Attend;
+               end if;
+
                Products.Add_Heads
                  (Steps, Step_Q, Natural (Q_Rows) / Head_Size, Head_Size,
                   Rotary, (if Split then Products.Split else Products.Interleaved),

@@ -15131,8 +15131,12 @@ package body Model_Runner.Platform.Device.Products is
           then Steps.Items (Which).Heads * Count
           else Steps.Items (Which).Heads);
 
+      --  Only for groups that fill the tile's rows: the compilation reads
+      --  its queries where they lie, and a smaller group's sixteen rows
+      --  were the next group's queries, past the batch's at its end.
       function Latent_Batch (Which : Positive) return Boolean
       is (not Steps.Items (Which).Rows_As_Heads
+          and then Steps.Items (Which).Group_Size = Latent_Rows
           and then Count >= Latent_Rows
           and then Item.Latent_Batch_Attend /= Null_Handle
           and then Few_Line (Which) = Item.Latent_Attend);

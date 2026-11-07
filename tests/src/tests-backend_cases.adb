@@ -13481,6 +13481,167 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Latent_Attends_As_The_Host_Does;
 
+   --  Gemma4's global layers on the latent's kernel: heads 512 wide, keys
+   --  and values each their own, two key-value heads of four queries each
+   --  (E4B's) and one of sixteen (the 12B's) -- the values read from their
+   --  own rows, a group's head along them, against the softmax worked out
+   --  on the host. One position, a few, and a batch long enough for the
+   --  batch's compilation where the group fills its rows.
+   procedure Wide_Heads_Attend_On_The_Latent_Kernel_As_The_Host_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Validity_Checks (Off);
+      pragma Unreferenced (T_Case);
+
+      Size      : constant := 512;
+      Positions : constant := 300;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+
+      Found : Boolean;
+      Ready : Boolean;
+      Ok    : Boolean;
+
+      procedure Compare (Heads, KV_Heads : N.Element_Count; Batch : Positive) is
+         Group : constant N.Element_Count := Heads / KV_Heads;
+         Row   : constant N.Element_Count := KV_Heads * Size;
+         Room  : constant N.Element_Count := N.Element_Count (Positions + Batch) * Row;
+         Span  : constant N.Element_Count := Heads * Size;
+
+         type Values is access N.Real_Array;
+         procedure Free is new Ada.Unchecked_Deallocation (N.Real_Array, Values);
+
+         Cache  : Values := new N.Real_Array (0 .. Room * 2 - 1);
+         Query  : N.Real_Array (0 .. Span * N.Element_Count (Batch) - 1);
+         Device : N.Real_Array (0 .. Span * N.Element_Count (Batch) - 1) := [others => 0.0];
+
+         Steps  : Products.Sequence;
+         Added  : Boolean;
+         Halted : Boolean;
+         Worst  : N.Real := 0.0;
+         Most   : N.Real := 0.0;
+      begin
+         for Index in Cache'Range loop
+            Cache (Index) := N.Real ((Index * 7) mod 13) / 13.0 - 0.5;
+         end loop;
+         for Index in Query'Range loop
+            Query (Index) := (N.Real (Index mod 7) / 7.0 - 0.4) * 0.1;
+         end loop;
+
+         Products.Reserve (Engine, Cache'Length, Cache'Length, Ok);
+         Assert (Ok, "the cache would not be reserved");
+         Products.Put_Cache (Engine, 0, Cache.all, Ok);
+         Assert (Ok, "the cache would not be written");
+
+         Products.Open_Sequence (Steps);
+         Products.Add_Attention
+           (Steps,
+            Heads => Natural (Heads), Head_Size => Size, Value_Size => Size,
+            Group_Size => Natural (Group), First => 0, Last => Positions - 1,
+            K_Base => 0, V_Base => Room,
+            KV_Width => Natural (Row), V_Width => Natural (Row),
+            Scale => 1.0, Cap => 0.0, Added => Added);
+         Assert (Added, "a sequence would not take a 512-wide head's attention");
+
+         Products.Run (Engine, Steps, Query, Batch, Device, Ok, Halted);
+         Assert (Ok, "a 512-wide head's attention was refused");
+
+         for P in 0 .. Batch - 1 loop
+            for H in 0 .. Heads - 1 loop
+               declare
+                  Last   : constant Natural := Positions - 1 + P;
+                  Scores : N.Real_Array (0 .. N.Element_Count (Last));
+                  Top    : N.Real := N.Real'First;
+                  Sum    : N.Real := 0.0;
+                  KV     : constant N.Element_Count := H / Group;
+                  Q_At   : constant N.Element_Count :=
+                    (N.Element_Count (P) * Heads + H) * Size;
+               begin
+                  for Pos in 0 .. N.Element_Count (Last) loop
+                     declare
+                        Dot : N.Real := 0.0;
+                     begin
+                        for D in 0 .. Size - 1 loop
+                           Dot := Dot + Query (Q_At + N.Element_Count (D))
+                             * Cache.all (Pos * Row + KV * Size + N.Element_Count (D));
+                        end loop;
+                        Scores (Pos) := Dot;
+                        Top := N.Real'Max (Top, Scores (Pos));
+                     end;
+                  end loop;
+                  for Pos in Scores'Range loop
+                     Scores (Pos) := N.Real (Ada.Numerics.Elementary_Functions.Exp
+                                              (Float (Scores (Pos) - Top)));
+                     Sum := Sum + Scores (Pos);
+                  end loop;
+                  for C in 0 .. Size - 1 loop
+                     declare
+                        Blend : N.Real := 0.0;
+                     begin
+                        for Pos in Scores'Range loop
+                           Blend := Blend + Scores (Pos)
+                             * Cache.all (Room + Pos * Row + KV * Size + N.Element_Count (C));
+                        end loop;
+                        Blend := Blend / Sum;
+                        Most := N.Real'Max (Most, abs Blend);
+                        Worst := N.Real'Max
+                          (Worst, abs (Blend - Device (Q_At + N.Element_Count (C))));
+                     end;
+                  end loop;
+               end;
+            end loop;
+         end loop;
+         Free (Cache);
+
+         Assert (Most > 0.01, "the answers are all near nought, which tells nothing");
+         Assert (Worst <= 4.0e-3,
+                 "a 512-wide head's attention, groups of" & N.Element_Count'Image (Group) & ", at"
+                 & Positive'Image (Batch) & " positions answers"
+                 & N.Real'Image (Worst) & " away from the host's");
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Devices.Open (Opened, Held, 1, Ready);
+
+      if not Ready then
+         Device_Notes.Skip ("for a 512-wide head to attend as the host does");
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Open (Engine, Opened, Ready);
+
+      if not Ready or else not Products.Takes_Latent (Engine, Size, Size, 16) then
+         Device_Notes.Skip ("for a 512-wide head to attend as the host does");
+         if Ready then
+            Products.Close (Engine);
+         end if;
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      Products.Prefer_Halves (Engine, True);
+
+      Compare (Heads => 8, KV_Heads => 2, Batch => 1);
+      Compare (Heads => 8, KV_Heads => 2, Batch => 3);
+      Compare (Heads => 8, KV_Heads => 2, Batch => 17);
+      Compare (Heads => 16, KV_Heads => 1, Batch => 1);
+      Compare (Heads => 16, KV_Heads => 1, Batch => 17);
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end Wide_Heads_Attend_On_The_Latent_Kernel_As_The_Host_Does;
+
    --  An absorbed latent's queries folded and its blends taken back out on
    --  the device, step by step as the whole layer builds them, against the
    --  same arithmetic on the host: the plain parts packed end to end, a
@@ -15167,6 +15328,10 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, A_Latent_Attends_As_The_Host_Does'Access,
          "an absorbed latent attends as the host does, one position, a few and a batch");
+      Register_Routine
+        (T, Wide_Heads_Attend_On_The_Latent_Kernel_As_The_Host_Does'Access,
+         "heads 512 wide, keys and values apart, attend on the latent's kernel as the host does,"
+         & " groups of four and of sixteen");
       Register_Routine
         (T, A_Latent_Folds_And_Takes_Out_As_The_Host_Does'Access,
          "an absorbed latent's queries folded and blends taken out on the device as the host does");

@@ -28,7 +28,14 @@ begin
                             and then Model_Runner.Backend.Device.Attends_Latent_Heads
                                        (Item.Owner.Settings.Head_Size,
                                         Item.Owner.Settings.Value_Size,
-                                        Item.Owner.Settings.Group_Size)))
+                                        Item.Owner.Settings.Group_Size))
+              --  Gemma4's global heads, 512 wide, which the latent's
+              --  kernel attends at any group up to its heads.
+              and then not (Item.Owner.Settings.Kind = Gemma4
+                            and then Model_Runner.Backend.Device.Attends_Latent_Heads
+                                       (Item.Owner.Settings.Head_Size,
+                                        Item.Owner.Settings.Value_Size,
+                                        Item.Owner.Settings.Heads)))
      or else (Item.Held in Eighth | Fourth
               and then (Item.Byte_Keys = null or else Item.Byte_Values = null
                         or else Item.Key_Scales = null

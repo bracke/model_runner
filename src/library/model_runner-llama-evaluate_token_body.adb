@@ -206,16 +206,19 @@ is
        and then L.Second_Attention_Norm = null
        and then L.Query_Whole_Norm = null
 
-       --  Gemma4's layer goes whole where its heads are the narrow ones
-       --  the device's attention holds -- its windowed layers -- its
-       --  feed-forward is the dense one, and it projects its values (a
-       --  layer reading another's cache has none to project).
+       --  Gemma4's layer goes whole where the device's attention holds
+       --  its heads -- the windowed layers' 256 in the ordinary kernels,
+       --  the global layers' 512 in the latent's -- and its feed-forward
+       --  is the dense one. A layer without a value projection gives its
+       --  key projection for the values, which are the keys as projected.
        and then (Settings.Kind /= Gemma4
-                 or else (Head_Of (Settings, Index)
-                            <= Model_Runner.Backend.Device.Attention_Head_Room
-                          and then Settings.Experts = 0
-                          and then (Cache_Layer (Settings, Index) /= Index
-                                    or else T.Is_Present (L.Value))))
+                 or else ((Head_Of (Settings, Index)
+                             <= Model_Runner.Backend.Device.Attention_Head_Room
+                           or else Model_Runner.Backend.Device.Attends_Latent_Heads
+                                     (Head_Of (Settings, Index),
+                                      Value_Of (Settings, Index),
+                                      Group_Of (Settings, Index)))
+                          and then Settings.Experts = 0))
 
        --  DeepSeek's latent attention goes whole where its queries are
        --  one projection (V2-Lite's); a query through a latent of its
@@ -1244,6 +1247,9 @@ begin
                       else Current.Key),
                      (if Is_MLA (Settings.Kind)
                       then MLA_Rows (Current.KV_A_MQA, V_Width)
+                      elsif Settings.Kind = Gemma4
+                        and then not T.Is_Present (Current.Value)
+                      then Current.Key
                       else Current.Value),
                      Angles, Natural (Head_Size), Natural (Rotary),
                      K."=" (Settings.Pairing, K.Split),

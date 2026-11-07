@@ -23,6 +23,14 @@
 //
 //  What it leaves out the host does not ask of it: a bound on the scores,
 //  slopes, sinks and a sliding window, none of which DeepSeek has.
+//
+//  And Gemma4's global layers, whose heads are 512 wide -- past every
+//  other kernel's room -- with values of their own: a key as wide as its
+//  value is a head with values beside the keys rather than inside them,
+//  read out of the values' copy at the values' base, a group's head along
+//  the row. The batch's compilation the host takes only for groups that
+//  fill the tile's rows, which read no query of another group's; a key
+//  narrower than the tile's 576 reads none past its own width.
 
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
@@ -308,7 +316,11 @@ void main() {
 #ifdef WIDE_TILE
                 [[unroll]] for (uint m = 0u; m < POS; m++) {
                     coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> qf;
-                    coopMatLoad (qf, q, q_at[m] + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
+                    if (t * 16u < dk) {
+                        coopMatLoad (qf, q, q_at[m] + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
+                    } else {
+                        qf = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (0.0);
+                    }
                     qm[m] = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
                 }
 #else
@@ -395,16 +407,26 @@ void main() {
                 //  The values are the latent, which the keys hold after
                 //  their rotated slice: read there, a key the scores just
                 //  read is a value already near, and the cache is read
-                //  once where it was read twice.
-                uint values = place_of (base + n0, shape.k_base, shape.kv_width) + k_at
-                              + (dk - dv);
+                //  once where it was read twice. A head whose key is no
+                //  wider than its value keeps them apart -- Gemma4's --
+                //  and reads them from their own copy.
+                bool in_keys = dk > dv;
+                uint values = in_keys
+                              ? place_of (base + n0, shape.k_base, shape.kv_width) + k_at
+                                + (dk - dv)
+                              : place_of (base + n0, shape.v_base, shape.v_width) + group * dv;
 
                 [[unroll]] for (uint g = 0u; g < V_TILES; g += V_AT_ONCE) {
                     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> vm[V_AT_ONCE];
                     [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
                         uint col = sub * (DV / SUBS) + (g + t) * 16u;
-                        coopMatLoad (vm[t], kvh, values + min (col, dv - 16u), shape.kv_width,
-                                     gl_CooperativeMatrixLayoutRowMajor);
+                        if (in_keys) {
+                            coopMatLoad (vm[t], kvh, values + min (col, dv - 16u), shape.kv_width,
+                                         gl_CooperativeMatrixLayoutRowMajor);
+                        } else {
+                            coopMatLoad (vm[t], vh, values + min (col, dv - 16u), shape.v_width,
+                                         gl_CooperativeMatrixLayoutRowMajor);
+                        }
                     }
                     [[unroll]] for (uint t = 0u; t < V_AT_ONCE; t++) {
                         [[unroll]] for (uint m = 0u; m < POS; m++) {
