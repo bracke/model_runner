@@ -976,7 +976,69 @@ package body Model_Runner.Tools.Editing is
       File  : constant Line_Lists.Vector := Lines_Of (Text);
       Given : constant Line_Lists.Vector := Lines_Of (Old_Text);
       Said  : U.Unbounded_String;
+
+      function Indent (Item : String) return Natural is
+         Count : Natural := 0;
+      begin
+         for C of Item loop
+            exit when C /= ' ';
+            Count := Count + 1;
+         end loop;
+         return Count;
+      end Indent;
+
+      --  Whether old_text's lines From .. To stand at the file's line At on,
+      --  each with the same text and set the same way in from old_text's
+      --  first line as the file's are from Anchor.
+      function Stands
+        (From, To : Positive; At_Line, Anchor : Positive) return Boolean
+      is (At_Line + (To - From) <= Natural (File.Length)
+          and then (for all Index in From .. To =>
+                      Bare (Given (Index)) = Bare (File (At_Line + Index - From))
+                      and then Integer (Indent (File (At_Line + Index - From))) - Integer (Indent (File (Anchor)))
+                               = Integer (Indent (Given (Index))) - Integer (Indent (Given (1)))));
    begin
+      --  The front of old_text there, and its back further on, the file
+      --  holding lines between them that old_text has not: what an edit
+      --  put in the middle of the block old_text remembers. qwen3-8b
+      --  replaced one line of its if with nineteen, then gave the if as it
+      --  had been eight times, told only that its line 6 was not the
+      --  file's line 11.
+      if Natural (Given.Length) >= 3 and then Bare (Given (1)) /= "" then
+         for Start in 1 .. Natural (File.Length) loop
+            if Bare (File (Start)) = Bare (Given (1)) then
+               declare
+                  Front : Natural := 0;
+               begin
+                  while Front < Natural (Given.Length)
+                    and then Stands (1, Front + 1, Start, Start)
+                  loop
+                     Front := Front + 1;
+                  end loop;
+                  if Front >= 1 and then Front < Natural (Given.Length) then
+                     for Back_At in Start + Front + 1 .. Natural'Min (Natural (File.Length), Start + 400) loop
+                        if Stands (Front + 1, Natural (Given.Length), Back_At, Start) then
+                           declare
+                              Through : constant Positive := Back_At + Natural (Given.Length) - Front - 1;
+                           begin
+                              return "; old_text's first" & Natural'Image (Front) & " line"
+                                & (if Front = 1 then " is" else "s are") & " the file's from line"
+                                & Natural'Image (Start) & ", and its last"
+                                & Natural'Image (Natural (Given.Length) - Front) & " the file's from line"
+                                & Natural'Image (Back_At) & ", but the file has lines" & Natural'Image (Start + Front)
+                                & " to" & Natural'Image (Back_At - 1) & " between them, which old_text has not"
+                                & " -- what an edit put in the middle of it. The block as the file holds it now"
+                                & " is lines" & Natural'Image (Start) & " to" & Natural'Image (Through)
+                                & ": read them, and give old_text as they read";
+                           end;
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end if;
+         end loop;
+      end if;
+
       for Offset in 1 .. Natural (Given.Length) loop
          if Bare (Given (Offset)) /= "" then
             for At_Line in 1 .. Natural (File.Length) loop

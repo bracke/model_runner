@@ -1154,6 +1154,22 @@ package body Tests.Tools_Cases is
                     "the one line of a passage the file has otherwise was not named: "
                     & Ada.Strings.Unbounded.To_String (Near.Text));
          end;
+         --  Its front there and its back further on, lines between them it
+         --  has not: those named, and the block as it now stands.
+         Put (Gone_Path, "   if A then" & ASCII.LF & "      X := 1;" & ASCII.LF & "   else" & ASCII.LF
+              & "      if B then" & ASCII.LF & "         Y := 2;" & ASCII.LF & "      end if;" & ASCII.LF
+              & "      Z := 3;" & ASCII.LF & "   end if;" & ASCII.LF);
+         declare
+            Split : constant Ed.Said :=
+              Ed.Edit (Gone_Path, "if A then" & ASCII.LF & "   X := 1;" & ASCII.LF & "else" & ASCII.LF
+                                  & "   Z := 3;" & ASCII.LF & "end if;", "x", "");
+         begin
+            Assert (Split.Failed
+                    and then Has (Split, "but the file has lines 4 to 6 between them, which old_text has not")
+                    and then Has (Split, "The block as the file holds it now is lines 1 to 8"),
+                    "lines put in the middle of a passage were not named: "
+                    & Ada.Strings.Unbounded.To_String (Split.Text));
+         end;
       end;
       --  Copied from a check's quotation, its front and its hint with it:
       --  taken off, and the edit made.
