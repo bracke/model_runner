@@ -164,6 +164,14 @@ is
    --  that runs both of its sublayers from it. Null for the rest, which
    --  is what the block below reads.
    Kept_Norm : T.Real_Array_Access := null;
+
+   --  Gemma4's embedding a layer for every position of the batch, the
+   --  projection it is worked out from, and at a layer's end its gates
+   --  and what they project back up to. Null for every other model.
+   Layer_Rows      : T.Real_Array_Access := null;
+   Layer_Projected : T.Real_Array_Access := null;
+   Layer_Gates     : T.Real_Array_Access := null;
+   Layer_Out       : T.Real_Array_Access := null;
    Query  : T.Real_Array_Access := null;
    Keys   : T.Real_Array_Access := null;
    Values : T.Real_Array_Access := null;
@@ -503,6 +511,10 @@ is
       T.Free (Acts);
       T.Free (Norm);
       T.Free (Kept_Norm);
+      T.Free (Layer_Rows);
+      T.Free (Layer_Projected);
+      T.Free (Layer_Gates);
+      T.Free (Layer_Out);
       T.Free (Query);
       T.Free (Keys);
       T.Free (Values);
@@ -523,6 +535,57 @@ is
    function Slot
      (Which : Element_Count; Stride : Element_Count) return Element_Count
    is (Which * Stride);
+
+   --  Gemma4's step at a layer's end, for every position of the batch:
+   --  each position's state gated down to its embedding a layer's width
+   --  through the Gaussian unit, scaled by the position's slice of
+   --  Layer_Rows, projected back up, normalized and added to it; then the
+   --  whole state multiplied by the layer's output scale, where it carries
+   --  one. As Feed_Layer_Input does a position.
+   procedure Feed_Layer_Inputs_Batch
+     (Current : Layer;
+      Index   : Natural;
+      Failed  : out E.Error_Info)
+   is
+      Inputs     : constant Element_Count := Element_Count (Settings.Layer_Input);
+      All_Layers : constant Element_Count := Inputs * Element_Count (Settings.Layers);
+   begin
+      Failed := E.Success;
+      if Inputs > 0 then
+         Product_Batch (Item, Current.Input_Gate, Acts, Count, Layer_Gates, Failed);
+         if E.Is_Error (Failed) then
+            return;
+         end if;
+         K.GELU (Layer_Gates.all (0 .. Count * Inputs - 1));
+         for Which in 0 .. Count - 1 loop
+            for Offset in 0 .. Inputs - 1 loop
+               Layer_Gates.all (Which * Inputs + Offset) :=
+                 Layer_Gates.all (Which * Inputs + Offset)
+                 * Layer_Rows.all (Which * All_Layers + Element_Count (Index) * Inputs + Offset);
+            end loop;
+         end loop;
+         Product_Batch (Item, Current.Input_Proj, Layer_Gates, Count, Layer_Out, Failed);
+         if E.Is_Error (Failed) then
+            return;
+         end if;
+         for Which in 0 .. Count - 1 loop
+            Join_Residual
+              (Source, Layer_Out.all (Which * Width .. Which * Width + Width - 1),
+               Acts.all (Which * Width .. Which * Width + Width - 1),
+               Current.Input_Post_Norm, null, Item.Post_Room);
+         end loop;
+      end if;
+
+      if Current.Output_Scale /= null then
+         declare
+            Scale : constant Real := Current.Output_Scale.all (Current.Output_Scale.all'First);
+         begin
+            for Value of Acts.all (0 .. Count * Width - 1) loop
+               Value := Value * Scale;
+            end loop;
+         end;
+      end if;
+   end Feed_Layer_Inputs_Batch;
 begin
    Logits := [others => 0.0];
 
@@ -933,6 +996,49 @@ begin
       end;
    end if;
 
+   --  Gemma4's embedding a layer for every position, from its token and
+   --  its scaled row: the rows projected at once, each combined with its
+   --  token's row of the table (Combine_Layer_Inputs).
+   if Settings.Layer_Input > 0 then
+      declare
+         Inputs     : constant Element_Count := Element_Count (Settings.Layer_Input);
+         All_Layers : constant Element_Count := Inputs * Element_Count (Settings.Layers);
+      begin
+         T.Allocate (Count * All_Layers, Layer_Rows);
+         T.Allocate (Count * All_Layers, Layer_Projected);
+         T.Allocate (Count * Inputs, Layer_Gates);
+         T.Allocate (Count * Width, Layer_Out);
+         if Layer_Rows = null or else Layer_Projected = null
+           or else Layer_Gates = null or else Layer_Out = null
+         then
+            Release;
+            Item.Current := Failed;
+            Status := E.Make (E.Memory_Allocation_Failed);
+            return;
+         end if;
+         Product_Batch
+           (Item, Source.Layer_Projection, Acts, Count, Layer_Projected, Status);
+         for Which in 0 .. Count - 1 loop
+            exit when E.Is_Error (Status);
+            T.Dequantize_Row
+              (Source.Layer_Embeddings, Element_Count (Tokens (Tokens'First + Natural (Which))),
+               Layer_Rows.all (Which * All_Layers .. Which * All_Layers + All_Layers - 1), Status);
+            if E.Is_Ok (Status) then
+               Combine_Layer_Inputs
+                 (Source,
+                  Layer_Rows.all (Which * All_Layers .. Which * All_Layers + All_Layers - 1),
+                  Layer_Projected.all (Which * All_Layers .. Which * All_Layers + All_Layers - 1),
+                  Item.Layer_Gate.all);
+            end if;
+         end loop;
+         if E.Is_Error (Status) then
+            Release;
+            Item.Current := Failed;
+            return;
+         end if;
+      end;
+   end if;
+
    for Index in Source.Layers.all'Range loop
       --  A dense layer whose feed-forward the processor runs reads its
       --  products there; every other runs where it always has.
@@ -950,12 +1056,37 @@ begin
 
       declare
          Current : Layer renames Source.Layers.all (Index);
+
+         --  The layer's own widths, which hide the model's: Gemma4's
+         --  windowed layers' heads are narrower (Head_Of). Wide and Blend
+         --  are the batch's rows of queries and blends; Row_KV and Row_V
+         --  its rows of keys and values, as the projections write them.
+         --  KV_Width and V_Width stay the cache's rows, which are the
+         --  widest layer's. The model's everywhere but Gemma4.
+         Head_Size  : constant Element_Count :=
+           Element_Count (Head_Of (Settings, Natural (Index)));
+         Value_Size : constant Element_Count :=
+           Element_Count (Value_Of (Settings, Natural (Index)));
+         Rotary     : constant Element_Count :=
+           Element_Count (Rotary_Of (Settings, Natural (Index)));
+         Wide       : constant Element_Count :=
+           (if Settings.Kind = Gemma4 then Heads * Head_Size else Evaluate_Batch_Body.Wide);
+         Blend      : constant Element_Count :=
+           (if Settings.Kind = Gemma4 then Heads * Value_Size else Evaluate_Batch_Body.Blend);
+         Row_KV     : constant Element_Count := KV_Heads * Head_Size;
+         Row_V      : constant Element_Count := KV_Heads * Value_Size;
+
+         --  The layer whose keys and values this one attends over: its
+         --  own, but for Gemma4's last layers, which keep none and read an
+         --  earlier one's (Cache_Layer).
+         Reads     : constant Natural := Cache_Layer (Settings, Natural (Index));
+         Own_Cache : constant Boolean := Reads = Natural (Index);
          Base    : constant Element_Count :=
-           Keys_At (Item, Natural (Index));
+           Keys_At (Item, Reads);
          Rows_Base : constant Element_Count :=
-           Rows_At (Item, Natural (Index));
+           Rows_At (Item, Reads);
          V_Base  : constant Element_Count :=
-           Values_At (Item, Natural (Index));
+           Values_At (Item, Reads);
 
          --  Where a paged batch's page table for the layer was written,
          --  and whether it reached the device: a round reads its per-row
@@ -2253,13 +2384,21 @@ begin
                --  DeepSeek made its keys and values above, a head at a
                --  time from the latent, so there is no separate
                --  projection for them.
-               if not Is_MLA (Settings.Kind) then
+               --  Nor does a layer of Gemma4's that reads an earlier one's
+               --  cache, and a layer of its without a value projection
+               --  takes its keys as projected for its values.
+               if not Is_MLA (Settings.Kind) and then Own_Cache then
                   Product_Batch
                     (Item, Current.Key, Norm, Count, Keys, Status);
                   exit when E.Is_Error (Status);
-                  Product_Batch
-                    (Item, Current.Value, Norm, Count, Values, Status);
-                  exit when E.Is_Error (Status);
+                  if T.Is_Present (Current.Value) then
+                     Product_Batch
+                       (Item, Current.Value, Norm, Count, Values, Status);
+                     exit when E.Is_Error (Status);
+                  else
+                     Values.all (0 .. Count * Row_V - 1) :=
+                       Keys.all (0 .. Count * Row_KV - 1);
+                  end if;
                end if;
             end if;
 
@@ -2278,15 +2417,15 @@ begin
             loop
                declare
                   Q_At : constant Element_Count := Slot (Which, Wide);
-                  KV_At : constant Element_Count := Slot (Which, KV_Width);
-                  V_At  : constant Element_Count := Slot (Which, V_Width);
+                  KV_At : constant Element_Count := Slot (Which, Row_KV);
+                  V_At  : constant Element_Count := Slot (Which, Row_V);
                   Place : constant Element_Count :=
                     Base
-                    + Cell_Of (Item, Natural (Index), Sits_At (Which))
+                    + Cell_Of (Item, Reads, Sits_At (Which))
                       * KV_Width;
                   V_Place : constant Element_Count :=
                     V_Base
-                    + Cell_Of (Item, Natural (Index), Sits_At (Which))
+                    + Cell_Of (Item, Reads, Sits_At (Which))
                       * V_Stride;
                begin
                   --  The same bias as the single-token path adds, on each
@@ -2296,9 +2435,9 @@ begin
                   if Current.Query_Bias /= null then
                      K.Add (Query.all (Q_At .. Q_At + Wide - 1),
                             Current.Query_Bias.all);
-                     K.Add (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                     K.Add (Keys.all (KV_At .. KV_At + Row_KV - 1),
                             Current.Key_Bias.all);
-                     K.Add (Values.all (V_At .. V_At + V_Width - 1),
+                     K.Add (Values.all (V_At .. V_At + Row_V - 1),
                             Current.Value_Bias.all);
                   end if;
 
@@ -2307,25 +2446,36 @@ begin
                   Clip_QKV
                     (Settings.Clip_QKV,
                      Query.all (Q_At .. Q_At + Wide - 1),
-                     Keys.all (KV_At .. KV_At + KV_Width - 1),
-                     Values.all (V_At .. V_At + V_Width - 1));
+                     Keys.all (KV_At .. KV_At + Row_KV - 1),
+                     Values.all (V_At .. V_At + Row_V - 1));
 
                   if Current.Query_Norm /= null then
                      Normalize_Heads
                        (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
                         Current.Query_Norm.all, Settings.Epsilon,
-                        Item.Head_Row.all);
-                     Normalize_Heads
-                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                        KV_Heads, Head_Size, Current.Key_Norm.all,
-                        Settings.Epsilon, Item.Head_Row.all);
+                        Item.Head_Row.all (0 .. Head_Size - 1));
+                     if Current.Key_Norm /= null then
+                        Normalize_Heads
+                          (Keys.all (KV_At .. KV_At + Row_KV - 1),
+                           KV_Heads, Head_Size, Current.Key_Norm.all,
+                           Settings.Epsilon, Item.Head_Row.all (0 .. Head_Size - 1));
+                     end if;
+
+                     --  Gemma4 normalizes its values a head too, with no
+                     --  gain, and does not turn them.
+                     if Settings.Kind = Gemma4 and then Own_Cache then
+                        Normalize_Heads
+                          (Values.all (V_At .. V_At + Row_V - 1),
+                           KV_Heads, Value_Size, [0 .. Value_Size - 1 => 1.0],
+                           Settings.Epsilon, Item.Head_Row.all (0 .. Value_Size - 1));
+                     end if;
                   elsif Current.Query_Head_Norm /= null then
                      Normalize_Heads_Centred
                        (Query.all (Q_At .. Q_At + Wide - 1), Heads, Head_Size,
                         Current.Query_Head_Norm.all, Settings.Epsilon,
                         Item.Head_Row.all);
                      Normalize_Heads_Centred
-                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                       (Keys.all (KV_At .. KV_At + Row_KV - 1),
                         KV_Heads, Head_Size, Current.Key_Head_Norm.all,
                         Settings.Epsilon, Item.Head_Row.all);
                   end if;
@@ -2338,7 +2488,7 @@ begin
                         Current.Query_Whole_Norm,
                         Current.Query_Whole_Norm_Bias);
                      Normalize_Whole
-                       (Source, Keys.all (KV_At .. KV_At + KV_Width - 1),
+                       (Source, Keys.all (KV_At .. KV_At + Row_KV - 1),
                         Current.Key_Whole_Norm,
                         Current.Key_Whole_Norm_Bias);
                   end if;
@@ -2353,8 +2503,9 @@ begin
                   if not Rotated then
                      K.Apply_Rotary_Pair
                        (Query.all (Q_At .. Q_At + Wide - 1), Heads,
-                        Keys.all (KV_At .. KV_At + KV_Width - 1), KV_Heads,
-                        Head_Size, Element_Count (Settings.Rotary),
+                        Keys.all (KV_At .. KV_At + Row_KV - 1),
+                        (if Own_Cache then KV_Heads else 0),
+                        Head_Size, Rotary,
                         Natural (Sits_At (Which)),
                         Turn_Base (Settings, Natural (Index)),
                         Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
@@ -2366,14 +2517,18 @@ begin
                         Offset => 0);
                   end if;
 
-                  if Item.Held in Eighth | Fourth then
+                  --  Not at all from a layer that reads another's cache: that
+                  --  one wrote these positions' keys and values already.
+                  if not Own_Cache then
+                     null;
+                  elsif Item.Held in Eighth | Fourth then
                      Pack_Row
-                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
-                        Item'Unchecked_Access.Byte_Keys.all, Place, KV_Width,
+                       (Keys.all (KV_At .. KV_At + Row_KV - 1),
+                        Item'Unchecked_Access.Byte_Keys.all, Place, Row_KV,
                         Item'Unchecked_Access.Key_Scales.all, Item.Held);
                      Pack_Row
-                       (Values.all (V_At .. V_At + V_Width - 1),
-                        Item'Unchecked_Access.Byte_Values.all, V_Place, V_Width,
+                       (Values.all (V_At .. V_At + Row_V - 1),
+                        Item'Unchecked_Access.Byte_Values.all, V_Place, Row_V,
                         Item'Unchecked_Access.Value_Scales.all, Item.Held_Values);
 
                      --  And the device's copy of the packed block --
@@ -2391,11 +2546,11 @@ begin
                         end;
                      end if;
                   elsif Item.Held = Exact then
-                     for Offset in 0 .. KV_Width - 1 loop
+                     for Offset in 0 .. Row_KV - 1 loop
                         Item'Unchecked_Access.Keys.all (Place + Offset) :=
                           Keys.all (KV_At + Offset);
                      end loop;
-                     for Offset in 0 .. V_Width - 1 loop
+                     for Offset in 0 .. Row_V - 1 loop
                         Item'Unchecked_Access.Values.all (V_Place + Offset) :=
                           Values.all (V_At + Offset);
                      end loop;
@@ -2421,9 +2576,9 @@ begin
                            Put_Position
                              (Item'Unchecked_Access,
                               Place,
-                              Keys.all (KV_At .. KV_At + KV_Width - 1),
+                              Keys.all (KV_At .. KV_At + Row_KV - 1),
                               V_Place,
-                              Values.all (V_At .. V_At + V_Width - 1),
+                              Values.all (V_At .. V_At + Row_V - 1),
                               Placed);
 
                            Resident := Placed;
@@ -2431,13 +2586,13 @@ begin
                      end if;
                   else
                      Model_Runner.Kernels.To_Halves
-                       (Keys.all (KV_At .. KV_At + KV_Width - 1),
+                       (Keys.all (KV_At .. KV_At + Row_KV - 1),
                         Item'Unchecked_Access.Half_Keys.all
-                          (Place .. Place + KV_Width - 1));
+                          (Place .. Place + Row_KV - 1));
                      Model_Runner.Kernels.To_Halves
-                       (Values.all (V_At .. V_At + V_Width - 1),
+                       (Values.all (V_At .. V_At + Row_V - 1),
                         Item'Unchecked_Access.Half_Values.all
-                          (V_Place .. V_Place + V_Width - 1));
+                          (V_Place .. V_Place + Row_V - 1));
                   end if;
                end;
             end loop;
@@ -2495,10 +2650,10 @@ begin
                   --  moves its own end along; attending both ways it is the
                   --  batch's last, and every position shares it.
                   First_Step : constant Element_Count :=
-                    Cell_Of (Item, Natural (Index),
+                    Cell_Of (Item, Reads,
                              Earliest (Settings, Reserved, Natural (Index)));
                   Last_Step  : constant Element_Count :=
-                    Cell_Of (Item, Natural (Index),
+                    Cell_Of (Item, Reads,
                              (if Settings.Causal
                               then Reserved
                               else Reserved + Count - 1));
@@ -2653,14 +2808,14 @@ begin
                         function First_Of (Which : Element_Count)
                           return Element_Count
                         is (Cell_Of (Item'Unchecked_Access.all,
-                                     Natural (Index),
+                                     Reads,
                                      Earliest (Settings, Sits_At (Which),
                                                Natural (Index))));
 
                         function Last_Of (Which : Element_Count)
                           return Element_Count
                         is (Cell_Of (Item'Unchecked_Access.all,
-                                     Natural (Index),
+                                     Reads,
                                      (if Settings.Causal
                                       then Sits_At (Sees_To (Which))
                                       else Reserved + Count - 1)));
@@ -2668,7 +2823,7 @@ begin
                         function Query_Of (Which : Element_Count)
                           return Element_Count
                         is (Cell_Of (Item'Unchecked_Access.all,
-                                     Natural (Index), Sits_At (Which)));
+                                     Reads, Sits_At (Which)));
 
                         procedure One (Which : Element_Count) is
                            --  A causal position looks to itself -- or to
@@ -2689,10 +2844,10 @@ begin
                            --  own. Every distance the blend takes is a
                            --  difference between two of these.
                            First_Cell : constant Element_Count :=
-                             Cell_Of (Item'Unchecked_Access.all, Natural (Index),
+                             Cell_Of (Item'Unchecked_Access.all, Reads,
                                       First_Step);
                            Last_Cell  : constant Element_Count :=
-                             Cell_Of (Item'Unchecked_Access.all, Natural (Index),
+                             Cell_Of (Item'Unchecked_Access.all, Reads,
                                       Last_Step);
 
                            --  The query's own position, which is not the
@@ -2701,7 +2856,7 @@ begin
                            --  last position, and the fall-off with distance
                            --  is measured from where the query is.
                            Query_Cell : constant Element_Count :=
-                             Cell_Of (Item'Unchecked_Access.all, Natural (Index),
+                             Cell_Of (Item'Unchecked_Access.all, Reads,
                                       Sits_At (Which));
 
                            Q_At   : constant Element_Count :=
@@ -3113,6 +3268,16 @@ begin
             end;
 
             Charge (Item, Joining, Mark);
+
+            --  Gemma4's embedding a layer, and its scale on the state.
+            if Settings.Kind = Gemma4 then
+               Feed_Layer_Inputs_Batch (Current, Natural (Index), Status);
+               if E.Is_Error (Status) then
+                  Release;
+                  Item.Current := Failed;
+                  return;
+               end if;
+            end if;
 
             <<After_Feed_Batch>>
             null;

@@ -197,6 +197,9 @@ package body Model_Runner.Llama is
    function Score_Scale (Settings : Configuration) return Real
    is (if Settings.Kind in Granite | Granite_MoE and then Settings.Attention_Mul /= 0.0
        then Settings.Attention_Mul
+       --  Gemma4 scales nothing: its queries and keys are normalized a
+       --  head before they meet, and the reference multiplies by one.
+       elsif Settings.Kind = Gemma4 then 1.0
        else Real
          (1.0
           / Model_Runner.Numerics.Sqrt
@@ -666,7 +669,9 @@ package body Model_Runner.Llama is
         --  shared expert's three beside the routed ones. Counted for every
         --  layer and left empty where a layer has none, since Add skips an
         --  empty view.
-        + (if Is_MLA (Item.Settings.Kind) then 6 else 0);
+        + (if Is_MLA (Item.Settings.Kind) then 6 else 0)
+        --  Gemma4's embedding a layer adds its gate and its projection.
+        + (if Item.Settings.Layer_Input > 0 then 2 else 0);
 
       --  Four beside the layers -- the embedding table, the output
       --  projection, the positions and the segments -- though no
@@ -674,8 +679,10 @@ package body Model_Runner.Llama is
       --  projection. Sized for four anyway, because "three is enough" is
       --  true by a coincidence between two architectures rather than by
       --  anything holding it, and the cost of the fourth is a pointer.
+      --  And one more for Gemma4's projection into its embedding a layer,
+      --  which is present only where it has one.
       Room  : View_List
-        (1 .. 4 + Per_Layer * (Item.Settings.Layers + Item.Settings.Next_Layers));
+        (1 .. 5 + Per_Layer * (Item.Settings.Layers + Item.Settings.Next_Layers));
       Count : Natural := 0;
 
       procedure Add (Where : View_Access) is
@@ -737,6 +744,8 @@ package body Model_Runner.Llama is
          Add (Which.Shared_Up'Unchecked_Access);
          Add (Which.Shared_Down'Unchecked_Access);
          Add (Which.Next_Proj'Unchecked_Access);
+         Add (Which.Input_Gate'Unchecked_Access);
+         Add (Which.Input_Proj'Unchecked_Access);
 
          if Which.Experts /= null then
             for Expert in Which.Experts.all'Range loop
@@ -751,6 +760,10 @@ package body Model_Runner.Llama is
       Add (Item.Output'Unchecked_Access);
       Add (Item.Positions'Unchecked_Access);
       Add (Item.Segments'Unchecked_Access);
+
+      --  Gemma4's projection into its embedding a layer; the table itself
+      --  is read a row at a time and never through the product.
+      Add (Item.Layer_Projection'Unchecked_Access);
 
       for Index in Item.Layers'Range loop
          Add_Layer (Item.Layers (Index));
@@ -1409,7 +1422,7 @@ package body Model_Runner.Llama is
    function Gate_Unit (Item : Model'Class) return Natural
    is (if Item.Settings.Gate_Alpha > 0.0 then 3
        elsif Item.Settings.Kind
-             in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+             in Gemma | Gemma2 | Gemma3 | Gemma4 | Falcon | Phi2 | GPT2 | Bert
                 | Jina_Bert_V2 | Starcoder2 | Gptneox | Mpt
        then 1 else 0);
 
@@ -1417,7 +1430,7 @@ package body Model_Runner.Llama is
    is
    begin
       if Item.Settings.Kind
-         in Gemma | Gemma2 | Gemma3 | Falcon | Phi2 | GPT2 | Bert
+         in Gemma | Gemma2 | Gemma3 | Gemma4 | Falcon | Phi2 | GPT2 | Bert
             | Jina_Bert_V2 | Starcoder2 | Gptneox | Mpt
       then
          K.GELU (Target);
@@ -1462,7 +1475,7 @@ package body Model_Runner.Llama is
    --  61.69 against its 61.65.
    function Turn_Scaling
      (Settings : Configuration; Layer : Natural) return K.Rotary_Scaling
-   is (if Settings.Kind in Gemma3 | Olmo2 | Mellum | Lfm3
+   is (if Settings.Kind in Gemma3 | Gemma4 | Olmo2 | Mellum | Lfm3
          and then Windowed_Layer (Settings, Layer)
        then K.Rotary_Scaling'(others => <>)
        else Settings.Scaling);
@@ -2101,7 +2114,7 @@ package body Model_Runner.Llama is
    --  per token and the alternative is a field that can disagree with the
    --  architecture that decides it.
    function Embedding_Scale (Item : Model'Class) return Real
-   is (if Item.Settings.Kind in Gemma | Gemma2 | Gemma3
+   is (if Item.Settings.Kind in Gemma | Gemma2 | Gemma3 | Gemma4
        then Real (N.Sqrt (N.Wide_Real (Item.Settings.Embedding)))
        elsif Item.Settings.Kind in Granite | Granite_MoE
              and then Item.Settings.Embedding_Mul /= 0.0
@@ -3387,7 +3400,7 @@ package body Model_Runner.Llama is
      (Item    : Model'Class;
       Turning : Session'Class;
       Layer   : Natural) return Real_Array
-   is (if Is_Lfm3 (Item.Settings.Kind)
+   is (if (Is_Lfm3 (Item.Settings.Kind) or else Item.Settings.Kind = Gemma4)
          and then Windowed_Layer (Item.Settings, Layer)
        then K.No_Factors
        elsif Item.Rope_Long /= null and then Item.Rope_Short /= null
@@ -8836,6 +8849,9 @@ package body Model_Runner.Llama is
       T.Free (Item.Gate);
       T.Free (Item.Up);
       T.Free (Item.Head_Row);
+      T.Free (Item.Layer_Inputs);
+      T.Free (Item.Layer_Room);
+      T.Free (Item.Layer_Gate);
       T.Free (Item.Query_Full);
       T.Free (Item.Last_Final);
       T.Free (Item.Next_Input);
@@ -11275,6 +11291,136 @@ package body Model_Runner.Llama is
       First  : Natural;
       Status : out E.Error_Info)
    is separate;
+
+   --  Gemma4's embedding a layer for one position, worked out from the
+   --  token's row of the table (Inputs) and the position's embedded row
+   --  projected to every layer's width at once (Projected): the row scaled
+   --  by the root of its width, the projection by one over the root of
+   --  the model's width and normalized a layer's slice at a time, the two
+   --  summed and scaled by one over the root of two, as the reference
+   --  does. Written over Inputs.
+   --
+   --  @param Source Model whose norm and widths are read.
+   --  @param Inputs The table's row in, the embedding a layer out.
+   --  @param Projected The projection; changed.
+   --  @param Room A layer's width of scratch.
+   procedure Combine_Layer_Inputs
+     (Source    : Model'Class;
+      Inputs    : in out Real_Array;
+      Projected : in out Real_Array;
+      Room      : in out Real_Array)
+   is
+      Width   : constant Element_Count := Element_Count (Source.Settings.Layer_Input);
+      Table   : constant Real := Real (N.Sqrt (N.Wide_Real (Width)));
+      Project : constant Real :=
+        Real (1.0 / N.Sqrt (N.Wide_Real (Source.Settings.Embedding)));
+      Halve   : constant Real := Real (1.0 / N.Sqrt (2.0));
+   begin
+      for Layer in 0 .. Element_Count (Source.Settings.Layers) - 1 loop
+         declare
+            From : constant Element_Count := Projected'First + Layer * Width;
+            Into : constant Element_Count := Inputs'First + Layer * Width;
+         begin
+            for Value of Projected (From .. From + Width - 1) loop
+               Value := Value * Project;
+            end loop;
+            K.RMS_Norm
+              (Projected (From .. From + Width - 1), Source.Layer_Projection_Norm.all,
+               Source.Settings.Epsilon, Room);
+            for Offset in 0 .. Width - 1 loop
+               Inputs (Into + Offset) :=
+                 (Room (Room'First + Offset) + Inputs (Into + Offset) * Table) * Halve;
+            end loop;
+         end;
+      end loop;
+   end Combine_Layer_Inputs;
+
+   --  Gemma4's embedding a layer for one position, into Item.Layer_Inputs,
+   --  from the token and the position's embedded row (Embedded), already
+   --  scaled as the model scales it.
+   --
+   --  @param Item Session whose buffers are used.
+   --  @param Source Model whose tables are read.
+   --  @param Token The position's token.
+   --  @param Embedded The position's embedded row.
+   --  @param Status Success, or why not.
+   procedure Embed_Layer_Inputs
+     (Item     : in out Session;
+      Source   : Model'Class;
+      Token    : Token_Id;
+      Embedded : T.Real_Array_Access;
+      Status   : out E.Error_Info) is
+   begin
+      T.Dequantize_Row
+        (Source.Layer_Embeddings, Element_Count (Token), Item.Layer_Inputs.all, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Product (Item, Source.Layer_Projection, Embedded, Item.Layer_Room, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      Combine_Layer_Inputs
+        (Source, Item.Layer_Inputs.all, Item.Layer_Room.all, Item.Layer_Gate.all);
+   end Embed_Layer_Inputs;
+
+   --  Gemma4's step at a layer's end: the layer's output gated down to its
+   --  embedding a layer's width through the Gaussian unit, scaled by the
+   --  layer's slice of Item.Layer_Inputs, projected back up, normalized
+   --  and added to the residual; then the whole residual multiplied by the
+   --  layer's output scale, where it carries one. Item.Normalized is the
+   --  room the projection is made in.
+   --
+   --  @param Item Session whose residual is changed.
+   --  @param Source Model the layer belongs to.
+   --  @param Current The layer.
+   --  @param Index The layer's place in the stack.
+   --  @param Status Success, or why not.
+   procedure Feed_Layer_Input
+     (Item    : in out Session;
+      Source  : Model'Class;
+      Current : Layer;
+      Index   : Natural;
+      Status  : out E.Error_Info)
+   is
+   begin
+      Status := E.Success;
+      if Source.Settings.Layer_Input > 0 then
+         declare
+            Width : constant Element_Count := Element_Count (Source.Settings.Layer_Input);
+            Gate  : Real_Array renames Item.Layer_Gate.all;
+            From  : constant Element_Count :=
+              Item.Layer_Inputs.all'First + Element_Count (Index) * Width;
+         begin
+            Product (Item, Current.Input_Gate, Item.Activation, Item.Layer_Gate, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            K.GELU (Gate);
+            for Offset in 0 .. Width - 1 loop
+               Gate (Gate'First + Offset) :=
+                 Gate (Gate'First + Offset) * Item.Layer_Inputs.all (From + Offset);
+            end loop;
+            Product (Item, Current.Input_Proj, Item.Layer_Gate, Item.Normalized, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            Join_Residual
+              (Source, Item.Normalized.all, Item.Activation.all,
+               Current.Input_Post_Norm, null, Item.Post_Room);
+         end;
+      end if;
+
+      if Current.Output_Scale /= null then
+         declare
+            Scale : constant Real := Current.Output_Scale.all (Current.Output_Scale.all'First);
+         begin
+            for Value of Item.Activation.all loop
+               Value := Value * Scale;
+            end loop;
+         end;
+      end if;
+   end Feed_Layer_Input;
 
    --------------------
    -- Evaluate_Token --

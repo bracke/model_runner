@@ -417,6 +417,17 @@ begin
          T.Allocate (Width, Item.Kept_Input);
       end if;
 
+      --  Gemma4's embedding a layer, its room and a layer's gate.
+      if Source.Settings.Layer_Input > 0 then
+         T.Allocate
+           (Element_Count (Source.Settings.Layer_Input * Source.Settings.Layers),
+            Item.Layer_Inputs);
+         T.Allocate
+           (Element_Count (Source.Settings.Layer_Input * Source.Settings.Layers),
+            Item.Layer_Room);
+         T.Allocate (Element_Count (Source.Settings.Layer_Input), Item.Layer_Gate);
+      end if;
+
       T.Allocate (Wide, Item.Query);
       T.Allocate (KV, Item.Key_Row);
       T.Allocate (KV_Out, Item.Value_Row);

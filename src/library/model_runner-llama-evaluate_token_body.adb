@@ -362,6 +362,11 @@ is
          Upto      : Element_Count := 0;
          Sinks     : T.Real_Array_Access := null;
          Ok        : Boolean := True;
+
+         --  The layer's own head widths, which are the model's but on
+         --  Gemma4's windowed layers (Head_Of).
+         Head_Size  : Element_Count := 0;
+         Value_Size : Element_Count := 0;
       end record;
 
    overriding procedure Run
@@ -375,6 +380,15 @@ is
       To    : Element_Count)
    is
       Fine : Boolean := True;
+
+      --  The layer's queries and blends, as wide as its heads and no
+      --  wider: the blends read a head's place from the rows they are
+      --  given, and the session's rows are the widest layer's.
+      Asked   : Real_Array renames
+        Item.Query.all (Item.Query.all'First .. Item.Query.all'First + Heads * Share.Head_Size - 1);
+      Blended : Real_Array renames
+        Item.Attention.all
+          (Item.Attention.all'First .. Item.Attention.all'First + Heads * Share.Value_Size - 1);
    begin
       if From > To then
          return;
@@ -382,16 +396,16 @@ is
 
       if Item.Held in Eighth | Fourth then
          Blend_Eighth
-           (Item.Held, Item.Held_Values, Item.Query.all, Item.Byte_Keys.all,
+           (Item.Held, Item.Held_Values, Asked, Item.Byte_Keys.all,
             Item.Byte_Values.all,
             Item.Key_Scales.all, Item.Value_Scales.all,
             Share.Base, Share.V_Base, Share.Rows_Base, KV_Width,
-            V_Width, Heads, Head_Size, Value_Size,
+            V_Width, Heads, Share.Head_Size, Share.Value_Size,
             Element_Count (Settings.Group_Size),
             Share.Earliest, Share.Upto, Scale, Settings.Attention_Cap,
             Settings.Max_Bias, Share.Upto, Share.Sinks,
             From, To, Item.Score_Room,
-            Item.Scores.all, Item.Attention.all, Fine);
+            Item.Scores.all, Blended, Fine);
       else
          --  The heads of a group read the same keys and values, so a run
          --  of four or eight of them goes through the block a batch's
@@ -409,8 +423,8 @@ is
             Blocks     : constant Boolean :=
               Settings.Max_Bias = 0.0
               and then Share.Sinks = null
-              and then Value_Size mod 16 = 0
-              and then (Item.Held = Halved or else Head_Size /= 64);
+              and then Share.Value_Size mod 16 = 0
+              and then (Item.Held = Halved or else Share.Head_Size /= 64);
             Same       : constant Cell_Quad := [others => Share.Upto];
             Earliest   : constant Cell_Quad := [others => Share.Earliest];
             Head       : Element_Count := From;
@@ -429,10 +443,10 @@ is
 
                if Size > 1 and then Item.Held = Exact then
                   Blend_Exact_Four
-                    (Size, Item.Query.all, Item.Query.all'First, Head_Size,
+                    (Size, Item.Query.all, Item.Query.all'First, Share.Head_Size,
                      Item.Keys.all, Item.Values.all,
                      Share.Base, Share.V_Base, KV_Width, V_Stride,
-                     Head_Size, Value_Size, Group_Size, Heads,
+                     Share.Head_Size, Share.Value_Size, Group_Size, Heads,
                      Earliest, Same, Same, Scale, Settings.Attention_Cap,
                      Settings.Max_Bias, null, Head, Head,
                      Item.Score_Room,
@@ -440,13 +454,13 @@ is
                        (Item.Scores.all'First + Head * Item.Score_Room
                         .. Item.Scores.all'Last),
                      Item.Attention.all, Item.Attention.all'First,
-                     Value_Size, Fine);
+                     Share.Value_Size, Fine);
                elsif Size > 1 then
                   Blend_Halved_Four
-                    (Size, Item.Query.all, Item.Query.all'First, Head_Size,
+                    (Size, Item.Query.all, Item.Query.all'First, Share.Head_Size,
                      Item.Half_Keys.all, Item.Half_Values.all,
                      Share.Base, Share.V_Base, KV_Width, V_Stride,
-                     Head_Size, Value_Size, Group_Size, Heads,
+                     Share.Head_Size, Share.Value_Size, Group_Size, Heads,
                      Earliest, Same, Same, Scale, Settings.Attention_Cap,
                      Settings.Max_Bias, null, Head, Head,
                      Item.Score_Room,
@@ -454,26 +468,26 @@ is
                        (Item.Scores.all'First + Head * Item.Score_Room
                         .. Item.Scores.all'Last),
                      Item.Attention.all, Item.Attention.all'First,
-                     Value_Size, Fine);
+                     Share.Value_Size, Fine);
                elsif Item.Held = Exact then
                   Blend_Exact
-                    (Item.Query.all, Item.Keys.all, Item.Values.all,
+                    (Asked, Item.Keys.all, Item.Values.all,
                      Share.Base, Share.V_Base, KV_Width, V_Stride, Heads,
-                     Head_Size, Value_Size, Group_Size,
+                     Share.Head_Size, Share.Value_Size, Group_Size,
                      Share.Earliest, Share.Upto, Scale,
                      Settings.Attention_Cap, Settings.Max_Bias, Share.Upto,
                      Share.Sinks, Head, Head, Item.Score_Room,
-                     Item.Scores.all, Item.Attention.all, Fine);
+                     Item.Scores.all, Blended, Fine);
                else
                   Blend_Halved
-                    (Item.Query.all, Item.Half_Keys.all,
+                    (Asked, Item.Half_Keys.all,
                      Item.Half_Values.all,
                      Share.Base, Share.V_Base, KV_Width, V_Stride, Heads,
-                     Head_Size, Value_Size, Group_Size,
+                     Share.Head_Size, Share.Value_Size, Group_Size,
                      Share.Earliest, Share.Upto, Scale,
                      Settings.Attention_Cap, Settings.Max_Bias, Share.Upto,
                      Share.Sinks, Head, Head, Item.Score_Room,
-                     Item.Scores.all, Item.Attention.all, Fine);
+                     Item.Scores.all, Blended, Fine);
                end if;
 
                Head := Head + Element_Count (Size);
@@ -670,6 +684,15 @@ begin
       end loop;
    end if;
 
+   --  Gemma4's embedding a layer, from the token and its scaled row.
+   if Settings.Layer_Input > 0 then
+      Embed_Layer_Inputs (Item, Source, Token, Item.Activation, Status);
+      if E.Is_Error (Status) then
+         Item.Current := Failed;
+         return;
+      end if;
+   end if;
+
    --  RWKV6 normalizes the embedding once before the first block sees it,
    --  the way Bert does -- the batch path does this too, and a generated
    --  token is the first place the single-token path meets an
@@ -737,10 +760,26 @@ begin
 
       declare
          Current : Layer renames Source.Layers.all (Index);
+
+         --  The layer's own widths, which hide the model's: Gemma4's
+         --  windowed layers' heads are narrower, and use the front of
+         --  each row of the cache (Head_Of). The model's everywhere else.
+         Head_Size  : constant Element_Count :=
+           Element_Count (Head_Of (Settings, Natural (Index)));
+         Value_Size : constant Element_Count :=
+           Element_Count (Value_Of (Settings, Natural (Index)));
+         Rotary     : constant Element_Count :=
+           Element_Count (Rotary_Of (Settings, Natural (Index)));
+
+         --  The layer whose keys and values this one attends over: its
+         --  own, but for Gemma4's last layers, which keep none and read an
+         --  earlier one's (Cache_Layer).
+         Reads     : constant Natural := Cache_Layer (Settings, Natural (Index));
+         Own_Cache : constant Boolean := Reads = Natural (Index);
          Base    : constant Element_Count :=
-           Keys_At (Item, Natural (Index));
+           Keys_At (Item, Reads);
          Cell    : constant Element_Count :=
-           Cell_Of (Item, Natural (Index), Reserved);
+           Cell_Of (Item, Reads, Reserved);
          Slot    : constant Element_Count := Base + Cell * KV_Width;
 
          --  Where this layer's page table was written, for a paged
@@ -752,9 +791,9 @@ begin
          --  Where this layer's row scales begin, which is one a position
          --  rather than one an element.
          Rows_Base : constant Element_Count :=
-           Rows_At (Item, Natural (Index));
+           Rows_At (Item, Reads);
          V_Base  : constant Element_Count :=
-           Values_At (Item, Natural (Index));
+           Values_At (Item, Reads);
          V_Slot  : constant Element_Count := V_Base + Cell * V_Stride;
 
          --  Whether this position reached the device's own cache, which
@@ -1431,6 +1470,18 @@ begin
             --  them.
             if Is_MLA (Settings.Kind) then
                MLA_Project (Item, Current, Status);
+
+            --  Gemma4's: no keys or values where the layer reads another
+            --  layer's, and its keys as projected for its values where it
+            --  carries no value projection.
+            elsif not Own_Cache then
+               Product (Item, Current.Query, Item.Normalized, Item.Query, Status);
+            elsif not T.Is_Present (Current.Value) then
+               Product_Group
+                 (Item, [Current.Query, Current.Key], Item.Normalized,
+                  [Item.Query, Item.Key_Row], Status);
+               Item.Value_Row.all (0 .. KV_Heads * Value_Size - 1) :=
+                 Item.Key_Row.all (0 .. KV_Heads * Head_Size - 1);
             else
                Product_Group
                  (Item,
@@ -1471,10 +1522,22 @@ begin
                Normalize_Heads
                  (Item.Query.all, Heads, Head_Size,
                   Current.Query_Norm.all, Settings.Epsilon,
-                  Item.Head_Row.all);
-               Normalize_Heads
-                 (Item.Key_Row.all, KV_Heads, Head_Size,
-                  Current.Key_Norm.all, Settings.Epsilon, Item.Head_Row.all);
+                  Item.Head_Row.all (0 .. Head_Size - 1));
+               if Current.Key_Norm /= null then
+                  Normalize_Heads
+                    (Item.Key_Row.all, KV_Heads, Head_Size,
+                     Current.Key_Norm.all, Settings.Epsilon,
+                     Item.Head_Row.all (0 .. Head_Size - 1));
+               end if;
+
+               --  Gemma4 normalizes its values a head too, with no gain,
+               --  and does not turn them.
+               if Settings.Kind = Gemma4 and then Own_Cache then
+                  Normalize_Heads
+                    (Item.Value_Row.all, KV_Heads, Value_Size,
+                     [0 .. Value_Size - 1 => 1.0], Settings.Epsilon,
+                     Item.Head_Row.all (0 .. Value_Size - 1));
+               end if;
             elsif Current.Query_Head_Norm /= null then
                Normalize_Heads_Centred
                  (Item.Query.all, Heads, Head_Size,
@@ -1504,8 +1567,7 @@ begin
                  Turn_Base (Settings, Natural (Index));
                Stretch : constant K.Rotary_Scaling :=
                  Turn_Scaling (Settings, Natural (Index));
-               Pairs   : constant Element_Count :=
-                 Element_Count (Settings.Rotary) / 2;
+               Pairs   : constant Element_Count := Rotary / 2;
                --  Every head turns from its first element: DeepSeek's
                --  heads are laid out rotated slice first (MLA_Project).
                Shift   : constant Element_Count := 0;
@@ -1526,7 +1588,7 @@ begin
                             /= (Turns (Source, Item, Natural (Index))'Length > 0)
                   then
                      K.Rotary_Table
-                       (Element_Count (Settings.Rotary), Item.Committed,
+                       (Rotary, Item.Committed,
                         Base, Stretch, Turns (Source, Item, Natural (Index)),
                         Cosines => Item.Turned_Cos (0 .. Pairs - 1),
                         Sines => Item.Turned_Sin (0 .. Pairs - 1));
@@ -1539,39 +1601,53 @@ begin
                        Turns (Source, Item, Natural (Index))'Length > 0;
                   end if;
 
+                  --  The rows as wide as this layer's heads: the rotation
+                  --  turns nothing in a row of another width, and the
+                  --  session's rows are the widest layer's -- Gemma4's
+                  --  windowed layers went unturned in every generated token.
                   K.Apply_Rotary_Table
-                    (Item.Query.all, Heads, Head_Size,
-                     Element_Count (Settings.Rotary),
+                    (Item.Query.all (Item.Query.all'First .. Item.Query.all'First + Heads * Head_Size - 1),
+                     Heads, Head_Size, Rotary,
                      Item.Turned_Cos (0 .. Pairs - 1),
                      Item.Turned_Sin (0 .. Pairs - 1),
                      Settings.Pairing, Shift);
-                  K.Apply_Rotary_Table
-                    (Item.Key_Row.all, KV_Heads, Head_Size,
-                     Element_Count (Settings.Rotary),
-                     Item.Turned_Cos (0 .. Pairs - 1),
-                     Item.Turned_Sin (0 .. Pairs - 1),
-                     Settings.Pairing, Shift);
+                  if Own_Cache then
+                     K.Apply_Rotary_Table
+                       (Item.Key_Row.all (Item.Key_Row.all'First .. Item.Key_Row.all'First + KV_Heads * Head_Size - 1),
+                        KV_Heads, Head_Size, Rotary,
+                        Item.Turned_Cos (0 .. Pairs - 1),
+                        Item.Turned_Sin (0 .. Pairs - 1),
+                        Settings.Pairing, Shift);
+                  end if;
                else
                   K.Apply_Rotary
-                    (Item.Query.all, Heads, Head_Size,
-                     Element_Count (Settings.Rotary), Item.Committed,
+                    (Item.Query.all (Item.Query.all'First .. Item.Query.all'First + Heads * Head_Size - 1),
+                     Heads, Head_Size,
+                     Rotary, Item.Committed,
                      Base, Stretch, Turns (Source, Item, Natural (Index)), Settings.Pairing,
                      Sections => Settings.Sections,
                      Place => Place_At (Item, Item.Committed),
                      Offset => Shift);
-                  K.Apply_Rotary
-                    (Item.Key_Row.all, KV_Heads, Head_Size,
-                     Element_Count (Settings.Rotary), Item.Committed,
-                     Base, Stretch, Turns (Source, Item, Natural (Index)), Settings.Pairing,
-                     Sections => Settings.Sections,
-                     Place => Place_At (Item, Item.Committed),
-                     Offset => Shift);
+                  if Own_Cache then
+                     K.Apply_Rotary
+                       (Item.Key_Row.all (Item.Key_Row.all'First .. Item.Key_Row.all'First + KV_Heads * Head_Size - 1),
+                        KV_Heads, Head_Size,
+                        Rotary, Item.Committed,
+                        Base, Stretch, Turns (Source, Item, Natural (Index)), Settings.Pairing,
+                        Sections => Settings.Sections,
+                        Place => Place_At (Item, Item.Committed),
+                        Offset => Shift);
+                  end if;
                end if;
             end;
 
             --  Write into the reserved slot. The slot is only readable as
             --  context once Committed is advanced, at the end of this call.
-            if Item.Held in Eighth | Fourth then
+            --  Not at all from a layer that reads another's: that one
+            --  wrote this position's keys and values already.
+            if not Own_Cache then
+               null;
+            elsif Item.Held in Eighth | Fourth then
                Pack_Row
                  (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
                   Slot, KV_Width, Item.Key_Scales.all, Item.Held);
@@ -1634,10 +1710,12 @@ begin
                  (Base     => Base,
                   V_Base   => V_Base,
                   Rows_Base => Rows_Base,
-                  Earliest => Cell_Of (Item, Natural (Index), First),
+                  Earliest => Cell_Of (Item, Reads, First),
                   Upto     => Cell,
                   Sinks    => Current.Sinks,
-                  Ok       => True);
+                  Ok       => True,
+                  Head_Size  => Head_Size,
+                  Value_Size => Value_Size);
                Shared : E.Error_Info;
             begin
 
@@ -1987,6 +2065,12 @@ begin
                exit when E.Is_Error (Status);
             end if;
 
+         end if;
+
+         --  Gemma4's embedding a layer, and its scale on the residual.
+         if Settings.Kind = Gemma4 then
+            Feed_Layer_Input (Item, Source, Current, Natural (Index), Status);
+            exit when E.Is_Error (Status);
          end if;
 
          Charge (Item, Joining, Mark);

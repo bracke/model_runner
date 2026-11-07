@@ -91,7 +91,7 @@ begin
                     | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                     | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
                     | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL | Lfm3
-                    | Qwen2_VL =>
+                    | Qwen2_VL | Gemma4 =>
                    K.Split);
 
             --  What a position may see. Every architecture here
@@ -1328,6 +1328,9 @@ begin
         (case Settings.Kind is
             when Gemma2 | GPT_OSS => 2,
             when Gemma3 => 6,
+            --  Gemma4 states its list of windowed layers, which is read
+            --  instead; six is Gemma3's, for a file that states none.
+            when Gemma4 => 6,
             when Olmo2 | Mellum | Lfm3 => 4,
             when others => 0);
       Key    : constant String :=
@@ -1411,7 +1414,7 @@ begin
          return;
       end if;
 
-      if E.Is_Error (Local) and then Settings.Kind = Gemma3 then
+      if E.Is_Error (Local) and then Settings.Kind in Gemma3 | Gemma4 then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "rope.local_freq_base"),
             1.0, 1.0E12, Value, Local);
@@ -1443,8 +1446,8 @@ begin
    --  thirty where its file states neither -- the architecture's, as the
    --  reference runtime carries them; an early gemma2 file states none and
    --  ran unbounded here. Gemma3 bounds its logits only where the file
-   --  says so.
-   if Settings.Kind in Gemma2 | Gemma3 then
+   --  says so, as Gemma4 does.
+   if Settings.Kind in Gemma2 | Gemma3 | Gemma4 then
       if Settings.Kind = Gemma2 then
          Containers.Get_Float
            (Source, Model_Key (Settings.Kind, "attn_logit_softcapping"),
@@ -1832,6 +1835,67 @@ begin
             if E.Is_Ok (Found) and then First > 0 and then Second > 0 then
                Settings.Pairing := K.Split;
             end if;
+         end if;
+      end;
+   end if;
+
+   --  Gemma4's windowed layers' own widths -- the heads half as wide as
+   --  the global layers' -- the layers from which the cache is shared,
+   --  and the width of its embedding a layer. The global layers' widths
+   --  are key_length, value_length and dimension_count above, and every
+   --  layer's cache row is the wider; a windowed layer's heads use the
+   --  front of it. A windowed width past the global one is a shape the
+   --  row does not hold, and refused.
+   if Settings.Kind = Gemma4 then
+      declare
+         procedure Width (Key : String; Into : out Natural) is
+         begin
+            Into := 0;
+            Containers.Get_Integer
+              (Source, Model_Key (Settings.Kind, Key), 0,
+               Long_Long_Integer (Bounds.Max_Embedding), Number, Local);
+            if Present_And_Wrong (Local) then
+               Status := Local;
+            elsif E.Is_Ok (Local) then
+               Into := Natural (Number);
+            end if;
+         end Width;
+      begin
+         Width ("attention.key_length_swa", Settings.Local_Head_Size);
+         Width ("attention.value_length_swa", Settings.Local_Value_Size);
+         Width ("rope.dimension_count_swa", Settings.Local_Rotary);
+         Width ("embedding_length_per_layer_input", Settings.Layer_Input);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Containers.Get_Integer
+           (Source, Model_Key (Settings.Kind, "attention.shared_kv_layers"), 0,
+            Long_Long_Integer (Settings.Layers), Number, Local);
+         if Present_And_Wrong (Local) then
+            Status := Local;
+            return;
+         end if;
+         --  Shared from the layer past the last that keeps its own, which
+         --  needs two before it to read from: one windowed, one global.
+         if E.Is_Ok (Local) and then Number > 0 then
+            Settings.Shared_KV_From := Settings.Layers - Natural (Number);
+            if Settings.Shared_KV_From < 2 then
+               Status := E.Make (E.Arch_Invalid_Dimensions);
+               E.Add_Integer (Status, "shared_kv_layers", Number);
+               return;
+            end if;
+         end if;
+         if Settings.Local_Head_Size > Settings.Head_Size
+           or else Settings.Local_Value_Size > Settings.Value_Size
+           or else Settings.Local_Rotary > Settings.Local_Head_Size
+           or else Settings.Local_Rotary mod 2 /= 0
+         then
+            Status := E.Make (E.Arch_Invalid_Dimensions);
+            E.Add_Integer
+              (Status, "head_size_swa", Long_Long_Integer (Settings.Local_Head_Size));
+            E.Add_Integer
+              (Status, "head_size", Long_Long_Integer (Settings.Head_Size));
+            return;
          end if;
       end;
    end if;

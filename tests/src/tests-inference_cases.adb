@@ -15287,6 +15287,30 @@ package body Tests.Inference_Cases is
                  & Model_Runner.Numerics.Wide_Real'Image (Slid.Local_Base));
       end;
 
+      --  Gemma4's windowed layers read their own widths, its global ones
+      --  the model's, and its shared layers the last windowed or global
+      --  layer before them that keeps a cache.
+      declare
+         Shaped : L.Configuration;
+      begin
+         Shaped.Kind := L.Gemma4;
+         Shaped.Layers := 6;
+         Shaped.Head_Size := 512;
+         Shaped.Value_Size := 512;
+         Shaped.Rotary := 512;
+         Shaped.Local_Head_Size := 256;
+         Shaped.Local_Value_Size := 256;
+         Shaped.Local_Rotary := 128;
+         Shaped.Shared_KV_From := 4;
+         Shaped.Window_Layers := [0 | 1 | 2 | 4 => True, others => False];
+         Assert (L.Head_Of (Shaped, 0) = 256 and then L.Head_Of (Shaped, 3) = 512
+                 and then L.Value_Of (Shaped, 1) = 256 and then L.Value_Of (Shaped, 5) = 512
+                 and then L.Rotary_Of (Shaped, 2) = 128 and then L.Rotary_Of (Shaped, 3) = 512
+                 and then L.Cache_Layer (Shaped, 3) = 3 and then L.Cache_Layer (Shaped, 4) = 2
+                 and then L.Cache_Layer (Shaped, 5) = 3,
+                 "a gemma4 layer's widths or the cache it reads were not its own");
+      end;
+
       --  OLMo-3 windows the layers its list marks, and not by its period.
       declare
          Slid : constant L.Configuration :=

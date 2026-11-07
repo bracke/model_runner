@@ -1170,6 +1170,20 @@ package body Tests.Template_Cases is
       --  And each name the loops bind is given back as each ends: an
       --  inner loop by the outer's name left the outer's at the inner's
       --  first, and an inner name stayed bound after its loop.
+      --  An inner range from the outer loop's place to a length, as
+      --  Gemma4's template counts the turns after the one it is at.
+      Same ("{% for i in range(2) %}{% for j in range(loop.index0 + 1, 3) %}{{ i }}{{ j }} {% endfor %}{% endfor %}",
+            "01 02 12 ", "a range from the outer loop's place was refused or miscounted");
+      Same ("{% set xs = [1, 2, 3] %}{% for j in range(1, xs | length) %}{{ j }}{% endfor %}",
+            "12", "a range to a filtered length was refused or miscounted");
+      --  And inside a loop over the turns, counting the turns after the
+      --  one it is at, as Gemma4's template scans ahead.
+      Same ("{% set lm = messages %}{% for message in lm %}{% for j in range(loop.index0 + 1, lm | length) %}"
+            & "{{ j }}{% endfor %};{% endfor %}",
+            "12;2;;", "a range inside a loop over the turns was refused or miscounted");
+      Same ("{% for message in messages %}{% set c %}x{% endset %}{% for j in range(loop.index0 + 1, 3) %}"
+            & "{{ j }}{% endfor %};{% endfor %}",
+            "12;2;;", "a range after a set block in a loop over the turns was refused or miscounted");
       Same ("{% for i in range(2) %}{% for i in range(3) %}{% endfor %}{{ i }}{% endfor %}",
             "01", "an inner loop by the same name left the outer's name at its own first");
       Same ("{% for i in range(2) %}{% for j in range(3) %}{% endfor %}{{ j is defined }}{% endfor %}",

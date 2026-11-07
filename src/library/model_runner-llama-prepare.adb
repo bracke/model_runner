@@ -718,6 +718,30 @@ begin
          --  keys and values and has projections of its own.
          Is_Linear : constant Boolean :=
            not Beyond and then Linear (Item.Settings, Index);
+
+         --  The layer's own head widths, which are the model's but on
+         --  Gemma4's windowed layers (Head_Of): what its queries, keys,
+         --  values and the output projection's input are shaped by.
+         Head      : constant Element_Count :=
+           Element_Count (if Beyond then Item.Settings.Head_Size
+                          else Head_Of (Item.Settings, Index));
+         Own_Wide  : constant Element_Count :=
+           (if Item.Settings.Kind = Gemma4
+            then Element_Count (Item.Settings.Heads) * Head else Wide);
+         Own_KV    : constant Element_Count :=
+           (if Item.Settings.Kind = Gemma4
+            then Element_Count (Item.Settings.KV_Heads) * Head else KV);
+         Own_Blend : constant Element_Count :=
+           (if Item.Settings.Kind = Gemma4
+            then Element_Count (Item.Settings.Heads)
+                 * Element_Count (Value_Of (Item.Settings, Index))
+            else Blend);
+
+         --  Whether the layer keeps keys and values of its own, which a
+         --  layer of Gemma4's past Shared_KV_From does not: it reads an
+         --  earlier layer's, and carries no key projection.
+         Own_Cache : constant Boolean :=
+           Beyond or else Cache_Layer (Item.Settings, Index) = Index;
       begin
          --  The normalization a block is given on the way in. Every
          --  architecture here has one except Bert, which normalizes
@@ -891,7 +915,7 @@ begin
          --  gemma2 file without them is not one this build can
          --  compute, and taking them if present would read such a
          --  file as a model with two normalizations missing.
-         if Item.Settings.Kind in Gemma2 | Gemma3 | Olmo2 | Glm4 | Lfm3 then
+         if Item.Settings.Kind in Gemma2 | Gemma3 | Gemma4 | Olmo2 | Glm4 | Lfm3 then
             Resolve_Norm
               (Item, Source,
                Layer_Key (Index, "post_attention_norm.weight"), Width,
@@ -1650,24 +1674,40 @@ begin
             --  gate beside each head, as the hybrids' does.
             Resolve
               (Item, Source, Layer_Key (Index, "attn_q.weight"),
-               (if Hybrid (Item.Settings.Kind) then 2 * Wide else Wide),
+               (if Hybrid (Item.Settings.Kind) then 2 * Wide else Own_Wide),
                Width, Current.Query, Status, Repack);
             if E.Is_Error (Status) then
                return;
             end if;
 
-            Resolve
-              (Item, Source, Layer_Key (Index, "attn_k.weight"),
-               KV, Width, Current.Key, Status, Repack);
-            if E.Is_Error (Status) then
-               return;
+            --  Gemma4's layers that read an earlier layer's cache carry
+            --  no key or value projection, and any of its layers may
+            --  carry no value projection: its values are then its keys
+            --  as projected, before their normalization and rotation.
+            if Own_Cache then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_k.weight"),
+                  Own_KV, Width, Current.Key, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
 
-            Resolve
-              (Item, Source, Layer_Key (Index, "attn_v.weight"),
-               KV_Out, Width, Current.Value, Status, Repack);
-            if E.Is_Error (Status) then
-               return;
+            if Own_Cache
+              and then (Item.Settings.Kind /= Gemma4
+                        or else Containers.Find_Tensor
+                                  (Source, Layer_Key (Index, "attn_v.weight")) /= 0)
+            then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "attn_v.weight"),
+                  (if Item.Settings.Kind = Gemma4
+                   then Element_Count (Item.Settings.KV_Heads)
+                        * Element_Count (Value_Of (Item.Settings, Index))
+                   else KV_Out),
+                  Width, Current.Value, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
          end if;
 
@@ -1827,25 +1867,26 @@ begin
          --  the rotation, with one gain per element of a head shared
          --  across the heads. Required for the architectures that have
          --  it, for the same reason the biases are.
-         if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Mellum
+         if Item.Settings.Kind in Qwen3 | Qwen3_MoE | Qwen3_VL | Gemma3 | Gemma4 | Mellum
            or else ((Hybrid (Item.Settings.Kind)
                      or else Is_Lfm3 (Item.Settings.Kind))
                     and then not Is_Linear)
          then
             Resolve_Norm
               (Item, Source, Layer_Key (Index, "attn_q_norm.weight"),
-               Element_Count (Item.Settings.Head_Size),
-               Current.Query_Norm, Status);
+               Head, Current.Query_Norm, Status);
             if E.Is_Error (Status) then
                return;
             end if;
 
-            Resolve_Norm
-              (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
-               Element_Count (Item.Settings.Head_Size),
-               Current.Key_Norm, Status);
-            if E.Is_Error (Status) then
-               return;
+            --  None for a layer that reads another's keys.
+            if Own_Cache then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "attn_k_norm.weight"),
+                  Head, Current.Key_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
             end if;
          end if;
 
@@ -1886,7 +1927,7 @@ begin
          if not Is_Linear then
             Resolve
               (Item, Source, Layer_Key (Index, "attn_output.weight"),
-               Width, Blend, Current.Attention_Out, Status, Repack);
+               Width, Own_Blend, Current.Attention_Out, Status, Repack);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -2203,6 +2244,48 @@ begin
                return;
             end if;
          end if;
+
+         --  Gemma4's scale on the residual at the layer's end, where the
+         --  file carries it, and its embedding a layer's three: the gate
+         --  down to Layer_Input, the projection back up and the
+         --  normalization after it.
+         if Item.Settings.Kind = Gemma4 and then not Beyond then
+            if Containers.Find_Tensor
+                 (Source, Layer_Key (Index, "layer_output_scale.weight")) /= 0
+            then
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "layer_output_scale.weight"),
+                  1, Current.Output_Scale, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+
+            if Item.Settings.Layer_Input > 0 then
+               Resolve
+                 (Item, Source, Layer_Key (Index, "inp_gate.weight"),
+                  Element_Count (Item.Settings.Layer_Input), Width,
+                  Current.Input_Gate, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve
+                 (Item, Source, Layer_Key (Index, "proj.weight"),
+                  Width, Element_Count (Item.Settings.Layer_Input),
+                  Current.Input_Proj, Status, Repack);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+
+               Resolve_Norm
+                 (Item, Source, Layer_Key (Index, "post_norm.weight"),
+                  Width, Current.Input_Post_Norm, Status);
+               if E.Is_Error (Status) then
+                  return;
+               end if;
+            end if;
+         end if;
       end Resolve_Block;
    begin
       Resolve
@@ -2214,6 +2297,33 @@ begin
       --  position, as wide as the embedding, and read exactly once a
       --  token -- there is no rotation anywhere in such a model, so this
       --  is the whole of its position handling.
+      --  Gemma4's embedding a layer: a row a token holding every
+      --  layer's input at once, the projection of the token's own row
+      --  added to it, and the normalization of each layer's slice.
+      if E.Is_Ok (Status) and then Item.Settings.Layer_Input > 0 then
+         declare
+            All_Layers : constant Element_Count :=
+              Element_Count (Item.Settings.Layer_Input * Item.Settings.Layers);
+         begin
+            --  Read a row a token, as the embedding is, and never repacked:
+            --  it is the largest tensor of the file.
+            Resolve
+              (Item, Source, "per_layer_token_embd.weight", Vocab, All_Layers,
+               Item.Layer_Embeddings, Status);
+            if E.Is_Ok (Status) then
+               Resolve
+                 (Item, Source, "per_layer_model_proj.weight", All_Layers, Width,
+                  Item.Layer_Projection, Status, Repack);
+            end if;
+            if E.Is_Ok (Status) then
+               Resolve_Norm
+                 (Item, Source, "per_layer_proj_norm.weight",
+                  Element_Count (Item.Settings.Layer_Input),
+                  Item.Layer_Projection_Norm, Status);
+            end if;
+         end;
+      end if;
+
       if E.Is_Ok (Status) and then Item.Settings.Kind in GPT2 | Bert then
          Resolve
            (Item, Source, "position_embd.weight",

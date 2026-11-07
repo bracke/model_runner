@@ -195,7 +195,8 @@ package Model_Runner.Llama is
       Falcon, Phi2, GPT2, Bert, Nomic_Bert, Jina_Bert_V2,
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
-      Mamba2, Rwkv6, Jamba, Deepseek2, Mellum, Qwen3_VL, Lfm3, Qwen2_VL);
+      Mamba2, Rwkv6, Jamba, Deepseek2, Mellum, Qwen3_VL, Lfm3, Qwen2_VL,
+      Gemma4);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -349,7 +350,8 @@ package Model_Runner.Llama is
          when Mellum     => "mellum",
          when Qwen3_VL   => "qwen3vl",
          when Lfm3       => "lfm3",
-         when Qwen2_VL   => "qwen2vl");
+         when Qwen2_VL   => "qwen2vl",
+         when Gemma4     => "gemma4");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -718,7 +720,72 @@ package Model_Runner.Llama is
       --  where it attends. Read, as Jamba's, from the per-layer key-value
       --  head count; all false for every other architecture.
       Conv_Layer      : Layer_Flags := [others => False];
+
+      --  Gemma4's windowed layers' own head widths and rotated width,
+      --  where they differ from the layers that see everything: its
+      --  sliding layers' heads are half as wide as its global ones'. The
+      --  cache keeps every layer's rows at the wider width, Head_Size
+      --  and Value_Size above, and a narrower layer uses the front of
+      --  each. Nought where every layer is one width, which is every
+      --  architecture but Gemma4.
+      Local_Head_Size  : Natural := 0;
+      Local_Value_Size : Natural := 0;
+      Local_Rotary     : Natural := 0;
+
+      --  The first layer that keeps no keys and values of its own and
+      --  attends over an earlier layer's instead: Gemma4's small models
+      --  share their last layers' caches, a windowed layer reading the
+      --  last windowed layer's before it and a global one the last global
+      --  one's. Nought where every layer keeps its own.
+      Shared_KV_From   : Natural := 0;
+
+      --  The width of the embedding Gemma4's small models give each layer
+      --  of its own beside the residual -- one row a token for all the
+      --  layers, gated into each layer's output. Nought where there is
+      --  none.
+      Layer_Input      : Natural := 0;
    end record;
+
+   --  A layer's key width, as the layer reads it: the windowed layers'
+   --  own where the architecture states them apart (Local_Head_Size),
+   --  the model's otherwise.
+   --
+   --  @param Settings Configuration to read.
+   --  @param Index Layer to ask about.
+   --  @return The width.
+   function Head_Of (Settings : Configuration; Index : Natural) return Natural
+   is (if Settings.Local_Head_Size > 0 and then Settings.Window_Layers (Index)
+       then Settings.Local_Head_Size else Settings.Head_Size);
+
+   --  A layer's value width, as Head_Of says its key width.
+   --
+   --  @param Settings Configuration to read.
+   --  @param Index Layer to ask about.
+   --  @return The width.
+   function Value_Of (Settings : Configuration; Index : Natural) return Natural
+   is (if Settings.Local_Value_Size > 0 and then Settings.Window_Layers (Index)
+       then Settings.Local_Value_Size else Settings.Value_Size);
+
+   --  A layer's rotated width, as Head_Of says its key width.
+   --
+   --  @param Settings Configuration to read.
+   --  @param Index Layer to ask about.
+   --  @return The width.
+   function Rotary_Of (Settings : Configuration; Index : Natural) return Natural
+   is (if Settings.Local_Rotary > 0 and then Settings.Window_Layers (Index)
+       then Settings.Local_Rotary else Settings.Rotary);
+
+   --  The layer whose keys and values a layer attends over: its own, or
+   --  for a layer past Shared_KV_From the last layer before that of its
+   --  own kind -- the windowed one two before, the global one before.
+   --
+   --  @param Settings Configuration to read.
+   --  @param Index Layer to ask about.
+   --  @return The layer whose cache it reads.
+   function Cache_Layer (Settings : Configuration; Index : Natural) return Natural
+   is (if Settings.Shared_KV_From = 0 or else Index < Settings.Shared_KV_From then Index
+       elsif Settings.Window_Layers (Index) then Settings.Shared_KV_From - 2
+       else Settings.Shared_KV_From - 1);
 
    --  What the attention scores are scaled by before the softmax: one over
    --  the square root of the head's width, for every model but one.
@@ -3044,6 +3111,19 @@ private
       Next_ENorm : Model_Runner.Tensors.Real_Array_Access;
       Next_HNorm : Model_Runner.Tensors.Real_Array_Access;
       Next_Head_Norm : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Gemma4's per-layer input: the gate that takes the layer's output
+      --  down to Layer_Input numbers, which the layer's own row of the
+      --  embedding a layer then scales, the projection back up and the
+      --  normalization after it, added to the residual. Absent where the
+      --  model has no embedding a layer.
+      Input_Gate      : aliased Model_Runner.Tensors.View;
+      Input_Proj      : aliased Model_Runner.Tensors.View;
+      Input_Post_Norm : Model_Runner.Tensors.Real_Array_Access;
+
+      --  The one number Gemma4 multiplies the whole residual by at the
+      --  layer's end, where the file carries it; null otherwise.
+      Output_Scale    : Model_Runner.Tensors.Real_Array_Access;
    end record;
 
    type Layer_Array is array (Natural range <>) of Layer;
@@ -3187,6 +3267,15 @@ private
       Embedding_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
       Output      : aliased Model_Runner.Tensors.View;
       Output_Norm : Model_Runner.Tensors.Real_Array_Access;
+
+      --  Gemma4's embedding a layer: a row a token of Layer_Input numbers
+      --  for every layer at once, and the projection of the token's own
+      --  embedding row that is added to it, normalized a layer's slice at
+      --  a time by Layer_Projection_Norm. Absent where Layer_Input is
+      --  nought.
+      Layer_Embeddings      : aliased Model_Runner.Tensors.View;
+      Layer_Projection      : aliased Model_Runner.Tensors.View;
+      Layer_Projection_Norm : Model_Runner.Tensors.Real_Array_Access;
 
       --  And the bias for it, for the same reason and the same architecture.
       Output_Norm_Bias : Model_Runner.Tensors.Real_Array_Access;
@@ -3601,6 +3690,13 @@ private
       --  variant of jina-bert-v2, whose third normalization adds it once
       --  more. Allocated for a model carrying that normalization alone.
       Kept_Input : Model_Runner.Tensors.Real_Array_Access := null;
+
+      --  Gemma4's embedding a layer for the position being evaluated --
+      --  every layer's Layer_Input numbers, end to end -- the room it is
+      --  worked out in, and a layer's gate. Null for a model without one.
+      Layer_Inputs : Model_Runner.Tensors.Real_Array_Access := null;
+      Layer_Room   : Model_Runner.Tensors.Real_Array_Access := null;
+      Layer_Gate   : Model_Runner.Tensors.Real_Array_Access := null;
       Expert_Row : Model_Runner.Tensors.Real_Array_Access := null;
 
       --  Room for every chosen expert's two arms at once.

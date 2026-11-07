@@ -564,6 +564,13 @@ private
       --  rather than the pieces the table can build.
       Whole_First   : Boolean := False;
 
+      --  Gemma4's road: a byte-pair vocabulary written in the text's own
+      --  characters rather than in a stand-in a byte, its spaces as the
+      --  marker SentencePiece writes, and cut only where a run of line
+      --  breaks begins or ends. A symbol the vocabulary does not carry
+      --  falls back to its bytes as <0xNN> tokens.
+      Raw_Pieces    : Boolean := False;
+
       --  What the unigram road needs beyond the pieces and their scores:
       --  the longest piece in bytes, which bounds how far ahead the best
       --  path has to look, and what an unseen character costs, which is the

@@ -844,6 +844,12 @@ package body Model_Runner.CLI.Execute.Support is
 
          if Named_Device then
             null;
+
+         --  Gemma4 runs on the processor until its narrower windowed
+         --  heads, its shared caches and its embedding a layer have paths
+         --  of their own on the device.
+         elsif Seen.Measured and then L."=" (Seen.Settings.Kind, L.Gemma4) then
+            Model_Runner.Backend.Device.Close;
          elsif Takes then
             Result.Backend := Model_Runner.Backend.Backend_Device;
          else

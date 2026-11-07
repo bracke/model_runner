@@ -99,6 +99,7 @@ package body Model_Runner.Tokenizer is
       --  loaded again in its place kept whole-word lookup, and the flags,
       --  of the one before.
       Item.Whole_First := False;
+      Item.Raw_Pieces := False;
       Item.Add_Beginning := True;
       Item.Add_End := False;
       Item.Pair := (others => <>);
@@ -425,6 +426,12 @@ package body Model_Runner.Tokenizer is
                Item.Strip_Accents :=
                  (if E.Is_Ok (Local) then Strips else Item.Lowercase);
             end;
+         elsif Name = "gemma4" then
+            --  A byte-pair vocabulary of the text's own characters,
+            --  which llama.cpp begins every text with its marker for.
+            Item.Model := Kind_BPE;
+            Item.Raw_Pieces := True;
+            Rule_Begins := True;
          elsif Name = "t5" then
             Item.Model := Kind_Unigram;
          elsif Name = "rwkv" then
@@ -1105,6 +1112,10 @@ package body Model_Runner.Tokenizer is
                Keep_Marked ("<|end|>");
             end if;
             Keep_Marked ("<end_of_turn>");
+            --  Gemma4's end of a turn, and the opening of a tool's answer,
+            --  which the model writes after its call where it means to stop.
+            Keep_Marked ("<turn|>");
+            Keep_Marked ("<|tool_response>");
             Keep_Marked ("<|endoftext|>");
             Keep_Marked ("<|eom_id|>");
             Keep_Marked ("<|end_of_text|>");
@@ -2683,32 +2694,55 @@ package body Model_Runner.Tokenizer is
                   Free (Next);
                   Free (Heap);
                end Give_Back;
+               --  One symbol more, linked after the last.
+               procedure Add_Symbol (One : String) is
+               begin
+                  Count := Count + 1;
+                  Starts (Count) := Filled + 1;
+                  Mapped (Filled + 1 .. Filled + One'Length) := One;
+                  Filled := Filled + One'Length;
+                  Ends (Count) := Filled;
+                  Prev (Count) := Count - 1;
+                  Next (Count) := 0;
+                  if Count > 1 then
+                     Next (Count - 1) := Count;
+                  end if;
+               end Add_Symbol;
             begin
-               for Letter of Piece loop
+               --  A symbol a character as the text writes it, where the
+               --  vocabulary is written so (Raw_Pieces); a symbol a byte,
+               --  as its stand-in, everywhere else.
+               if Item.Raw_Pieces then
                   declare
-                     One : constant String :=
-                       Model_Runner.UTF8.Encode
-                         (BPE.Byte_Character (Character'Pos (Letter)));
+                     At_Byte     : Natural := Piece'First;
+                     Code, Width : Natural;
                   begin
-                     Count := Count + 1;
-                     Starts (Count) := Filled + 1;
-                     Mapped (Filled + 1 .. Filled + One'Length) := One;
-                     Filled := Filled + One'Length;
-                     Ends (Count) := Filled;
-                     Prev (Count) := Count - 1;
-                     Next (Count) := 0;
-                     if Count > 1 then
-                        Next (Count - 1) := Count;
-                     end if;
+                     while At_Byte <= Piece'Last loop
+                        Model_Runner.UTF8.Decode_First
+                          (Piece (At_Byte .. Piece'Last), Code, Width);
+                        Width := Natural'Max (1, Width);
+                        Add_Symbol (Piece (At_Byte .. At_Byte + Width - 1));
+                        At_Byte := At_Byte + Width;
+                     end loop;
                   end;
-               end loop;
+               else
+                  for Letter of Piece loop
+                     Add_Symbol
+                       (Model_Runner.UTF8.Encode
+                          (BPE.Byte_Character (Character'Pos (Letter))));
+                  end loop;
+               end if;
 
                --  A vocabulary that takes a piece whole does so here, before
                --  any merge: the piece as one symbol, if the file names a
                --  token for exactly that. A piece the merge table cannot
                --  build is then the token the file holds for it rather than
-               --  what the table can build out of it.
-               if Item.Whole_First and then Count > 1
+               --  what the table can build out of it. Gemma4's takes a run
+               --  of line breaks whole so, as llama.cpp reads it.
+               if (Item.Whole_First
+                   or else (Item.Raw_Pieces
+                            and then (for all Letter of Piece => Letter = ASCII.LF)))
+                 and then Count > 1
                  and then Find (Item, Mapped (1 .. Filled)) /= No_Token
                then
                   Ends (1) := Filled;
@@ -2785,6 +2819,24 @@ package body Model_Runner.Tokenizer is
                      begin
                         if Token /= No_Token then
                            Put (Token);
+
+                        --  Gemma4's fallback: each byte as the <0xNN> token
+                        --  the vocabulary carries for it, one not carried
+                        --  left out, as llama.cpp does.
+                        elsif Item.Raw_Pieces then
+                           for Byte of Symbol loop
+                              declare
+                                 Hex  : constant String := "0123456789ABCDEF";
+                                 Code : constant Natural := Character'Pos (Byte);
+                                 Each : constant Token_Id :=
+                                   Find (Item, "<0x" & Hex (Hex'First + Code / 16)
+                                               & Hex (Hex'First + Code mod 16) & ">");
+                              begin
+                                 if Each /= No_Token then
+                                    Put (Each);
+                                 end if;
+                              end;
+                           end loop;
                         elsif Each_Carried then
                            declare
                               At_Byte : Natural := Symbol'First;
@@ -2824,6 +2876,44 @@ package body Model_Runner.Tokenizer is
             Ends  : Cutting.Piece_Ends_Access;
             Count : Natural;
          begin
+            --  Gemma4's road: its spaces written as the marker, and the
+            --  text cut where a run of line breaks begins and ends.
+            if Item.Raw_Pieces then
+               declare
+                  type Text_Room is access String;
+                  procedure Free is new Ada.Unchecked_Deallocation (String, Text_Room);
+                  Escaped : Text_Room := new String (1 .. Text'Length * 3);
+                  Length  : Natural := 0;
+                  First   : Positive := 1;
+               begin
+                  for Letter of Text loop
+                     if Letter = ' ' then
+                        Escaped (Length + 1 .. Length + 3) := Space_Marker;
+                        Length := Length + 3;
+                     else
+                        Length := Length + 1;
+                        Escaped (Length) := Letter;
+                     end if;
+                  end loop;
+                  for At_Char in 1 .. Length loop
+                     if At_Char = Length
+                       or else (Escaped (At_Char) = ASCII.LF) /= (Escaped (At_Char + 1) = ASCII.LF)
+                     then
+                        Emit (Escaped (First .. At_Char));
+                        First := At_Char + 1;
+                        exit when Refused;
+                     end if;
+                  end loop;
+                  Free (Escaped);
+               exception
+                  when others =>
+                     Free (Escaped);
+                     raise;
+               end;
+               Last := (if Refused then 0 else Produced);
+               return;
+            end if;
+
             Cutting.Cut (Text, Item.Cutting, Ends, Count);
             --  A piece of any length: its merge is a heap's logarithm a
             --  merge and its room on the heap, where a piece past 65,536
@@ -3630,7 +3720,7 @@ package body Model_Runner.Tokenizer is
          return Raw;
       end if;
 
-      if Item.Model = Kind_BPE then
+      if Item.Model = Kind_BPE and then not Item.Raw_Pieces then
          declare
             Result : String (1 .. Raw'Length);
             Filled : Natural := 0;

@@ -209,7 +209,9 @@ package Model_Runner.Templates is
    Max_Terms : constant := 32;
 
    --  Largest number of distinct names a template may read or assign.
-   Max_Variables : constant := 64;
+   --  Sixty-four was too few for Gemma4's, whose last loops were refused
+   --  for want of a name to count with.
+   Max_Variables : constant := 256;
 
    --  Largest total text a template's variables may hold during one render:
    --  the prompt's own bound, since what they hold is mostly the messages
