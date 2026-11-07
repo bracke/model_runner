@@ -97,6 +97,9 @@ package body Agent_Trial is
      "In src/calc.adb make Add return Integer'Last when A + B would overflow above it and"
      & " Integer'First when it would overflow below, instead of raising. Change only Add.";
 
+   --  The tasks' places in Tasks, in the order a trial runs them.
+   type Task_Order is array (1 .. 10) of Positive;
+
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
@@ -774,6 +777,51 @@ package body Agent_Trial is
       --  Whether a session could not start: the runs after it would end the
       --  same, and are not run.
       Halted   : Boolean := False;
+
+      --  Where Name stands among those asked for, a comma apart: 1 for the
+      --  first; 0 where it is not named.
+      function Place (Name : String) return Natural is
+         Start : Positive := Only'First;
+         Count : Natural := 0;
+      begin
+         for At_Char in Only'Range loop
+            if Only (At_Char) = ',' or else At_Char = Only'Last then
+               Count := Count + 1;
+               if Ada.Strings.Fixed.Trim
+                    (Only (Start .. (if Only (At_Char) = ',' then At_Char - 1 else At_Char)), Ada.Strings.Both)
+                 = Name
+               then
+                  return Count;
+               end if;
+               Start := At_Char + 1;
+            end if;
+         end loop;
+         return 0;
+      end Place;
+
+      --  The tasks in the order they are asked for -- styled,edit runs styled
+      --  first -- and, none named, as they are listed.
+      function Ordered return Task_Order is
+         Result : Task_Order := [others => 1];
+         Last   : Natural := 0;
+      begin
+         for Which in Tasks'Range loop
+            declare
+               Here : constant Natural := Place (To_String (Tasks (Which).Name));
+               At_It : Natural := Last;
+            begin
+               while At_It >= 1 and then Place (To_String (Tasks (Result (At_It)).Name)) > Here loop
+                  Result (At_It + 1) := Result (At_It);
+                  At_It := At_It - 1;
+               end loop;
+               Result (At_It + 1) := Which;
+               Last := Last + 1;
+            end;
+         end loop;
+         return Result;
+      end Ordered;
+
+      Order : constant Task_Order := Ordered;
    begin
       Clean := True;
       --  A name no task has runs nothing: said, not an empty trial.
@@ -798,10 +846,11 @@ package body Agent_Trial is
       Inference_Mode := To_Unbounded_String (Inference);
       for Round in 1 .. Repeats loop
          exit when Halted;
-         for Which in Tasks'Range loop
+         for Turn in Tasks'Range loop
             exit when Halted;
             declare
-               One : Trial_Task renames Tasks (Which);
+               Which : constant Positive := Order (Turn);
+               One   : Trial_Task renames Tasks (Which);
             begin
                if Chosen (Only, To_String (One.Name))
                  and then (Only /= ""

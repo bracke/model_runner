@@ -2806,6 +2806,82 @@ package body Model_Runner.Framework.Work is
             return (if At_Line = Number and then Start <= Whole'Last then Whole (Start .. Whole'Last) else "");
          end;
       end Line_Of;
+
+      --  What a guard X > T'Last + Y or X < T'First + Y in Line asks, said
+      --  where it holds one: of the difference X - Y, not the sum. qwen3-8b
+      --  guarded A + B for a negative B with A > Integer'Last + B, saw in
+      --  its own thinking that Add (Integer'Last, Integer'First) took it,
+      --  and gave the work up as done, shown only the test that failed.
+      function Difference_Guard (Line : String) return String is
+         Lower : constant String := Ada.Characters.Handling.To_Lower (Line);
+         Code  : constant Natural := Ada.Strings.Fixed.Index (Lower, "--");
+         Upto  : constant Natural := (if Code = 0 then Lower'Last else Code - 1);
+
+         function Spelled (From, To : Positive) return String
+         is (Line (Line'First + (From - Lower'First) .. Line'First + (To - Lower'First)));
+
+         function Before_Spaces (Index : Natural) return Natural is
+            Back : Natural := Index;
+         begin
+            while Back >= Lower'First and then Lower (Back) = ' ' loop
+               Back := Back - 1;
+            end loop;
+            return Back;
+         end Before_Spaces;
+
+         function Name_From (Index : Natural) return Positive is
+            Back : Natural := Index;
+         begin
+            while Back >= Lower'First and then Name_Char (Lower (Back)) and then Lower (Back) /= '-' loop
+               Back := Back - 1;
+            end loop;
+            return Back + 1;
+         end Name_From;
+      begin
+         for Bound in 1 .. 2 loop
+            declare
+               Mark  : constant String := (if Bound = 1 then "'last + " else "'first + ");
+               At_It : constant Natural := Ada.Strings.Fixed.Index (Lower (Lower'First .. Upto), Mark);
+            begin
+               if At_It > 0 then
+                  declare
+                     Y_First   : constant Positive := At_It + Mark'Length;
+                     Y_Last    : Natural := Y_First - 1;
+                     Type_From : constant Positive := Name_From (At_It - 1);
+                     Compared  : Natural := Before_Spaces (Type_From - 1);
+                     X_Last    : Natural;
+                     X_From    : Positive;
+                  begin
+                     while Y_Last < Upto and then Name_Char (Lower (Y_Last + 1)) and then Lower (Y_Last + 1) /= '-' loop
+                        Y_Last := Y_Last + 1;
+                     end loop;
+                     if Compared >= Lower'First and then Lower (Compared) = '=' then
+                        Compared := Compared - 1;
+                     end if;
+                     if Y_Last >= Y_First and then Type_From < At_It and then Compared >= Lower'First
+                       and then Lower (Compared) = (if Bound = 1 then '>' else '<')
+                     then
+                        X_Last := Before_Spaces (Compared - 1);
+                        X_From := Name_From (X_Last);
+                        if X_From <= X_Last then
+                           declare
+                              X      : constant String := Spelled (X_From, X_Last);
+                              Y      : constant String := Spelled (Y_First, Y_Last);
+                              Limit  : constant String := Spelled (Type_From, At_It + Mark'Length - 4);
+                              Side   : constant String := (if Bound = 1 then " > " else " < ");
+                           begin
+                              return " -- " & X & Side & Limit & " + " & Y & " asks whether " & X & " - " & Y
+                                & " is " & (if Bound = 1 then "above " else "below ") & Limit & "; whether "
+                                & X & " + " & Y & " is, is " & X & Side & Limit & " - " & Y;
+                           end;
+                        end if;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+         return "";
+      end Difference_Guard;
    begin
       while Index <= Text'Last and then Given < 3 loop
          if Text (Index) = ':' and then Index > Text'First and then Name_Char (Text (Index - 1))
@@ -3084,6 +3160,54 @@ package body Model_Runner.Framework.Work is
                              & (if Under = Null_Unbounded_String then ""
                                 else ", under: " & To_String (Under))
                              & " -- read it: what it calls there, and what it wants back, is what fails");
+                     --  A test of a type's limits failing: the guards in
+                     --  the project's Ada sources that ask of a difference
+                     --  where a sum is meant, quoted.
+                     if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (To_String (Under)), "'last") > 0
+                       or else Ada.Strings.Fixed.Index
+                                 (Ada.Characters.Handling.To_Lower (To_String (Under)), "'first") > 0
+                     then
+                        for Path of Known loop
+                           exit when Given >= 6;
+                           if Path /= To_String (Found) and then Path'Length > 4
+                             and then Ada.Characters.Handling.To_Lower (Path (Path'Last - 3 .. Path'Last))
+                                        in ".adb" | ".ads"
+                           then
+                              declare
+                                 Held  : Unbounded_String;
+                                 Got   : E.Error_Info;
+                                 At_Line : Positive := 1;
+                              begin
+                                 Files.Read_Text (Hostkit.Fs.Join (Project, Path), Held, Got);
+                                 if not E.Is_Error (Got) then
+                                    declare
+                                       Whole : constant String := To_String (Held);
+                                       Start : Positive := Whole'First;
+                                    begin
+                                       for Position in Whole'First .. Whole'Last + 1 loop
+                                          if Position > Whole'Last or else Whole (Position) = ASCII.LF then
+                                             declare
+                                                Line : constant String :=
+                                                  Ada.Strings.Fixed.Trim
+                                                    (Whole (Start .. Position - 1), Ada.Strings.Both);
+                                                Says : constant String := Difference_Guard (Line);
+                                             begin
+                                                if Says /= "" and then Given < 6 then
+                                                   Append (Said, ASCII.LF & Path & " line" & Natural'Image (At_Line)
+                                                           & " is: " & Line & Says);
+                                                   Given := Given + 1;
+                                                end if;
+                                             end;
+                                             At_Line := At_Line + 1;
+                                             Start := Position + 1;
+                                          end if;
+                                       end loop;
+                                    end;
+                                 end if;
+                              end;
+                           end if;
+                        end loop;
+                     end if;
                   end if;
                end if;
             end;

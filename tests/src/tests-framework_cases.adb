@@ -20546,7 +20546,12 @@ package body Tests.Framework_Cases is
       begin
          Assert (Raised = LF & "src/test_add.adb line 5 raises it, under: if Calc.Add (Integer'Last, 1) /="
                  & " Integer'Last or else Calc.Add (2, 3) /= 5 then -- read it: what it calls there, and what"
-                 & " it wants back, is what fails",
+                 & " it wants back, is what fails"
+                 --  And, the test being of Integer's limits, a guard that
+                 --  asks of a difference where a sum is meant.
+                 & LF & "src/calc.adb line 12 is: elsif (A < 0 and then B < 0) and then (A < Integer'First + B)"
+                 & " then -- A < Integer'First + B asks whether A - B is below Integer'First; whether A + B is, is"
+                 & " A < Integer'First - B",
                  "an exception's message was not said with where it is raised: " & Raised);
       end;
       Remove_Tree (Root);
