@@ -206,7 +206,7 @@ names ask for the same one. The grouping is the other runtime's own.
 | `viking` | Implemented; `bloom`'s cut and then digits one at a time |
 | `superbpe` | Implemented; nothing is cut but the digits, which are grouped in threes from the right by an expression that matches nothing and draws boundaries, so the merges may join words across spaces, which is what the vocabulary is for |
 | `chameleon` | Implemented; its sentinel and image tokens, a tab, a line feed, four spaces or two, digits one at a time, and punctuation one character at a time, each cut out before the original rule runs |
-| `gemma4`, `sarvam-moe`, `whitespace`, `granite-embed-multi-311m` | Rejected: `MR-TOK-0002`, on purpose. These are not cutting rules but another road -- pieces looked up as the bytes they are rather than through the stand-in alphabet, spaces written as the word marker -- which the byte-pair road here does not take |
+| `sarvam-moe`, `whitespace`, `granite-embed-multi-311m` | Rejected: `MR-TOK-0002`, on purpose. These are not cutting rules but another road -- pieces looked up as the bytes they are rather than through the stand-in alphabet, spaces written as the word marker -- which the byte-pair road here does not take |
 | Everything else | Rejected: `MR-TOK-0002` |
 
 ## Tokenizer capabilities
