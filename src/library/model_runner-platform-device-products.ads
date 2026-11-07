@@ -1291,6 +1291,8 @@ package Model_Runner.Platform.Device.Products is
    --  @param Region_At Bytes past At_Byte the stack's own rows begin, where
    --    Stack counts a region it shares -- a gate and up stack uploaded
    --    once, as Add_Gathered_Pair uploads them -- or zero.
+   --  @param Slice_Rows How far apart two experts' slices begin, in rows,
+   --    where it is not Each, as Add_Gathered_Product's; zero for Each.
    procedure Add_Listed_Product
      (Steps       : in out Sequence;
       Base        : System.Address;
