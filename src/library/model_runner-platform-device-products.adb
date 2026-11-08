@@ -367,8 +367,11 @@ package body Model_Runner.Platform.Device.Products is
    --  weights again for every eight vectors.
    Narrow_Run : Boolean := False;
 
-   --  Past this many vectors a batch takes the wider tile.
-   Wider_Least : constant := 128;
+   --  Past this many vectors a batch takes the wider tile. Not from 129:
+   --  a batch of 129 to 192 is a tile of 128 and the rest on the narrow
+   --  tiles (see Tile_Product), where the wider tile's 256 cost a prompt of
+   --  144 what one of 237 costs.
+   Wider_Least : constant := 224;
    Wider_Vectors : constant := 256;
 
    function Widened (Count : Natural) return Boolean
@@ -9274,15 +9277,30 @@ package body Model_Runner.Platform.Device.Products is
       --  of 513 did the work of 768 -- a qwen3.6 layer's projections half
       --  as long again as at 512 -- and a long prompt's last batch of a
       --  few dozen paid a whole wide tile for them.
+      --  And a batch past one tile of 128 by no more than the narrow tiles
+      --  hold the same way: the tile of 128, then the rest on the narrow
+      --  or the mid tile.
       declare
-         Rest : constant Natural :=
-           (if Widened (Count) then Count mod Wider_Vectors else 0);
-         Split : constant Boolean :=
+         Short_Split : constant Boolean :=
            Members = 1
-           and then Rest > 0 and then Rest <= Tile_Vectors
-           and then Count > Wider_Vectors
-           and then Tile_Pipeline (Item, Packing, Rest) /= Null_Handle;
+           and then not Widened (Count)
+           and then Count in Tile_Vectors + 1 .. Tile_Vectors + Mid_Wide_Vectors
+           and then Tile_Pipeline (Item, Packing, Count - Tile_Vectors)
+                      /= Null_Handle;
+         Rest : constant Natural :=
+           (if Widened (Count) then Count mod Wider_Vectors
+            elsif Short_Split then Count - Tile_Vectors
+            else 0);
+         Split : constant Boolean :=
+           Short_Split
+           or else (Members = 1
+                    and then Rest > 0 and then Rest <= Tile_Vectors
+                    and then Count > Wider_Vectors
+                    and then Tile_Pipeline (Item, Packing, Rest) /= Null_Handle);
          Aligned : constant Natural := Count - (if Split then Rest else 0);
+
+         --  The count whose tile takes the aligned part.
+         Lead : constant Natural := (if Short_Split then Tile_Vectors else Count);
 
          --  A 3x3's taps on the first tile take the taps' own height
          --  where its rows are not a whole number of sixty-fours, or are of
@@ -9364,8 +9382,8 @@ package body Model_Runner.Platform.Device.Products is
       begin
          if Split then
             Run_Tiles
-              (Chosen (Tile_Pipeline (Item, Packing, Count)), Aligned, 0,
-               Aligned / Tile_Width (Count));
+              (Chosen (Tile_Pipeline (Item, Packing, Lead)), Aligned, 0,
+               Aligned / Tile_Width (Lead));
             Run_Tiles
               (Chosen (Tile_Pipeline (Item, Packing, Rest)), Rest, Aligned,
                (Rest + Tile_Width (Rest) - 1) / Tile_Width (Rest));

@@ -5875,13 +5875,14 @@ package body Tests.Backend_Cases is
 
    --  A batch of nine to thirty-two takes the narrow tile, one of
    --  thirty-three to sixty-four the narrow tile at sixty-four vectors and
-   --  one of sixty-five to ninety-six at ninety-six, each in its three
+   --  one of sixty-five to ninety-six at ninety-six, and one of 129 to
+   --  224 as a tile of 128 and the rest on those, each in its three
    --  compilations: the first (Q8_0, and Q4_K, which
    --  reads its words a step ahead there), the second (Q4_0, read a step
    --  ahead too) and the low-bit one (IQ3_S). Each against the same
-   --  product over a hundred positions, which is the wide tile, on the
-   --  first twenty-two, forty-eight and eighty: the same half-precision
-   --  operands, the sums in another order.
+   --  product over three hundred positions, which is the wider tile, on
+   --  the first twenty-two, forty-eight, eighty, 150 and 200: the same
+   --  half-precision operands, the sums in another order.
    procedure A_Short_Batch_Answers_As_The_Wide_Tile_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -5889,7 +5890,7 @@ package body Tests.Backend_Cases is
 
       Height : constant := 64;
       Width  : constant := 512;
-      Wide   : constant := 100;
+      Wide   : constant := 300;
 
       Held   : Devices.Inventory;
       Opened : Devices.Context;
@@ -5933,7 +5934,7 @@ package body Tests.Backend_Cases is
          end loop;
          Assert (Worst <= 1.0E-3,
                  Name & " over" & Mid'Image & " positions is"
-                 & N.Real'Image (Worst) & " away from the wide tile's");
+                 & N.Real'Image (Worst) & " away from the wider tile's");
       end Compare;
    begin
       Devices.Open (Held, Found);
@@ -5962,7 +5963,7 @@ package body Tests.Backend_Cases is
          Rows (Index) := N.Real ((Index * 3) mod 13) / 13.0 - 0.4;
       end loop;
 
-      for Mid of Positive_Array'(22, 48, 80) loop
+      for Mid of Positive_Array'(22, 48, 80, 150, 200) loop
          Compare (Fixtures.Encode_Q8_0 (Matrix), Products.Packed_Q8_0,
                   "Q8_0", Mid);
          Compare (Fixtures.Encode_Q4_K (Matrix), Products.Packed_Q4_K,
@@ -15782,8 +15783,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, A_Short_Batch_Answers_As_The_Wide_Tile_Does'Access,
          "a batch of twenty-two positions on the narrow tile, one of "
-         & "forty-eight at sixty-four vectors and one of eighty at ninety-six, "
-         & "in each of their three compilations, answer as the wide tile does");
+         & "forty-eight at sixty-four vectors, one of eighty at ninety-six and "
+         & "ones of 150 and 200 split past a tile of 128, in each of their "
+         & "three compilations, answer as the wider tile does");
       Register_Routine
         (T, A_Projection_Bias_Is_Added_Where_It_Lies'Access,
          "a projection's bias, one slice for every row, is added by the "
