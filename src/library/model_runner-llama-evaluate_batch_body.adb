@@ -1674,9 +1674,14 @@ begin
                end if;
             end;
 
+            --  A layer reading another's cache (Gemma 4's last ones) wrote
+            --  no keys or values, so it owes the host none and defers as
+            --  any whole layer does: kept from deferring, it kept the whole
+            --  batch from owing, and every layer's rows were read back a
+            --  page at a time with a wait on each -- E4B's 112-token prompt
+            --  33 ms longer than its 111-token one, its pages two.
             Deferred (Index) :=
-              Deferring and then (Whole_Layer_Done or else Half_Done)
-              and then Own_Cache;
+              Deferring and then (Whole_Layer_Done or else Half_Done);
 
             if Half_Done then
                --  The front half only: each member's ring reached the
@@ -2173,8 +2178,7 @@ begin
                end if;
 
                Deferred (Index) :=
-                 Deferring and then (Whole_Layer_Done or else Half_Done)
-                 and then Own_Cache;
+                 Deferring and then (Whole_Layer_Done or else Half_Done);
 
                --  The front half only: the keys and values are the
                --  device's as a whole layer's are, and the feed-forward
@@ -3581,6 +3585,7 @@ begin
       for Index in Source.Layers.all'Range loop
          if Deferred (Index) and then not Owing
            and then not Linear (Settings, Natural (Index))
+           and then Cache_Layer (Settings, Natural (Index)) = Natural (Index)
          then
             declare
                Layer_Keys : constant Element_Count :=

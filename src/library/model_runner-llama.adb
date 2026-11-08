@@ -6292,8 +6292,11 @@ package body Model_Runner.Llama is
 
          for Index in Source.Layers.all'Range loop
             --  A linear layer keeps a state rather than keys and values,
-            --  and its ring comes home by its own road.
-            if Linear (Settings, Natural (Index)) then
+            --  and its ring comes home by its own road; a layer reading
+            --  another's cache keeps none.
+            if Linear (Settings, Natural (Index))
+              or else Cache_Layer (Settings, Natural (Index)) /= Natural (Index)
+            then
                goto Next_Layer;
             end if;
 

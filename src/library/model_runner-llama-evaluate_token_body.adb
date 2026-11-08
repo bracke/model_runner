@@ -2218,6 +2218,7 @@ begin
       for Index in Source.Layers.all'Range loop
          if Deferred (Index) and then not Owing
            and then not Linear (Settings, Natural (Index))
+           and then Cache_Layer (Settings, Natural (Index)) = Natural (Index)
          then
             declare
                At_Key : constant Element_Count :=
