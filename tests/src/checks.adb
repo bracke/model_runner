@@ -6403,7 +6403,7 @@ package body Checks is
             end Number_After;
 
             --  The shader states its rows under LISTED first, then under
-            --  NARROW_SHORT, then for the rest, and its vectors under
+            --  NARROW, then for the rest, and its vectors under
             --  NARROW, under LISTED with LISTED_WIDE, under LISTED and then
             --  for the rest, in that order.
             Listed_Rows_Said : constant Natural :=
@@ -6415,7 +6415,7 @@ package body Checks is
             Wider_Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ", Skip => 3);
             Short_Rows_Asked : constant Natural :=
-              Number_After (Engine, "Narrow_Short_Rows : constant := ");
+              Number_After (Engine, "Narrow_Rows : constant := ");
             Wider_Rows_Asked : constant Natural :=
               Number_After (Engine, "Wider_Rows : constant := ");
             Thin_Said : constant Natural :=
@@ -6458,7 +6458,7 @@ package body Checks is
                Fail ("one of the matrix tile's numbers could not be "
                      & "read: the shader states TILE_R and TILE_V for each "
                      & "of its compilations and the engine states Tile_Rows,"
-                     & " Tile_Vectors, Narrow_Vectors, Narrow_Short_Rows, "
+                     & " Tile_Vectors, Narrow_Vectors, Narrow_Rows, "
                      & "Listed_Vectors, Listed_Wide_Vectors and Listed_Rows,"
                      & " and this check "
                      & "reads them all as text");
@@ -6474,7 +6474,7 @@ package body Checks is
                      & Natural'Image (Rows_Said) & " rows by"
                      & Natural'Image (Vecs_Said) & " vectors, or"
                      & Natural'Image (Thin_Said) & " under NARROW ("
-                     & Natural'Image (Short_Rows_Said) & " rows under NARROW_SHORT), or"
+                     & Natural'Image (Short_Rows_Said) & " rows), or"
                      & Natural'Image (Listed_Rows_Said) & " by"
                      & Natural'Image (Listed_Said) & " under LISTED or"
                      & Natural'Image (Wide_Said) & " with LISTED_WIDE, or"
@@ -6984,32 +6984,6 @@ package body Checks is
 
             if Found and then Digest /= Recorded then
                Fail ("a LOW_BITS compilation of src/shaders/matrix_product.comp"
-                     & " is older than the source; run ./compile-shaders.sh");
-            end if;
-         end;
-      end loop;
-
-      --  And the narrow tile's three compilations at thirty-two rows.
-      for Which in 1 .. 3 loop
-         declare
-            Found : Boolean;
-
-            Digest : constant Interfaces.Unsigned_64 :=
-              Shader_Generation.Source_Digest
-                (Root & "/src/shaders/matrix_product.comp", Found);
-
-            Recorded : constant Interfaces.Unsigned_64 :=
-              (case Which is
-                  when 1 => Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Digest,
-                  when 2 =>
-                     Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Extra_Digest,
-                  when others =>
-                     Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Low_Digest);
-         begin
-            Result.Performed := Result.Performed + 1;
-
-            if Found and then Digest /= Recorded then
-               Fail ("a NARROW_SHORT compilation of src/shaders/matrix_product.comp"
                      & " is older than the source; run ./compile-shaders.sh");
             end if;
          end;

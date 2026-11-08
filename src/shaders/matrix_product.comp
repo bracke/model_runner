@@ -95,8 +95,12 @@
 //  the finished shape: it pays four times over on the decode to find out
 //  whether the accumulators were the wall.
 #ifdef NARROW
-layout(local_size_x = 64) in;
-const uint SUBS = 1u;
+//  The narrow tile on two subgroups, each half of its thirty-two vectors and
+//  each a chunk of the step: on one, a 24-token prompt waited on its one
+//  subgroup's loads -- qwen3-8b 0.196 -> 0.171 s on two, gemma-3-4b 0.096
+//  -> 0.087, MiniCPM-V's Q2_K 0.17 -> 0.14, the answers the same.
+layout(local_size_x = 128) in;
+const uint SUBS = 2u;
 #elif defined(LISTED)
 layout(local_size_x = 128) in;
 const uint SUBS = 2u;
@@ -241,11 +245,10 @@ float gaussian_tanh(float v) {
 //  are never stored.
 #ifdef LISTED
 const uint TILE_R = 64u;
-#elif defined(NARROW_SHORT)
-//  And the narrow tile again at thirty-two rows, for a matrix with few of
-//  them: at sixty-four a gemma's 2048 rows were thirty-two workgroups of
-//  one subgroup each, too few to keep the memory busy. The engine's
-//  Narrow_Short_Most carries the measurements.
+#elif defined(NARROW)
+//  And the narrow tile thirty-two, on its two subgroups: at sixty-four on
+//  one a gemma's 2048 rows were thirty-two workgroups, too few to keep the
+//  memory busy. The engine's Narrow_Rows carries the measurements.
 const uint TILE_R = 32u;
 #elif !defined(TAP_ROWS) && !defined(WIDER)
 const uint TILE_R = 64u;

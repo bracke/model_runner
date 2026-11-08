@@ -4069,14 +4069,6 @@ private
       Listed_Tile_Low : System.Address := System.Null_Address;
       Low_Tile_Line   : System.Address := System.Null_Address;
       Narrow_Low_Line : System.Address := System.Null_Address;
-      --  The narrow tile at thirty-two rows, in each of the three
-      --  compilations: see Narrow_Short_Most.
-      Narrow_Short           : System.Address := System.Null_Address;
-      Narrow_Short_More      : System.Address := System.Null_Address;
-      Narrow_Short_Low       : System.Address := System.Null_Address;
-      Narrow_Short_Line      : System.Address := System.Null_Address;
-      Narrow_Short_More_Line : System.Address := System.Null_Address;
-      Narrow_Short_Low_Line  : System.Address := System.Null_Address;
       --  The tiles made again for one format each, as they are first
       --  asked for: see Specialized_Tile.
       Special_Base    : Special_Lines := [others => System.Null_Address];

@@ -243,30 +243,17 @@ package body Model_Runner.Platform.Device.Products is
    --  far the batch is rounded up before it is handed over.
    Tile_Rows    : constant := 64;
 
-   --  The narrow tile's other height, and the most rows a matrix may have
-   --  to take it: at sixty-four rows a narrow tile is one subgroup, and a
-   --  matrix of few rows few workgroups -- gemma's 2048 rows thirty-two,
-   --  too few to keep the memory busy. Thirty-two rows for those; a
-   --  matrix with rows enough keeps sixty-four, which re-reads the vectors
-   --  half as often. The narrow tile is a batch of nine to thirty-two: a
-   --  short prompt, a long one's last batch, a drafted round's check.
-   Narrow_Short_Rows : constant := 32;
-
-   --  Whether a matrix takes it: few rows, or not many with short ones.
-   --  Every matrix of up to 2560 rows: Gemma 4 E4B's 24-token prompt 0.144
-   --  -> 0.137 s, gemma-3-4b's 0.107 -> 0.101, qwen3-8b's the same (its
-   --  matrices are 1024 and 4096 rows and more). And up to 10240 rows where
-   --  a row is 2560 columns or fewer -- gemma's gates and ups: 0.132 and
-   --  0.098 more. qwen3-8b's 4096 by 4096 and by 12288 lost at thirty-two
-   --  rows (0.193 -> 0.205 with every matrix up to 10240 taken).
-   Narrow_Short_Most : constant := 2560;
-   Narrow_Short_Wide_Most : constant := 10240;
-   Narrow_Short_Columns : constant := 2560;
-
-   function Short_Rows (Rows, Columns : Natural) return Boolean
-   is (Rows <= Narrow_Short_Most
-       or else (Rows <= Narrow_Short_Wide_Most
-                and then Columns <= Narrow_Short_Columns));
+   --  The narrow tile's rows: thirty-two, on two subgroups. It was one
+   --  subgroup of sixty-four rows, and a matrix of few rows was few
+   --  workgroups -- gemma's 2048 rows thirty-two, too few to keep the
+   --  memory busy. At thirty-two rows on one subgroup Gemma 4 E4B's
+   --  24-token prompt read in 0.137 s against 0.144, gemma-3-4b's 0.101
+   --  against 0.107, and qwen3-8b's 0.205 against 0.193, its rows enough
+   --  already; on two subgroups 0.113, 0.088 and 0.166, sixty-four rows
+   --  for the matrices with many no better (0.113, 0.093, 0.168). The
+   --  narrow tile is a batch of nine to thirty-two: a short prompt, a long
+   --  one's last batch, a drafted round's check.
+   Narrow_Rows : constant := 32;
 
    --  What a matrix's rows must divide by to be tiled: half a tile, the
    --  last tile of such a matrix covering the half it has.
@@ -4754,12 +4741,6 @@ package body Model_Runner.Platform.Device.Products is
                              Item.Tap_Short);
                      Module (Model_Runner.Shaders.Low_Tiles.Matrix_Tap_Tall,
                              Item.Tap_Tall);
-                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short,
-                             Item.Narrow_Short);
-                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Extra,
-                             Item.Narrow_Short_More);
-                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Low,
-                             Item.Narrow_Short_Low);
                   end;
 
                   declare
@@ -6167,9 +6148,6 @@ package body Model_Runner.Platform.Device.Products is
                      Line (Item.Wider_Low, Item.Wider_Low_Line);
                      Line (Item.Tap_Short, Item.Tap_Short_Line);
                      Line (Item.Tap_Tall, Item.Tap_Tall_Line);
-                     Line (Item.Narrow_Short, Item.Narrow_Short_Line);
-                     Line (Item.Narrow_Short_More, Item.Narrow_Short_More_Line);
-                     Line (Item.Narrow_Short_Low, Item.Narrow_Short_Low_Line);
                      Wider_Ready :=
                        Item.Wider_Line /= Null_Handle
                        and then Item.Wider_More_Line /= Null_Handle
@@ -6811,13 +6789,10 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Tap_Tall_Line, "vkDestroyPipeline");
       Wider_Ready := False;
       Give_Back (Item.Narrow_Low_Line, "vkDestroyPipeline");
-      Give_Back (Item.Narrow_Short_Line, "vkDestroyPipeline");
       for Index in 1 .. Item.Special_Count loop
          Give_Back (Item.Special_Line (Index), "vkDestroyPipeline");
       end loop;
       Item.Special_Count := 0;
-      Give_Back (Item.Narrow_Short_More_Line, "vkDestroyPipeline");
-      Give_Back (Item.Narrow_Short_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
@@ -6855,9 +6830,6 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Tap_Short, "vkDestroyShaderModule");
       Give_Back (Item.Tap_Tall, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_Low, "vkDestroyShaderModule");
-      Give_Back (Item.Narrow_Short, "vkDestroyShaderModule");
-      Give_Back (Item.Narrow_Short_More, "vkDestroyShaderModule");
-      Give_Back (Item.Narrow_Short_Low, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_Low, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
@@ -9005,8 +8977,6 @@ package body Model_Runner.Platform.Device.Products is
        elsif Line = Item.Narrow_Low_Line then Item.Narrow_Low
        elsif Line = Item.Wider_More_Line then Item.Wider_More
        elsif Line = Item.Wider_Low_Line then Item.Wider_Low
-       elsif Line = Item.Narrow_Short_More_Line then Item.Narrow_Short_More
-       elsif Line = Item.Narrow_Short_Low_Line then Item.Narrow_Short_Low
        else Null_Handle);
 
    --  A tile's pipeline made again for one format, the first time that
@@ -9228,24 +9198,11 @@ package body Model_Runner.Platform.Device.Products is
            and then Tile_Pipeline (Item, Packing, Rest) /= Null_Handle;
          Aligned : constant Natural := Count - (if Split then Rest else 0);
 
-         --  The narrow tile's thirty-two-row compilation for a narrow
-         --  tile, null for every other.
-         function Short_Of (Pipeline : Address) return Address
-         is (if Pipeline = Item.Narrow_Line then Item.Narrow_Short_Line
-             elsif Pipeline = Item.Narrow_More_Line
-             then Item.Narrow_Short_More_Line
-             elsif Pipeline = Item.Narrow_Low_Line
-             then Item.Narrow_Short_Low_Line
-             else Null_Handle);
-
          --  A 3x3's taps on the first tile take the taps' own height
          --  where its rows are not a whole number of sixty-fours, or are of
          --  ninety-sixes: see Tap_Short_Rows.
          function Chosen (Pipeline : Address) return Address
-         is (if Tap_Row = 0 and then Short_Rows (Rows, Columns)
-               and then Short_Of (Pipeline) /= Null_Handle
-             then Short_Of (Pipeline)
-             elsif Tap_Row = 0 or else Pipeline /= Item.Matrix_Line then Pipeline
+         is (if Tap_Row = 0 or else Pipeline /= Item.Matrix_Line then Pipeline
              elsif Rows mod Tap_Tall_Rows = 0
                and then Item.Tap_Tall_Line /= Null_Handle
              then Item.Tap_Tall_Line
@@ -9256,10 +9213,10 @@ package body Model_Runner.Platform.Device.Products is
 
          function Height (Pipeline : Address) return Natural
          is (if Pipeline = Item.Tap_Short_Line then Tap_Short_Rows
-             elsif Pipeline = Item.Narrow_Short_Line
-               or else Pipeline = Item.Narrow_Short_More_Line
-               or else Pipeline = Item.Narrow_Short_Low_Line
-             then Narrow_Short_Rows
+             elsif Pipeline = Item.Narrow_Line
+               or else Pipeline = Item.Narrow_More_Line
+               or else Pipeline = Item.Narrow_Low_Line
+             then Narrow_Rows
              elsif Pipeline = Item.Tap_Tall_Line then Tap_Tall_Rows
              elsif Pipeline = Item.Wider_Line or else Pipeline = Item.Wider_More_Line
                or else Pipeline = Item.Wider_Low_Line
