@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A prompt past whole wider tiles by 129 to 224 runs the rest as a tile of 128 and the narrow tiles: 2-6% faster there.** Such a rest rounded up to another wider tile of 256. Gemma 4 E4B 449 tokens 0.875 -> 0.849 s, 476 0.853 -> 0.822; qwen3-8b 439 1.35 -> 1.27; gemma-3-4b 449 0.667 -> 0.651. Answers the same.
+
 - **A prompt of 129 to 224 tokens on the device runs a tile of 128 and the rest on the narrow tiles: 8-25% faster.** Past 128 vectors a batch took the wider tile of 256 and paid for all of it: Gemma 4 E4B read 144 tokens in 0.396 s and 237 in 0.437. Now the first 128 run on the tile of 128 and the rest, up to 96, on the narrow, mid or mid-wide tile in a second dispatch, as the wider tile's own remainder already did. E4B 144 tokens 0.396 -> 0.298 s, 176 0.412 -> 0.336, 193 0.419 -> 0.377; qwen3-8b 140 0.621 -> 0.488, 172 0.642 -> 0.561; gemma-3-4b 144 0.325 -> 0.249. 225 and more unchanged. Answers the same.
 
 - **A session keeps the drafting base its replies found.** A mixture drafting from its block looked for the length its rounds go back to afresh every reply, spending its first rounds at lengths it had found slower the reply before. The session now keeps the base and what each length's rounds cost, and the next reply starts from them; a closed session forgets them. Mellum over four turns of a conversation, 43.7 -> 43.8 tokens a second.

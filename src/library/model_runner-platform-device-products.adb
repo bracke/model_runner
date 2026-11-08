@@ -9291,8 +9291,22 @@ package body Model_Runner.Platform.Device.Products is
            (if Widened (Count) then Count mod Wider_Vectors
             elsif Short_Split then Count - Tile_Vectors
             else 0);
+         --  And past whole wider tiles by more than a tile of 128 and no
+         --  more than the narrow tiles hold past that: the wider tiles, a
+         --  tile of 128, and the rest on the narrow tiles -- three
+         --  dispatches, where it rounded up to another wider tile. E4B's
+         --  449-token prompt took 0.873 s and its 377-token one 0.640.
+         Long_Split : constant Boolean :=
+           Members = 1
+           and then Widened (Count)
+           and then Count > Wider_Vectors
+           and then Rest in Tile_Vectors + 1 .. Tile_Vectors + Mid_Wide_Vectors
+           and then Tile_Pipeline (Item, Packing, Tile_Vectors) /= Null_Handle
+           and then Tile_Pipeline (Item, Packing, Rest - Tile_Vectors)
+                      /= Null_Handle;
          Split : constant Boolean :=
            Short_Split
+           or else Long_Split
            or else (Members = 1
                     and then Rest > 0 and then Rest <= Tile_Vectors
                     and then Count > Wider_Vectors
@@ -9380,7 +9394,22 @@ package body Model_Runner.Platform.Device.Products is
             end;
          end Run_Tiles;
       begin
-         if Split then
+         if Long_Split then
+            Run_Tiles
+              (Chosen (Tile_Pipeline (Item, Packing, Count)), Aligned, 0,
+               Aligned / Tile_Width (Count));
+            Run_Tiles
+              (Chosen (Tile_Pipeline (Item, Packing, Tile_Vectors)),
+               Tile_Vectors, Aligned, 1);
+            declare
+               Last : constant Natural := Rest - Tile_Vectors;
+            begin
+               Run_Tiles
+                 (Chosen (Tile_Pipeline (Item, Packing, Last)), Last,
+                  Aligned + Tile_Vectors,
+                  (Last + Tile_Width (Last) - 1) / Tile_Width (Last));
+            end;
+         elsif Split then
             Run_Tiles
               (Chosen (Tile_Pipeline (Item, Packing, Lead)), Aligned, 0,
                Aligned / Tile_Width (Lead));
