@@ -13753,6 +13753,12 @@ package body Tests.Backend_Cases is
       Compare (Heads => 16, KV_Heads => 1, Batch => 1);
       Compare (Heads => 16, KV_Heads => 1, Batch => 17);
 
+      --  And not asked to prefer the copy, as a session holding its cache
+      --  exact is not: such a head has no other kernel, and was refused.
+      Products.Prefer_Halves (Engine, False);
+      Compare (Heads => 8, KV_Heads => 2, Batch => 17);
+      Compare (Heads => 16, KV_Heads => 1, Batch => 3);
+
       Products.Close (Engine);
       Devices.Close (Opened);
       Devices.Close (Held);

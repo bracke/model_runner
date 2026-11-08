@@ -543,7 +543,10 @@ package body Perplexity_Run is
 
                      if E.Is_Error (Status) then
                         Note ("a chunk would not evaluate: "
-                              & E.Error_Code'Image (Status.Code));
+                              & E.Error_Code'Image (Status.Code)
+                              & (if E.Text_Of (Status, "layer") /= ""
+                                 then " at layer " & E.Text_Of (Status, "layer")
+                                 else ""));
                         L.Close (Live);
                         exit;
                      end if;

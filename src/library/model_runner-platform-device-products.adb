@@ -914,9 +914,15 @@ package body Model_Runner.Platform.Device.Products is
        elsif Attends_By_Matrix (Item, Positions, Head_Size, Value_Size)
        then True
        --  An absorbed latent's head, past every other kernel's width, is
-       --  attention_latent.comp's at any batch, and it reads the copy.
+       --  attention_latent.comp's at any batch, and it reads the copy --
+       --  whether or not the session prefers it: the copy is kept beside an
+       --  exact cache too, and no other kernel attends such a head. Asked
+       --  to prefer it, a session holding its cache exact -- the perplexity
+       --  tool's -- had Gemma 4's 512-wide global heads refused, and the host
+       --  attends no head that wide: every chunk of the 12B and the 26B
+       --  ended non-finite at their last layer.
        elsif Head_Size > Matrix_Wider_Head and then Item.Latent_Attend /= Null_Handle
-       then Attends_By_Halves (Item, False)
+       then Attends_By_Halves (Item, True)
        elsif Item.Tile_Line /= Null_Handle and then Positions >= Query_Block
        then False
        else Attends_By_Halves (Item, False));
