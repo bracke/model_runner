@@ -3742,7 +3742,24 @@ void main_one() {
     uint i_from = short_rows ? 0u : ix;
     uint i_step = short_rows ? 1u : IN_FLIGHT;
 
-    for (uint i = i_from; i < groups; i += i_step) {
+#if defined(OWN_ACTIVATIONS) && !defined(LANE32)
+    //  Each band of four rows starts its walk a group further along than
+    //  the band before. Rows of whole multiples of 4,096 columns lie a
+    //  multiple of 256 bytes apart, and walked in step every workgroup
+    //  read the same memory channels at once: 3840 x 4096 Q4_0 took 146
+    //  us where 3840 x 3840 took 119; staggered, 128 (gemma-4 12B's token
+    //  8.93 -> 9.03 a second). By the band of four, not the workgroup, so
+    //  MXFP4's gate-and-up pair, a row a workgroup, sums each row as its
+    //  plain product of four rows does. A row each lost: its rows'
+    //  activations no longer shared, 3840 x 4096 MXFP4 119 -> 158 us.
+    uint rot = (first_row / 4u) % groups;
+#endif
+    for (uint j = i_from; j < groups; j += i_step) {
+#if defined(OWN_ACTIVATIONS) && !defined(LANE32)
+        uint i = j + rot >= groups ? j + rot - groups : j + rot;
+#else
+        uint i = j;
+#endif
 #ifdef LANE32
         uint col = i * 256u + itid * 32u;
         if (col < shape.columns) {
