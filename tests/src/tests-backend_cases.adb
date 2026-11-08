@@ -5873,14 +5873,15 @@ package body Tests.Backend_Cases is
    -- A_Short_Batch_Answers_As_The_Wide_Tile_Does --
    ------------------------------------------------------
 
-   --  A batch of nine to thirty-two takes the narrow tile, and one of
-   --  thirty-three to sixty-four the narrow tile at sixty-four vectors,
-   --  each in its three compilations: the first (Q8_0, and Q4_K, which
+   --  A batch of nine to thirty-two takes the narrow tile, one of
+   --  thirty-three to sixty-four the narrow tile at sixty-four vectors and
+   --  one of sixty-five to ninety-six at ninety-six, each in its three
+   --  compilations: the first (Q8_0, and Q4_K, which
    --  reads its words a step ahead there), the second (Q4_0, read a step
    --  ahead too) and the low-bit one (IQ3_S). Each against the same
    --  product over a hundred positions, which is the wide tile, on the
-   --  first twenty-two and forty-eight: the same half-precision operands,
-   --  the sums in another order.
+   --  first twenty-two, forty-eight and eighty: the same half-precision
+   --  operands, the sums in another order.
    procedure A_Short_Batch_Answers_As_The_Wide_Tile_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -5961,7 +5962,7 @@ package body Tests.Backend_Cases is
          Rows (Index) := N.Real ((Index * 3) mod 13) / 13.0 - 0.4;
       end loop;
 
-      for Mid of Positive_Array'(22, 48) loop
+      for Mid of Positive_Array'(22, 48, 80) loop
          Compare (Fixtures.Encode_Q8_0 (Matrix), Products.Packed_Q8_0,
                   "Q8_0", Mid);
          Compare (Fixtures.Encode_Q4_K (Matrix), Products.Packed_Q4_K,
@@ -15780,9 +15781,9 @@ package body Tests.Backend_Cases is
          & "the table it keeps them in");
       Register_Routine
         (T, A_Short_Batch_Answers_As_The_Wide_Tile_Does'Access,
-         "a batch of twenty-two positions on the narrow tile and one of "
-         & "forty-eight on the narrow tile at sixty-four vectors, in each of "
-         & "their three compilations, answer as the wide tile does");
+         "a batch of twenty-two positions on the narrow tile, one of "
+         & "forty-eight at sixty-four vectors and one of eighty at ninety-six, "
+         & "in each of their three compilations, answer as the wide tile does");
       Register_Routine
         (T, A_Projection_Bias_Is_Added_Where_It_Lies'Access,
          "a projection's bias, one slice for every row, is added by the "

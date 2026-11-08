@@ -3959,6 +3959,14 @@ private
       Mid_More_Line : System.Address := System.Null_Address;
       Mid_Low_Line  : System.Address := System.Null_Address;
 
+      --  And at ninety-six, for a batch of sixty-five to ninety-six.
+      Mid_Wide       : System.Address := System.Null_Address;
+      Mid_Wide_More  : System.Address := System.Null_Address;
+      Mid_Wide_Low   : System.Address := System.Null_Address;
+      Mid_Wide_Line      : System.Address := System.Null_Address;
+      Mid_Wide_More_Line : System.Address := System.Null_Address;
+      Mid_Wide_Low_Line  : System.Address := System.Null_Address;
+
       --  And the taps' two heights of the first tile; see Tap_Line.
       Tap_Short      : System.Address := System.Null_Address;
       Tap_Tall       : System.Address := System.Null_Address;

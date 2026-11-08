@@ -304,19 +304,27 @@ package body Shader_Generation is
            and then Ada.Strings.Fixed.Index (Name, "_Dots") /= 0;
       end Is_Low_Dots;
 
+      --  And the narrow tile's compilations at sixty-four and ninety-six
+      --  vectors to one of their own, the six of them past what the low-bit
+      --  tiles' child had room for.
+      function Is_Mid_Tile (Pair : Shader_Pair) return Boolean is
+         Name : constant String := Ada_Name (Pair.Compiled.all);
+      begin
+         return Ada.Strings.Fixed.Index (Name, "Matrix_Mid") = Name'First;
+      end Is_Mid_Tile;
+
       --  And the matrix tile's LOW_BITS compilations to a third, once the
       --  generating kernels' few-vector walks put the low-bit child past
       --  that size in turn; and the taps' tiles beside them, which the
-      --  parent had no room for, and the narrow tile's three compilations at
-      --  sixty-four vectors for the same reason.
+      --  parent had no room for.
       function Is_Low_Tile (Pair : Shader_Pair) return Boolean is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
-         return Ada.Strings.Fixed.Index (Name, "Matrix_Tap_") = Name'First
-           or else Ada.Strings.Fixed.Index (Name, "Matrix_Mid") = Name'First
-           or else (Ada.Strings.Fixed.Index (Name, "Matrix") = Name'First
-                    and then Name'Length >= 4
-                    and then Name (Name'Last - 3 .. Name'Last) = "_Low");
+         return not Is_Mid_Tile (Pair)
+           and then (Ada.Strings.Fixed.Index (Name, "Matrix_Tap_") = Name'First
+                     or else (Ada.Strings.Fixed.Index (Name, "Matrix") = Name'First
+                              and then Name'Length >= 4
+                              and then Name (Name'Last - 3 .. Name'Last) = "_Low"));
       end Is_Low_Tile;
 
       --  And the attention kernels to another, for the same reason: with
@@ -341,6 +349,7 @@ package body Shader_Generation is
 
       function In_Parent (Pair : Shader_Pair) return Boolean
       is (not Is_Low (Pair) and then not Is_Low_Tile (Pair)
+          and then not Is_Mid_Tile (Pair)
           and then not Is_Attend (Pair) and then not Is_Low_Dots (Pair)
           and then not Is_Super (Pair));
 
@@ -470,6 +479,15 @@ package body Shader_Generation is
         (Root & "/src/library/model_runner-shaders-low_tiles.ads",
          "Model_Runner.Shaders.Low_Tiles", "The low-bit matrix tiles' and the taps'",
          Is_Low_Tile'Access, Good);
+      if not Good then
+         return;
+      end if;
+
+      Write_Child
+        (Root & "/src/library/model_runner-shaders-mid_tiles.ads",
+         "Model_Runner.Shaders.Mid_Tiles",
+         "The narrow tile's compilations at sixty-four and ninety-six vectors:",
+         Is_Mid_Tile'Access, Good);
       if not Good then
          return;
       end if;

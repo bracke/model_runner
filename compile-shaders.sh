@@ -161,6 +161,9 @@ compile matrix_narrow_low            matrix_product.comp   vulkan1.3 LOW_BITS NA
 compile matrix_mid                   matrix_product.comp   vulkan1.3 NARROW MID
 compile matrix_mid_extra             matrix_product.comp   vulkan1.3 MORE_FORMATS NARROW MID
 compile matrix_mid_low               matrix_product.comp   vulkan1.3 LOW_BITS NARROW MID
+compile matrix_mid_wide              matrix_product.comp   vulkan1.3 NARROW MID MID_WIDE
+compile matrix_mid_wide_extra        matrix_product.comp   vulkan1.3 MORE_FORMATS NARROW MID MID_WIDE
+compile matrix_mid_wide_low          matrix_product.comp   vulkan1.3 LOW_BITS NARROW MID MID_WIDE
 compile matrix_listed_low            matrix_product.comp   vulkan1.3 LOW_BITS LISTED
 compile matrix_wider                 matrix_product.comp   vulkan1.3 WIDER
 compile matrix_wider_extra           matrix_product.comp   vulkan1.3 MORE_FORMATS WIDER

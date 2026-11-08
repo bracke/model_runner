@@ -27,6 +27,7 @@ with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
 with Model_Runner.Shaders.Low_Dots;
 with Model_Runner.Shaders.Low_Tiles;
+with Model_Runner.Shaders.Mid_Tiles;
 with Model_Runner.Shaders.Attend;
 with Model_Runner.Shaders.Super;
 with Shader_Generation;
@@ -6989,8 +6990,9 @@ package body Checks is
          end;
       end loop;
 
-      --  And the narrow tile's three compilations at sixty-four vectors.
-      for Which in 1 .. 3 loop
+      --  And the narrow tile's six compilations at sixty-four and
+      --  ninety-six vectors.
+      for Which in 1 .. 6 loop
          declare
             Found : Boolean;
 
@@ -7000,11 +7002,17 @@ package body Checks is
 
             Recorded : constant Interfaces.Unsigned_64 :=
               (case Which is
-                  when 1 => Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Digest,
+                  when 1 => Model_Runner.Shaders.Mid_Tiles.Matrix_Mid_Digest,
                   when 2 =>
-                     Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Extra_Digest,
+                     Model_Runner.Shaders.Mid_Tiles.Matrix_Mid_Extra_Digest,
+                  when 3 =>
+                     Model_Runner.Shaders.Mid_Tiles.Matrix_Mid_Low_Digest,
+                  when 4 =>
+                     Model_Runner.Shaders.Mid_Tiles.Matrix_Mid_Wide_Digest,
+                  when 5 =>
+                     Model_Runner.Shaders.Mid_Tiles.Matrix_Mid_Wide_Extra_Digest,
                   when others =>
-                     Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Low_Digest);
+                     Model_Runner.Shaders.Mid_Tiles.Matrix_Mid_Wide_Low_Digest);
          begin
             Result.Performed := Result.Performed + 1;
 
