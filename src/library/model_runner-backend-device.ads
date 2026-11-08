@@ -234,6 +234,13 @@ package Model_Runner.Backend.Device is
    --  @return Bytes.
    function Budget_Bytes return Interfaces.Unsigned_64;
 
+   --  Whether the open device's budget was named when it was opened -- a
+   --  run's --device-memory -- rather than taken as its heaps' share, which
+   --  leaves a session its room already.
+   --
+   --  @return True where Open was given a budget.
+   function Budget_Named return Boolean;
+
    --  Let the matrices take Bytes in place of the budget the device opened
    --  with; see Products.Fit_Budget. Nothing with no device, or for a
    --  budget the caller named.

@@ -207,7 +207,7 @@ begin
    --  and a token choose the same experts with the same shares: the
    --  host's softmax sums in binary64 and the device's in binary32,
    --  and a share a bit apart is an answer a bit apart.
-   if Item.Owner.all.Stacked
+   if (Item.Owner.all.Stacked or else Current.Mixture_Held)
      and then Model_Runner.Backend."="
                 (Item.Owner.Able.Kind,
                  Model_Runner.Backend.Backend_Device)
@@ -1211,7 +1211,7 @@ begin
             --  the gate through the same kernel a token's gathered
             --  mixture puts it through, which is what keeps a prompt
             --  and a token agreeing to the bit.
-            if Item.Owner.all.Stacked
+            if (Item.Owner.all.Stacked or else Current.Mixture_Held)
               and then (Current.Expert_Gate_Bias = null)
                        = (Current.Expert_Up_Bias = null)
               and then Model_Runner.Backend."="

@@ -1441,6 +1441,22 @@ package Model_Runner.Llama is
       Cache    : Cache_Precision := Exact;
       Paged    : Boolean := True) return Interfaces.Unsigned_64;
 
+   --  What Device_Room keeps back of the heaps for a session: its context
+   --  as the device holds it, a hybrid's kept states and Session_Margin --
+   --  so that a budget other than the device's own, one a run named, can be
+   --  weighed the same way. Nought where the context cannot be planned.
+   --
+   --  @param Settings The model's configuration.
+   --  @param Context Positions the session will hold.
+   --  @param Cache The precision it keeps them in.
+   --  @param Paged Whether the device's cache is paged.
+   --  @return The bytes kept back.
+   function Device_Kept_Back
+     (Settings : Configuration;
+      Context  : Natural;
+      Cache    : Cache_Precision := Exact;
+      Paged    : Boolean := True) return Interfaces.Unsigned_64;
+
    --  The positions Prepare plans a dense model's device room for when
    --  the run names none: the model's own context halves down to this
    --  while its matrices do not fit, and no further.
@@ -2863,6 +2879,13 @@ private
       --  not take whole, split as a mixture's experts are, its top layers'
       --  gate, up and down left on the host in panels.
       Host_Feed : Boolean := False;
+
+      --  Whether this layer's expert stacks are held on the device and the
+      --  layer goes whole there, in a mixture split between the two: the
+      --  room beside the context holds some layers' stacks and not every
+      --  layer's, and those it holds run whole rather than split. Every
+      --  layer of a mixture held whole (Model.Stacked) leaves this false.
+      Mixture_Held : Boolean := False;
 
       --  And those three as the file holds them, which the panels replace
       --  in Gate, Up and Down: what the device uploads to run the layer

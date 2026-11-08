@@ -62,6 +62,7 @@ is
                L : Layer renames Item.Layers.all (Index);
             begin
                if Mixture_Split
+                 and then not L.Mixture_Held
                  and then (Within (L.Gate_Stack)
                            or else Within (L.Up_Stack)
                            or else Within (L.Down_Stack))
@@ -185,12 +186,78 @@ is
    --  Whether a mixture's matrices, Total of them, leave the context its
    --  room on the device: the context named, or the one planned where
    --  none is, counted as a dense model's is.
+   --  What the session keeps back on the device beside the matrices: its
+   --  context's cache and the margin (Device_Kept_Back).
+   function Kept_Back return Interfaces.Unsigned_64
+   is (Device_Kept_Back
+         (Item.Settings,
+          (if Context > 0 then Context else Planned_Device_Context),
+          Cache, Paged));
+
+   --  The room the context leaves the device's matrices: the device's
+   --  heaps less what the session keeps back (Device_Room).
+   function Context_Room return Interfaces.Unsigned_64
+   is (Device_Room
+         (Item.Settings,
+          (if Context > 0 then Context else Planned_Device_Context),
+          Cache, Paged));
+
+   --  What a budget leaves the matrices: a budget the run named holds the
+   --  session's context within it, and the share of the heaps taken where
+   --  none was named leaves the session its room already. Weighed against
+   --  a named budget whole, a mixture went whole there with nothing left
+   --  for its context.
+   function Budget_Room (Budget : Interfaces.Unsigned_64) return Interfaces.Unsigned_64
+   is (if not Model_Runner.Backend.Device.Budget_Named then Budget
+       elsif Budget > Kept_Back then Budget - Kept_Back
+       else 0);
+
    function Context_Leaves_Room (Total : Interfaces.Unsigned_64) return Boolean
-   is (Total
-       <= Device_Room
-            (Item.Settings,
-             (if Context > 0 then Context else Planned_Device_Context),
-             Cache, Paged));
+   is (Total <= Context_Room
+       and then Total <= Budget_Room (Item.Able.Memory_Bytes));
+
+   --  What the device's room holds of a mixture split between the two,
+   --  past what every layer keeps there: the stacks, routers and shared
+   --  experts of the layers Hold_Some held (Layer.Mixture_Held).
+   Held_Bytes : Interfaces.Unsigned_64 := 0;
+
+   --  A layer's share of a mixture's feed-forward, as Mixture_Bytes
+   --  counts it.
+   function Layer_Feed (L : Layer) return Interfaces.Unsigned_64
+   is (Bytes_Of (L.Gate_Stack) + Bytes_Of (L.Up_Stack)
+       + Bytes_Of (L.Fused_Stack) + Bytes_Of (L.Down_Stack)
+       + Bytes_Of (L.Router) + Bytes_Of (L.Shared_Gate)
+       + Bytes_Of (L.Shared_Up) + Bytes_Of (L.Shared_Down));
+
+   --  A mixture split between the two keeps on the device every layer's
+   --  front half and dense parts (Total less Feed); where the room left
+   --  beside the context holds more, as many layers' feed-forwards as it
+   --  holds go there too, from the first, and those layers run whole.
+   --  Gemma 4's 26B, 13.4 GB of matrices against a room of 11.7 GB at a
+   --  context of 32k, split every layer and read a prompt at 56 tokens a
+   --  second against 194 whole.
+   procedure Hold_Some (Total, Feed, Budget : Interfaces.Unsigned_64) is
+      --  The room beside the context, within the budget it is placed by
+      --  (a draft's share off it where one is to come).
+      Room : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64'Min (Context_Room, Budget_Room (Budget));
+      Base : Interfaces.Unsigned_64;
+   begin
+      if Held_Bytes > 0 or else Item.Layers = null
+        or else Feed = 0 or else Feed >= Total
+      then
+         return;
+      end if;
+      Base := Total - Feed;
+      for L of Item.Layers.all loop
+         if L.Experts /= null and then Layer_Feed (L) > 0 then
+            exit when Base + Layer_Feed (L) > Room;
+            L.Mixture_Held := True;
+            Base := Base + Layer_Feed (L);
+            Held_Bytes := Held_Bytes + Layer_Feed (L);
+         end if;
+      end loop;
+   end Hold_Some;
 
    --  Whether the mixture goes to the device as Prepare places it below.
    function On_Device_Mixture return Boolean
@@ -3121,6 +3188,9 @@ begin
            and then Panels_Unasked
                       (Feed, Bounds.Max_Allocation_Bytes,
                        Model_Runner.Panel_Cache.Room_Now);
+         if Mixture_Split then
+            Hold_Some (Total, Feed, Budget);
+         end if;
       end;
    end if;
 
@@ -4174,7 +4244,7 @@ begin
          --  Gemma 4's 26B, 13.5 GB on the device, read a 6,289-token prompt
          --  2,048 positions a batch and ran the part out of memory.
          Item.Batch_Cap := Positive'Last;
-         if Item.Stacked then
+         if Item.Stacked or else Held_Bytes > 0 then
             declare
                W : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Item.Settings.Embedding);
                Floats : constant Interfaces.Unsigned_64 :=
@@ -4187,9 +4257,24 @@ begin
                --  Three times its floats: measured, a 26B batch's peak grew
                --  1.8 MB a position, where the floats said 0.6.
                Each : constant Interfaces.Unsigned_64 := Floats * 4 * 3;
+               --  Held in part, the room past the held stacks is what the
+               --  context's room leaves them (Hold_Some filled it to
+               --  there): the budget less them counted the context's cache
+               --  and the margin over again, and a 26B batch of 2,048 ran
+               --  the part out of memory.
+               On_Device : constant Interfaces.Unsigned_64 :=
+                 Total - Feed + Held_Bytes;
+               Room_Left : constant Interfaces.Unsigned_64 :=
+                 (if Item.Stacked then Item.Able.Memory_Bytes - Total
+                  elsif Interfaces.Unsigned_64'Min
+                          (Context_Room, Budget_Room (Item.Able.Memory_Bytes))
+                        > On_Device
+                  then Interfaces.Unsigned_64'Min
+                         (Context_Room, Budget_Room (Item.Able.Memory_Bytes))
+                       - On_Device
+                  else 0);
                Allowance : constant Interfaces.Unsigned_64 :=
-                 Device_Session_Margin - 640 * 2 ** 20
-                 + (Item.Able.Memory_Bytes - Total);
+                 Device_Session_Margin - 640 * 2 ** 20 + Room_Left;
                Fits : constant Interfaces.Unsigned_64 := Allowance / Interfaces.Unsigned_64'Max (1, Each);
             begin
                if Fits < Interfaces.Unsigned_64 (Streamed_Batch) then
@@ -4217,7 +4302,10 @@ begin
               Mixture_Split or else Splits (Total, Feed, Item.Able.Memory_Bytes)
               or else not Context_Leaves_Room (Total);
             if Item.Split_Feed then
-               Taken := Total - Feed;
+               if not Mixture_Split then
+                  Hold_Some (Total, Feed, Item.Able.Memory_Bytes);
+               end if;
+               Taken := Total - Feed + Held_Bytes;
                Item.Host_Front_Raw := Front_Reads_Raw;
             end if;
          end if;
@@ -4242,7 +4330,7 @@ begin
       --
       --  Published as the finalizing it is part of: a stage of its own
       --  would be one a trace of every other load could not show.
-      if Item.Stacked and then Item.Layers /= null then
+      if (Item.Stacked or else Held_Bytes > 0) and then Item.Layers /= null then
          P.Publish (Observer, P.Load_Progress (P.Finalizing_Model));
 
          for Index in Item.Layers.all'Range loop
@@ -4250,7 +4338,9 @@ begin
                Current : Layer renames Item.Layers.all (Index);
                Ignored : E.Error_Info;
             begin
-               if T.Is_Present (Current.Gate_Stack) then
+               if not Item.Stacked and then not Current.Mixture_Held then
+                  null;
+               elsif T.Is_Present (Current.Gate_Stack) then
                   Model_Runner.Backend.Device.Hold_Pair
                     (Current.Gate_Stack, Current.Up_Stack, Ignored);
                   Model_Runner.Backend.Device.Hold
@@ -4273,7 +4363,7 @@ begin
          --  fit above, and never held, its stacks were copied over again
          --  every draft -- qwen3.6-35B-A3B drafting from it lost to not
          --  drafting at all, its device idle a third of every round.
-         if Item.Next /= null then
+         if Item.Stacked and then Item.Next /= null then
             for Current of Item.Next.all loop
                declare
                   Ignored : E.Error_Info;

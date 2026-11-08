@@ -285,6 +285,7 @@ is
 
    function Mixture_Whole (L : Layer) return Boolean
    is ((Source.Stacked
+        or else L.Mixture_Held
         --  Streamed a batch's stacks only as two of them, which the
         --  prefetch copies: Gemma4's one stack an expert was uploaded
         --  layer after layer and kept, and its 26B ran the part out of
@@ -315,6 +316,7 @@ is
         and then not Source.Stacked
         and then Count >= Element_Count (Stream_Least)
         and then Index < Source.Layers.all'Last
+        and then not Source.Layers.all (Index + 1).Mixture_Held
         and then Mixture_Whole (Source.Layers.all (Index + 1))
       then
          Model_Runner.Backend.Device.Prefetch_Stacks

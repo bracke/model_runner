@@ -4499,6 +4499,10 @@ package body Tests.Inference_Cases is
                Worst   : N.Real := 0.0;
                All_Of  : Interfaces.Unsigned_64 := 0;
                Experts : Interfaces.Unsigned_64 := 0;
+               --  What the device keeps back beside the matrices -- the
+               --  session's margin and the planned context's cache -- so
+               --  that a budget can leave room for half the experts.
+               Kept_Back : Interfaces.Unsigned_64 := 0;
                Name    : constant String :=
                  Tiny_Model.Fixture_Architecture'Image (Kind)
                  & " split between the device and the processor";
@@ -4515,6 +4519,15 @@ package body Tests.Inference_Cases is
                   Status : E.Error_Info;
                begin
                   Containers.Reader.Parse (Item, Source, Status => Status);
+                  declare
+                     Settings : L.Configuration;
+                  begin
+                     L.Read_Config (Item, Settings => Settings, Status => Status);
+                     Kept_Back :=
+                       L.Device_Kept_Back (Settings, L.Planned_Device_Context);
+                     Assert (Kept_Back > 0,
+                             "nothing kept back measured for " & Name);
+                  end;
                   for Index in 1 .. Containers.Tensor_Count (Item) loop
                      All_Of := All_Of + Containers.Tensor_Bytes (Item, Index);
                      if Ada.Strings.Fixed.Index
@@ -4607,7 +4620,10 @@ package body Tests.Inference_Cases is
                --  dealt, and is written the owed positions all the same.
                --  Not a hybrid, which rewinds to a kept state and keeps to
                --  the split.
-               for Arm in reverse 1 .. 8 loop
+               --  And a ninth: a budget that holds about half the experts
+               --  beside the context, so that the layers it holds go whole
+               --  and the rest split (Layer.Mixture_Held).
+               for Arm in reverse 1 .. 9 loop
                   if Arm = 8 and then Tiny_Model."=" (Kind, Tiny_Model.Qwen35)
                   then
                      goto Next_Arm;
@@ -4615,6 +4631,7 @@ package body Tests.Inference_Cases is
                   declare
                      Chunk : constant Positive :=
                        (case Arm is
+                          when 9 => Length,
                           when 1 => 1,
                           when 4 | 6 => 4,
                           when 5 | 7 => 15,
@@ -4625,8 +4642,15 @@ package body Tests.Inference_Cases is
                   begin
                      Model_Runner.Backend.Device.Close;
                      Model_Runner.Backend.Device.Open
-                       (Awake, Budget => All_Of - Experts / 4);
+                       (Awake,
+                        Budget =>
+                          (if Arm = 9
+                           then All_Of - Experts / 2 + Kept_Back
+                           else All_Of - Experts / 4));
                      Assert (Awake, "the device did not reopen for " & Name);
+                     Assert (Model_Runner.Backend.Device.Budget_Named,
+                             "a budget the device was opened with was not "
+                             & "taken as named for " & Name);
                      if Arm = 3 then
                         L.Set_Stream_Least (1);
                      end if;
@@ -4661,6 +4685,18 @@ package body Tests.Inference_Cases is
                                 & " split and"
                                 & Model_Runner.Backend.Device.Layers_Handed'Image
                                 & " handed back");
+                     elsif Arm = 9 and then Tiny_Model."=" (Kind, Tiny_Model.Qwen35) then
+                        --  A hybrid's layers stay split here as in the
+                        --  arms above; its held stacks are read gathered.
+                        null;
+                     elsif Arm = 9 then
+                        Assert (Model_Runner.Backend.Device.Layers_Whole > 0
+                                and then Model_Runner.Backend.Device.Layers_Split > 0,
+                                Name & " held in part ran"
+                                & Model_Runner.Backend.Device.Layers_Whole'Image
+                                & " layers whole and"
+                                & Model_Runner.Backend.Device.Layers_Split'Image
+                                & " split, where it should run some of each");
                      elsif Arm = 3 then
                         Assert (Model_Runner.Backend.Device.Layers_Whole > 0,
                                 "no layer of " & Name & " streamed its stacks,"
@@ -4686,6 +4722,7 @@ package body Tests.Inference_Cases is
                      Assert (Worst <= Tolerance,
                              "on " & Name
                              & (case Arm is
+                                   when 9 => " held in part",
                                    when 8 => " in pages, read again past a"
                                              & " rewind",
                                    when 7 => " in pages, its reply crossing"
@@ -21509,6 +21546,8 @@ package body Tests.Inference_Cases is
          Device_Notes.Skip ("for a second model adds to the device budget");
          return;
       end if;
+      Assert (not Device.Budget_Named,
+              "a device opened with no budget took its heaps' share as named");
 
       Device.Note_Model (First);
       Device.Note_Model (Second);

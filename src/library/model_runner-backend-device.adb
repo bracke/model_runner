@@ -706,6 +706,9 @@ package body Model_Runner.Backend.Device is
    function Budget_Bytes return Interfaces.Unsigned_64
    is (if Ready_Now then Products.Heap_Budget (Engine) else 0);
 
+   function Budget_Named return Boolean
+   is (Ready_Now and then Opened_Budget > 0);
+
    -----------------
    -- Drop_Spares --
    -----------------

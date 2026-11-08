@@ -2703,7 +2703,9 @@ package body Model_Runner.Llama is
             Touch (Layer.File_Down);
          end if;
 
-         if Layer.Experts /= null and then not Item.Stacked then
+         if Layer.Experts /= null and then not Item.Stacked
+           and then not Layer.Mixture_Held
+         then
             for One of Layer.Experts.all loop
                Touch (One.Gate);
                Touch (One.Up);
@@ -8757,7 +8759,7 @@ package body Model_Runner.Llama is
    -- Device_Room --
    -----------------
 
-   function Device_Room
+   function Device_Kept_Back
      (Settings : Configuration;
       Context  : Natural;
       Cache    : Cache_Precision := Exact;
@@ -8765,26 +8767,19 @@ package body Model_Runner.Llama is
    is
       subtype U64 is Interfaces.Unsigned_64;
 
-      Session_Margin : constant U64 := Device_Session_Margin;
-
       --  A hybrid's states, five deep: a drafted round's rewind.
       State_Slots : constant := 5;
 
       Plan     : Mem.Session_Plan;
       Planning : E.Error_Info;
 
-      Budget : constant U64 := Model_Runner.Backend.Device.Budget_Bytes;
-      Heaps  : constant U64 :=
-        (if Budget > 0
-         then U64'Min (Budget, Model_Runner.Backend.Device.Heap_Bytes)
-         else Model_Runner.Backend.Device.Heap_Bytes);
       States : constant U64 :=
         (if Hybrid (Settings.Kind)
          then U64 (State_Slots)
               * U64 (State_Room (Settings) + Conv_Room (Settings)) * 4
          else 0);
    begin
-      if Context = 0 or else Heaps = 0 then
+      if Context = 0 then
          return 0;
       end if;
 
@@ -8793,18 +8788,35 @@ package body Model_Runner.Llama is
          return 0;
       end if;
 
-      declare
-         --  The device's own copy of the cache, which is not the host's
-         --  plan: binary32 rows paged beside a half-precision copy are six
-         --  bytes an element where the plan says four.
-         Cache_Bytes : constant U64 :=
-           Device_Cache_Bytes (Settings, Plan, Context, Cache, Paged);
-      begin
-         if Heaps <= Session_Margin + States + Cache_Bytes then
-            return 0;
-         end if;
-         return Heaps - Session_Margin - States - Cache_Bytes;
-      end;
+      --  The device's own copy of the cache, which is not the host's plan:
+      --  binary32 rows paged beside a half-precision copy are six bytes an
+      --  element where the plan says four.
+      return Device_Session_Margin + States
+        + Device_Cache_Bytes (Settings, Plan, Context, Cache, Paged);
+   end Device_Kept_Back;
+
+   function Device_Room
+     (Settings : Configuration;
+      Context  : Natural;
+      Cache    : Cache_Precision := Exact;
+      Paged    : Boolean := True) return Interfaces.Unsigned_64
+   is
+      subtype U64 is Interfaces.Unsigned_64;
+
+      Budget : constant U64 := Model_Runner.Backend.Device.Budget_Bytes;
+      Heaps  : constant U64 :=
+        (if Budget > 0
+         then U64'Min (Budget, Model_Runner.Backend.Device.Heap_Bytes)
+         else Model_Runner.Backend.Device.Heap_Bytes);
+      Kept   : constant U64 :=
+        Device_Kept_Back (Settings, Context, Cache, Paged);
+   begin
+      if Context = 0 or else Heaps = 0 or else Kept = 0
+        or else Heaps <= Kept
+      then
+         return 0;
+      end if;
+      return Heaps - Kept;
    end Device_Room;
 
    ----------

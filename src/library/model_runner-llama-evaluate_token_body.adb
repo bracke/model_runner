@@ -75,7 +75,7 @@ is
        and then T.Is_Present (L.Up));
 
    function Mixture_Whole (L : Layer) return Boolean
-   is (Source.Stacked
+   is ((Source.Stacked or else L.Mixture_Held)
        and then L.Experts /= null
        and then T.Is_Present (L.Router)
        and then ((T.Is_Present (L.Gate_Stack) and then T.Is_Present (L.Up_Stack))

@@ -22,7 +22,7 @@ is
    --  same kernel a batch and a token's whole layer choose through, so
    --  that every road through a mixture on the device chooses alike.
    Gathered : constant Boolean :=
-     Item.Owner.all.Stacked
+     (Item.Owner.all.Stacked or else Current.Mixture_Held)
      and then (Current.Expert_Gate_Bias = null)
               = (Current.Expert_Up_Bias = null)
      and then Used <= Model_Runner.Backend.Device.Max_Route
