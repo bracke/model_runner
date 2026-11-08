@@ -2746,6 +2746,28 @@ package Model_Runner.Llama is
    --  @return True where Draft_Next may be called.
    function Drafts_Next (Item : Session) return Boolean;
 
+   --  What a reply drafting from the block learned of its rounds, kept by
+   --  the session for the next: the length its rounds go back to after a
+   --  miss, and what a round of each length cost (Generation.Note_Base).
+   --  Learned afresh every reply, Mellum's spent its first rounds at
+   --  lengths it had already found slower.
+   Draft_Memo_Lengths : constant := 8;
+   type Draft_Memo_Times is array (1 .. Draft_Memo_Lengths) of Long_Float;
+   type Draft_Memo is record
+      --  Nought where nothing is learned yet.
+      Base   : Natural := 0;
+      Ns     : Draft_Memo_Times := [others => 0.0];
+      Rounds : Draft_Memo_Times := [others => 0.0];
+   end record;
+
+   --  @param Item Session.
+   --  @return What its replies learned of their rounds so far.
+   function Draft_Memo_Of (Item : Session) return Draft_Memo;
+
+   --  @param Item Session.
+   --  @param Memo What this reply learned, for the next.
+   procedure Keep_Draft_Memo (Item : in out Session; Memo : Draft_Memo);
+
    --  Whether a session of this model can be rewound past what a round
    --  proposed, which drafting needs: every architecture but those whose
    --  linear layers read one state (One_State_Slot).
@@ -3959,6 +3981,9 @@ private
       --  still hold what was written there and a later rewind's slot is
       --  intact only if nothing has come round to it.
       Kept_Newest : Natural := 0;
+
+      --  See Draft_Memo.
+      Drafting_Memo : Draft_Memo;
 
       --  The lowest position whose slot holds a state the ring was
       --  written with: where the ring was last made from one state --

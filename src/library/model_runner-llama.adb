@@ -8920,6 +8920,10 @@ package body Model_Runner.Llama is
 
       Give_Back_Device_Cache (Item);
 
+      --  What its replies learned of drafting is this model's, and the next
+      --  session opened in its place may be another's.
+      Item.Drafting_Memo := (others => <>);
+
       --  What the device owed the host is a closed session's, and the next
       --  session opened in this one's place settles from nothing: carried
       --  over, its first slide read back the closed session's range into
@@ -11382,6 +11386,14 @@ package body Model_Runner.Llama is
 
       return (if Stack > 0.0 then Block / Stack else 1.0);
    end Draft_Share;
+
+   function Draft_Memo_Of (Item : Session) return Draft_Memo
+   is (Item.Drafting_Memo);
+
+   procedure Keep_Draft_Memo (Item : in out Session; Memo : Draft_Memo) is
+   begin
+      Item.Drafting_Memo := Memo;
+   end Keep_Draft_Memo;
 
    function Drafts_Next (Item : Session) return Boolean
    is (Item.Current not in Closed | Failed

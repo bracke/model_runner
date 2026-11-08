@@ -898,6 +898,17 @@ package body Model_Runner.Generation is
             Base_Length := Next;
             Round_Draft := Next;
          end if;
+
+         --  Kept for the next reply; see L.Draft_Memo.
+         declare
+            Memo : L.Draft_Memo := (Base => Base_Length, others => <>);
+         begin
+            for At_Length in 1 .. Natural'Min (Largest_Draft, L.Draft_Memo_Lengths) loop
+               Memo.Ns (At_Length) := Cost_Ns (At_Length);
+               Memo.Rounds (At_Length) := Cost_Rounds (At_Length);
+            end loop;
+            L.Keep_Draft_Memo (Session, Memo);
+         end;
       end Note_Base;
 
       --  Whether drafting is paying, timed rather than assumed: a stretch
@@ -3223,6 +3234,25 @@ package body Model_Runner.Generation is
             --  ended where a count ends it.
             if Item.Max_Tokens = 0 then
                Outcome.Reason := Maximum_Tokens;
+            end if;
+
+            --  What the session's earlier replies learned of the base and
+            --  of what each length's rounds cost: taken up, the base is
+            --  not looked for again from the length asked for.
+            if Adapting and then Timed and then Settings.Experts > 0 then
+               declare
+                  Memo : constant L.Draft_Memo := L.Draft_Memo_Of (Session);
+               begin
+                  if Memo.Base in 1 .. Base_Most then
+                     Base_Length := Memo.Base;
+                     Round_Draft := Memo.Base;
+                     for At_Length in 1 .. Natural'Min (Largest_Draft, L.Draft_Memo_Lengths) loop
+                        Cost_Ns (At_Length) := Memo.Ns (At_Length);
+                        Cost_Rounds (At_Length) := Memo.Rounds (At_Length);
+                        Cost_Seen (At_Length) := Memo.Rounds (At_Length) > 0.0;
+                     end loop;
+                  end if;
+               end;
             end if;
 
             Decode_Loop :
