@@ -172,6 +172,12 @@ is
    Layer_Projected : T.Real_Array_Access := null;
    Layer_Gates     : T.Real_Array_Access := null;
    Layer_Out       : T.Real_Array_Access := null;
+
+   --  Gemma4's mixture over the batch: its dense feed-forward's rows and
+   --  the experts' own input's, then their answers. Null until a layer
+   --  with one asks for them.
+   Dense_Rows      : T.Real_Array_Access := null;
+   Expert_Rows     : T.Real_Array_Access := null;
    Query  : T.Real_Array_Access := null;
    Keys   : T.Real_Array_Access := null;
    Values : T.Real_Array_Access := null;
@@ -279,8 +285,13 @@ is
 
    function Mixture_Whole (L : Layer) return Boolean
    is ((Source.Stacked
+        --  Streamed a batch's stacks only as two of them, which the
+        --  prefetch copies: Gemma4's one stack an expert was uploaded
+        --  layer after layer and kept, and its 26B ran the part out of
+        --  memory on a prompt of 2,817 tokens.
         or else (Source.Split_Feed
-                 and then Count >= Element_Count (Stream_Least)))
+                 and then Count >= Element_Count (Stream_Least)
+                 and then not T.Is_Present (L.Fused_Stack)))
        and then L.Experts /= null
        and then T.Is_Present (L.Router)
        and then ((T.Is_Present (L.Gate_Stack) and then T.Is_Present (L.Up_Stack))
@@ -530,6 +541,8 @@ is
 
    procedure Release is
    begin
+      T.Free (Dense_Rows);
+      T.Free (Expert_Rows);
       T.Free (Acts);
       T.Free (Norm);
       T.Free (Kept_Norm);
@@ -3191,21 +3204,90 @@ begin
             --  in. Everything before it -- the projections, the attention,
             --  the output -- still goes through the batch.
             if Current.Experts /= null and then Settings.Kind = Gemma4 then
-               --  Gemma4's dense feed-forward beside its mixture, a row at
-               --  a time as Gemma4_Mixture takes it: the row's residual and
-               --  its feed-normalized input in, the two answers' sum back
-               --  where the join reads it.
-               for Which in 0 .. Count - 1 loop
-                  declare
-                     Origin : constant Element_Count := Slot (Which, Width);
-                  begin
-                     Item.Activation.all := Acts.all (Origin .. Origin + Width - 1);
-                     Item.Normalized.all := Norm.all (Origin .. Origin + Width - 1);
-                     Gemma4_Mixture (Item, Current, Status);
-                     exit when E.Is_Error (Status);
-                     Norm.all (Origin .. Origin + Width - 1) := Item.Mixture.all;
-                  end;
-               end loop;
+               --  Gemma4's dense feed-forward beside its mixture, over the
+               --  batch: the dense one's three products over every row and
+               --  its post-norm a row; the experts' own input a row, the
+               --  experts gathered by expert over all of them (Mixture_Batch)
+               --  and their post-norm a row; the two added where the join
+               --  reads them. A row at a time, a split 26B read a prompt of
+               --  2,817 tokens at 5.7 a second. On the processor's pool where
+               --  the device runs only the front halves, as Gemma4_Mixture is.
+               declare
+                  Was     : constant Boolean := Item.Host_Feed;
+                  Eps     : constant Real := Settings.Epsilon;
+                  Grouped : Boolean := False;
+               begin
+                  Item.Host_Feed := Was or else Source.Split_Feed;
+                  if Dense_Rows = null then
+                     T.Allocate (Count * Width, Dense_Rows);
+                     T.Allocate (Count * Width, Expert_Rows);
+                  end if;
+                  if Dense_Rows /= null and then Expert_Rows /= null
+                    and then Model_Runner.Backend."/="
+                               (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Reference)
+                    and then Count > 1
+                  then
+                     Product_Batch (Item, Current.Gate, Norm, Count, Gate, Status);
+                     if E.Is_Ok (Status) then
+                        Product_Batch (Item, Current.Up, Norm, Count, Up, Status);
+                     end if;
+                     if E.Is_Ok (Status) then
+                        K.GELU (Gate.all (0 .. Count * Feed - 1));
+                        K.Multiply (Gate.all (0 .. Count * Feed - 1), Up.all (0 .. Count * Feed - 1));
+                        Product_Batch (Item, Current.Down, Gate, Count, Dense_Rows, Status);
+                     end if;
+                     if E.Is_Ok (Status) then
+                        for Which in 0 .. Count - 1 loop
+                           declare
+                              Origin : constant Element_Count := Slot (Which, Width);
+                           begin
+                              K.RMS_Norm (Dense_Rows.all (Origin .. Origin + Width - 1),
+                                          Current.Post_Feed_Norm_1.all, Eps, Item.Post_Room.all);
+                              Dense_Rows.all (Origin .. Origin + Width - 1) := Item.Post_Room.all;
+                              K.RMS_Norm (Acts.all (Origin .. Origin + Width - 1),
+                                          Current.Pre_Feed_Norm_2.all, Eps,
+                                          Expert_Rows.all (Origin .. Origin + Width - 1));
+                           end;
+                        end loop;
+                        Mixture_Batch (Item, Current, Expert_Rows, Count, Grouped, Status);
+                        if Workers_CPU."/=" (Item.Team, null) then
+                           Workers_CPU.Rest (Item.Team.all);
+                        end if;
+                     end if;
+                     if E.Is_Ok (Status) and then Grouped then
+                        for Which in 0 .. Count - 1 loop
+                           declare
+                              Origin : constant Element_Count := Slot (Which, Width);
+                           begin
+                              K.RMS_Norm (Expert_Rows.all (Origin .. Origin + Width - 1),
+                                          Current.Post_Feed_Norm_2.all, Eps, Item.Post_Room.all);
+                              Norm.all (Origin .. Origin + Width - 1) := Item.Post_Room.all;
+                              K.Add (Norm.all (Origin .. Origin + Width - 1),
+                                     Dense_Rows.all (Origin .. Origin + Width - 1));
+                           end;
+                        end loop;
+                     end if;
+                  end if;
+                  Item.Host_Feed := Was;
+                  exit when E.Is_Error (Status);
+                  if not Grouped then
+                     --  A row at a time where the batch was not gathered, as
+                     --  Gemma4_Mixture takes it: the row's residual and its
+                     --  feed-normalized input in, the two answers' sum back
+                     --  where the join reads it.
+                     for Which in 0 .. Count - 1 loop
+                        declare
+                           Origin : constant Element_Count := Slot (Which, Width);
+                        begin
+                           Item.Activation.all := Acts.all (Origin .. Origin + Width - 1);
+                           Item.Normalized.all := Norm.all (Origin .. Origin + Width - 1);
+                           Gemma4_Mixture (Item, Current, Status);
+                           exit when E.Is_Error (Status);
+                           Norm.all (Origin .. Origin + Width - 1) := Item.Mixture.all;
+                        end;
+                     end loop;
+                  end if;
+               end;
                exit when E.Is_Error (Status);
             elsif Current.Experts /= null then
                --  Gathered by expert, which is what makes an expert's

@@ -182,6 +182,16 @@ is
       return True;
    end Front_Reads_Raw;
 
+   --  Whether a mixture's matrices, Total of them, leave the context its
+   --  room on the device: the context named, or the one planned where
+   --  none is, counted as a dense model's is.
+   function Context_Leaves_Room (Total : Interfaces.Unsigned_64) return Boolean
+   is (Total
+       <= Device_Room
+            (Item.Settings,
+             (if Context > 0 then Context else Planned_Device_Context),
+             Cache, Paged));
+
    --  Whether the mixture goes to the device as Prepare places it below.
    function On_Device_Mixture return Boolean
    is (Item.Settings.Experts > 0
@@ -3100,8 +3110,14 @@ begin
             Budget := Budget - Beside;
          end if;
          Mixture_Bytes (Total, Feed);
+         --  Split too where the stacks would not leave the context its
+         --  room (Context_Leaves_Room), as Stacked is decided below: not
+         --  split, a mixture not stacked ran its experts piecemeal on the
+         --  device, uploading them as tokens chose them, until the part
+         --  ran out of memory.
          Mixture_Split :=
-           Splits (Total, Feed, Budget)
+           (Splits (Total, Feed, Budget)
+            or else not Context_Leaves_Room (Total))
            and then Panels_Unasked
                       (Feed, Bounds.Max_Allocation_Bytes,
                        Model_Runner.Panel_Cache.Room_Now);
@@ -4146,11 +4162,7 @@ begin
          --  part out of memory at its first prompt of 547 tokens.
          Item.Stacked :=
            not Mixture_Split and then Total <= Item.Able.Memory_Bytes
-           and then Total
-                    <= Device_Room
-                         (Item.Settings,
-                          (if Context > 0 then Context else Planned_Device_Context),
-                          Cache, Paged);
+           and then Context_Leaves_Room (Total);
 
          --  Its batch held to what the room keeps for a batch's answers:
          --  the session margin, less the driver's and the desktop's share,
@@ -4202,7 +4214,8 @@ begin
          --  13.9 on the processor alone.
          if not Item.Stacked then
             Item.Split_Feed :=
-              Mixture_Split or else Splits (Total, Feed, Item.Able.Memory_Bytes);
+              Mixture_Split or else Splits (Total, Feed, Item.Able.Memory_Bytes)
+              or else not Context_Leaves_Room (Total);
             if Item.Split_Feed then
                Taken := Total - Feed;
                Item.Host_Front_Raw := Front_Reads_Raw;
