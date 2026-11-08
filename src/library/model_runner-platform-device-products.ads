@@ -3771,6 +3771,11 @@ private
    type Few_Lines is
      array (1 .. 4, 1 .. 3) of System.Address;
 
+   --  Room for the tiles made for one format each.
+   Special_Most : constant := 192;
+   type Special_Lines is array (1 .. Special_Most) of System.Address;
+   type Special_Packings is array (1 .. Special_Most) of Weight_Packing;
+
    type Engine is limited record
       --  Where the last Run told to leave its answers left the first.
       Kept_At : System.Address := System.Null_Address;
@@ -4072,6 +4077,12 @@ private
       Narrow_Short_Line      : System.Address := System.Null_Address;
       Narrow_Short_More_Line : System.Address := System.Null_Address;
       Narrow_Short_Low_Line  : System.Address := System.Null_Address;
+      --  The tiles made again for one format each, as they are first
+      --  asked for: see Specialized_Tile.
+      Special_Base    : Special_Lines := [others => System.Null_Address];
+      Special_Line    : Special_Lines := [others => System.Null_Address];
+      Special_Packing : Special_Packings := [others => Values_F32];
+      Special_Count   : Natural := 0;
       Listed_Low_Line : System.Address := System.Null_Address;
       --  One for every count a round may bring, up to the eight-wide
       --  kernel, indexed by that count. A pipeline is cheap now the words

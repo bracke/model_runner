@@ -6812,6 +6812,10 @@ package body Model_Runner.Platform.Device.Products is
       Wider_Ready := False;
       Give_Back (Item.Narrow_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Short_Line, "vkDestroyPipeline");
+      for Index in 1 .. Item.Special_Count loop
+         Give_Back (Item.Special_Line (Index), "vkDestroyPipeline");
+      end loop;
+      Item.Special_Count := 0;
       Give_Back (Item.Narrow_Short_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Narrow_Short_Low_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Low_Line, "vkDestroyPipeline");
@@ -8988,6 +8992,94 @@ package body Model_Runner.Platform.Device.Products is
    --  before them already converted. The caller says so; this cannot tell,
    --  because what it is handed is a shape and a weight rather than which
    --  step's answer it is reading.
+   --  The module a tile's pipeline was made from, or null for one this
+   --  does not make again: the listed tiles bind their own, and the first
+   --  compilation's six formats -- the half precisions, Q8_0 and the
+   --  k-quants -- are left as they are: qwen3-8b's 24-token prompt read in
+   --  0.193 s on them and 0.218 made for Q4_K and Q6_K.
+   function Tile_Module (Item : Engine; Line : Address) return Address
+   is (if Line = Null_Handle then Null_Handle
+       elsif Line = Item.Extra_Line then Item.Extra
+       elsif Line = Item.Narrow_More_Line then Item.Narrow_More
+       elsif Line = Item.Low_Tile_Line then Item.Low_Tile
+       elsif Line = Item.Narrow_Low_Line then Item.Narrow_Low
+       elsif Line = Item.Wider_More_Line then Item.Wider_More
+       elsif Line = Item.Wider_Low_Line then Item.Wider_Low
+       elsif Line = Item.Narrow_Short_More_Line then Item.Narrow_Short_More
+       elsif Line = Item.Narrow_Short_Low_Line then Item.Narrow_Short_Low
+       else Null_Handle);
+
+   --  A tile's pipeline made again for one format, the first time that
+   --  format asks for it: the format told through the shader's constant
+   --  FORMAT_FIXED, so that the driver drops every other format's decode.
+   --  matrix_product.comp carries the measurements. The tile itself where
+   --  it cannot be made, or the room for them is full.
+   procedure Specialized_Tile
+     (Item    : in out Engine;
+      Line    : Address;
+      Packing : Weight_Packing;
+      Result  : out Address)
+   is
+      Module : constant Address := Tile_Module (Item, Line);
+   begin
+      Result := Line;
+      if Module = Null_Handle then
+         return;
+      end if;
+
+      for Index in 1 .. Item.Special_Count loop
+         if Item.Special_Base (Index) = Line
+           and then Item.Special_Packing (Index) = Packing
+         then
+            Result := Item.Special_Line (Index);
+            return;
+         end if;
+      end loop;
+
+      if Item.Special_Count = Special_Most then
+         return;
+      end if;
+
+      declare
+         Create : constant Create_Pipelines_Call :=
+           To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+         Name    : C.Strings.chars_ptr := C.Strings.New_String ("main");
+         Request : aliased Compute_Pipeline_Info;
+         Pin     : aliased Required_Size_Info;
+         Which   : aliased Specialization_Entry :=
+           (Which => 0, At_Was => 0, Span => 4);
+         Value   : aliased C.unsigned :=
+           C.unsigned (Weight_Packing'Pos (Packing) + 1);
+         Told    : aliased Specialization_Info;
+         Made    : aliased Address := Null_Handle;
+      begin
+         if Create /= null then
+            Pin.Required := Matrix_Lanes;
+            Told.Count := 1;
+            Told.Entries := Which'Address;
+            Told.Span := 4;
+            Told.Values := Value'Address;
+            Request.Stage.Module := Module;
+            Request.Stage.Name := Name;
+            Request.Stage.Next := Pin'Address;
+            Request.Stage.Flags := Require_Full_Subgroups;
+            Request.Stage.Specialized := Told'Address;
+            Request.Layout := Item.Layout;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Special_Count := Item.Special_Count + 1;
+               Item.Special_Base (Item.Special_Count) := Line;
+               Item.Special_Packing (Item.Special_Count) := Packing;
+               Item.Special_Line (Item.Special_Count) := Made;
+               Result := Made;
+            end if;
+         end if;
+         C.Strings.Free (Name);
+      end;
+   end Specialized_Tile;
+
    procedure Tile_Product
      (Item    : in out Engine;
       Rows    : Natural;
@@ -9191,7 +9283,12 @@ package body Model_Runner.Platform.Device.Products is
                Members (8) := C.unsigned (Copy_Columns);
                Members (9) := C.unsigned (Rows * Count);
             end if;
-            Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Pipeline);
+            declare
+               Special : Address;
+            begin
+               Specialized_Tile (Item, Pipeline, Packing, Special);
+               Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Special);
+            end;
             declare
                Shape : aliased Shape_Constants :=
                  (Rows    => C.unsigned (Rows),

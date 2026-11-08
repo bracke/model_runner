@@ -192,6 +192,16 @@ layout(push_constant) uniform Shape {
     uint routed;
 } shape;
 
+//  The format, where the pipeline was made for one: one more than its
+//  number, nought where the push constant says it. A pipeline made for one
+//  format is the driver's to strip of every other's decode, and a tile of
+//  every format's was most of a hundred kilobytes of code switched in at
+//  every step of a layer: Gemma 4 E4B's 24-token prompt 0.129 -> 0.122 s
+//  made for Q4_0, its 102-token one 0.291 -> 0.280. The engine's
+//  Specialized_Tile makes them.
+layout(constant_id = 0) const uint FORMAT_FIXED = 0u;
+#define SHAPE_FORMAT (FORMAT_FIXED != 0u ? FORMAT_FIXED - 1u : shape.format)
+
 //  Three of the listed words, read otherwise by a plain tile. Stride is
 //  where its operand begins in the half-precision buffer, in halves: the
 //  front, as it always was, but for the projection down of a gated
@@ -1911,21 +1921,21 @@ void main() {
     //  Bytes a row takes, which says where the next row starts. The
     //  formats differ in this, in the decode below, and in nothing else.
 #if defined(LOW_BITS)
-    uint rb = (shape.columns / low_elements (shape.format))
-              * low_bytes (shape.format);
+    uint rb = (shape.columns / low_elements (SHAPE_FORMAT))
+              * low_bytes (SHAPE_FORMAT);
 #elif defined(MORE_FORMATS)
-    uint rb = (is_short (shape.format) ? shape.columns / 32u
+    uint rb = (is_short (SHAPE_FORMAT) ? shape.columns / 32u
                                        : shape.columns / 256u)
-              * block_bytes (shape.format);
+              * block_bytes (SHAPE_FORMAT);
 #else
-    uint block = shape.format == FMT_Q4_K ? 144u
-                 : (shape.format == FMT_Q5_K ? 176u : 210u);
+    uint block = SHAPE_FORMAT == FMT_Q4_K ? 144u
+                 : (SHAPE_FORMAT == FMT_Q5_K ? 176u : 210u);
 
-    uint rb = shape.format == FMT_F32
+    uint rb = SHAPE_FORMAT == FMT_F32
               ? shape.columns * 4u
-              : shape.format <= FMT_BF16
+              : SHAPE_FORMAT <= FMT_BF16
               ? shape.columns * 2u
-              : (shape.format == FMT_Q8_0
+              : (SHAPE_FORMAT == FMT_Q8_0
                  ? (shape.columns / 32u) * 34u
                  : (shape.columns / 256u) * block);
 
@@ -1941,7 +1951,7 @@ void main() {
     //  tenth (429), but at 128 registers and 54 KB of shared memory it
     //  runs four waves a unit, and a register more is a wave fewer.
 #ifdef LISTED
-    bool q4k = shape.format == FMT_Q4_K;
+    bool q4k = SHAPE_FORMAT == FMT_Q4_K;
 #else
     const bool q4k = false;
 #endif
@@ -1987,7 +1997,7 @@ void main() {
 
 #if defined(MORE_FORMATS) && defined(LISTED)
     //  MXFP4 a step ahead; see mx_fetch.
-    bool mx = shape.format == FMT_MXFP4;
+    bool mx = SHAPE_FORMAT == FMT_MXFP4;
     uvec4 mx_a[TILE_R / 32u];
     uint  mx_e[TILE_R / 32u];
     uint  mx_rows[TILE_R / 32u];
@@ -2113,13 +2123,13 @@ void main() {
                 //  The low-bit formats: sixteen weights decoded by the
                 //  format's own arithmetic, as the row product has it.
                 float v[16];
-                decode16 (shape.format, row, k0 + half_of * 16u, rr / 32u, v);
+                decode16 (SHAPE_FORMAT, row, k0 + half_of * 16u, rr / 32u, v);
                 for (uint j = 0u; j < 16u; ++j) {
                     wt[into + j] = float16_t (v[j]);
                 }
             }
 #elif defined(MORE_FORMATS)
-            if (is_nibble (shape.format)) {
+            if (is_nibble (SHAPE_FORMAT)) {
                 //  The six formats that keep thirty-two elements in a
                 //  block behind one scale, as nibbles. They share a shape
                 //  and differ only in what is done to a nibble once it is
@@ -2131,7 +2141,7 @@ void main() {
                 //  The low half of byte j is element j and the high half is
                 //  element j + 16, so both halves of a step read the same
                 //  sixteen bytes and only the nibble differs.
-                uint fmt = shape.format;
+                uint fmt = SHAPE_FORMAT;
 
                 uint quants_at = fmt == FMT_Q4_1 ? 4u
                                  : (fmt == FMT_Q5_0 ? 6u
@@ -2252,7 +2262,7 @@ void main() {
                         (p3, turn + 24u, 15u, fifths, levelled, bias)
                         + lowest);
                 }
-            } else if (shape.format == FMT_Q2_K) {
+            } else if (SHAPE_FORMAT == FMT_Q2_K) {
                 //  Two bits an element, sixteen sub-blocks of sixteen, and
                 //  a four-bit scale and a four-bit minimum sharing a byte
                 //  for each. A step of thirty-two columns is two of those
@@ -2307,7 +2317,7 @@ void main() {
                     ((p3 >> (16u + shift)) & 3u) - lowest);
                 wt[into + 15u] = float16_t (factor * float
                     ((p3 >> (24u + shift)) & 3u) - lowest);
-            } else if (shape.format == FMT_IQ4_XS) {
+            } else if (SHAPE_FORMAT == FMT_IQ4_XS) {
                 //  The levels again, over a super-block: one half-precision
                 //  scale for the whole of it and a six-bit one for each
                 //  sub-block of thirty-two, four bits in a nibble and two
@@ -2366,7 +2376,7 @@ void main() {
                     (LEVELS[(p3 >> (turn + 16u)) & 15u]));
                 wt[into + 15u] = float16_t (step * float
                     (LEVELS[(p3 >> (turn + 24u)) & 15u]));
-            } else if (shape.format == FMT_Q3_K) {
+            } else if (SHAPE_FORMAT == FMT_Q3_K) {
                 //  Two bits an element in sixty-four bytes and the third
                 //  bit apart in a mask of thirty-two, one bit of it for
                 //  each of the eight steps a super-block is made of. A set
@@ -2457,7 +2467,7 @@ void main() {
                      - 4.0 * float (1u - ((m3 >> (24u + bit)) & 1u))));
             }
 #else
-            if (shape.format == FMT_F32) {
+            if (SHAPE_FORMAT == FMT_F32) {
                 //  Binary32 and no blocks: the sixteen an invocation wants
                 //  are sixteen words, each rounded once to the half the
                 //  tile holds -- the rounding every other format's weights
@@ -2467,7 +2477,7 @@ void main() {
                 for (uint j = 0u; j < 16u; ++j) {
                     wt[into + j] = float16_t(uintBitsToFloat(w[i + j]));
                 }
-            } else if (shape.format <= FMT_BF16) {
+            } else if (SHAPE_FORMAT <= FMT_BF16) {
                 //  Sixteen bits a weight and no blocks: the sixteen an
                 //  invocation wants are eight words, and they always start
                 //  on a word boundary because a row is a whole number of
@@ -2499,7 +2509,7 @@ void main() {
                 for (uint j = 0u; j < 8u; ++j) {
                     uint held = words[j];
 
-                    if (shape.format == FMT_F16) {
+                    if (SHAPE_FORMAT == FMT_F16) {
                         vec2 pair = unpackHalf2x16(held);
                         wt[into + j * 2u]      = float16_t(pair.x);
                         wt[into + j * 2u + 1u] = float16_t(pair.y);
@@ -2510,7 +2520,7 @@ void main() {
                             float16_t(uintBitsToFloat(held & 0xFFFF0000u));
                     }
                 }
-            } else if (shape.format == FMT_Q8_0) {
+            } else if (SHAPE_FORMAT == FMT_Q8_0) {
                 uint at = row + (k0 / 32u) * 34u;
 
                 //  A block begins on an even byte, so its scale is in one
@@ -2537,7 +2547,7 @@ void main() {
                 wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
                 wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
                 wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
-            } else if (shape.format == FMT_Q4_K) {
+            } else if (SHAPE_FORMAT == FMT_Q4_K) {
                 //  Q4_K. A super-block is two hundred and fifty-six
                 //  elements in a hundred and forty-four bytes, and a step
                 //  of thirty-two columns is one of its eight sub-blocks:
@@ -2598,7 +2608,7 @@ void main() {
                 wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
                 wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
                 wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
-            } else if (shape.format == FMT_Q5_K) {
+            } else if (SHAPE_FORMAT == FMT_Q5_K) {
                 //  Q5_K. The four-bit k-quant with a bit taken out of every
                 //  quant and kept apart: the same two scales and the same
                 //  twelve packed six-bit pairs, then thirty-two bytes
