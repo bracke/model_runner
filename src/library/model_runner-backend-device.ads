@@ -393,6 +393,15 @@ package Model_Runner.Backend.Device is
    --  first time either asks, and asking again before it stops keeps it.
    procedure Hold_Clock;
 
+   --  Hold_Clock for a prompt, but only the first the engine reads: then
+   --  the part comes from its lowest clock with every pipeline still to be
+   --  made, and Gemma 4 E4B's cold 110-token prompt read in 0.605 s held
+   --  against 0.620. Every prompt after it is quicker left alone -- the
+   --  keeper's rounds beside it cost more than the climb they save: E4B's
+   --  22 tokens 0.088 s against 0.092 held, qwen3-8b's 21 0.151 against
+   --  0.159, TinyLlama's 23 0.032 against 0.034, alternated.
+   procedure Hold_Clock_For_Prompt;
+
    --  @param Whole True where the whole layer went over as one sequence.
    --  @param Asked True where the device was asked, False where the
    --    engine's own check kept the layer back.

@@ -37,6 +37,10 @@ package body Model_Runner.Backend.Device is
    Keeping      : Devices.Context;
    Keeper_Asked : Boolean := False;
 
+   --  Whether the engine has had its first prompt held; see
+   --  Hold_Clock_For_Prompt.
+   Prompt_Held : Boolean := False;
+
    Ready_Now : Boolean := False;
 
    --  The layers' outcomes, as Note_Layer counts them.
@@ -599,6 +603,7 @@ package body Model_Runner.Backend.Device is
       Products.Close_Keeper;
       Devices.Close (Keeping);
       Keeper_Asked := False;
+      Prompt_Held := False;
       T.Free (Landing);
       T.Free (Fed_Room);
       Products.Close (Engine);
@@ -916,6 +921,14 @@ package body Model_Runner.Backend.Device is
 
       Products.Keep_Clock;
    end Hold_Clock;
+
+   procedure Hold_Clock_For_Prompt is
+   begin
+      if not Prompt_Held and then Ready_Now then
+         Prompt_Held := True;
+         Hold_Clock;
+      end if;
+   end Hold_Clock_For_Prompt;
 
    ----------------
    -- Note_Layer --

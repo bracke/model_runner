@@ -664,13 +664,14 @@ begin
 
    --  A prompt on the device: the part has likely been idle and at its
    --  lowest clock, which a short prompt is over before it climbs out
-   --  of. A round's few positions are not a prompt, and a keeper beside
-   --  a token's work costs it.
+   --  of -- the first one the engine reads; see Hold_Clock_For_Prompt.
+   --  A round's few positions are not a prompt, and a keeper beside a
+   --  token's work costs it.
    if Count >= Prompt_Clock_Least
      and then Model_Runner.Backend."="
                 (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
    then
-      Model_Runner.Backend.Device.Hold_Clock;
+      Model_Runner.Backend.Device.Hold_Clock_For_Prompt;
    end if;
 
    --  More than one token at a time is a thing the backend either does or
