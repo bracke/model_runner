@@ -6402,16 +6402,20 @@ package body Checks is
                return 0;
             end Number_After;
 
-            --  The shader states its rows under LISTED first and then
-            --  for the rest, and its vectors under NARROW, under LISTED
-            --  with LISTED_WIDE, under LISTED and then for the rest, in
-            --  that order.
+            --  The shader states its rows under LISTED first, then under
+            --  NARROW_SHORT, then for the rest, and its vectors under
+            --  NARROW, under LISTED with LISTED_WIDE, under LISTED and then
+            --  for the rest, in that order.
             Listed_Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ");
-            Rows_Said : constant Natural :=
+            Short_Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ", Skip => 1);
-            Wider_Rows_Said : constant Natural :=
+            Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ", Skip => 2);
+            Wider_Rows_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_R = ", Skip => 3);
+            Short_Rows_Asked : constant Natural :=
+              Number_After (Engine, "Narrow_Short_Rows : constant := ");
             Wider_Rows_Asked : constant Natural :=
               Number_After (Engine, "Wider_Rows : constant := ");
             Thin_Said : constant Natural :=
@@ -6449,12 +6453,14 @@ package body Checks is
               or else Wide_Said = 0 or else Wide_Asked = 0
               or else Listed_Rows_Said = 0 or else Listed_Rows_Asked = 0
               or else Wider_Rows_Said = 0 or else Wider_Rows_Asked = 0
+              or else Short_Rows_Said = 0 or else Short_Rows_Asked = 0
             then
                Fail ("one of the matrix tile's numbers could not be "
                      & "read: the shader states TILE_R and TILE_V for each "
                      & "of its compilations and the engine states Tile_Rows,"
-                     & " Tile_Vectors, Narrow_Vectors, Listed_Vectors, "
-                     & "Listed_Wide_Vectors and Listed_Rows, and this check "
+                     & " Tile_Vectors, Narrow_Vectors, Narrow_Short_Rows, "
+                     & "Listed_Vectors, Listed_Wide_Vectors and Listed_Rows,"
+                     & " and this check "
                      & "reads them all as text");
             elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked
               or else Thin_Said /= Thin_Asked
@@ -6462,18 +6468,21 @@ package body Checks is
               or else Wide_Said /= Wide_Asked
               or else Listed_Rows_Said /= Listed_Rows_Asked
               or else Wider_Rows_Said /= Wider_Rows_Asked
+              or else Short_Rows_Said /= Short_Rows_Asked
             then
                Fail ("src/shaders/matrix_product.comp answers a tile of"
                      & Natural'Image (Rows_Said) & " rows by"
                      & Natural'Image (Vecs_Said) & " vectors, or"
-                     & Natural'Image (Thin_Said) & " under NARROW, or"
+                     & Natural'Image (Thin_Said) & " under NARROW ("
+                     & Natural'Image (Short_Rows_Said) & " rows under NARROW_SHORT), or"
                      & Natural'Image (Listed_Rows_Said) & " by"
                      & Natural'Image (Listed_Said) & " under LISTED or"
                      & Natural'Image (Wide_Said) & " with LISTED_WIDE, or"
                      & Natural'Image (Wider_Rows_Said) & " rows under WIDER, and "
                      & "the engine dispatches for" & Natural'Image (Rows_Asked)
                      & " by" & Natural'Image (Vecs_Asked) & " or"
-                     & Natural'Image (Thin_Asked) & " or"
+                     & Natural'Image (Thin_Asked) & " ("
+                     & Natural'Image (Short_Rows_Asked) & " rows) or"
                      & Natural'Image (Listed_Rows_Asked) & " by"
                      & Natural'Image (Listed_Asked) & " or"
                      & Natural'Image (Wide_Asked) & " or"
@@ -6973,6 +6982,32 @@ package body Checks is
 
             if Found and then Digest /= Recorded then
                Fail ("a LOW_BITS compilation of src/shaders/matrix_product.comp"
+                     & " is older than the source; run ./compile-shaders.sh");
+            end if;
+         end;
+      end loop;
+
+      --  And the narrow tile's three compilations at thirty-two rows.
+      for Which in 1 .. 3 loop
+         declare
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/matrix_product.comp", Found);
+
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (case Which is
+                  when 1 => Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Digest,
+                  when 2 =>
+                     Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Extra_Digest,
+                  when others =>
+                     Model_Runner.Shaders.Low_Tiles.Matrix_Narrow_Short_Low_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Found and then Digest /= Recorded then
+               Fail ("a NARROW_SHORT compilation of src/shaders/matrix_product.comp"
                      & " is older than the source; run ./compile-shaders.sh");
             end if;
          end;

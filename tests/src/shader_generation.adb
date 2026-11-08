@@ -312,6 +312,7 @@ package body Shader_Generation is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
          return Ada.Strings.Fixed.Index (Name, "Matrix_Tap_") = Name'First
+           or else Ada.Strings.Fixed.Index (Name, "Matrix_Narrow_Short") = Name'First
            or else (Ada.Strings.Fixed.Index (Name, "Matrix") = Name'First
                     and then Name'Length >= 4
                     and then Name (Name'Last - 3 .. Name'Last) = "_Low");
@@ -466,7 +467,7 @@ package body Shader_Generation is
 
       Write_Child
         (Root & "/src/library/model_runner-shaders-low_tiles.ads",
-         "Model_Runner.Shaders.Low_Tiles", "The low-bit matrix tiles' and the taps'",
+         "Model_Runner.Shaders.Low_Tiles", "The low-bit matrix tiles', the taps' and the short narrow tiles'",
          Is_Low_Tile'Access, Good);
       if not Good then
          return;

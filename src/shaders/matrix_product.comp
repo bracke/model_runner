@@ -231,6 +231,12 @@ float gaussian_tanh(float v) {
 //  are never stored.
 #ifdef LISTED
 const uint TILE_R = 64u;
+#elif defined(NARROW_SHORT)
+//  And the narrow tile again at thirty-two rows, for a matrix with few of
+//  them: at sixty-four a gemma's 2048 rows were thirty-two workgroups of
+//  one subgroup each, too few to keep the memory busy. The engine's
+//  Narrow_Short_Most carries the measurements.
+const uint TILE_R = 32u;
 #elif !defined(TAP_ROWS) && !defined(WIDER)
 const uint TILE_R = 64u;
 #elif defined(WIDER)

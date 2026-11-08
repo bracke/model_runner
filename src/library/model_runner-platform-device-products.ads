@@ -4063,6 +4063,14 @@ private
       Listed_Tile_Low : System.Address := System.Null_Address;
       Low_Tile_Line   : System.Address := System.Null_Address;
       Narrow_Low_Line : System.Address := System.Null_Address;
+      --  The narrow tile at thirty-two rows, in each of the three
+      --  compilations: see Narrow_Short_Most.
+      Narrow_Short           : System.Address := System.Null_Address;
+      Narrow_Short_More      : System.Address := System.Null_Address;
+      Narrow_Short_Low       : System.Address := System.Null_Address;
+      Narrow_Short_Line      : System.Address := System.Null_Address;
+      Narrow_Short_More_Line : System.Address := System.Null_Address;
+      Narrow_Short_Low_Line  : System.Address := System.Null_Address;
       Listed_Low_Line : System.Address := System.Null_Address;
       --  One for every count a round may bring, up to the eight-wide
       --  kernel, indexed by that count. A pipeline is cheap now the words
