@@ -8011,6 +8011,89 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end Refused_Tokens_Read_The_Devices_Prompt;
 
+   --  A hybrid with a window: its checkpoint, kept before an answer, stands
+   --  the whole answer behind where the next turn rewinds from, further
+   --  than a sliding layer's slack. LFM3 slid its windowed layers past
+   --  the window before the checkpoint and could not go back to it, so an
+   --  agent's every step read its whole conversation again: 254,793
+   --  positions read and 7,763 kept over one task.
+   procedure Hybrid_Window_Rewinds_To_Its_Checkpoint
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Room  : constant := 1024;
+      Front : constant := 8;
+      Half  : constant := 350;
+
+      function Run_Of (First : Natural) return Vocab.Token_Array is
+         Result : Vocab.Token_Array (1 .. Half);
+      begin
+         for Index in Result'Range loop
+            Result (Index) := Vocab.Token_Id (3 + (First + Index * 7) mod 13);
+         end loop;
+         return Result;
+      end Run_Of;
+
+      function Worst (A, B : Logit_Vector) return N.Real is
+         Most : N.Real := 0.0;
+      begin
+         for Index in A'Range loop
+            Most := N.Real'Max (Most, abs (A (Index) - B (Index)));
+         end loop;
+         return Most;
+      end Worst;
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build
+        (Image, Kind => Tiny_Model.Lfm3, Room => Room, Window => 3);
+      declare
+         Held     : aliased constant B.Byte_Array := Image.all;
+         Under    : Harness (Held'Access);
+         Live     : L.Session;
+         Straight, Again : Logit_Vector;
+         Status   : E.Error_Info;
+         Ran      : Boolean;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_CPU, Ran);
+         Assert (Ran, "the fixture did not prepare");
+         L.Open (Live, Under.Ready, Context => Room, Status => Status);
+         Assert (E.Is_Ok (Status), "the session did not open");
+
+         L.Evaluate_Batch
+           (Live, Under.Ready, Run_Of (0) (1 .. Front), Straight,
+            Status => Status);
+         Assert (E.Is_Ok (Status), "the front failed");
+         L.Mark_Checkpoint (Live);
+         L.Evaluate_Batch (Live, Under.Ready, Run_Of (1), Straight,
+                           Status => Status);
+         Assert (E.Is_Ok (Status), "the first half failed");
+         L.Evaluate_Batch (Live, Under.Ready, Run_Of (2), Straight,
+                           Status => Status);
+         Assert (E.Is_Ok (Status), "the second half failed");
+
+         Assert (L.Rewind_Point (Live, Front + 1) = Front,
+                 "the checkpoint" & Natural'Image (2 * Half)
+                 & " positions behind is out of reach; a rewind reaches"
+                 & Natural'Image (L.Rewind_Point (Live, Front + 1)));
+         L.Rewind (Live, Front, Status);
+         Assert (E.Is_Ok (Status), "the rewind to the checkpoint was refused");
+
+         L.Evaluate_Batch (Live, Under.Ready, Run_Of (1), Again,
+                           Status => Status);
+         Assert (E.Is_Ok (Status), "the first half again failed");
+         L.Evaluate_Batch (Live, Under.Ready, Run_Of (2), Again,
+                           Status => Status);
+         Assert (E.Is_Ok (Status), "the second half again failed");
+         Assert (Worst (Straight, Again) = 0.0,
+                 "read again from the checkpoint the answer moved by"
+                 & N.Real'Image (Worst (Straight, Again)));
+         L.Close (Live);
+      end;
+      B.Free (Image);
+   end Hybrid_Window_Rewinds_To_Its_Checkpoint;
+
    procedure Lookup_Drafting_Produces_The_Same_Text
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -22233,6 +22316,10 @@ package body Tests.Inference_Cases is
         (T, A_Rotation_Stretches_When_A_Caller_Asks_It'Access,
          "a caller may stretch the rotation the file did not, and only a "
          & "model stretched for it reaches past its trained context");
+      Register_Routine
+        (T, Hybrid_Window_Rewinds_To_Its_Checkpoint'Access,
+         "a hybrid with a window rewinds to a checkpoint a long answer "
+         & "behind");
       Register_Routine
         (T, Refused_Tokens_Read_The_Devices_Prompt'Access,
          "tokens the device refuses after a prompt it read read that "

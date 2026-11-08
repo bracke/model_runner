@@ -3462,6 +3462,25 @@ begin
             return;
          end if;
 
+         --  --turns names a directory of turn files. A count given there
+         --  -- --turns 2 -- was searched as a directory inside the run,
+         --  and the run waited for ever on the search's error.
+         if Option ("--turns", "") /= ""
+           and then not
+             (Ada.Directories.Exists (Option ("--turns", ""))
+              and then Ada.Directories."="
+                         (Ada.Directories.Kind (Option ("--turns", "")),
+                          Ada.Directories.Directory))
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "speed: --turns names a directory of turn files, read in "
+               & "their names' order; " & Option ("--turns", "")
+               & " is not one");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
          --  The arithmetic is told the backends by Speed_Run once the
          --  model is prepared, as run tells them: what run takes depends
          --  on the model -- Gemma 2's mixed one -- and this told every model

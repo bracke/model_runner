@@ -8375,6 +8375,15 @@ package body Model_Runner.Llama is
    --  slide costs is a window of rows moved every margin positions, and
    --  a larger margin would buy fewer slides for a bigger cache, which is
    --  the trade this refuses.
+   --
+   --  Except in a hybrid. Its linear layers cannot be walked back, so a
+   --  conversation's next turn rewinds to the checkpoint kept before the
+   --  answer -- the whole answer behind, and the tool's reply after it
+   --  -- and a sliding layer must still hold the window before that
+   --  point. Slid, it did not: LFM3 read its whole conversation again at
+   --  every step of an agent's task, 254,793 positions read and 7,763
+   --  kept. Its windowed layers keep the whole context, as its others do;
+   --  five of its eleven attention layers, under twice its cache.
    function Layer_Cells
      (Settings : Configuration;
       Capacity : Natural;
@@ -8382,6 +8391,7 @@ package body Model_Runner.Llama is
    is (if Layer < Settings.Layers and then Linear (Settings, Layer) then 0
        elsif Layer < Settings.Layers and then Settings.Window > 0
          and then Slides (Settings, Layer)
+         and then Linear_Ordinal (Settings, Settings.Layers) = 0
        then Natural'Min
               (Capacity,
                Settings.Window + Window_Margin (Settings) + Rewind_Slack
