@@ -13599,7 +13599,8 @@ package body Tests.Backend_Cases is
    --  (E4B's) and one of sixteen (the 12B's) -- the values read from their
    --  own rows, a group's head along them, against the softmax worked out
    --  on the host. One position, a few, and a batch long enough for the
-   --  batch's compilation where the group fills its rows.
+   --  batch's compilation where the group fills its rows, and for two
+   --  tiles of packed positions a workgroup where it does not.
    procedure Wide_Heads_Attend_On_The_Latent_Kernel_As_The_Host_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -13746,6 +13747,8 @@ package body Tests.Backend_Cases is
 
       Compare (Heads => 8, KV_Heads => 2, Batch => 1);
       Compare (Heads => 8, KV_Heads => 2, Batch => 3);
+      --  Two tiles of four positions a workgroup, the second of one.
+      Compare (Heads => 8, KV_Heads => 2, Batch => 5);
       Compare (Heads => 8, KV_Heads => 2, Batch => 17);
       Compare (Heads => 16, KV_Heads => 1, Batch => 1);
       Compare (Heads => 16, KV_Heads => 1, Batch => 17);

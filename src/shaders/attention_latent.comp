@@ -87,14 +87,20 @@ uint place_of (uint pos, uint offset, uint width) {
 //  The heads a latent answers, the widest key and value it stages, and the
 //  positions a tile holds.
 const uint ROWS = 16u;
+#ifdef PACK_PAIR
+//  A packed group's heads are no wider than their values -- Gemma4's 512
+//  -- and a key of 576 stepped four steps of zeros past them.
+const uint DK   = 512u;
+#else
 const uint DK   = 576u;
+#endif
 const uint DV   = 512u;
 
 //  A batch's compilation (WIDE_TILE) walks tiles of 128: a subgroup scores
 //  thirty-two keys as two chains of the instruction, each query read out of
 //  shared memory feeding two products where it fed one. Holding the queries
 //  in the instruction's operands instead spilled 225 registers.
-#ifdef WIDE_TILE
+#if defined(WIDE_TILE) || defined(PACK_PAIR)
 const uint BC   = 128u;
 #else
 const uint BC   = 64u;
@@ -112,6 +118,12 @@ const uint SUB_TILES = SUB_KEYS / 16u;
 //  workgroup that wide may have (89.5). The engine's Latent_Pair.
 #ifdef WIDE_TILE
 const uint POS = 3u;
+#elif defined(PACK_PAIR)
+//  And two tiles of packed rows: a group of fewer heads than the rows --
+//  Gemma4's four -- packs four positions a tile, and two tiles a
+//  workgroup read each key and value for eight. The engine's
+//  Latent_Pack_Pair carries the measurements.
+const uint POS = 2u;
 #else
 const uint POS = 1u;
 #endif
@@ -133,7 +145,7 @@ const uint V_AT_ONCE = 4u;
 //  it only for a latent whose heads fill the tile's rows, and its partial
 //  scores' 16 KB with these 18 held a unit to one workgroup.
 #if !defined(WIDE_TILE) && !defined(SPLIT_DEPTH)
-shared float16_t qs[ROWS * DK];
+shared float16_t qs[POS * ROWS * DK];
 #endif
 shared float ss[POS * ROWS * BC];
 #ifdef SPLIT_DEPTH
@@ -192,12 +204,12 @@ void main() {
 #ifdef SPLIT_DEPTH
     const bool direct = true;
 #else
-    bool direct = rows == ROWS && dk == DK;
+    bool direct = POS == 1u && rows == ROWS && dk == DK;
 #endif
     uint q_direct = (p0 * shape.heads + head0) * dk;
 #ifndef SPLIT_DEPTH
     if (!direct) {
-        for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
+        for (uint at = gl_LocalInvocationID.x; at < POS * ROWS * DK; at += 256u) {
             uint r = at / DK;
             uint c = at % DK;
             uint rp = p0 + r / rows;
@@ -344,7 +356,10 @@ void main() {
                     coopMatLoad (qf, q, q_direct + t * 16u, dk, gl_CooperativeMatrixLayoutRowMajor);
                     qm[0] = coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> (qf);
                 } else {
-                    coopMatLoad (qm[0], qs, t * 16u, DK, gl_CooperativeMatrixLayoutRowMajor);
+                    [[unroll]] for (uint m = 0u; m < POS; m++) {
+                        coopMatLoad (qm[m], qs, m * ROWS * DK + t * 16u, DK,
+                                     gl_CooperativeMatrixLayoutRowMajor);
+                    }
                 }
 #endif
                 [[unroll]] for (uint n = 0u; n < SUB_TILES; n++) {
@@ -471,7 +486,7 @@ void main() {
         for (uint at = lane; at < 256u; at += 64u) {
             uint r = at / 16u;
             uint c = col0 + at % 16u;
-            uint rp = packed > 1u ? p0 + r / rows : p;
+            uint rp = packed > 1u ? p0 + (m * ROWS + r) / rows : p;
             uint rh = packed > 1u ? r % rows : r;
             if ((packed > 1u || r < rows) && c < dv && rp <= p_end) {
                 uint record = records
@@ -485,7 +500,8 @@ void main() {
     }
     [[unroll]] for (uint i = 0u; i < SUB_ROWS; i++) {
         uint r = (sub * SUB_ROWS + i) % ROWS;
-        uint p = packed > 1u ? p0 + r / rows : p0 + (sub * SUB_ROWS + i) / ROWS;
+        uint p = packed > 1u ? p0 + (sub * SUB_ROWS + i) / rows
+                             : p0 + (sub * SUB_ROWS + i) / ROWS;
         uint h = packed > 1u ? r % rows : r;
         if (lane == 0u && (packed > 1u || r < rows) && p <= p_end) {
             uint record = records

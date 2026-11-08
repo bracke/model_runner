@@ -688,6 +688,14 @@ package body Model_Runner.Platform.Device.Products is
    --  attention_latent.comp's POS.
    Latent_Pair : constant := 3;
 
+   --  Tiles of packed positions a workgroup of the PACK_PAIR compilation
+   --  holds: a group of fewer heads than the tile's rows, Gemma4's four,
+   --  reads each key and value for twice as many positions.
+   Latent_Pack_Pair : constant := 2;
+
+   --  And the widest head it takes: it stages a key of this width.
+   Latent_Pack_Head : constant := 512;
+
    --  At most Few_Wide_Busy a position: DeepSeek-Coder-V2-Lite's token
    --  31,161 deep attended a layer in 731 us at twenty-four, 842 at
    --  thirty-two.
@@ -4556,6 +4564,21 @@ package body Model_Runner.Platform.Device.Products is
                      Item.Attend_Latent_Split := Made;
                   end if;
                end;
+
+               --  And a packed group's, two tiles a workgroup (PACK_PAIR).
+               declare
+                  Packed : aliased constant Model_Runner.Shaders.Word_Array :=
+                    Model_Runner.Shaders.Attend.Attention_Latent_Packed;
+               begin
+                  Request.Size := Interfaces.C.size_t (Packed'Length * 4);
+                  Request.Code := Packed'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Attend_Latent_Packed := Made;
+                  end if;
+               end;
             end if;
          end;
       end if;
@@ -5844,6 +5867,16 @@ package body Model_Runner.Platform.Device.Products is
             end if;
          end if;
 
+         if Item.Attend_Latent_Packed /= Null_Handle then
+            Request.Stage.Module := Item.Attend_Latent_Packed;
+
+            if Create (Item.Logical, Null_Handle, 1, Request'Address,
+                       Null_Handle, Made'Access) = 0
+            then
+               Item.Latent_Packed_Attend := Made;
+            end if;
+         end if;
+
          --  And each of the four again for a batch attending far:
          --  Matrix_Queries a subgroup, as the plain pipeline answers, and
          --  Matrix_Deep_Queries a workgroup, its subgroups reading the
@@ -6834,6 +6867,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Latent_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Batch_Attend, "vkDestroyPipeline");
       Give_Back (Item.Latent_Split_Attend, "vkDestroyPipeline");
+      Give_Back (Item.Latent_Packed_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Mid_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Deep_Attend, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Wide_Deep_Attend, "vkDestroyPipeline");
@@ -6855,6 +6889,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Attend_Latent, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent_Batch, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Latent_Split, "vkDestroyShaderModule");
+      Give_Back (Item.Attend_Latent_Packed, "vkDestroyShaderModule");
       Give_Back (Item.Attend_Matrix_Mid, "vkDestroyShaderModule");
       Give_Back (Item.Query_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Grouped, "vkDestroyShaderModule");
@@ -15232,6 +15267,16 @@ package body Model_Runner.Platform.Device.Products is
       --  Only for groups that fill the tile's rows: the compilation reads
       --  its queries where they lie, and a smaller group's sixteen rows
       --  were the next group's queries, past the batch's at its end.
+      --  A packed group's batch on the compilation that holds two tiles
+      --  of its positions a workgroup; see Latent_Pack_Pair.
+      function Pack_Pair (Which : Positive) return Boolean
+      is (Few_Line (Which) = Item.Latent_Attend
+          and then not Latent_Batch (Which)
+          and then Item.Latent_Packed_Attend /= Null_Handle
+          and then Latent_Packed (Steps.Items (Which).Group_Size) > 1
+          and then Steps.Items (Which).Head_Size <= Latent_Pack_Head
+          and then Count > Latent_Packed (Steps.Items (Which).Group_Size));
+
       function Latent_Batch (Which : Positive) return Boolean
       is (not Steps.Items (Which).Rows_As_Heads
           and then Steps.Items (Which).Group_Size = Latent_Rows
@@ -18344,6 +18389,10 @@ package body Model_Runner.Platform.Device.Products is
                               Bind_Pipeline
                                 (Item.Buffer, Bind_Point_Compute,
                                  Item.Latent_Split_Attend);
+                           elsif Pack_Pair (Index) then
+                              Bind_Pipeline
+                                (Item.Buffer, Bind_Point_Compute,
+                                 Item.Latent_Packed_Attend);
                            end if;
                            --  The latent's positions each their own
                            --  workgroups, down the third axis.
@@ -18356,6 +18405,10 @@ package body Model_Runner.Platform.Device.Products is
                               C.unsigned
                                 (if Latent_Batch (Index)
                                  then (Attending_Of (Index) + Latent_Pair - 1) / Latent_Pair
+                                 elsif Pack_Pair (Index)
+                                 then (Attending_Of (Index)
+                                       + Latent_Pack_Pair * Latent_Packed (This.Group_Size) - 1)
+                                      / (Latent_Pack_Pair * Latent_Packed (This.Group_Size))
                                  elsif Few_Line (Index) = Item.Latent_Attend
                                  then (Attending_Of (Index)
                                        + Latent_Packed (This.Group_Size) - 1)

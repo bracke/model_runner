@@ -6815,6 +6815,8 @@ package body Checks is
              Model_Runner.Shaders.Attend.Attention_Latent_Batch_Digest),
             (Latent'Access,
              Model_Runner.Shaders.Attend.Attention_Latent_Split_Digest),
+            (Latent'Access,
+             Model_Runner.Shaders.Attend.Attention_Latent_Packed_Digest),
             (Token'Access,
              Model_Runner.Shaders.Attend.Attention_Token_Digest),
             (Token'Access,

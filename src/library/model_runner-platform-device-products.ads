@@ -3865,6 +3865,7 @@ private
       Attend_Latent : System.Address := System.Null_Address;
       Attend_Latent_Batch : System.Address := System.Null_Address;
       Attend_Latent_Split : System.Address := System.Null_Address;
+      Attend_Latent_Packed : System.Address := System.Null_Address;
 
       --  The fourth and fifth kernels, which go together and are made only
       --  where the device offers the matrix instruction: a tile of the
@@ -4249,6 +4250,7 @@ private
       Latent_Attend : System.Address := System.Null_Address;
       Latent_Batch_Attend : System.Address := System.Null_Address;
       Latent_Split_Attend : System.Address := System.Null_Address;
+      Latent_Packed_Attend : System.Address := System.Null_Address;
 
       --  The same four at Matrix_Deep_Queries a workgroup, for a batch
       --  attending far.

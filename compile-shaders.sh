@@ -178,6 +178,7 @@ compile attention_split_wider        attention_split.comp  vulkan1.3 HEAD_256
 compile attention_latent             attention_latent.comp vulkan1.3
 compile attention_latent_batch       attention_latent.comp vulkan1.3 WIDE_TILE
 compile attention_latent_split       attention_latent.comp vulkan1.3 SPLIT_DEPTH
+compile attention_latent_packed      attention_latent.comp vulkan1.3 PACK_PAIR
 compile attention_token              attention_token.comp  vulkan1.1
 compile attention_token_packed       attention_token.comp  vulkan1.1 PACKED
 compile norm                         norm.comp             vulkan1.1
