@@ -327,60 +327,76 @@ begin
          --  else '' -- and what it compiles to is what the block form
          --  compiles to, because it is the block form said in one
          --  line: the condition, a jump over the first assignment,
-         --  and a jump over the second.
+         --  and a jump over the second. The second may itself be a
+         --  choice -- A if C else B if D else E, read as Python reads
+         --  it, A if C else (B if D else E) -- and is then compiled
+         --  the same way in its place.
          declare
             At_If   : constant Natural := Word_At (Rest, "if");
             At_Else : constant Natural :=
               (if At_If = 0 then 0 else Word_At (Rest, "else", At_If + 2));
-         begin
-            if At_If > Rest'First and then At_Else /= 0
-              and then Word_At (Rest, "if", At_Else + 4) = 0
-            then
+
+            --  Assign one side, answering where the instruction landed
+            --  or zero when it could not be read or could not be kept.
+            procedure Assign (Source : String; At_Step : out Natural) is
+               Value : Operand;
+               Read  : Boolean;
+               Scan  : Natural := Source'First;
+               Kept  : Natural;
+            begin
+               At_Step := 0;
+               Read_Operand (Source, Scan, Value, Read);
+               if not Read
+                 or else Skip_Spaces (Source, Scan) <= Source'Last
+               then
+                  return;
+               end if;
+
+               Keep (Value, Kept);
+               if Kept = 0 then
+                  return;
+               end if;
+               Emit ((Op => Op_Set_Value, Offset => Target,
+                      Value_At => Kept, others => <>), At_Step);
+            end Assign;
+
+            --  Compile one choice, or the plain value ending a chain.
+            --  Unread is set when a part did not read, and the
+            --  statement is to be refused; a full program has already
+            --  been said by Keep or Emit.
+            procedure Choose (Source : String; Fine, Unread : out Boolean)
+            is
+               If_At   : constant Natural := Word_At (Source, "if");
+               Else_At : constant Natural :=
+                 (if If_At = 0 then 0
+                  else Word_At (Source, "else", If_At + 2));
+               Landed  : Natural;
+            begin
+               Fine := False;
+               Unread := False;
+               if If_At <= Source'First or else Else_At = 0 then
+                  Assign (Source, Landed);
+                  Fine := Landed /= 0;
+                  Unread := Landed = 0;
+                  return;
+               end if;
+
                declare
                   Whether : constant String :=
-                    Model_Runner.Text.Trim
-                      (Rest (At_If + 2 .. At_Else - 1));
+                    Model_Runner.Text.Trim (Source (If_At + 2 .. Else_At - 1));
                   Chosen  : constant String :=
-                    Model_Runner.Text.Trim
-                      (Rest (Rest'First .. At_If - 1));
+                    Model_Runner.Text.Trim (Source (Source'First .. If_At - 1));
                   Otherwise : constant String :=
-                    Model_Runner.Text.Trim
-                      (Rest (At_Else + 4 .. Rest'Last));
+                    Model_Runner.Text.Trim (Source (Else_At + 4 .. Source'Last));
 
                   Test  : Condition;
                   Valid : Boolean;
                   Held  : Natural;
                   Over_First, Over_Second : Natural := 0;
-
-                  --  Assign one side, answering where the
-                  --  instruction landed or zero when it could not
-                  --  be read or could not be kept.
-                  procedure Assign (Source : String; At_Step : out Natural)
-                  is
-                     Value : Operand;
-                     Read  : Boolean;
-                     Scan  : Natural := Source'First;
-                     Kept  : Natural;
-                  begin
-                     At_Step := 0;
-                     Read_Operand (Source, Scan, Value, Read);
-                     if not Read
-                       or else Skip_Spaces (Source, Scan) <= Source'Last
-                     then
-                        return;
-                     end if;
-
-                     Keep (Value, Kept);
-                     if Kept = 0 then
-                        return;
-                     end if;
-                     Emit ((Op => Op_Set_Value, Offset => Target,
-                            Value_At => Kept, others => <>), At_Step);
-                  end Assign;
                begin
                   Read_Condition (Whether, Test, Valid);
                   if not Valid then
-                     Refuse (Text, Where);
+                     Unread := True;
                      return;
                   end if;
 
@@ -395,9 +411,9 @@ begin
                      return;
                   end if;
 
-                  Assign (Chosen, Where);
-                  if Where = 0 then
-                     Refuse (Text, Where);
+                  Assign (Chosen, Landed);
+                  if Landed = 0 then
+                     Unread := True;
                      return;
                   end if;
 
@@ -407,13 +423,24 @@ begin
                   end if;
                   Item.Program.all (Over_First).Target := Over_Second + 1;
 
-                  Assign (Otherwise, Where);
-                  if Where = 0 then
-                     Refuse (Text, Where);
-                     return;
+                  Choose (Otherwise, Fine, Unread);
+                  if Fine then
+                     Item.Program.all (Over_Second).Target :=
+                       Item.Program_Used + 1;
                   end if;
-                  Item.Program.all (Over_Second).Target :=
-                    Item.Program_Used + 1;
+               end;
+            end Choose;
+         begin
+            if At_If > Rest'First and then At_Else /= 0 then
+               declare
+                  Fine, Unread : Boolean;
+               begin
+                  Choose (Rest, Fine, Unread);
+                  if Unread then
+                     Refuse (Text, Where);
+                  else
+                     Where := Item.Program_Used;
+                  end if;
                   return;
                end;
             end if;

@@ -1448,6 +1448,12 @@ package body Tests.Template_Cases is
       Same ("{% set p = 'x' %}{{ (p if false) }}[{{ (p if true) }}]", "[x]",
             "a choice without an else");
 
+      --  A set choice chained through its else, as LFM3's template
+      --  picks a turn's thinking from one of three fields.
+      Same ("{% for n in [1, 2, 3] %}{% set w = 'a' if n == 1 else 'b'"
+            & " if n == 2 else 'c' %}{{ w }}{% endfor %}", "abc",
+            "a set choice chained through its else");
+
       --  Positions and members chained after a term, however it began.
       Same ("{% set l = [['b', 'c'], 'd'] %}{{ l[0][1] }}{{ l[1][0] }}"
             & "{{ messages[0].role[0] }}{{ messages[0]['content'][0] }}"
