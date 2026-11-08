@@ -6593,6 +6593,15 @@ package body Tests.Framework_Cases is
                                 Answer => To_Unbounded_String ("status: blocked" & LF & "parts: x")))
                  = Wk.Ask_To_Mend,
                  "a report that cannot be taken was not handed back");
+         --  An empty reply after its calls: asked once to go on, not failed
+         --  for a report it had not begun.
+         Assert (Wk.Next_Step ((Worked with delta Answer => To_Unbounded_String ("  " & LF)))
+                 = Wk.Ask_To_Go_On
+                 and then Wk.Next_Step ((Worked with delta Answer => Null_Unbounded_String,
+                                         Asked_To_Go_On => True)) /= Wk.Ask_To_Go_On
+                 and then Wk.Next_Step ((Worked with delta Answer => Null_Unbounded_String,
+                                         Time_Left => False)) = Wk.Finish,
+                 "an empty reply was not asked to go on once, with time left");
          Assert (Wk.Next_Step ((Worked with delta Answered => False, Repeating => True, Wrote => True))
                  = Wk.Ask_To_Report,
                  "an agent repeating a write it made was not asked for its report");

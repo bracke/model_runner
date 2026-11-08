@@ -620,6 +620,7 @@ package Model_Runner.Framework.Work is
       Check_For_It,   --  Said done with no check run: the harness runs them.
       Ask_To_Mend,    --  Its report cannot be taken: handed back once.
       Ask_To_Report,  --  Repeating a write already made: asked for its report.
+      Ask_To_Go_On,   --  Its reply was empty: asked once to go on.
       --  A root that answered without a call, or a helper that said done
       --  without one: told nothing changed.
       Ask_To_Call,
@@ -635,6 +636,7 @@ package Model_Runner.Framework.Work is
       Asked_To_Fix    : Boolean := False;
       Asked_To_Mend   : Boolean := False;
       Asked_To_Report : Boolean := False;
+      Asked_To_Go_On  : Boolean := False;
       --  Whether a work's host stands behind it, and what it says.
       Hosted          : Boolean := False;
       Checks_Failing  : Boolean := False;

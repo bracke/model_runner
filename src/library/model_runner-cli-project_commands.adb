@@ -691,6 +691,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  And its pace where there is no task to keep it.
       Rounds_Pace     : aliased Model_Runner.Agent.Pace_State;
       Asked_To_Mend   : Boolean := False;
+      Asked_To_Go_On  : Boolean := False;
       --  The work as the harness saw it happen, the last round's.
       Recorded : Unbounded_String;
 
@@ -921,6 +922,7 @@ package body Model_Runner.CLI.Project_Commands is
                Asked_To_Fix    => Asked_To_Fix,
                Asked_To_Mend   => Asked_To_Mend,
                Asked_To_Report => Asked_To_Report,
+               Asked_To_Go_On  => Asked_To_Go_On,
                Hosted          => Host /= null,
                Checks_Failing  => Host /= null and then Host.Checks_Failing,
                May_Check       => Host /= null and then Host.May_Check (Host.Task_Profile),
@@ -972,6 +974,15 @@ package body Model_Runner.CLI.Project_Commands is
                         & "Fix what they report, run run_checks yourself, and report status: done only when"
                         & " they pass.", Status);
                   end;
+               when Wk.Ask_To_Go_On =>
+                  Must_Call := False;
+                  Asked_To_Go_On := True;
+                  Doing := Model_Runner.Framework.Inference_Policy.Task_Work;
+                  Conv.Append
+                    (Messages, Conv.User_Role,
+                     "Your reply was empty. Go on with the task: make the calls it needs, or, where it is"
+                     & " done, finish with the report lines -- status:, summary: and changed_files:, each"
+                     & " on a line of its own.", Status);
                when Wk.Ask_To_Mend =>
                   Must_Call := False;
                   Asked_To_Mend := True;

@@ -1174,6 +1174,14 @@ package body Model_Runner.Framework.Work is
         and then State.Calls > 0 and then Says_Done (Said)
       then
          return Check_For_It;
+      --  Nothing said at all, and no call: asked once to go on -- Gemma 4's
+      --  E4B read the file it was to change, then ended its next turn at
+      --  once, and the task failed for a report it had not begun.
+      elsif State.Answered and then State.Hosted and then State.Round < Rounds
+        and then not State.Asked_To_Go_On and then State.Time_Left
+        and then (for all C of Said => C in ' ' | ASCII.LF | ASCII.CR | ASCII.HT)
+      then
+         return Ask_To_Go_On;
       --  A report the harness cannot take -- a required line missing, a
       --  status none of its words -- handed back once, saying what is
       --  wrong, as an unreadable call is: a 8B wrote status: blocked and
