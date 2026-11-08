@@ -742,7 +742,8 @@ package body Model_Runner.Generation is
       --  makes the next one longer, up to two past the length asked for --
       --  but past that length only while the run keeps Grow_Above per cent
       --  of what it proposes; a round that turned down more than its last
-      --  proposal goes straight back to the length asked for, and below it
+      --  proposal goes straight back to the base (Base_Length: the length
+      --  asked for, or one below it the run found quicker), and below it
       --  one at a time only while the run keeps less than Shrink_Below -- a
       --  round short of only its last keeps its length, which is what the
       --  figures below were measured with. A reply that repeats
@@ -763,6 +764,141 @@ package body Model_Runner.Generation is
       --  prompt, 36.4 against 38.6 on a story.
       Round_Draft : Natural :=
         Natural'Min (Item.Draft_Tokens, Largest_Draft);
+
+      --  The length a round goes back to after a miss (see the rule in
+      --  Draft_Round): the length asked for, or for a mixture where the run
+      --  is timed (Timed, below) the one at or below it that the run's own
+      --  figures say makes the most tokens a second (Note_Base). Not a
+      --  dense model's: a position more in its check reads no weight more,
+      --  so a shorter base cannot pay, and the search only cost it --
+      --  qwen3.5-4b's prose 41.8 tokens a second from three, 37.9 seeking.
+      --  The rule round by round rides what the text repeats --
+      --  qwen3.5-4b's code 40.7 tokens a second adapting from three, held
+      --  at three 38.7, at five 39.5 -- but what a round back at the base
+      --  costs is the model's: a mixture's check reads every position's
+      --  experts. Mellum drafting from its block, held at one a round, 46.0
+      --  and 48.0 tokens a second on code and prose, adapting from three
+      --  41.3 and 40.5; Qwen3.6-35B-A3B the other way, 31.5 and 31.3 at
+      --  one, 33.9 and 37.3 at three.
+      Base_Length : Natural := Natural'Min (Item.Draft_Tokens, Largest_Draft);
+
+      --  The base is chosen by a model of the run rather than by timing
+      --  each base over a stretch of its own: how much of a round is kept
+      --  hangs on the text far more than on the base, and stretches of
+      --  different text told nothing about the bases they ran under
+      --  (Mellum's three timed at 47 to 52 tokens a second in one, 39 when
+      --  held). What a round keeps comes from every round, the share of
+      --  rounds that kept their k-th proposal (Outcome.Kept_At over
+      --  Offered_At); what a round costs comes from timing rounds by how
+      --  many they proposed -- the model's, and nearly the same whatever
+      --  the text. The base is the length with the most tokens a second by
+      --  the two: one plus the shares kept up to it, over its round's time.
+      --  The base goes no higher than the length asked for: the rounds grow
+      --  past it as they keep all, and the shares kept past it are known
+      --  only from rounds that grew -- after a streak -- so the model
+      --  prized long rounds: qwen3.5-4b's code went to a base of five, 38.2
+      --  tokens a second against 40.7 from three. What a base below asks
+      --  of is a check that costs more than its keeping, which is Mellum's.
+      Base_Most : constant Natural :=
+        Natural'Min (Item.Draft_Tokens, Largest_Draft);
+
+      --  Each length's nanoseconds and rounds, halved past Cost_Window
+      --  rounds as the context deepens; a length is costed once it has
+      --  Cost_Least rounds, and the one below the base is tried for that
+      --  many rounds where it has none and the base is the quickest.
+      Cost_Window : constant := 32;
+      Cost_Least  : constant := 3;
+      Offer_Least : constant := 4;
+      type Cost_Times is array (1 .. Natural'Max (Largest_Draft, 1))
+        of Long_Float;
+      Cost_Ns     : Cost_Times := [others => 0.0];
+      Cost_Rounds : Cost_Times := [others => 0.0];
+
+      --  Whether a length has had the round that bears its kernels' first
+      --  use, which is not counted.
+      type Cost_Flags is array (1 .. Natural'Max (Largest_Draft, 1))
+        of Boolean;
+      Cost_Seen   : Cost_Flags := [others => False];
+
+      --  The proposals the last round checked, nought where they came out
+      --  of the text or it proposed none.
+      Round_Length  : Natural := 0;
+
+      --  Tokens left before rounds are timed: the first bear the kernels'
+      --  and the tables' first use, as Untimed says.
+      Base_Untimed : Natural := 8;
+
+      --  A round timed from its start to the next round's, which holds what
+      --  is done with its tokens between: timed over the round alone, a
+      --  round of one looked slower than it runs, since it pays that work
+      --  for fewer tokens. The last round's start, its proposals (nought
+      --  where it is not timed).
+      Cycle_Began  : Model_Runner.Clocks.Nanoseconds := 0;
+      Cycle_Length : Natural := 0;
+
+      --  A round of Length proposals that took Took: noted, and the base
+      --  chosen.
+      procedure Note_Base
+        (Length : Positive;
+         Took   : Model_Runner.Clocks.Nanoseconds)
+      is
+         function Costed (At_Length : Positive) return Boolean
+         is (Cost_Rounds (At_Length) >= Long_Float (Cost_Least));
+
+         --  Tokens a second a round of At_Length would make, by the model;
+         --  nought where it cannot say yet.
+         function Rate (At_Length : Positive) return Long_Float is
+            Kept : Long_Float := 1.0;
+         begin
+            if not Costed (At_Length)
+              or else At_Length > Most_Proposals
+              or else Outcome.Offered_At (At_Length) < Offer_Least
+            then
+               return 0.0;
+            end if;
+            for K in 1 .. At_Length loop
+               Kept := Kept + Long_Float (Outcome.Kept_At (K))
+                              / Long_Float (Outcome.Offered_At (K));
+            end loop;
+            return Kept * Cost_Rounds (At_Length) / Cost_Ns (At_Length);
+         end Rate;
+
+         Here : constant Positive := Base_Length;
+         Next : Positive := Here;
+      begin
+         if not Cost_Seen (Length) then
+            Cost_Seen (Length) := True;
+         else
+            Cost_Ns (Length) := Cost_Ns (Length) + Long_Float (Took);
+            Cost_Rounds (Length) := Cost_Rounds (Length) + 1.0;
+            if Cost_Rounds (Length) > Long_Float (Cost_Window) then
+               Cost_Ns (Length) := Cost_Ns (Length) / 2.0;
+               Cost_Rounds (Length) := Cost_Rounds (Length) / 2.0;
+            end if;
+         end if;
+
+         --  The base's own cost first; then the quickest so far, and the one
+         --  below tried only where the base is that: each base tried costs
+         --  the rounds that time it, and trying every one below the length
+         --  asked for cost qwen3.5-4b, whose rounds of one make 24 tokens a
+         --  second against 37 at three, 7 to 10 per cent of a reply.
+         if not Costed (Here) then
+            return;
+         end if;
+         for Other in 1 .. Base_Most loop
+            if Rate (Other) > Rate (Next) then
+               Next := Other;
+            end if;
+         end loop;
+         if Next = Here and then Here > 1 and then not Costed (Here - 1) then
+            Next := Here - 1;
+         end if;
+
+         if Next /= Here then
+            Base_Length := Next;
+            Round_Draft := Next;
+         end if;
+      end Note_Base;
 
       --  Whether drafting is paying, timed rather than assumed: a stretch
       --  of drafted rounds, then a few with nothing proposed -- the
@@ -3049,21 +3185,25 @@ package body Model_Runner.Generation is
                end if;
             end if;
 
+            Round_Length :=
+              (if From_Context or else Count <= 1 then 0
+               else Natural'Min (Count - 1, Largest_Draft));
+
             if Adapting then
                if Accepted - 1 >= Count - 1 and then Count - 1 = Round_Draft
                then
                   Round_Draft :=
-                    (if Round_Draft < Item.Draft_Tokens
+                    (if Round_Draft < Base_Length
                        or else Outcome.Accepted * 100
                                >= Grow_Above * Outcome.Drafted
                      then Natural'Min (Round_Draft + 1, Largest_Draft)
                      else Round_Draft);
                elsif Accepted < Count - 1 then
                   Round_Draft :=
-                    (if Round_Draft > Item.Draft_Tokens
+                    (if Round_Draft > Base_Length
                        or else Outcome.Accepted * 100
                                >= Shrink_Below * Outcome.Drafted
-                     then Item.Draft_Tokens
+                     then Base_Length
                      else Natural'Max (Round_Draft - 1, 1));
                end if;
             end if;
@@ -3213,11 +3353,33 @@ package body Model_Runner.Generation is
                            Took  : Model_Runner.Clocks.Nanoseconds;
                            use type Model_Runner.Clocks.Nanoseconds;
                         begin
+                           --  The round before, timed up to this one's start.
+                           if Cycle_Length > 0 and then not Paused then
+                              Note_Base
+                                (Cycle_Length,
+                                 Model_Runner.Clocks.Elapsed (Cycle_Began, Began));
+                           end if;
+                           Cycle_Length := 0;
+
                            Draft_Round (Made, Gave);
                            exit Decode_Loop when Gave;
 
                            Took := Model_Runner.Clocks.Elapsed
                              (Began, Model_Runner.Clocks.Read (Time));
+
+                           --  This round's length timed from its start to
+                           --  the next's, where the run is; see Note_Base.
+                           Cycle_Began := Began;
+                           Cycle_Length :=
+                             (if Adapting and then Timed and then not Paused
+                                and then Settings.Experts > 0
+                              then Round_Length else 0);
+                           if Cycle_Length > 0 and then Base_Untimed > 0 then
+                              Base_Untimed :=
+                                Base_Untimed
+                                - Natural'Min (Base_Untimed, Verified_Count);
+                              Cycle_Length := 0;
+                           end if;
 
                            --  A mixture's lookup times its steps and its
                            --  checks of two, past the first rounds.
