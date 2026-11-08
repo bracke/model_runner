@@ -1174,6 +1174,16 @@ package body Model_Runner.Conversation is
       First_User : Natural := 0;
       Keep       : array (1 .. Max_Messages) of Boolean := [others => False];
 
+      --  Kept tool results a later one repeats word for word, long enough
+      --  to matter: each kept as a line saying so. A model that read a
+      --  59 KB file whole twice held two copies of it in its most recent
+      --  turns, which compaction keeps, and a 32,768-token context ran
+      --  out with nothing older to drop.
+      Repeated       : array (1 .. Max_Messages) of Boolean := [others => False];
+      Repeat_Least   : constant := 2_000;
+      Repeated_Note  : constant String :=
+        "[the same as a later result, which this one is given as]";
+
       --  A short digest of the turns being dropped is folded into the task,
       --  after a marker, so a long run keeps the thread of what it has done
       --  even as its oldest turns go. It is bounded and carried forward: each
@@ -1322,6 +1332,34 @@ package body Model_Runner.Conversation is
             Dropped := Dropped + 1;
          end if;
       end loop;
+
+      for I in 1 .. N loop
+         if Keep (I)
+           and then Item.Messages (I).Sender = Tool_Role
+           and then Item.Messages (I).Length >= Repeat_Least
+           and then Item.Messages (I).Parts_Length = 0
+         then
+            declare
+               Mine : String renames Item.Storage.all
+                 (Item.Messages (I).Offset + 1
+                  .. Item.Messages (I).Offset + Item.Messages (I).Length);
+            begin
+               for J in I + 1 .. N loop
+                  if Item.Messages (J).Sender = Tool_Role
+                    and then Item.Messages (J).Length = Item.Messages (I).Length
+                    and then Item.Storage.all
+                               (Item.Messages (J).Offset + 1
+                                .. Item.Messages (J).Offset + Item.Messages (J).Length) = Mine
+                  then
+                     Repeated (I) := True;
+                     Dropped := Dropped + 1;
+                     exit;
+                  end if;
+               end loop;
+            end;
+         end if;
+      end loop;
+
       if Dropped = 0 then
          return;
       end if;
@@ -1459,14 +1497,19 @@ package body Model_Runner.Conversation is
                      goto Next_Message;
                   end if;
 
-                  New_Storage.all (Fill + 1 .. Fill + Src.Length) :=
-                    Item.Storage.all (Src.Offset + 1 .. Src.Offset + Src.Length);
-                  Fill := Fill + Src.Length;
+                  if Repeated (I) then
+                     New_Storage.all (Fill + 1 .. Fill + Repeated_Note'Length) := Repeated_Note;
+                     Fill := Fill + Repeated_Note'Length;
+                  else
+                     New_Storage.all (Fill + 1 .. Fill + Src.Length) :=
+                       Item.Storage.all (Src.Offset + 1 .. Src.Offset + Src.Length);
+                     Fill := Fill + Src.Length;
+                  end if;
                   M := M + 1;
                   New_Messages (M) :=
                     (Sender     => Src.Sender,
                      Offset     => New_Off,
-                     Length     => Src.Length,
+                     Length     => Fill - New_Off,
                      Parts_Offset => 0,
                      Parts_Length => 0,
                      First_Call =>

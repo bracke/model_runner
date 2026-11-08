@@ -4105,6 +4105,45 @@ package body Tests.Template_Cases is
       Conv.Close (Messages);
    end Compaction_Keeps_The_Shape;
 
+   --  A long tool result a later one repeats word for word is kept as a
+   --  line saying so, even among the recent turns compaction keeps whole:
+   --  a model that read a large file twice ran out of room with nothing
+   --  older to drop. The later copy stays whole, and a short repeat stays.
+   procedure Compaction_Folds_A_Repeated_Result
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Conv.Role;
+      Messages : Conv.History;
+      Status   : E.Error_Info;
+      Dropped  : Natural;
+      Big      : constant String (1 .. 3_000) := [others => 'x'];
+   begin
+      Conv.Open (Messages, Status => Status);
+      Assert (E.Is_Ok (Status), "the history would not open");
+      Conv.Append (Messages, Conv.System_Role, "Be brief.", Status);
+      Conv.Append (Messages, Conv.User_Role, "the task", Status);
+      for Round in 1 .. 2 loop
+         Conv.Append_Asking (Messages, "reading", Status);
+         Conv.Append_Call (Messages, "read_file", "{""path"":""a.adb""}", Status);
+         Conv.Append (Messages, Conv.Tool_Role, Big, Status);
+         Conv.Append_Asking (Messages, "short", Status);
+         Conv.Append_Call (Messages, "find", "{}", Status);
+         Conv.Append (Messages, Conv.Tool_Role, "found it", Status);
+      end loop;
+
+      Conv.Compact (Messages, Keep_Recent => 100, Dropped => Dropped);
+      Assert (Dropped = 1, "a repeated long result was not folded:" & Natural'Image (Dropped));
+      Assert (Conv.Length (Messages) = 10, "a folded result changed the turns");
+      Assert (Conv.Content_At (Messages, 4) /= Big
+              and then Conv.Content_At (Messages, 4)'Length < 100
+              and then Conv.Content_At (Messages, 8) = Big
+              and then Conv.Content_At (Messages, 6) = "found it"
+              and then Conv.Content_At (Messages, 10) = "found it",
+              "the earlier copy was not the one folded, or a short repeat was");
+      Conv.Close (Messages);
+   end Compaction_Folds_A_Repeated_Result;
+
    --  Compaction cuts the turns it folds into the task at whole
    --  characters: a digest line of Danish cut at its hundredth byte, a
    --  synopsis past its cap kept from its end, and the task stays UTF-8.
@@ -4684,6 +4723,9 @@ package body Tests.Template_Cases is
         (T, The_Opening_Is_What_The_Prompt_Adds'Access,
          "the opening of the answer is what the generation prompt adds to "
          & "a conversation");
+      Register_Routine
+        (T, Compaction_Folds_A_Repeated_Result'Access,
+         "compacting folds a long tool result a later one repeats into a line saying so");
       Register_Routine
         (T, Compaction_Keeps_The_Shape'Access,
          "compacting a history drops the oldest turns and keeps the system "
