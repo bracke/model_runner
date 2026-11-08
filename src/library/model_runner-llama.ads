@@ -274,6 +274,19 @@ package Model_Runner.Llama is
    function Is_Lfm3 (Item : Architecture) return Boolean
    is (Item = Lfm3);
 
+   --  Whether a session of an architecture keeps a state no rewind walks
+   --  back -- a hybrid's linear layers, LFM3's convolutions, Jamba's
+   --  Mamba layers, every layer of Mamba and RWKV -- and so picks up a
+   --  conversation's next turn at a checkpoint rather than anywhere it
+   --  likes. Asking Hybrid for it left all but Qwen3.5's kind reading
+   --  every turn's whole conversation again.
+   --
+   --  @param Item Architecture to ask about.
+   --  @return True where a session keeps states.
+   function Keeps_States (Item : Architecture) return Boolean
+   is (Hybrid (Item) or else Pure_SSM (Item) or else Is_RWKV (Item)
+       or else Is_Jamba (Item) or else Is_Lfm3 (Item));
+
    --  Whether an architecture attends through a compressed latent -- multi-
    --  head latent attention. DeepSeek-V2/V3: a position's keys and values
    --  are one low-rank vector each layer holds, up-projected a head at a

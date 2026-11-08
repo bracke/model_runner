@@ -9116,6 +9116,88 @@ package body Tests.Inference_Cases is
       B.Free (Image);
    end A_Prompt_Held_Whole_Is_Read_For_Its_Draw;
 
+   --  A conversation's next turn, in every architecture that keeps a state:
+   --  it picks up at the checkpoint the turn before kept, and says what a
+   --  fresh session says. Only Qwen3.5's kind kept one; LFM3, Jamba, Mamba
+   --  and RWKV read every turn's whole conversation again.
+   procedure Every_State_Keeper_Picks_Up_A_Turn
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Gen renames Model_Runner.Generation;
+
+      Kinds : constant array (Positive range <>) of Tiny_Model.Fixture_Architecture :=
+        [Tiny_Model.Qwen35, Tiny_Model.Lfm3, Tiny_Model.Jamba,
+         Tiny_Model.Mamba, Tiny_Model.Mamba2, Tiny_Model.Rwkv6];
+
+      First  : constant String :=
+        "abbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabbaabba";
+      Second : constant String := First & "babababa";
+   begin
+      for Kind of Kinds loop
+         declare
+            Image : B.Byte_Array_Access;
+         begin
+            Tiny_Model.Build
+              (Image, Kind => Kind, Room => 256,
+               Window => (if Tiny_Model."=" (Kind, Tiny_Model.Lfm3) then 3 else 0));
+            declare
+               Held  : aliased constant B.Byte_Array := Image.all;
+               Under : aliased Harness (Held'Access);
+               Live, Alone : L.Session;
+               Request : Gen.Request;
+               Stop    : Model_Runner.Stops.Set;
+               Turn, Next, Fresh : Gen.Result;
+               Status  : E.Error_Info;
+               Name    : constant String :=
+                 Tiny_Model.Fixture_Architecture'Image (Kind);
+            begin
+               Start (Under);
+               Assert (L.Keeps_States (L.Config (Under.Ready).Kind),
+                       Name & " is not said to keep states");
+               L.Open (Live, Under.Ready, 256, Status => Status);
+               Assert (E.Is_Ok (Status), Name & ": the session did not open");
+               L.Open (Alone, Under.Ready, 256, Status => Status);
+               Assert (E.Is_Ok (Status), Name & ": the fresh session did not open");
+
+               Model_Runner.Stops.Open (Stop);
+               Request.Sampling := Model_Runner.Sampling.Greedy_Configuration;
+               Request.Seed := 1;
+               Request.Has_Seed := True;
+               Request.Add_Beginning := True;
+               Request.Retain_Text := True;
+               Request.Max_Tokens := 6;
+               Request.Reuse_Committed_Prefix := True;
+
+               Gen.Generate (Under.Ready, Live, First, Request, Stop, null, null,
+                             null, null, null, null, Outcome => Turn);
+               Gen.Generate (Under.Ready, Live, Second, Request, Stop, null, null,
+                             null, null, null, null, Outcome => Next);
+               Request.Reuse_Committed_Prefix := False;
+               Gen.Generate (Under.Ready, Alone, Second, Request, Stop, null, null,
+                             null, null, null, null, Outcome => Fresh);
+
+               Assert (Next.Reused_Tokens > 0,
+                       Name & ": the next turn read its whole conversation "
+                       & "again; it kept none of" & Next.Prompt_Tokens'Image);
+               Assert (Gen.Generated_Text (Next) = Gen.Generated_Text (Fresh),
+                       Name & ": picked up at the checkpoint the turn said "
+                       & Gen.Generated_Text (Next) & " where a fresh session said "
+                       & Gen.Generated_Text (Fresh));
+
+               Gen.Release (Turn);
+               Gen.Release (Next);
+               Gen.Release (Fresh);
+               Model_Runner.Stops.Close (Stop);
+               L.Close (Alone);
+               L.Close (Live);
+            end;
+            B.Free (Image);
+         end;
+      end loop;
+   end Every_State_Keeper_Picks_Up_A_Turn;
+
    ------------------------------------------------
    -- A_Draft_With_Fewer_Tokens_Keeps_The_Target --
    ------------------------------------------------
@@ -22316,6 +22398,10 @@ package body Tests.Inference_Cases is
         (T, A_Rotation_Stretches_When_A_Caller_Asks_It'Access,
          "a caller may stretch the rotation the file did not, and only a "
          & "model stretched for it reaches past its trained context");
+      Register_Routine
+        (T, Every_State_Keeper_Picks_Up_A_Turn'Access,
+         "every architecture that keeps a state picks up a conversation's "
+         & "next turn at its checkpoint");
       Register_Routine
         (T, Hybrid_Window_Rewinds_To_Its_Checkpoint'Access,
          "a hybrid with a window rewinds to a checkpoint a long answer "

@@ -1776,7 +1776,7 @@ package body Model_Runner.Generation is
 
          Margin : constant Natural :=
            (if Item.Reuse_Committed_Prefix
-              and then L.Hybrid (L.Config (Source).Kind)
+              and then L.Keeps_States (L.Config (Source).Kind)
             then Held_Back else 0);
          Hold_At : constant Natural :=
            (if Margin = 0 then 0
