@@ -161,12 +161,24 @@ void main() {
     uint group  = gl_WorkGroupID.x;
     uint slices = gl_NumWorkGroups.y;
     uint slice  = gl_WorkGroupID.y;
-    uint p0     = gl_WorkGroupID.z * POS;
-    uint p_end  = min (p0 + POS, shape.positions) - 1u;
-
     uint dk = shape.head_size;
     uint dv = shape.value_size;
     uint rows = min (shape.group_size, ROWS);
+
+    //  Positions a tile's rows hold: one, but where a group's heads are
+    //  fewer than the rows and divide them, the plain compilation packs as
+    //  many positions' heads of the group as fill them -- Gemma4's E4B's
+    //  four heads a group, four positions a tile -- so each key and value
+    //  read serves them all. One a tile, a batch of 512 positions 18,000
+    //  deep took a third of a second a layer; the host dispatches a
+    //  workgroup a packed run of positions (Latent_Packed).
+#if !defined(WIDE_TILE) && !defined(SPLIT_DEPTH)
+    uint packed = (rows < ROWS && ROWS % rows == 0u) ? ROWS / rows : 1u;
+#else
+    const uint packed = 1u;
+#endif
+    uint p0     = gl_WorkGroupID.z * POS * packed;
+    uint p_end  = min (p0 + POS * packed, shape.positions) - 1u;
     uint head0 = group * shape.group_size;
     uint k_at = group * dk;
 
@@ -188,8 +200,11 @@ void main() {
         for (uint at = gl_LocalInvocationID.x; at < ROWS * DK; at += 256u) {
             uint r = at / DK;
             uint c = at % DK;
-            qs[at] = r < rows && c < dk
-                     ? float16_t (q[(p0 * shape.heads + head0 + r) * dk + c])
+            uint rp = p0 + r / rows;
+            qs[at] = (packed > 1u ? rp <= p_end : r < rows) && c < dk
+                     ? float16_t (q[(packed > 1u
+                                     ? (rp * shape.heads + head0 + r % rows)
+                                     : (p0 * shape.heads + head0 + r)) * dk + c])
                      : float16_t (0.0);
         }
     }
@@ -357,7 +372,9 @@ void main() {
             uint r = sub * SUB_ROWS + i;
             //  This row's own last key: its position's.
             uint row_last = min (walk_to,
-                                 shape.last + (causal ? min (p0 + r / ROWS, p_end) : 0u));
+                                 shape.last
+                                 + (causal ? min (p0 + (packed > 1u ? r / rows : r / ROWS), p_end)
+                                           : 0u));
             float score[BC / 64u];
             float best = -1.0 / 0.0;
             [[unroll]] for (uint c = 0u; c < BC / 64u; c++) {
@@ -454,9 +471,11 @@ void main() {
         for (uint at = lane; at < 256u; at += 64u) {
             uint r = at / 16u;
             uint c = col0 + at % 16u;
-            if (r < rows && c < dv && p <= p_end) {
+            uint rp = packed > 1u ? p0 + r / rows : p;
+            uint rh = packed > 1u ? r % rows : r;
+            if ((packed > 1u || r < rows) && c < dv && rp <= p_end) {
                 uint record = records
-                  + ((slice * shape.positions + p) * shape.heads + head0 + r) * stride;
+                  + ((slice * shape.positions + rp) * shape.heads + head0 + rh) * stride;
                 y[record + c] = ss[sub * 256u + at];
             }
         }
@@ -466,10 +485,11 @@ void main() {
     }
     [[unroll]] for (uint i = 0u; i < SUB_ROWS; i++) {
         uint r = (sub * SUB_ROWS + i) % ROWS;
-        uint p = p0 + (sub * SUB_ROWS + i) / ROWS;
-        if (lane == 0u && r < rows && p <= p_end) {
+        uint p = packed > 1u ? p0 + r / rows : p0 + (sub * SUB_ROWS + i) / ROWS;
+        uint h = packed > 1u ? r % rows : r;
+        if (lane == 0u && (packed > 1u || r < rows) && p <= p_end) {
             uint record = records
-              + ((slice * shape.positions + p) * shape.heads + head0 + r) * stride;
+              + ((slice * shape.positions + p) * shape.heads + head0 + h) * stride;
             y[record + dv]      = top[i];
             y[record + dv + 1u] = total[i];
         }

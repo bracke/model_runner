@@ -641,6 +641,15 @@ package body Model_Runner.Platform.Device.Products is
    --  How many slices it cuts a cache of Span positions into: a tile of it
    --  at least, and no more than its workgroups of 25 KB of shared memory
    --  that the part holds at once.
+   --  Positions a tile of attention_latent.comp's plain compilation holds:
+   --  as many as fill its rows with a group's heads, where the group is
+   --  fewer than the rows and divides them, and one otherwise. Its
+   --  workgroups go a run of that many positions each.
+   function Latent_Packed (Group_Size : Natural) return Positive
+   is (if Group_Size in 1 .. Latent_Rows - 1
+          and then Latent_Rows mod Group_Size = 0
+       then Latent_Rows / Group_Size else 1);
+
    function Takes_Latent
      (Item       : Engine;
       Head_Size  : Natural;
@@ -18291,7 +18300,10 @@ package body Model_Runner.Platform.Device.Products is
                                 (if Latent_Batch (Index)
                                  then (Attending_Of (Index) + Latent_Pair - 1) / Latent_Pair
                                  elsif Few_Line (Index) = Item.Latent_Attend
-                                 then Attending_Of (Index) else 1));
+                                 then (Attending_Of (Index)
+                                       + Latent_Packed (This.Group_Size) - 1)
+                                      / Latent_Packed (This.Group_Size)
+                                 else 1));
                         elsif Attends_By_Matrix
                              (Item, Seated, This.Head_Size, This.Value_Size)
                         then
