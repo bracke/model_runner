@@ -5869,6 +5869,104 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Mixture_Keeps_Its_Expert_Biases_On_The_Device;
 
+   ------------------------------------------------------
+   -- A_Batch_Of_Forty_Eight_Answers_As_The_Wide_Tile_Does --
+   ------------------------------------------------------
+
+   --  A batch of thirty-three to sixty-four takes the narrow tile at
+   --  sixty-four vectors, in each of its three compilations: the first
+   --  (Q8_0), the second (Q4_0) and the low-bit one (IQ3_S). Each against
+   --  the same product over a hundred positions, which is the wide tile,
+   --  on the first forty-eight: the same half-precision operands, the sums
+   --  in another order.
+   procedure A_Batch_Of_Forty_Eight_Answers_As_The_Wide_Tile_Does
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Height : constant := 64;
+      Width  : constant := 256;
+      Mid    : constant := 48;
+      Wide   : constant := 100;
+
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Engine : Products.Engine;
+      Found, Ready, Ok, Added, Halted : Boolean;
+      Steps  : Products.Sequence;
+
+      Matrix : N.Real_Array (0 .. Height * Width - 1);
+      Rows   : N.Real_Array (0 .. Width * Wide - 1);
+
+      procedure Compare
+        (Packed : B.Byte_Array; Packing : Products.Weight_Packing;
+         Name   : String)
+      is
+         Narrow : N.Real_Array (0 .. Height * Mid - 1) := [others => 0.0];
+         Broad  : N.Real_Array (0 .. Height * Wide - 1) := [others => 0.0];
+         Worst  : N.Real := 0.0;
+
+         procedure Once (Count : Positive; Into : out N.Real_Array) is
+         begin
+            Products.Open_Sequence (Steps);
+            Products.Add_Product
+              (Steps, Packed (Packed'First)'Address,
+               Model_Runner.Bytes.Byte_Count (Packed'Length), 0,
+               Packing, Height, Width, Added, Kept => False,
+               Key => Packed (Packed'First)'Address);
+            Assert (Added, Name & "'s product was refused");
+            Products.Run
+              (Engine, Steps, Rows (0 .. N.Element_Count (Width * Count) - 1),
+               Count, Into, Ok, Halted);
+            Assert (Ok, Name & "'s product of" & Count'Image
+                    & " positions was refused");
+         end Once;
+      begin
+         Once (Mid, Narrow);
+         Once (Wide, Broad);
+         for Index in Narrow'Range loop
+            Worst := N.Real'Max (Worst, abs (Narrow (Index) - Broad (Index)));
+         end loop;
+         Assert (Worst <= 1.0E-3,
+                 Name & " over" & Mid'Image & " positions is"
+                 & N.Real'Image (Worst) & " away from the wide tile's");
+      end Compare;
+   begin
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Device_Notes.Skip ("for a batch of forty-eight");
+         Devices.Close (Held);
+         return;
+      end if;
+      Products.Open (Engine, Opened, Ready);
+      if not Ready then
+         Device_Notes.Skip ("for a batch of forty-eight");
+         Devices.Close (Opened);
+         Devices.Close (Held);
+         return;
+      end if;
+
+      for Index in Matrix'Range loop
+         Matrix (Index) := N.Real ((Index * 5) mod 11) / 11.0 - 0.45;
+      end loop;
+      for Index in Rows'Range loop
+         Rows (Index) := N.Real ((Index * 3) mod 13) / 13.0 - 0.4;
+      end loop;
+
+      Compare (Fixtures.Encode_Q8_0 (Matrix), Products.Packed_Q8_0, "Q8_0");
+      Compare (Fixtures.Encode_Q4_0 (Matrix), Products.Packed_Q4_0, "Q4_0");
+      Compare (Fixtures.Encode_IQ3_S (Matrix), Products.Packed_IQ3_S, "IQ3_S");
+
+      Products.Close (Engine);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+   end A_Batch_Of_Forty_Eight_Answers_As_The_Wide_Tile_Does;
+
    -----------------------------------------
    -- A_Projection_Bias_Is_Added_Where_It_Lies --
    -----------------------------------------
@@ -10145,7 +10243,8 @@ package body Tests.Backend_Cases is
       --  read, and the unit's answer as halves for the projection down.
       --  Against the same three steps over a batch the row kernel takes,
       --  at the fixture's own widths -- up twice the width, down back --
-      --  and at forty-one positions, which is the narrow tile.
+      --  and at forty-one positions, which is the narrow tile at sixty-four
+      --  vectors.
       declare
          Narrow_Width : constant := 32;
          Feed         : constant := 64;
@@ -15669,6 +15768,11 @@ package body Tests.Backend_Cases is
         (T, The_Count_Is_Not_What_Bounds_What_Stays_Resident'Access,
          "what the device keeps is bounded by bytes and not by the size of "
          & "the table it keeps them in");
+      Register_Routine
+        (T, A_Batch_Of_Forty_Eight_Answers_As_The_Wide_Tile_Does'Access,
+         "a batch of forty-eight positions, on the narrow tile at sixty-four "
+         & "vectors in each of its three compilations, answers as the wide "
+         & "tile does");
       Register_Routine
         (T, A_Projection_Bias_Is_Added_Where_It_Lies'Access,
          "a projection's bias, one slice for every row, is added by the "

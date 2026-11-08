@@ -3950,6 +3950,15 @@ private
       Wider_More_Line : System.Address := System.Null_Address;
       Wider_Low_Line  : System.Address := System.Null_Address;
 
+      --  And the narrow tile's three at sixty-four vectors, for a batch of
+      --  thirty-three to sixty-four: all three or none in use.
+      Mid       : System.Address := System.Null_Address;
+      Mid_More  : System.Address := System.Null_Address;
+      Mid_Low   : System.Address := System.Null_Address;
+      Mid_Line      : System.Address := System.Null_Address;
+      Mid_More_Line : System.Address := System.Null_Address;
+      Mid_Low_Line  : System.Address := System.Null_Address;
+
       --  And the taps' two heights of the first tile; see Tap_Line.
       Tap_Short      : System.Address := System.Null_Address;
       Tap_Tall       : System.Address := System.Null_Address;

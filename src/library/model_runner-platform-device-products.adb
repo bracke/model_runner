@@ -321,6 +321,18 @@ package body Model_Runner.Platform.Device.Products is
    function Narrowed (Count : Natural) return Boolean
    is (Count <= Narrow_Limit);
 
+   --  And the narrow tile at sixty-four vectors, for a batch past the
+   --  narrow one's width and no wider than its own: one wide tile of a
+   --  hundred and twenty-eight cost what its width costs. Gemma 4 E4B's
+   --  prompts on it and on the wide tile, alternated three rounds: 63
+   --  tokens 0.150 s against 0.225 (llama.cpp 0.149). Whether every one of
+   --  its three compilations was made, as for the wider tile's.
+   Mid_Vectors : constant := 64;
+   Mid_Ready   : Boolean := False;
+
+   function Midway (Count : Natural) return Boolean
+   is (Mid_Ready and then not Narrowed (Count) and then Count <= Mid_Vectors);
+
    --  Whether the device made all three wider tiles, so that a long batch
    --  can be rounded to them. One engine is open at a time, and the room a
    --  batch is rounded to is asked in places that know only its length.
@@ -352,6 +364,7 @@ package body Model_Runner.Platform.Device.Products is
 
    function Tile_Width (Count : Natural) return Positive
    is (if Narrowed (Count) then Narrow_Vectors
+       elsif Midway (Count) then Mid_Vectors
        elsif Widened (Count) then Wider_Vectors
        else Tile_Vectors);
 
@@ -1649,11 +1662,15 @@ package body Model_Runner.Platform.Device.Products is
       Count   : Natural) return Address
    is (if Packing in Low_Packing
        then (if Narrowed (Count) then Item.Narrow_Low_Line
+             elsif Midway (Count) then Item.Mid_Low_Line
              elsif Widened (Count) then Item.Wider_Low_Line
              else Item.Low_Tile_Line)
        elsif Narrowed (Count)
        then (if On_Extra (Packing)
              then Item.Narrow_More_Line else Item.Narrow_Line)
+       elsif Midway (Count)
+       then (if On_Extra (Packing)
+             then Item.Mid_More_Line else Item.Mid_Line)
        elsif Widened (Count)
        then (if On_Extra (Packing)
              then Item.Wider_More_Line else Item.Wider_Line)
@@ -4747,6 +4764,12 @@ package body Model_Runner.Platform.Device.Products is
                              Item.Tap_Short);
                      Module (Model_Runner.Shaders.Low_Tiles.Matrix_Tap_Tall,
                              Item.Tap_Tall);
+                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Mid,
+                             Item.Mid);
+                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Extra,
+                             Item.Mid_More);
+                     Module (Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Low,
+                             Item.Mid_Low);
                   end;
 
                   declare
@@ -6158,6 +6181,13 @@ package body Model_Runner.Platform.Device.Products is
                        Item.Wider_Line /= Null_Handle
                        and then Item.Wider_More_Line /= Null_Handle
                        and then Item.Wider_Low_Line /= Null_Handle;
+                     Line (Item.Mid, Item.Mid_Line);
+                     Line (Item.Mid_More, Item.Mid_More_Line);
+                     Line (Item.Mid_Low, Item.Mid_Low_Line);
+                     Mid_Ready :=
+                       Item.Mid_Line /= Null_Handle
+                       and then Item.Mid_More_Line /= Null_Handle
+                       and then Item.Mid_Low_Line /= Null_Handle;
                   end;
 
                   if Item.Narrow_Low /= Null_Handle then
@@ -6794,7 +6824,11 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Tap_Short_Line, "vkDestroyPipeline");
       Give_Back (Item.Tap_Tall_Line, "vkDestroyPipeline");
       Wider_Ready := False;
+      Mid_Ready := False;
       Give_Back (Item.Narrow_Low_Line, "vkDestroyPipeline");
+      Give_Back (Item.Mid_Line, "vkDestroyPipeline");
+      Give_Back (Item.Mid_More_Line, "vkDestroyPipeline");
+      Give_Back (Item.Mid_Low_Line, "vkDestroyPipeline");
       for Index in 1 .. Item.Special_Count loop
          Give_Back (Item.Special_Line (Index), "vkDestroyPipeline");
       end loop;
@@ -6836,6 +6870,9 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Tap_Short, "vkDestroyShaderModule");
       Give_Back (Item.Tap_Tall, "vkDestroyShaderModule");
       Give_Back (Item.Narrow_Low, "vkDestroyShaderModule");
+      Give_Back (Item.Mid, "vkDestroyShaderModule");
+      Give_Back (Item.Mid_More, "vkDestroyShaderModule");
+      Give_Back (Item.Mid_Low, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_Low, "vkDestroyShaderModule");
       Give_Back (Item.Halver, "vkDestroyShaderModule");
       Give_Back (Item.Matrix, "vkDestroyShaderModule");
@@ -8981,6 +9018,8 @@ package body Model_Runner.Platform.Device.Products is
        elsif Line = Item.Narrow_More_Line then Item.Narrow_More
        elsif Line = Item.Low_Tile_Line then Item.Low_Tile
        elsif Line = Item.Narrow_Low_Line then Item.Narrow_Low
+       elsif Line = Item.Mid_More_Line then Item.Mid_More
+       elsif Line = Item.Mid_Low_Line then Item.Mid_Low
        elsif Line = Item.Wider_More_Line then Item.Wider_More
        elsif Line = Item.Wider_Low_Line then Item.Wider_Low
        else Null_Handle);
@@ -9222,6 +9261,9 @@ package body Model_Runner.Platform.Device.Products is
              elsif Pipeline = Item.Narrow_Line
                or else Pipeline = Item.Narrow_More_Line
                or else Pipeline = Item.Narrow_Low_Line
+               or else Pipeline = Item.Mid_Line
+               or else Pipeline = Item.Mid_More_Line
+               or else Pipeline = Item.Mid_Low_Line
              then Narrow_Rows
              elsif Pipeline = Item.Tap_Tall_Line then Tap_Tall_Rows
              elsif Pipeline = Item.Wider_Line or else Pipeline = Item.Wider_More_Line

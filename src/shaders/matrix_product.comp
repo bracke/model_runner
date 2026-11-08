@@ -289,7 +289,15 @@ const uint TILE_R = TAP_ROWS;
 //  Listed_Vectors carry the measurements. A specialization constant was
 //  tried for the width and the constants derived from it did not follow
 //  it.
-#ifdef NARROW
+#if defined(NARROW) && defined(MID)
+//  And the narrow tile again at sixty-four vectors, for a batch of
+//  thirty-three to sixty-four, which the tile of a hundred and twenty-eight
+//  took at its full cost: Gemma 4 E4B's 63-token prompt 0.225 s on that,
+//  0.150 on this (llama.cpp 0.149). Below thirty-three it loses to the
+//  narrow tile, 0.094 against 0.127 at 15. The engine's Mid_Vectors
+//  carries the measurements.
+const uint TILE_V = 64u;
+#elif defined(NARROW)
 const uint TILE_V = 32u;
 #elif defined(LISTED) && defined(LISTED_WIDE)
 //  And compiled once more at sixty-four, for runs that average past

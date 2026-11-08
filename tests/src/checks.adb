@@ -6989,6 +6989,32 @@ package body Checks is
          end;
       end loop;
 
+      --  And the narrow tile's three compilations at sixty-four vectors.
+      for Which in 1 .. 3 loop
+         declare
+            Found : Boolean;
+
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest
+                (Root & "/src/shaders/matrix_product.comp", Found);
+
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (case Which is
+                  when 1 => Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Digest,
+                  when 2 =>
+                     Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Extra_Digest,
+                  when others =>
+                     Model_Runner.Shaders.Low_Tiles.Matrix_Mid_Low_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+
+            if Found and then Digest /= Recorded then
+               Fail ("a MID compilation of src/shaders/matrix_product.comp"
+                     & " is older than the source; run ./compile-shaders.sh");
+            end if;
+         end;
+      end loop;
+
       --  And the taps' two heights of the first tile.
       for Which in 1 .. 2 loop
          declare
