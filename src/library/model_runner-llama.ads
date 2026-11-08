@@ -3419,6 +3419,11 @@ private
       --  only the slices a token touches, and a stack would be all of them.
       Stacked     : Boolean := False;
 
+      --  The longest batch the device's room holds the answers of, where
+      --  a mixture whole on the device leaves it little; Positive'Last
+      --  where it is not held (Batch_Limit).
+      Batch_Cap   : Positive := Positive'Last;
+
       --  Whether the device runs only the front half of each layer -- its
       --  normalization, attention or delta rule, projection out and join --
       --  and the processor the feed-forward: a mixture whose stacks do not

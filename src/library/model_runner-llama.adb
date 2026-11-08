@@ -46,13 +46,15 @@ package body Model_Runner.Llama is
    --  disagreed from position 1,536 on.
    function Batch_Limit (Item : Model'Class) return Positive
    is (Positive'Min
+         (Item.Batch_Cap,
+          Positive'Min
          ((if Item.Split_Feed and then Item.Settings.Experts = 0
            then Dense_Streamed_Batch
            elsif Item.Split_Feed then Streamed_Batch
            elsif Item.Settings.Experts > 0 then Streamed_Batch
            else Max_Batch),
           (if Item.Settings.Window > 0 then Window_Margin (Item.Settings)
-           else Positive'Last)));
+           else Positive'Last))));
 
    function Batch_Limit (Item : Model'Class; Depth : Natural) return Positive
    is

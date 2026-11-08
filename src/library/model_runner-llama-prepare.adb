@@ -4108,6 +4108,7 @@ begin
    --  the residency, and a model whose stacks do not all fit would give
    --  back and upload again a whole stack where it gave back a slice.
    Item.Stacked := False;
+   Item.Batch_Cap := Positive'Last;
    Item.Split_Feed := Dense_Split;
    Item.Host_Front_Raw := False;
 
@@ -4138,7 +4139,53 @@ begin
          --  A split decided before the panels were built is held to:
          --  its experts are now in the processor's layout, which the
          --  device does not read.
-         Item.Stacked := not Mixture_Split and then Total <= Item.Able.Memory_Bytes;
+         --  And only where the stacks leave the context its room: the
+         --  context named, or the one planned where none is, counted as a
+         --  dense model's is. Gemma 4's 26B, 14.4 GB of matrices, fitted a
+         --  budget counted for no context at all, went whole, and ran the
+         --  part out of memory at its first prompt of 547 tokens.
+         Item.Stacked :=
+           not Mixture_Split and then Total <= Item.Able.Memory_Bytes
+           and then Total
+                    <= Device_Room
+                         (Item.Settings,
+                          (if Context > 0 then Context else Planned_Device_Context),
+                          Cache, Paged);
+
+         --  Its batch held to what the room keeps for a batch's answers:
+         --  the session margin, less the driver's and the desktop's share,
+         --  and what the budget leaves past the stacks. A position's answers
+         --  are counted generously -- each chosen expert's gate, up, unit,
+         --  down and scale, the dense feed-forward's three, the attention's
+         --  rows and a score of the width's -- three times over, as a
+         --  batch's buffers measured.
+         --  Gemma 4's 26B, 13.5 GB on the device, read a 6,289-token prompt
+         --  2,048 positions a batch and ran the part out of memory.
+         Item.Batch_Cap := Positive'Last;
+         if Item.Stacked then
+            declare
+               W : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Item.Settings.Embedding);
+               Floats : constant Interfaces.Unsigned_64 :=
+                 Interfaces.Unsigned_64 (Item.Settings.Experts_Used)
+                 * (3 * Interfaces.Unsigned_64 (Item.Settings.Expert_Feed) + 2 * W)
+                 + 20 * W
+                 + 3 * Interfaces.Unsigned_64 (Item.Settings.Feed_Forward)
+                 + 3 * Interfaces.Unsigned_64 (Item.Settings.Heads)
+                     * Interfaces.Unsigned_64 (Natural'Max (Item.Settings.Head_Size, Item.Settings.Value_Size));
+               --  Three times its floats: measured, a 26B batch's peak grew
+               --  1.8 MB a position, where the floats said 0.6.
+               Each : constant Interfaces.Unsigned_64 := Floats * 4 * 3;
+               Allowance : constant Interfaces.Unsigned_64 :=
+                 Device_Session_Margin - 640 * 2 ** 20
+                 + (Item.Able.Memory_Bytes - Total);
+               Fits : constant Interfaces.Unsigned_64 := Allowance / Interfaces.Unsigned_64'Max (1, Each);
+            begin
+               if Fits < Interfaces.Unsigned_64 (Streamed_Batch) then
+                  Item.Batch_Cap :=
+                    Positive (Interfaces.Unsigned_64'Max (128, Fits / 128 * 128));
+               end if;
+            end;
+         end if;
 
          --  And the route kernel told whether this mixture's shares stay
          --  as the softmax gave them, so that one that does not
