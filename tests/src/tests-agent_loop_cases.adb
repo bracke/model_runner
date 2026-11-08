@@ -458,6 +458,27 @@ package body Tests.Agent_Loop_Cases is
                  "an answer showing broken JSON was given back as a call: " & Ended.Reason'Image);
       end;
 
+      --  A file far past the room the context has left, read whole: its
+      --  answer is cut at a line and said so, with how to read the rest --
+      --  given back whole, the next prompt would not have fitted at all.
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Big     : Unbounded_String;
+      begin
+         for Line in 1 .. 4_000 loop
+            Append (Big, "line" & Integer'Image (Line) & " of a file larger than the room" & ASCII.LF);
+         end loop;
+         Put ("too-big.txt", To_String (Big));
+         Replies.Replies.Append (Read ("too-big.txt"));
+         Run (Replies, Seen, Ended);
+         Assert (Natural (Seen.Results.Length) >= 1
+                 and then Has (Seen.Results (1), "cut here to fit the room left in the context")
+                 and then String'(Seen.Results (1))'Length < Length (Big),
+                 "a file past the context's room was given back whole");
+      end;
+
       --  In the open form, a whole call and then one cut: the whole one
       --  runs and the cut one is said -- taken for the last call read, the
       --  whole one was not run and the cut one never named.

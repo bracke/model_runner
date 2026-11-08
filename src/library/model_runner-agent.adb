@@ -179,6 +179,24 @@ package body Model_Runner.Agent is
       function Content_Text (Text : String) return String
       is (Vocab.Defused (Words.all, Text));
 
+      --  The tokens the tool answers given back since the last reply take,
+      --  for what the context can still hold of the next one.
+      Round_Taken : Natural := 0;
+
+      --  How many tokens a text is, as the model reads it; a third of its
+      --  bytes where it will not encode.
+      function Token_Count (Text : String) return Natural is
+         type Token_Access is access Vocab.Token_Array;
+         procedure Free is new Ada.Unchecked_Deallocation (Vocab.Token_Array, Token_Access);
+         Room : Token_Access := new Vocab.Token_Array (1 .. Text'Length + 8);
+         Last : Natural := 0;
+         Read : E.Error_Info;
+      begin
+         Vocab.Encode (Words.all, Text, False, False, Room.all, Last, Read);
+         Free (Room);
+         return (if E.Is_Error (Read) then Text'Length / 3 else Last);
+      end Token_Count;
+
       Have_Tools : constant Boolean :=
         Model_Runner.Tools.Count (Offered) > 0;
 
@@ -223,6 +241,63 @@ package body Model_Runner.Agent is
       Request : Gen.Request := Generation;
 
       Last_Result : Gen.Result;
+
+      --  A tool's answer held to what the context can still take: the
+      --  last prompt and its reply, the answers given back since, and
+      --  room for the next reply kept. Past it, cut at a line, and said so
+      --  with how to read the rest -- Gemma 4's 12B read a 59 KB body and
+      --  then its spec whole into a 32,768-token context, and the task
+      --  failed on a prompt it could not hold.
+      Fit_Least : constant := 512;
+
+      function Fitted (Text : String) return String is
+         Capacity : constant Natural := L.Capacity (Session);
+         Count    : constant Natural := Token_Count (Text);
+         Used     : constant Natural :=
+           Last_Result.Prompt_Tokens + Last_Result.Generated_Tokens + Round_Taken;
+         Reserve  : constant Natural := Natural'Min (4_096, Capacity / 8);
+         Room     : constant Integer := Capacity - Used - Reserve;
+      begin
+         --  A short answer is not what fills a context: kept whole.
+         if Capacity = 0 or else Count <= Fit_Least or else Count <= Integer'Max (Room, 0) then
+            Round_Taken := Round_Taken + Count;
+            return Text;
+         end if;
+         declare
+            Keep  : constant Natural :=
+              (if Room <= 256 then 0
+               else Natural (Long_Long_Integer (Text'Length)
+                             * Long_Long_Integer (Room - 200) / Long_Long_Integer (Count)));
+            Cut   : Natural := Text'First + Keep - 1;
+            Shown, Total : Natural := 0;
+         begin
+            while Cut >= Text'First and then Text (Cut) /= ASCII.LF loop
+               Cut := Cut - 1;
+            end loop;
+            for C of Text loop
+               if C = ASCII.LF then
+                  Total := Total + 1;
+               end if;
+            end loop;
+            for C of Text (Text'First .. Cut) loop
+               if C = ASCII.LF then
+                  Shown := Shown + 1;
+               end if;
+            end loop;
+            declare
+               Note : constant String :=
+                 (if Cut >= Text'First then "" & ASCII.LF else "")
+                 & "(note from the harness: this answer is cut here to fit the room left in the"
+                 & " context -- the first" & Natural'Image (Shown) & " of" & Natural'Image (Total)
+                 & " lines. Read the rest a part at a time with read_file's lines, or find what"
+                 & " you need with find.)";
+               Kept : constant String := Text (Text'First .. Cut) & Note;
+            begin
+               Round_Taken := Round_Taken + Token_Count (Kept);
+               return Kept;
+            end;
+         end;
+      end Fitted;
 
       --  A wall-clock budget for the loop, checked between steps. Read once
       --  at the start; a monotonic clock never goes back, so the elapsed
@@ -1222,6 +1297,7 @@ package body Model_Runner.Agent is
          Kept.Tokens := Kept.Tokens + Last_Result.Generated_Tokens;
          Kept.Spent_Ns := Kept.Spent_Ns + Last_Result.Decode_Ns;
          Result.Prompt_Tokens := Last_Result.Prompt_Tokens;
+         Round_Taken := 0;
 
          --  A call written so that it could not be read: the model is told,
          --  and tries again, twice at most -- where the reply was taken as
@@ -1927,7 +2003,7 @@ package body Model_Runner.Agent is
                            --  not always UTF-8; kept so, the next prompt
                            --  could not be read into tokens at all.
                            Answer : constant String := Unforged (Model_Runner.UTF8.Repaired (Said_By_Tool));
-                           Reply  : constant String := Answer & Seen;
+                           Reply  : constant String := Fitted (Answer & Seen);
                         begin
                            --  Kept by the call, for a repeat of it, and in the
                            --  record of the work: by the path it named, where
