@@ -1716,6 +1716,49 @@ float e8m0_at (uint at) {
     return uintBitsToFloat (e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
 }
 
+#if defined(MORE_FORMATS) && defined(NARROW)
+//  Q4_0's words for one invocation's half of a row in one step, read a
+//  step ahead in the narrow tiles as MXFP4's are in the listed one: the
+//  five words an eighteen-byte block lies across, beginning on a word or
+//  two bytes into one. Read where they are decoded, each of a short row's
+//  steps -- forty at 2,560 columns -- waited out its loads between the two
+//  barriers.
+void q40_fetch (uint row, uint k0, out uvec4 a, out uint e)
+{
+    uint i = (row + (k0 / 32u) * 18u) >> 2u;
+
+    a = uvec4 (w[i], w[i + 1u], w[i + 2u], w[i + 3u]);
+    e = w[i + 4u];
+}
+
+//  Two words joined and shifted down by sixteen bits, or the next word
+//  alone at thirty-two.
+uint q40_join (uint low, uint high, uint shift) {
+    return shift == 32u ? high : (low >> 16u) | (high << 16u);
+}
+
+//  And what the decode does with them, in the same arithmetic as the six
+//  formats' shared decode below, so the answers are the same.
+void q40_place (uvec4 a, uint e, uint row, uint k0, uint half_of, uint into)
+{
+    uint s = ((row + (k0 / 32u) * 18u) & 3u) * 8u;
+    float scale = unpackHalf2x16 (s == 0u ? a.x : (a.x >> 16u)).x;
+    uint t = s + 16u;
+    uint turn = half_of * 4u;
+
+    uvec4 words = uvec4 (q40_join (a.x, a.y, t), q40_join (a.y, a.z, t),
+                         q40_join (a.z, a.w, t), q40_join (a.w, e, t));
+    for (uint j = 0u; j < 4u; ++j) {
+        uint q = (words[j] >> turn) & 0x0F0F0F0Fu;
+        f16vec4 v = f16vec4 (scale * (vec4 (unpack8 (q)) - 8.0) + 0.0);
+        wt[into + 4u * j]      = v.x;
+        wt[into + 4u * j + 1u] = v.y;
+        wt[into + 4u * j + 2u] = v.z;
+        wt[into + 4u * j + 3u] = v.w;
+    }
+}
+#endif
+
 #ifdef LISTED
 //  MXFP4's words for one invocation's half of a row in one step, read a
 //  step ahead as Q4_K's are in the other compilation: the five words a
@@ -1961,7 +2004,7 @@ void main() {
     //  then wrong) the prompt read 484 -- and the activations' reads a
     //  tenth (429), but at 128 registers and 54 KB of shared memory it
     //  runs four waves a unit, and a register more is a wave fewer.
-#ifdef LISTED
+#if defined(LISTED) || defined(NARROW)
     bool q4k = SHAPE_FORMAT == FMT_Q4_K;
 #else
     const bool q4k = false;
@@ -2023,6 +2066,30 @@ void main() {
         uint k0 = ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
         for (uint it = 0u; it < TILE_R / 32u; ++it) {
             mx_fetch (mx_rows[it], k0, mx_a[it], mx_e[it]);
+        }
+    }
+#endif
+
+#if defined(MORE_FORMATS) && defined(NARROW)
+    //  Q4_0 a step ahead; see q40_fetch. Never a tap's: the taps take the
+    //  first tile.
+    bool q40 = SHAPE_FORMAT == FMT_Q4_0 && shape.members[3] == 0u;
+    uvec4 q40_a[TILE_R / 32u];
+    uint  q40_e[TILE_R / 32u];
+    uint  q40_rows[TILE_R / 32u];
+
+    for (uint it = 0u; it < TILE_R / 32u; ++it) {
+        uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+        q40_rows[it] = shape.base + slice
+                       + min(row0 + r, shape.rows - 1u) * rb;
+    }
+
+    if (q40) {
+        uint k0 = ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
+        for (uint it = 0u; it < TILE_R / 32u; ++it) {
+            if (k0 < shape.columns) {
+                q40_fetch (q40_rows[it], k0, q40_a[it], q40_e[it]);
+            }
         }
     }
 #endif
@@ -2093,6 +2160,19 @@ void main() {
             for (uint it = 0u; it < TILE_R / 32u; ++it) {
                 uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
                 q4k_place (ahead_h[it], ahead_q[it], k0,
+                           chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
+                           + half_of * 16u);
+            }
+        } else
+#endif
+#if defined(MORE_FORMATS) && defined(NARROW)
+        if (q40) {
+            uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
+            uint half_of = gl_LocalInvocationID.x & 1u;
+
+            for (uint it = 0u; it < TILE_R / 32u && k0 < shape.columns; ++it) {
+                uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+                q40_place (q40_a[it], q40_e[it], q40_rows[it], k0, half_of,
                            chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
                            + half_of * 16u);
             }
@@ -2790,6 +2870,14 @@ void main() {
             for (uint it = 0u; it < TILE_R / 32u; ++it) {
                 q4k_fetch (q4k_rows[it], k1, gl_LocalInvocationID.x & 1u,
                            ahead_h[it], ahead_q[it]);
+            }
+        }
+#endif
+#if defined(MORE_FORMATS) && defined(NARROW)
+        if (q40 && k0 + KCH * CHUNKS < shape.columns) {
+            uint k1 = k0 + KCH * CHUNKS;
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                q40_fetch (q40_rows[it], k1, q40_a[it], q40_e[it]);
             }
         }
 #endif
