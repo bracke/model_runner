@@ -178,9 +178,23 @@ layout(push_constant, std430) uniform Shape {
 //  its value both: each looked it up apart, and Gemma 4 E4B's global
 //  layers, heads of 512, attended 7,186 deep in 837 us paged against 603
 //  in one block.
+//  And the slice's pages, read into shared memory once by the workgroup
+//  where they are few enough, so that a lane's look-up is no read of the
+//  device's memory at all: the bases out of the table were a dependent
+//  read before every position's key.
+const uint PAGES_HELD = 64u;
+shared uint pages_sh[PAGES_HELD];
+uint pages_from = 0u;
+bool pages_held = false;
+
 uint page_of (uint pos) {
-    return shape.page_shift == 0u
-           ? 0u : floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)]);
+    if (shape.page_shift == 0u) {
+        return 0u;
+    }
+    if (pages_held) {
+        return pages_sh[(pos >> shape.page_shift) - pages_from];
+    }
+    return floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)]);
 }
 
 uint place_in (uint page, uint pos, uint offset, uint width) {
@@ -235,6 +249,20 @@ void main() {
     uint my_first = first + slice * per;
     uint my_last  = min (last, my_first + per - 1u);
     bool empty    = my_first > last;
+
+#ifndef PACKED
+    if (shape.page_shift != 0u && !empty) {
+        pages_from = my_first >> shape.page_shift;
+        uint pages_count = (my_last >> shape.page_shift) - pages_from + 1u;
+        pages_held = pages_count <= PAGES_HELD;
+        if (pages_held) {
+            for (uint at = tid; at < pages_count; at += LANES) {
+                pages_sh[at] =
+                  floatBitsToUint (kv[shape.pages_at + pages_from + at]);
+            }
+        }
+    }
+#endif
 
     for (uint at = tid; at < ROWS * HS4; at += LANES) {
         uint r = at / HS4;
