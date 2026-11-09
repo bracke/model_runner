@@ -4642,14 +4642,14 @@ package body Model_Runner.Platform.Device.Products is
             Thin_More : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Matrix_Narrow_Extra;
             Listed : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Matrix_Listed;
+              Model_Runner.Shaders.Mid_Tiles.Matrix_Listed;
             Listed_More : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Matrix_Listed_Extra;
+              Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Extra;
             Listed_Wide : aliased constant Model_Runner.Shaders.Word_Array :=
-              Model_Runner.Shaders.Matrix_Listed_Wide;
+              Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Wide;
             Listed_Wide_More :
               aliased constant Model_Runner.Shaders.Word_Array :=
-                Model_Runner.Shaders.Matrix_Listed_Wide_Extra;
+                Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Wide_Extra;
             Request : aliased Shader_Create_Info;
          begin
             if Create = null then

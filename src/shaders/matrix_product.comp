@@ -1685,6 +1685,55 @@ void q4k_place (uvec4 h, uvec4 q, uint k0, uint into)
     wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
     wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
 }
+
+#ifdef LISTED
+//  Q8_0's words for one invocation's half of a row in one step, a step
+//  ahead in the listed tile, in the room Q4_K's take: the scale's word and
+//  the five words sixteen signed bytes two bytes into a word lie across.
+//  Mellum's projections down are half of them Q8_0, decoded where read.
+void q80_fetch (uint row, uint k0, uint half_of, out uvec4 h, out uvec4 q)
+{
+    uint at = row + (k0 / 32u) * 34u;
+    uint i = (at + 2u + half_of * 16u) >> 2u;
+
+    h = uvec4 (w[at >> 2u], w[i], w[i + 1u], w[i + 2u]);
+    q = uvec4 (w[i + 3u], w[i + 4u], 0u, 0u);
+}
+
+//  And decoded as the step's own decode does it, so the answers are the
+//  same.
+void q80_place (uvec4 h, uvec4 q, uint row, uint k0, uint half_of, uint into)
+{
+    uint at = row + (k0 / 32u) * 34u;
+    float16_t d = float16_t(unpackHalf2x16
+        ((h.x >> ((at & 2u) * 8u)) & 65535u).x);
+
+    uint b = at + 2u + half_of * 16u;
+    uint p0, p1, p2, p3;
+    if ((b & 3u) == 0u) {
+        p0 = h.y; p1 = h.z; p2 = h.w; p3 = q.x;
+    } else {
+        p0 = (h.y >> 16u) | (h.z << 16u);
+        p1 = (h.z >> 16u) | (h.w << 16u);
+        p2 = (h.w >> 16u) | (q.x << 16u);
+        p3 = (q.x >> 16u) | (q.y << 16u);
+    }
+
+    f16vec4 v0 = f16vec4(unpack8(int(p0))) * d;
+    f16vec4 v1 = f16vec4(unpack8(int(p1))) * d;
+    f16vec4 v2 = f16vec4(unpack8(int(p2))) * d;
+    f16vec4 v3 = f16vec4(unpack8(int(p3))) * d;
+
+    wt[into +  0u] = v0.x; wt[into +  1u] = v0.y;
+    wt[into +  2u] = v0.z; wt[into +  3u] = v0.w;
+    wt[into +  4u] = v1.x; wt[into +  5u] = v1.y;
+    wt[into +  6u] = v1.z; wt[into +  7u] = v1.w;
+    wt[into +  8u] = v2.x; wt[into +  9u] = v2.y;
+    wt[into + 10u] = v2.z; wt[into + 11u] = v2.w;
+    wt[into + 12u] = v3.x; wt[into + 13u] = v3.y;
+    wt[into + 14u] = v3.z; wt[into + 15u] = v3.w;
+}
+#endif
 #endif
 
 #ifdef MORE_FORMATS
@@ -2016,6 +2065,11 @@ void main() {
 #else
     const bool q4k = false;
 #endif
+#ifdef LISTED
+    bool q80 = SHAPE_FORMAT == FMT_Q8_0;
+#else
+    const bool q80 = false;
+#endif
     uvec4 ahead_h[TILE_R / 32u];
     uvec4 ahead_q[TILE_R / 32u];
     uint  q4k_rows[TILE_R / 32u];
@@ -2033,6 +2087,15 @@ void main() {
                        ahead_h[it], ahead_q[it]);
         }
     }
+#ifdef LISTED
+    if (q80) {
+        uint k0 = ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
+        for (uint it = 0u; it < TILE_R / 32u; ++it) {
+            q80_fetch (q4k_rows[it], k0, gl_LocalInvocationID.x & 1u,
+                       ahead_h[it], ahead_q[it]);
+        }
+    }
+#endif
 
     //  Q6_K's scales, a block's sixteen and its own, read once a block
     //  rather than once a step: they sit at the far end of the block from
@@ -2171,6 +2234,19 @@ void main() {
                            + half_of * 16u);
             }
         } else
+#ifdef LISTED
+        if (q80) {
+            uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
+            uint half_of = gl_LocalInvocationID.x & 1u;
+
+            for (uint it = 0u; it < TILE_R / 32u && k0 < shape.columns; ++it) {
+                uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+                q80_place (ahead_h[it], ahead_q[it], q4k_rows[it], k0, half_of,
+                           chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
+                           + half_of * 16u);
+            }
+        } else
+#endif
 #endif
 #if defined(MORE_FORMATS) && (defined(NARROW) || defined(LISTED))
         if (q40) {
@@ -2879,6 +2955,15 @@ void main() {
                            ahead_h[it], ahead_q[it]);
             }
         }
+#ifdef LISTED
+        if (q80 && k0 + KCH * CHUNKS < shape.columns) {
+            uint k1 = k0 + KCH * CHUNKS;
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                q80_fetch (q4k_rows[it], k1, gl_LocalInvocationID.x & 1u,
+                           ahead_h[it], ahead_q[it]);
+            }
+        }
+#endif
 #endif
 #if defined(MORE_FORMATS) && (defined(NARROW) || defined(LISTED))
         if (q40 && k0 + KCH * CHUNKS < shape.columns) {

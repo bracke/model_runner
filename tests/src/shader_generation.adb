@@ -310,11 +310,15 @@ package body Shader_Generation is
 
       --  And the narrow tile's compilations at sixty-four and ninety-six
       --  vectors to one of their own, the six of them past what the low-bit
-      --  tiles' child had room for.
+      --  tiles' child had room for; and the listed tile's four beside them,
+      --  once its step-ahead for Q8_0 put the parent past that size.
       function Is_Mid_Tile (Pair : Shader_Pair) return Boolean is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
-         return Ada.Strings.Fixed.Index (Name, "Matrix_Mid") = Name'First;
+         return Ada.Strings.Fixed.Index (Name, "Matrix_Mid") = Name'First
+           or else (Ada.Strings.Fixed.Index (Name, "Matrix_Listed") = Name'First
+                    and then not (Name'Length >= 4
+                                  and then Name (Name'Last - 3 .. Name'Last) = "_Low"));
       end Is_Mid_Tile;
 
       --  And the matrix tile's LOW_BITS compilations to a third, once the

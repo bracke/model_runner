@@ -7360,7 +7360,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Matrix_Listed_Digest
+           and then Digest /= Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Digest
          then
             Fail ("the listed compilation of src/shaders/matrix_product.comp"
                   & " is older than the source; compile it with -DLISTED to"
@@ -7371,7 +7371,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Matrix_Listed_Extra_Digest
+           and then Digest /= Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Extra_Digest
          then
             Fail ("the listed compilation of src/shaders/matrix_product.comp"
                   & " for the other nine formats is older than the source; "
@@ -7384,7 +7384,7 @@ package body Checks is
          Result.Performed := Result.Performed + 1;
 
          if Found
-           and then Digest /= Model_Runner.Shaders.Matrix_Listed_Wide_Digest
+           and then Digest /= Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Wide_Digest
          then
             Fail ("the wide listed compilation of "
                   & "src/shaders/matrix_product.comp is older than the "
@@ -7395,7 +7395,7 @@ package body Checks is
 
          if Found
            and then Digest
-                    /= Model_Runner.Shaders.Matrix_Listed_Wide_Extra_Digest
+                    /= Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Wide_Extra_Digest
          then
             Fail ("the wide listed compilation of "
                   & "src/shaders/matrix_product.comp for the other nine "
