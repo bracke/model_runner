@@ -3420,6 +3420,11 @@ begin
             if Given ("--backend") then
                return Option ("--backend", "cpu");
             end if;
+            --  No model named: nothing to choose for, and the command says
+            --  so below rather than raising on an empty path here.
+            if Option ("--model", "") = "" then
+               return "";
+            end if;
             declare
                Catalog : aliased Model_Runner.Localization.Catalog;
                Screen  : Model_Runner.Presentation.Console;
@@ -3451,6 +3456,13 @@ begin
 
          Chosen_Backend : constant String := Chosen;
       begin
+         if Option ("--model", "") = "" then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error, "speed: --model PATH is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
          --  Refused on a busy machine, exactly as `tests benchmark` and
          --  `tests outside` are and on the same bound, because all three
          --  publish figures that are compared with each other and with what
