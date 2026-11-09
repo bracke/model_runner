@@ -1257,7 +1257,7 @@ begin
                      K."=" (Settings.Pairing, K.Split),
                      (if Item.Paged then 0
                       else Block_Base (Item) + Slot),
-                     (if Item.Paged then Page_Value_Base (Item)
+                     (if Item.Paged then Page_Value_Base (Item, Reads)
                       else Block_Base (Item)
                            + Values_Front (Item) + V_Slot),
                      Natural (Heads), Natural (Value_Size),
@@ -1267,10 +1267,12 @@ begin
                      Natural (Cell),
                      (if Item.Paged then 0
                       else Block_Base (Item) + Base),
-                     (if Item.Paged then Page_Value_Base (Item)
+                     (if Item.Paged then Page_Value_Base (Item, Reads)
                       else Block_Base (Item)
                            + Values_Front (Item) + V_Base),
-                     Natural (KV_Width), Natural (V_Stride),
+                     Natural (KV_Width),
+                     Natural (if Item.Paged then Page_Value_Stride (Item, Reads)
+                              else V_Stride),
                      Scale, Settings.Attention_Cap,
                      Current.Attention_Out,
                      Current.Gate, Current.Up, Current.Down,

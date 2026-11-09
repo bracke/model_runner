@@ -223,6 +223,35 @@ package body Model_Runner.Llama is
       return Widest;
    end Value_Row_Width;
 
+   --  Whether a paged device cache keeps a layer's values in its key rows,
+   --  past its keys: where the two together are no wider than a row of
+   --  keys, which a layer narrower than the widest is. Gemma 4's global
+   --  layers, two heads of 512, hold 1,024 of keys and 1,024 of values in
+   --  rows laid out for the windowed layers' eight heads of 256 -- 2,048
+   --  of keys and 2,048 of values -- and filled half of every page; packed,
+   --  their page is a row of keys a position, half a page (Page_Units).
+   --  An exact or halved cache's own rows only; a packed cache, a latent
+   --  read absorbed and a block keep theirs as they were, and so does any
+   --  model whose rows of keys and of values differ in width.
+   function Packs_Values
+     (Settings : Configuration;
+      Layer    : Natural;
+      Held     : Cache_Precision;
+      Paged    : Boolean) return Boolean
+   is
+      Own : constant Natural := Cache_Layer (Settings, Layer);
+   begin
+      return Paged
+        and then Held in Exact | Halved
+        and then not Settings.Latent_Attention
+        and then Layer < Settings.Layers
+        and then Own < Settings.Layers
+        and then Key_Row_Width (Settings) = Value_Row_Width (Settings)
+        and then KV_Heads_Of (Settings, Own)
+                 * (Head_Of (Settings, Own) + Value_Of (Settings, Own))
+                 <= Key_Row_Width (Settings);
+   end Packs_Values;
+
    function Score_Scale (Settings : Configuration) return Real
    is (if Settings.Kind in Granite | Granite_MoE and then Settings.Attention_Mul /= 0.0
        then Settings.Attention_Mul
@@ -3796,6 +3825,15 @@ package body Model_Runner.Llama is
    --  session is laid out and the same for every page of the run.
    Page_Elements : Element_Count := 0;
 
+   --  The most slots one page of the pool's sessions takes. A slot is the
+   --  smallest page the session that set the pool's size holds, and a page
+   --  larger than that takes as many neighbouring slots as it fills
+   --  (Page_Units): Gemma 4's windowed layers two, its global layers'
+   --  packed pages one (Packs_Values). One for a pool of one size of page,
+   --  as every pool was; a session whose page wants more than this is
+   --  refused while another holds pages, as one larger than a slot was.
+   Page_Units_Most : Natural := 1;
+
    --  Who holds each page slot of the cache, and how far into the buffer
    --  pages have been dealt -- what Block_Taken is for a cache in blocks.
    --  Slot I is the elements [I * Page_Elements, (I + 1) * Page_Elements).
@@ -5505,6 +5543,8 @@ package body Model_Runner.Llama is
    --  and back, in whichever storage the host keeps them: binary32 as it
    --  is, or halves through binary32, which the device takes and gives
    --  in. A paged session asking for halves keeps them so on the host.
+   function Page_Value_Base (Item : Session; Layer : Natural) return Element_Count;
+
    procedure Put_Host_Rows
      (Item   : Session;
       Where  : Element_Count;
@@ -5603,6 +5643,16 @@ package body Model_Runner.Llama is
 
       Keys_Base : constant Element_Count := Keys_At (Item, Layer);
       Vals_Base : constant Element_Count := Values_At (Item, Layer);
+
+      Packed : constant Boolean :=
+        not Item.Values_In_Keys
+        and then Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged);
+      Packed_At : constant Element_Count :=
+        (if Packed then Page_Value_Base (Item, Layer) else 0);
+      Packed_Width : constant Element_Count :=
+        Element_Count
+          (KV_Heads_Of (Item.Owner.Settings, Cache_Layer (Item.Owner.Settings, Layer))
+           * Value_Of (Item.Owner.Settings, Cache_Layer (Item.Owner.Settings, Layer)));
    begin
       Written := True;
 
@@ -5631,7 +5681,19 @@ package body Model_Runner.Llama is
               (Item, Base + Into * KV_Width, Keys_Base + Low * KV_Width,
                Span * KV_Width, Keys => True, Ok => Written);
 
-            if Written and then not Item.Values_In_Keys then
+            --  Packed (Packs_Values): each position's values past its
+            --  keys in its own row, written over what the run of keys put
+            --  there, so after it.
+            if Written and then Packed then
+               for Row in 0 .. Span - 1 loop
+                  Put_Host_Rows
+                    (Item,
+                     Base + (Into + Row) * KV_Width + Packed_At,
+                     Vals_Base + (Low + Row) * V_Width, Packed_Width,
+                     Keys => False, Ok => Written);
+                  exit when not Written;
+               end loop;
+            elsif Written and then not Item.Values_In_Keys then
                Put_Host_Rows
                  (Item,
                   Base + Element_Count (Page_Positions) * KV_Width
@@ -5667,6 +5729,16 @@ package body Model_Runner.Llama is
       Vals_Base : constant Element_Count := Values_At (Item, Layer);
 
       P : constant Element_Count := Element_Count (Page_Positions);
+
+      Packed : constant Boolean :=
+        not Item.Values_In_Keys
+        and then Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged);
+      Packed_At : constant Element_Count :=
+        (if Packed then Page_Value_Base (Item, Layer) else 0);
+      Packed_Width : constant Element_Count :=
+        Element_Count
+          (KV_Heads_Of (Item.Owner.Settings, Cache_Layer (Item.Owner.Settings, Layer))
+           * Value_Of (Item.Owner.Settings, Cache_Layer (Item.Owner.Settings, Layer)));
    begin
       Read := True;
 
@@ -5691,7 +5763,18 @@ package body Model_Runner.Llama is
                Keys_Base + Lo * KV_Width, Count * KV_Width,
                Keys => True, Ok => Read);
 
-            if Read and then not Item.Values_In_Keys then
+            --  Packed: each position's values out of its key row. The run
+            --  of keys above put them past the keys in the host's rows of
+            --  keys too, where nothing reads.
+            if Read and then Packed then
+               for Row in 0 .. Count - 1 loop
+                  Get_Host_Rows
+                    (Item, Base + (Lo - Low + Row) * KV_Width + Packed_At,
+                     Vals_Base + (Lo + Row) * V_Width, Packed_Width,
+                     Keys => False, Ok => Read);
+                  exit when not Read;
+               end loop;
+            elsif Read and then not Item.Values_In_Keys then
                Get_Host_Rows
                  (Item, Base + P * KV_Width + (Lo - Low) * V_Width,
                   Vals_Base + Lo * V_Width, Count * V_Width,
@@ -5879,6 +5962,26 @@ package body Model_Runner.Llama is
           + (if Item.Values_In_Keys then 0
              else Value_Row_Width (Item.Owner.Settings))));
 
+   --  The elements one page of a layer holds: its positions' keys and
+   --  values, or their rows of keys alone where the values are packed in
+   --  them (Packs_Values), or a packed cache's regions.
+   function Page_Want (Item : Session; Layer : Natural) return Element_Count
+   is (if Item.Held in Eighth | Fourth
+       then Packed_Page_Layout (Item).Span
+       elsif not Item.Values_In_Keys
+         and then Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged)
+       then Element_Count (Page_Positions)
+            * Element_Count (Key_Row_Width (Item.Owner.Settings))
+       else Element_Count (Page_Positions) * Page_Row (Item));
+
+   --  And the slots it takes: as many as it fills, one at the least.
+   function Page_Units (Item : Session; Layer : Natural) return Natural
+   is (if Page_Elements = 0 then 1
+       else Natural
+              (Element_Count'Max
+                 (1, (Page_Want (Item, Layer) + Page_Elements - 1)
+                     / Page_Elements)));
+
    --  Give every page a session holds back to the pool: its slots freed,
    --  the count of pages in use brought down, and where the buffer has been
    --  dealt recomputed to the pages that are left. Not cleared: a slot
@@ -5898,19 +6001,22 @@ package body Model_Runner.Llama is
       for Layer in Item.Page_Count.all'Range loop
          for Page in 0 .. Natural (Item.Page_Count.all (Layer)) - 1 loop
             declare
-               Slot : constant Natural :=
+               First_Slot : constant Natural :=
                  Base_Slot
                    (Item.Pages.all
                       (Natural (Item.Page_First.all (Layer)) + Page));
             begin
-               if Slot in Page_Owner'Range
-                 and then Page_Owner (Slot) = Item
-               then
-                  Page_Owner (Slot) := null;
-                  if Pages_In_Use > 0 then
-                     Pages_In_Use := Pages_In_Use - 1;
+               --  Every slot the page takes (Page_Units).
+               for Slot in First_Slot .. First_Slot + Page_Units (Item.all, Layer) - 1 loop
+                  if Slot in Page_Owner'Range
+                    and then Page_Owner (Slot) = Item
+                  then
+                     Page_Owner (Slot) := null;
+                     if Pages_In_Use > 0 then
+                        Pages_In_Use := Pages_In_Use - 1;
+                     end if;
                   end if;
-               end if;
+               end loop;
             end;
          end loop;
       end loop;
@@ -6009,12 +6115,28 @@ package body Model_Runner.Llama is
 
    --  Where a page's values begin inside it: after its positions' keys,
    --  or past the first key's rotated slice where they are the keys' rows.
-   function Page_Value_Base (Item : Session) return Element_Count
+   --  Or, a layer whose values are packed into its key rows
+   --  (Packs_Values), past the layer's own keys in each row.
+   function Page_Value_Base (Item : Session; Layer : Natural) return Element_Count
    is (if Item.Values_In_Keys
        then Element_Count (Item.Owner.Settings.Head_Size
                            - Item.Owner.Settings.Value_Size)
+       elsif Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged)
+       then Element_Count
+              (KV_Heads_Of (Item.Owner.Settings,
+                            Cache_Layer (Item.Owner.Settings, Layer))
+               * Head_Of (Item.Owner.Settings,
+                          Cache_Layer (Item.Owner.Settings, Layer)))
        else Element_Count (Page_Positions)
             * Element_Count (Key_Row_Width (Item.Owner.Settings)));
+
+   --  And from one position's values to the next's in a page: a row of
+   --  keys where they are packed into the key rows.
+   function Page_Value_Stride (Item : Session; Layer : Natural) return Element_Count
+   is (if not Item.Values_In_Keys
+         and then Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged)
+       then Element_Count (Key_Row_Width (Item.Owner.Settings))
+       else Value_Stride (Item));
 
    ------------------
    -- Holds_Block --
@@ -6089,6 +6211,7 @@ package body Model_Runner.Llama is
       --  The page's element count is worked out afresh from the new size
       --  when the next session takes its first page.
       Page_Elements := 0;
+      Page_Units_Most := 1;
    end Set_Page_Size;
 
    function Seats_Held return Natural is
@@ -8547,22 +8670,30 @@ package body Model_Runner.Llama is
         U64 (Key_Row_Width (Settings))
         + U64 (Stored_Values (Settings, Held));
       Sinks : constant U64 := U64 (Sink_Footprint (Settings));
-      Cells : U64 := 0;
+
+      --  Every layer's cells by its own row: the keys' row alone where its
+      --  values are packed into it (Packs_Values).
+      Elements_Held : U64 := 0;
    begin
       for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
          declare
             Here : constant U64 := U64 (Layer_Cells (Settings, Capacity, Layer));
+            Cells : constant U64 :=
+              (if Paged
+               then (Here + U64 (Page_Positions) - 1)
+                    / U64 (Page_Positions) * U64 (Page_Positions)
+               else Here);
          begin
-            Cells := Cells
-              + (if Paged
-                 then (Here + U64 (Page_Positions) - 1)
-                      / U64 (Page_Positions) * U64 (Page_Positions)
-                 else Here);
+            Elements_Held := Elements_Held
+              + Cells
+                * (if Packs_Values (Settings, Layer, Held, Paged)
+                   then U64 (Key_Row_Width (Settings))
+                   else Row);
          end;
       end loop;
 
       declare
-         Elements : constant U64 := Cells * Row;
+         Elements : constant U64 := Elements_Held;
          Front    : constant U64 := (if Paged then U64 (Page_Front) else 0);
          Bound    : constant U64 := Model_Runner.Backend.Device.Cache_Bound;
          Tables   : constant U64 := U64 (Model_Runner.Backend.Device.Table_Room);

@@ -55,28 +55,40 @@ begin
    declare
       --  A page holds a position's keys and values -- in full for an
       --  exact session, or its four packed regions for a packed one,
-      --  which is a smaller page again. The pool serves one of these at
-      --  a time, so a page that is not the held size is refused.
-      Want : constant Element_Count :=
-        (if Item.Held in Eighth | Fourth
-         then Packed_Page_Layout (Item.all).Span
-         else Element_Count (Page_Positions) * Page_Row (Item.all));
+      --  which is a smaller page again; or, where a layer's values are
+      --  packed into its key rows (Packs_Values), its rows of keys alone.
+      --  The pool's slot is the smallest page of the session that sets
+      --  it, and a larger page takes neighbouring slots (Page_Units).
+      Least, Most : Element_Count := 0;
    begin
+      for Layer in Item.Page_Count.all'Range loop
+         if not Linear (Item.Owner.Settings, Layer) then
+            declare
+               Want : constant Element_Count := Page_Want (Item.all, Layer);
+            begin
+               Least := (if Least = 0 then Want else Element_Count'Min (Least, Want));
+               Most := Element_Count'Max (Most, Want);
+            end;
+         end if;
+      end loop;
+
       --  A smaller page takes a slot of the held size and uses the front
       --  of it: its tables hold bases, which a slot's is, and a slot is
       --  found again by dividing by the held size. A larger one would
-      --  overrun its slot, and is refused while any are held. Gemma 3
-      --  4B's page is four times its 270M draft's: refused, the draft
-      --  attended on the host.
+      --  overrun what the pool's own pages take, and is refused while any
+      --  are held. Gemma 3 4B's page is four times its 270M draft's:
+      --  refused, the draft attended on the host.
       if not Item.Paged_In
         and then Pages_In_Use > 0
-        and then Want > Page_Elements
+        and then Most > Page_Elements * Element_Count (Page_Units_Most)
       then
          return;
       end if;
 
-      if Pages_In_Use = 0 then
-         Page_Elements := Want;
+      if Pages_In_Use = 0 and then Least > 0 then
+         Page_Elements := Least;
+         Page_Units_Most :=
+           Natural ((Most + Least - 1) / Least);
       end if;
    end;
 
@@ -133,7 +145,8 @@ begin
                Whole := Whole
                  + Pages_Wanted
                      (Item.all, Layer,
-                      Element_Count (Natural'Max (1, Item.Context)) - 1);
+                      Element_Count (Natural'Max (1, Item.Context)) - 1)
+                   * Element_Count (Page_Units (Item.all, Layer));
                Paging := Paging + 1;
             end if;
          end loop;
@@ -177,7 +190,8 @@ begin
                Extra : constant Element_Count :=
                  Element_Count'Max
                    (0, Pages_Wanted (Item.all, Layer, Upto)
-                       - Item.Page_Count.all (Layer));
+                       - Item.Page_Count.all (Layer))
+                 * Element_Count (Page_Units (Item.all, Layer));
             begin
                if Layer >= Item.Second_From then
                   More_Second := More_Second + Extra;
@@ -221,11 +235,18 @@ begin
                   Low  : constant Natural :=
                     (if Layer >= Item.Second_From then Page_Cap else 0);
                   High : constant Natural := Low + Pool_Slots;
+                  Units : constant Natural := Page_Units (Item.all, Layer);
                   Slot : Natural := Low;
+
+                  --  Free for a page of Units slots from here: each of
+                  --  them, a run beginning on a multiple of its length.
+                  function Free_Run (From : Natural) return Boolean
+                  is (From + Units <= High
+                      and then (for all Unit in From .. From + Units - 1 =>
+                                  Page_Owner (Unit) = null));
                begin
-                  while Slot < High and then Page_Owner (Slot) /= null
-                  loop
-                     Slot := Slot + 1;
+                  while Slot < High and then not Free_Run (Slot) loop
+                     Slot := Slot + Units;
                   end loop;
 
                   if Slot >= High then
@@ -238,8 +259,10 @@ begin
                      return;
                   end if;
 
-                  Page_Owner (Slot) := Item;
-                  Pages_In_Use := Pages_In_Use + 1;
+                  for Unit in Slot .. Slot + Units - 1 loop
+                     Page_Owner (Unit) := Item;
+                  end loop;
+                  Pages_In_Use := Pages_In_Use + Units;
                   Item.Pages.all
                     (Natural (First) + Natural (Item.Page_Count.all (Layer)))
                     := Slot_Base (Slot);
@@ -248,12 +271,14 @@ begin
                   if Slot < Page_Cap then
                      Pages_Taken :=
                        Element_Count'Max
-                         (Pages_Taken, Slot_Base (Slot) + Page_Elements);
+                         (Pages_Taken,
+                          Slot_Base (Slot + Units - 1) + Page_Elements);
                   else
                      Pages_Taken_Second :=
                        Element_Count'Max
                          (Pages_Taken_Second,
-                          Slot_Base (Slot) + Page_Elements - Second_Copy);
+                          Slot_Base (Slot + Units - 1) + Page_Elements
+                          - Second_Copy);
                   end if;
                end;
             end loop;

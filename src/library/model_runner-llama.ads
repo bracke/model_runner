@@ -1103,6 +1103,23 @@ package Model_Runner.Llama is
    is (if Values_In_Keys (Settings, Cache, Values) then 0
        else Value_Row_Width (Settings));
 
+   --  Whether a paged device cache keeps a layer's values in its rows of
+   --  keys, past the layer's keys: where its keys and values together are
+   --  no wider than a row of keys -- Gemma 4's global layers, and E4B's
+   --  windowed ones -- in an exact or halved cache whose rows of keys and
+   --  of values are one width. Such a layer's page is half a page.
+   --
+   --  @param Settings The model's configuration.
+   --  @param Layer The layer, whose cache is the one it reads.
+   --  @param Held The cache's storage.
+   --  @param Paged Whether the device's cache is paged.
+   --  @return True where the values are packed.
+   function Packs_Values
+     (Settings : Configuration;
+      Layer    : Natural;
+      Held     : Cache_Precision;
+      Paged    : Boolean) return Boolean;
+
    --  The identifier a caller names a cache precision by.
    --
    --  @param Item Precision to name.

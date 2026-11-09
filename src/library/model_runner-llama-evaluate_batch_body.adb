@@ -1951,7 +1951,7 @@ begin
                            + Cell_Of (Item, Reads,
                                       Reserved) * KV_Width
                            + Base),
-                     (if Item.Paged then Page_Value_Base (Item)
+                     (if Item.Paged then Page_Value_Base (Item, Reads)
                       else Block_Base (Item)
                            + Cell_Of (Item, Reads,
                                       Reserved) * V_Stride
@@ -1974,10 +1974,12 @@ begin
                      Natural (Highest_Cell (Reads)),
                      (if Item.Paged then 0
                       else Block_Base (Item) + Base),
-                     (if Item.Paged then Page_Value_Base (Item)
+                     (if Item.Paged then Page_Value_Base (Item, Reads)
                       else Block_Base (Item)
                            + Values_Front (Item) + V_Base),
-                     Natural (KV_Width), Natural (V_Stride),
+                     Natural (KV_Width),
+                     Natural (if Item.Paged then Page_Value_Stride (Item, Reads)
+                              else V_Stride),
                      Scale, Settings.Attention_Cap,
                      Current.Attention_Out,
                      Feed_Gate (Current), Feed_Up (Current),

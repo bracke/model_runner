@@ -15580,6 +15580,28 @@ package body Tests.Inference_Cases is
                  and then L.Value_Row_Width (Shaped) = 8 * 256,
                  "a gemma4 layer's key-value heads, its group or the cache's row were not its own: "
                  & Natural'Image (L.Key_Row_Width (Shaped)));
+         --  A global layer's keys and values, 512 and 512, fit a row of the
+         --  windowed layers' keys, 2,048: a paged device cache packs them
+         --  there, and so the shared layer reading it; a windowed layer's,
+         --  4,096, do not; nor does a block, or a packed cache.
+         Assert (L.Packs_Values (Shaped, 3, L.Halved, Paged => True)
+                 and then L.Packs_Values (Shaped, 5, L.Exact, Paged => True)
+                 and then not L.Packs_Values (Shaped, 0, L.Halved, Paged => True)
+                 and then not L.Packs_Values (Shaped, 4, L.Halved, Paged => True)
+                 and then not L.Packs_Values (Shaped, 3, L.Halved, Paged => False)
+                 and then not L.Packs_Values (Shaped, 3, L.Eighth, Paged => True),
+                 "a gemma4 layer's values were packed into its key rows, or not, "
+                 & "other than its widths say");
+      end;
+
+      --  A model of one width throughout packs nothing: its keys and
+      --  values are each a row.
+      declare
+         Plain : constant L.Configuration :=
+           Read_Of (Tiny_Model.Gemma3, Tiny_Model.Plain);
+      begin
+         Assert (not L.Packs_Values (Plain, 0, L.Halved, Paged => True),
+                 "a model whose keys fill their rows packed its values into them");
       end;
 
       --  OLMo-3 windows the layers its list marks, and not by its period.
