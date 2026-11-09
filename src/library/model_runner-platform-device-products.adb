@@ -727,10 +727,12 @@ package body Model_Runner.Platform.Device.Products is
    --  At most Few_Wide_Busy a position: DeepSeek-Coder-V2-Lite's token
    --  31,161 deep attended a layer in 731 us at twenty-four, 842 at
    --  thirty-two.
-   function Latent_Slices (Span : Natural; Positions : Natural := 1) return Natural
+   function Latent_Slices
+     (Span : Natural; Positions : Natural := 1; Groups : Natural := 1) return Natural
    is (if Positions >= Latent_Rows then 1
        else Natural'Max
-              (1, Natural'Min (Few_Wide_Busy / Natural'Max (1, Positions),
+              (1, Natural'Min (Few_Wide_Busy
+                               / (Natural'Max (1, Positions) * Natural'Max (1, Groups)),
                                (Span + 63) / 64)));
 
    --  The few-position pipeline for a step of Positions, or none: one to
@@ -1000,7 +1002,7 @@ package body Model_Runner.Platform.Device.Products is
       if Width <= 2 then
          return Group_Size;
       end if;
-      for Rows in reverse 1 .. Natural'Min (Group_Size, 8 / Width) loop
+      for Rows in reverse 1 .. Natural'Min (Group_Size, (if Width = 8 then 4 else 8 / Width)) loop
          if Group_Size mod Rows = 0 then
             return Rows;
          end if;
@@ -5683,7 +5685,9 @@ package body Model_Runner.Platform.Device.Products is
                            Value :=
                              [C.unsigned (Rows), C.unsigned (64 * Width)];
                            if Request.Stage.Module /= Null_Handle
-                             and then (Width <= 2 or else Rows * Width <= 8)
+                             and then (Width <= 2
+                                       or else (Width <= 4 and then Rows * Width <= 8)
+                                       or else (Width = 8 and then Rows <= 4))
                              and then Create (Item.Logical, Null_Handle, 1,
                                               Request'Address, Null_Handle,
                                               Made'Access) = 0
@@ -15395,8 +15399,44 @@ package body Model_Runner.Platform.Device.Products is
 
       --  The few-position pipeline an attending step takes, or none; see
       --  Few_Kernel.
+      --  Whether a token's or a check's few positions over heads of 512
+      --  take attention_token.comp at its widest (Token_Width_Most), a
+      --  group of up to four heads a workgroup, rather than the latent's
+      --  kernel, whose tile of sixteen rows a group of four fills a
+      --  quarter of: Gemma 4 E4B's global layers 7,186 deep attended at
+      --  33 GB/s there.
+      function Wide_Token (Which : Positive) return Boolean
+      is (Steps.Items (Which).Attends
+          and then not Steps.Items (Which).Rows_As_Heads
+          and then Count in 1 .. Token_Positions_Most
+          and then Steps.Items (Which).Packed.K_Bits = 0
+          and then Steps.Items (Which).Head_Size = 512
+          and then Steps.Items (Which).Value_Size = 512
+          and then Steps.Items (Which).Group_Size in 1 .. Token_Group_Most
+          and then Steps.Items (Which).Heads mod Steps.Items (Which).Group_Size = 0
+          --  A whole group a workgroup, which reads the group's keys and
+          --  values once: the 26B's groups of eight split in two read
+          --  them twice and generated 20.5 -> 20.2 7,186 deep.
+          and then Token_Rows (Steps.Items (Which).Group_Size, 512)
+                   = Steps.Items (Which).Group_Size
+          and then Token_By_Halves (Item, 1, 512, 512)
+          and then Steps.Items (Which).K_Base mod 4 = 0
+          and then Steps.Items (Which).V_Base mod 4 = 0
+          and then Steps.Items (Which).KV_Width mod 4 = 0
+          and then Steps.Items (Which).V_Width mod 4 = 0
+          and then Item.Token_Lines
+                     (Token_Rows (Steps.Items (Which).Group_Size, 512)) (8)
+                   /= Null_Handle);
+
+      --  And how many slices it cuts the cache into: more than a narrower
+      --  head's, since its workgroups are a group's -- two for E4B's
+      --  eight heads -- and few of them keep the part's memory busy.
+      Wide_Slices_Most : constant := 32;
+      function Wide_Token_Slices (Span : Natural) return Natural
+      is (Natural'Max (1, Natural'Min (Wide_Slices_Most, Span / 128)));
+
       function Few_Line (Which : Positive) return Address
-      is (if Steps.Items (Which).Rows_As_Heads then Null_Handle
+      is (if Steps.Items (Which).Rows_As_Heads or else Wide_Token (Which) then Null_Handle
           elsif Steps.Items (Which).Attends
             and then Steps.Items (Which).Packed.K_Bits = 0
             and then Steps.Items (Which).Causal
@@ -15442,7 +15482,9 @@ package body Model_Runner.Platform.Device.Products is
       --  wider for small groups), slopes or none, every base and width on
       --  a word of four.
       function Token_Line (Which : Positive) return Address
-      is (if Steps.Items (Which).Attends
+      is (if Wide_Token (Which)
+          then Item.Token_Lines (Token_Rows (Steps.Items (Which).Group_Size, 512)) (8)
+          elsif Steps.Items (Which).Attends
             and then (Steps.Items (Which).Rows_As_Heads
                       or else Count in 1 .. Token_Positions_Most)
             and then Steps.Items (Which).Packed.K_Bits = 0
@@ -16152,6 +16194,7 @@ package body Model_Runner.Platform.Device.Products is
            and then (Steps.Items (Index).Value_Size > Attention_Room
                      or else Steps.Items (Index).Head_Size > Attention_Room)
            and then Few_Line (Index) /= Item.Latent_Attend
+           and then not Wide_Token (Index)
          then
             return;
          end if;
@@ -16228,6 +16271,8 @@ package body Model_Runner.Platform.Device.Products is
                      else Natural'Min
                             (Few_Most_Slices,
                              Latent_Slices (2 ** 24, Attending_Of (Index))))
+               elsif This.Attends and then Wide_Token (Index)
+               then Wide_Token_Slices (2 ** 24)
                elsif This.Attends and then Few_Line (Index) /= Null_Handle
                then Few_Most_Slices
                --  Counted as the dispatch counts them: rows attending as
@@ -18780,9 +18825,14 @@ package body Model_Runner.Platform.Device.Products is
                      --  Merged_Slices gives the heads at this depth.
                      Slices : constant Natural :=
                        (if Barrier = null then 1
+                        elsif Wide_Token (Index)
+                        then Wide_Token_Slices (This.Last - This.First + 1)
                         elsif Latent_Batch (Index) then 1
                         elsif Few and then Few_Line (Index) = Item.Latent_Attend
-                        then Latent_Slices (This.Last - This.First + 1, Attending_Of (Index))
+                        then Latent_Slices
+                               (This.Last - This.First + 1, Attending_Of (Index),
+                                Heads_Attending_Of (Index)
+                                / Natural'Max (1, This.Group_Size))
                         elsif Few
                         then Few_Slices
                                (Heads_Attending_Of (Index) / Natural'Max (1, This.Group_Size),

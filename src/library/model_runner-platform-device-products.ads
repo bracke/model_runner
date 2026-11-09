@@ -136,8 +136,9 @@ package Model_Runner.Platform.Device.Products is
    Token_Positions_Most : constant := 8;
    --  Heads 64, 128, 192 and 256 wide; the two wider only for groups
    --  whose rows times sixty-fours stay within eight, which is what a
-   --  lane's registers hold.
-   Token_Width_Most : constant := 4;
+   --  lane's registers hold. And 512 (a width of eight), whose lanes take
+   --  a position four times as many to it, for up to four heads.
+   Token_Width_Most : constant := 8;
    type Token_Widths is array (1 .. Token_Width_Most) of System.Address;
    type Token_Line_Array is array (1 .. Token_Group_Most) of Token_Widths;
 

@@ -49,7 +49,10 @@ layout(constant_id = 2) const uint HS = 64u;
 //  Lanes a position's components are split over, positions a step of the
 //  walk, and what follows.
 const uint LANES = 128u;
-const uint D_SPLIT = 8u;
+//  Thirty-two for a head of 512 -- Gemma 4's global layers -- so that a
+//  group of four of them holds no more of a lane's registers than two
+//  heads of 256 do at eight: a lane a quarter of the components.
+const uint D_SPLIT = HS >= 512u ? 32u : 8u;
 const uint BC = 32u;
 const uint COLS_PER_ITER = LANES / D_SPLIT;
 const uint COLS = BC / COLS_PER_ITER;
@@ -171,12 +174,20 @@ layout(push_constant, std430) uniform Shape {
     uint page_shift;
 } shape;
 
-uint place_of (uint pos, uint offset, uint width) {
+//  The page a position lies in, looked up once and read for its key and
+//  its value both: each looked it up apart, and Gemma 4 E4B's global
+//  layers, heads of 512, attended 7,186 deep in 837 us paged against 603
+//  in one block.
+uint page_of (uint pos) {
+    return shape.page_shift == 0u
+           ? 0u : floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)]);
+}
+
+uint place_in (uint page, uint pos, uint offset, uint width) {
     if (shape.page_shift == 0u) {
         return shape.pages_at + offset + pos * width;
     }
-    return floatBitsToUint (kv[shape.pages_at + (pos >> shape.page_shift)])
-           + offset + (pos & ((1u << shape.page_shift) - 1u)) * width;
+    return page + offset + (pos & ((1u << shape.page_shift) - 1u)) * width;
 }
 
 //  The d-th of a lane's quarters of a head, in fours, D_SPLIT apart.
@@ -277,6 +288,9 @@ void main() {
 
     for (uint base = my_first; !empty && base <= my_last; base += BC) {
         float s[ROWS][COLS];
+#ifndef PACKED
+        uint pages[COLS];
+#endif
         bool  real[COLS];
 
         [[unroll]] for (uint c = 0u; c < COLS; c++) {
@@ -292,7 +306,8 @@ void main() {
                               k[d], k[d + 1u]);
             }
 #else
-            uint k_at = (place_of (min (pos, my_last), shape.k_base, shape.kv_width)
+            pages[c] = page_of (min (pos, my_last));
+            uint k_at = (place_in (pages[c], min (pos, my_last), shape.k_base, shape.kv_width)
                          + k_head) >> 2u;
 
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
@@ -356,7 +371,7 @@ void main() {
                               v_head + AT4 (d) * 4u, v[d], v[d + 1u]);
             }
 #else
-            uint v_at = (place_of (pos, shape.v_base, shape.v_width) + v_head) >> 2u;
+            uint v_at = (place_in (pages[c], pos, shape.v_base, shape.v_width) + v_head) >> 2u;
 
             [[unroll]] for (uint d = 0u; d < MINE4; d++) {
                 v[d] = vec4 (kvh4[v_at + AT4 (d)]);
