@@ -301,6 +301,18 @@ package body Model_Runner.Platform.Device.Products is
    Listed_Wide_Vectors : constant := 64;
    Listed_Wide_Run     : constant := 48;
 
+   --  The runs a mixture's experts average for their gate, up and
+   --  combination to be folded into two products (Fold_Gate). It was
+   --  Listed_Wide_Run, the wider tile's, which a fold does not need: at
+   --  runs of sixteen the fold's two products beat the gate, the up and
+   --  the combination apart. Gemma 4's 26B, a batch of 512 over 128
+   --  experts eight at a time, runs of 32: 1,328-token prompt 380-390 ->
+   --  404-406 tokens a second; Mellum's 279 616 -> 661, gpt-oss's 262
+   --  408 -> 428-436. The fold stores the gate and the middle as halves,
+   --  as it did past the old line, so an answer at a near-tie may move;
+   --  Mellum's perplexity over 16 chunks of 256, 19.086 -> 19.057.
+   Fold_Least_Run      : constant := 16;
+
    --  And the narrow tile's width, which the same source compiled with
    --  NARROW declares. A tile costs what its width costs whether the batch
    --  fills it or not, so a batch this size or smaller is given one of
@@ -15686,7 +15698,7 @@ package body Model_Runner.Platform.Device.Products is
             --  Runs long enough that few are short, whichever tile takes
             --  them.
             and then Count * Steps.Items (G).Used
-                     >= Listed_Wide_Run
+                     >= Fold_Least_Run
                         * Natural'Max (Steps.Items (G).Gathers, 1))
          then
             return 0;
