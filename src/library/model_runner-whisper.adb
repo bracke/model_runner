@@ -1423,12 +1423,28 @@ package body Model_Runner.Whisper is
       Heads  : constant Element_Count := Element_Count (Source.Encoder_Heads);
       Head   : constant Element_Count := W / Heads;
       Scale  : constant Real := Real (1.0 / Elementary.Sqrt (Wide_Real (Head)));
-      K_Base : constant Element_Count := Cache_End (Item);
+      K_Base : constant Element_Count := Scratch_At (Item);
       V_Base : constant Element_Count := K_Base + P * W;
       None   : T.View;
       Ok     : Boolean := True;
       Carried : Boolean := False;
       Was_Exact : Boolean;
+      --  A block's matrices held on the device, the rest left to the
+      --  products that read them where it holds no more.
+      procedure Hold_Block (Each : Block; Ahead : Boolean) is
+         Has_Cross : constant Boolean := Each.Cross.Q.Weight.Base /= System.Null_Address;
+         Them : constant array (1 .. 10) of T.View :=
+           [Each.Attention.Q.Weight, Each.Attention.K.Weight, Each.Attention.V.Weight,
+            Each.Attention.Output.Weight, Each.Up.Weight, Each.Down.Weight,
+            Each.Cross.Q.Weight, Each.Cross.K.Weight, Each.Cross.V.Weight, Each.Cross.Output.Weight];
+         Held : E.Error_Info;
+      begin
+         for I in Them'Range loop
+            exit when I > 6 and then not Has_Cross;
+            D.Hold (Them (I), Held, Ahead);
+            exit when E.Is_Error (Held);
+         end loop;
+      end Hold_Block;
    begin
       First_Host := 1;
       if not Item.Borrowed or else not D.Is_Ready
@@ -1467,6 +1483,12 @@ package body Model_Runner.Whisper is
          end;
       end loop;
 
+      --  The first block's matrices up now; each block's next and a
+      --  decoder block's go up beside the block before, the device running
+      --  it meanwhile (Hold, Ahead): uploaded first, Whisper medium's
+      --  first window waited 0.07 s for the encoder's and its first tokens
+      --  0.1 s for the decoder's.
+      Hold_Block (Source.Encoder (1), False);
       Was_Exact := D.Attends_Exactly;
       D.Attend_Exactly (False);
       for L in 1 .. Source.Encoder_Blocks loop
@@ -1501,6 +1523,12 @@ package body Model_Runner.Whisper is
                Out_Bias   => Each.Attention.Output.Bias,
                Shifted    => True);
             exit when not Ok;
+            if not Last then
+               Hold_Block (Source.Encoder (L + 1), True);
+            end if;
+            if L <= Source.Decoder_Blocks then
+               Hold_Block (Source.Decoder (L), True);
+            end if;
             Carried := not Last;
             First_Host := L + 1;
          end;
@@ -1860,13 +1888,12 @@ package body Model_Runner.Whisper is
          --  attention is the bytes it reads, and the copy is half of them.
          --  The conversation's choice is put back with the turn.
          Model_Runner.Backend.Device.Attend_In_Halves (True);
-         Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok, Scratch => True);
-         --  Without the candidates' rows where there is no room for them: a
-         --  window drawn again draws on the pool then.
-         if not Ok and then Item.Wide > 0 then
-            Item.Wide := 0;
-            Model_Runner.Backend.Device.Reserve_Cache (Cache_End (Item), Cache_End (Item), Ok, Scratch => True);
-         end if;
+         --  The candidates' rows are reserved when a window is first drawn
+         --  again (Reserve_Wide): Whisper medium's are 110 M of the 212 M
+         --  elements, and their room, made at the first window, cost a
+         --  one-shot recording 0.07 s that a greedy decode never reads.
+         Model_Runner.Backend.Device.Reserve_Cache
+           (Wide_Keys_At (Item, 1), Wide_Keys_At (Item, 1), Ok, Scratch => True);
          if not Ok then
             Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
             Model_Runner.Backend.Device.Return_Turn;
@@ -3271,6 +3298,16 @@ package body Model_Runner.Whisper is
                   --  that ended a dummy token whose answer goes unread, so
                   --  that row c stays candidate c.
                   On_Device := Item.Borrowed and then Item.Cross_On_Device and then Item.Wide >= Draws_Wanted;
+                  --  The candidates' rows, reserved now, the first window
+                  --  drawn again; without them, where there is no room for
+                  --  them, drawn on the pool.
+                  if On_Device then
+                     Model_Runner.Backend.Device.Reserve_Cache
+                       (Cache_End (Item), Cache_End (Item), On_Device, Scratch => True);
+                     if not On_Device then
+                        Item.Wide := 0;
+                     end if;
+                  end if;
                   if On_Device then
                      declare
                         Own  : T.Real_Array_Access;
