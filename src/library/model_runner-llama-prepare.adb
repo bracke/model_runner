@@ -212,8 +212,52 @@ is
        elsif Budget > Kept_Back then Budget - Kept_Back
        else 0);
 
+   --  What a position of a mixture's batch holds on the device while its
+   --  layer runs, counted from its floats: each chosen expert's gate, up,
+   --  unit, down and scale, the dense feed-forward's three, the
+   --  attention's rows and a score of the width's. Measured on Gemma 4's
+   --  26B once a sequence dealt its rooms again (Products.Run's
+   --  Plan_Reuse), 0.77 MB a position against 0.6 counted, and on
+   --  Qwen3.6-35B 0.46 against 0.39: half as much again as the floats is
+   --  the count. It was three times, as the buffers measured while every
+   --  step kept a room of its own (1.8 MB a position on the 26B).
+   function Position_Bytes return Interfaces.Unsigned_64 is
+      U : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Item.Settings.Embedding);
+      Floats : constant Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Item.Settings.Experts_Used)
+        * (3 * Interfaces.Unsigned_64 (Item.Settings.Expert_Feed) + 2 * U)
+        + 20 * U
+        + 3 * Interfaces.Unsigned_64 (Item.Settings.Feed_Forward)
+        + 3 * Interfaces.Unsigned_64 (Item.Settings.Heads)
+            * Interfaces.Unsigned_64 (Natural'Max (Item.Settings.Head_Size, Item.Settings.Value_Size));
+   begin
+      return Floats * 4 * 3 / 2;
+   end Position_Bytes;
+
+   --  The driver's and the desktop's share of the session margin; the rest
+   --  of it is a batch's room.
+   Driver_Share : constant Interfaces.Unsigned_64 := 640 * 2 ** 20;
+
+   --  The fewest positions a batch of a mixture is given room for where
+   --  that room is what puts it whole on the device.
+   Lean_Batch : constant := 128;
+
+   --  The room a mixture's matrices have where the margin keeps a batch of
+   --  Lean_Batch rather than the session margin's own: whole on the device
+   --  with a shorter batch is the quicker run. Gemma 4's 26B at a context
+   --  of 8k held 28 of its 30 layers' experts on the device beside the
+   --  margin's 1.5 GiB; whole, with batches of 192, it reads a prompt of
+   --  7,186 tokens and generates after it faster both (see CHANGELOG).
+   --  The part then peaked at 16.0 GB of its 16.4.
+   function Lean_Room return Interfaces.Unsigned_64
+   is (if Item.Settings.Experts = 0
+         or else Driver_Share + Position_Bytes * Lean_Batch >= Device_Session_Margin
+       then Context_Room
+       else Context_Room + Device_Session_Margin
+            - (Driver_Share + Position_Bytes * Lean_Batch));
+
    function Context_Leaves_Room (Total : Interfaces.Unsigned_64) return Boolean
-   is (Total <= Context_Room
+   is ((Total <= Context_Room or else (Context_Room > 0 and then Total <= Lean_Room))
        and then Total <= Budget_Room (Item.Able.Memory_Bytes));
 
    --  What the device's room holds of a mixture split between the two,
@@ -4237,26 +4281,13 @@ begin
          --  Its batch held to what the room keeps for a batch's answers:
          --  the session margin, less the driver's and the desktop's share,
          --  and what the budget leaves past the stacks. A position's answers
-         --  are counted generously -- each chosen expert's gate, up, unit,
-         --  down and scale, the dense feed-forward's three, the attention's
-         --  rows and a score of the width's -- three times over, as a
-         --  batch's buffers measured.
+         --  are counted as Position_Bytes says.
          --  Gemma 4's 26B, 13.5 GB on the device, read a 6,289-token prompt
          --  2,048 positions a batch and ran the part out of memory.
          Item.Batch_Cap := Positive'Last;
          if Item.Stacked or else Held_Bytes > 0 then
             declare
-               W : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Item.Settings.Embedding);
-               Floats : constant Interfaces.Unsigned_64 :=
-                 Interfaces.Unsigned_64 (Item.Settings.Experts_Used)
-                 * (3 * Interfaces.Unsigned_64 (Item.Settings.Expert_Feed) + 2 * W)
-                 + 20 * W
-                 + 3 * Interfaces.Unsigned_64 (Item.Settings.Feed_Forward)
-                 + 3 * Interfaces.Unsigned_64 (Item.Settings.Heads)
-                     * Interfaces.Unsigned_64 (Natural'Max (Item.Settings.Head_Size, Item.Settings.Value_Size));
-               --  Three times its floats: measured, a 26B batch's peak grew
-               --  1.8 MB a position, where the floats said 0.6.
-               Each : constant Interfaces.Unsigned_64 := Floats * 4 * 3;
+               Each : constant Interfaces.Unsigned_64 := Position_Bytes;
                --  Held in part, the room past the held stacks is what the
                --  context's room leaves them (Hold_Some filled it to
                --  there): the budget less them counted the context's cache
@@ -4273,13 +4304,22 @@ begin
                          (Context_Room, Budget_Room (Item.Able.Memory_Bytes))
                        - On_Device
                   else 0);
+               --  Whole by the lean room (Lean_Room), what the batch has
+               --  is what the margin's batch share leaves once the stacks
+               --  took the part of it they are past the context's room.
+               Lean : constant Boolean :=
+                 Item.Stacked and then Total > Context_Room;
                Allowance : constant Interfaces.Unsigned_64 :=
-                 Device_Session_Margin - 640 * 2 ** 20 + Room_Left;
+                 (if Lean
+                  then (if Device_Session_Margin - Driver_Share > Total - Context_Room
+                        then Device_Session_Margin - Driver_Share - (Total - Context_Room)
+                        else 0)
+                  else Device_Session_Margin - Driver_Share + Room_Left);
                Fits : constant Interfaces.Unsigned_64 := Allowance / Interfaces.Unsigned_64'Max (1, Each);
             begin
                if Fits < Interfaces.Unsigned_64 (Streamed_Batch) then
                   Item.Batch_Cap :=
-                    Positive (Interfaces.Unsigned_64'Max (128, Fits / 128 * 128));
+                    Positive (Interfaces.Unsigned_64'Max (128, Fits / 64 * 64));
                end if;
             end;
          end if;
