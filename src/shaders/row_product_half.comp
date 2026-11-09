@@ -38,6 +38,9 @@ layout(std430, binding = 1) readonly  buffer Vectors4 { vec4  x4[]; };
 layout(std430, binding = 2) writeonly buffer Result   { float y[]; };
 layout(std430, binding = 3) readonly  buffer Routing  { uint  route[]; };
 layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
+//  A bias beside the residual, row by row, where joins has its second bit:
+//  a plain product reads no routing, so the binding is free for it.
+layout(std430, binding = 3) readonly  buffer RowBias  { float rb[]; };
 
 const uint LISTED_BY_POSITION = 2u;
 
@@ -205,7 +208,8 @@ void main() {
                               ? (run_at + k) * shape.rows + row
                               : member * shape.rows * shape.count
                                 + (shape.first + k) * shape.rows + row;
-                y[out_at] = shape.joins != 0u ? whole + rj[out_at] : whole;
+                float sum = shape.joins != 0u ? whole + rj[out_at] : whole;
+                y[out_at] = (shape.joins & 2u) != 0u ? sum + rb[row] : sum;
             }
         }
     }

@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A half-precision product of one position adds its bias and its residual in its own store: Whisper's tokens 1% faster.** A join may now fold onto a bias already folded into the product before it (Add_Join's Bias_Too): the half-precision wave kernel adds the bias, bound where a plain product reads no routing, beside the residual. Whisper's decoder blocks fold all three of theirs, where the attention's was a join dispatched alone and the other two a bias added to the residual first: a medium block 583 -> 578 us of device time, its tokens' decoding 0.5-1% sooner in six of seven alternated pairs, the same text. A sequence ending in such a chain stores at the front through the whole chain, which with one folded step it had not needed to.
+
 - **`transcribe` hears a tiny model's single window on the processor unless the device is named.** Opening the device is 0.065 s, more than it saves for a model of 128 MB or less on a recording of one thirty-second window: JFK's eleven seconds by tiny 0.32 -> 0.29 s. A longer recording (45 s of Danish by tiny: 0.76 s with the device, 0.93 without) and every larger model still open it; `--backend device` still asks for it.
 
 - **A program ends without waiting on its interrupt watcher's next look: every command 25 ms sooner on average.** The task that hands recorded interrupts on looked every 50 ms, and the program's ending waited for its next look after the watching was removed; removing it now wakes it. Whisper medium from the command line, JFK's eleven seconds: 1.50 -> 1.45-1.49 s.

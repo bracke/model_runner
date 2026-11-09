@@ -2117,7 +2117,7 @@ package body Model_Runner.Whisper is
             end if;
             Out_1 := Projected (Each.Attention.Output, Mixed);
             if Added then
-               P.Add_Join (Steps, Added, From_Step => Out_1, From_Vector => 0, Kept => False);
+               P.Add_Join (Steps, Added, From_Step => Out_1, From_Vector => 0, Kept => False, Bias_Too => Fold);
                Join_1 := P.Length (Steps);
             end if;
 
@@ -2130,23 +2130,33 @@ package body Model_Runner.Whisper is
                                 Kept => False, From_Step => Asked);
                Heard := P.Length (Steps);
             end if;
-            --  The bias added to the residual rather than to the
-            --  product, so that the join folds into the product's store:
-            --  one dispatch where there were two.
-            Before_2 := Join_1;
-            Biased (Each.Cross.Output.Bias, Before_2);
-            if Added then
-               D.Add_View_Product (Steps, Each.Cross.Output.Weight, Heard, Added);
-               Out_2 := P.Length (Steps);
-            end if;
-            if Added then
-               P.Add_Join (Steps, Added, From_Step => Out_2, Residual_Step => Before_2, Kept => False);
-               Join_2 := P.Length (Steps);
+            --  One position: the bias and the residual both added in the
+            --  product's store (Bias_Too), one dispatch where there were
+            --  two. Else the bias added to the residual rather than to the
+            --  product, so that the join folds into the product's store.
+            if Fold then
+               Out_2 := Projected (Each.Cross.Output, Heard);
+               if Added then
+                  P.Add_Join (Steps, Added, From_Step => Out_2, Residual_Step => Join_1, Kept => False,
+                              Bias_Too => True);
+                  Join_2 := P.Length (Steps);
+               end if;
+            else
+               Before_2 := Join_1;
+               Biased (Each.Cross.Output.Bias, Before_2);
+               if Added then
+                  D.Add_View_Product (Steps, Each.Cross.Output.Weight, Heard, Added);
+                  Out_2 := P.Length (Steps);
+               end if;
+               if Added then
+                  P.Add_Join (Steps, Added, From_Step => Out_2, Residual_Step => Before_2, Kept => False);
+                  Join_2 := P.Length (Steps);
+               end if;
+               --  And the projection down's bias added to its residual.
+               Before_3 := Join_2;
+               Biased (Each.Down.Bias, Before_3);
             end if;
 
-            --  And the projection down's bias added to its residual.
-            Before_3 := Join_2;
-            Biased (Each.Down.Bias, Before_3);
             Norm_3 := Normed (First + 2, Join_2);
             Up := Projected (Each.Up, Norm_3);
             if Added then
@@ -2156,12 +2166,20 @@ package body Model_Runner.Whisper is
                P.Add_Combination (Steps, 10, Added, Kept => False, From_Step => Up, Other_Step => Up);
                Gelu := P.Length (Steps);
             end if;
-            if Added then
-               D.Add_View_Product (Steps, Each.Down.Weight, Gelu, Added);
-               Down := P.Length (Steps);
-            end if;
-            if Added then
-               P.Add_Join (Steps, Added, From_Step => Down, Residual_Step => Before_3, Kept => False);
+            if Fold then
+               Down := Projected (Each.Down, Gelu);
+               if Added then
+                  P.Add_Join (Steps, Added, From_Step => Down, Residual_Step => Join_2, Kept => False,
+                              Bias_Too => True);
+               end if;
+            else
+               if Added then
+                  D.Add_View_Product (Steps, Each.Down.Weight, Gelu, Added);
+                  Down := P.Length (Steps);
+               end if;
+               if Added then
+                  P.Add_Join (Steps, Added, From_Step => Down, Residual_Step => Before_3, Kept => False);
+               end if;
             end if;
             if not Added then
                Status := E.Make (E.Backend_Capability_Missing);

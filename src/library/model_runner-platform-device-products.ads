@@ -2014,13 +2014,20 @@ package Model_Runner.Platform.Device.Products is
    --  @param Added False when the sequence is full or there is nothing to
    --    join.
    --  @param Kept False when nothing on the host reads this step's answer.
+   --  @param Bias_Too Where the arm is a bias already folded into the
+   --    product before it, fold the join there too: the product's store
+   --    adds the bias and the residual both, one dispatch where there were
+   --    two. Only a half-precision product of one position on the wave
+   --    kernel adds both; any other is refused when the sequence runs, so
+   --    a caller asks it only of such a product.
    procedure Add_Join
      (Steps         : in out Sequence;
       Added         : out Boolean;
       From_Step     : Natural := 0;
       From_Vector   : Natural := 0;
       Residual_Step : Natural := 0;
-      Kept          : Boolean := True);
+      Kept          : Boolean := True;
+      Bias_Too      : Boolean := False);
 
    --  How a model pairs the components a rotation turns.
    type Rotary_Pairing is (Interleaved, Split);
@@ -4695,6 +4702,10 @@ private
       Joins     : Boolean := False;
       Joined    : Natural := 0;
       Folded    : Boolean := False;
+      --  And a bias folded into the product before a join was: the bias
+      --  step, whose rows the product's store adds beside the residual
+      --  (Add_Join's Bias_Too). Joined is then the join.
+      Bias_Too  : Natural := 0;
 
       --  A normalizing step rather than a product: it reads one step's
       --  result, or the caller's activation, and scales every position of

@@ -14728,7 +14728,8 @@ package body Model_Runner.Platform.Device.Products is
       From_Step     : Natural := 0;
       From_Vector   : Natural := 0;
       Residual_Step : Natural := 0;
-      Kept          : Boolean := True)
+      Kept          : Boolean := True;
+      Bias_Too      : Boolean := False)
    is
       Other : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -14764,6 +14765,25 @@ package body Model_Runner.Platform.Device.Products is
         --  what the first gpt-oss layer over the device did.
         and then not Steps.Items (Other).Biases
         and then not Steps.Items (Other).Folded;
+
+      --  Or, asked, onto a bias folded into the product before it: that
+      --  product, plain, adds both in its store.
+      Product : constant Natural := (if Other > 1 then Other - 1 else 0);
+      Onto_Bias : constant Boolean :=
+        Bias_Too
+        and then Room
+        and then Other = Steps.Held
+        and then Product >= 1
+        and then Steps.Items (Other).Biases
+        and then Steps.Items (Other).Folded
+        and then not Steps.Items (Other).Kept
+        and then Steps.Items (Product).Joins
+        and then Steps.Items (Product).Joined = Other
+        and then Steps.Items (Product).Bias_Too = 0
+        and then Steps.Items (Product).Routed = 0
+        and then not Steps.Items (Product).Listed
+        and then Steps.Items (Product).Gathers = 0
+        and then Steps.Items (Product).Packing in Half_Packing;
    begin
       if not Room then
          Added := False;
@@ -14783,12 +14803,15 @@ package body Model_Runner.Platform.Device.Products is
          At_Vector => From_Vector,
          Kept => Kept,
          Blends => True, Unit => 2, Attends => False,
-         Folded => Foldable,
+         Folded => Foldable or else Onto_Bias,
          others => <>);
 
       if Foldable then
          Steps.Items (Other).Joins := True;
          Steps.Items (Other).Joined := Steps.Held;
+      elsif Onto_Bias then
+         Steps.Items (Product).Bias_Too := Other;
+         Steps.Items (Product).Joined := Steps.Held;
       end if;
 
       Added := True;
@@ -15982,6 +16005,15 @@ package body Model_Runner.Platform.Device.Products is
 
          Last_Use (Steps.Held) := Natural'Last;
          Last_Use (Steps.Held - 1) := Natural'Last;
+         --  And the product a folded chain at the end stores for.
+         declare
+            Back : Natural := Steps.Held;
+         begin
+            while Back > 1 and then Steps.Items (Back).Folded loop
+               Last_Use (Back - 1) := Natural'Last;
+               Back := Back - 1;
+            end loop;
+         end;
       end Plan_Reuse;
 
       function Split_Listed (Which : Positive) return Boolean
@@ -16924,10 +16956,16 @@ package body Model_Runner.Platform.Device.Products is
          Places (Steps.Held).At_Byte := Origin;
 
          --  A folded join is the product before it, so moving one moves
-         --  both: the store that has to land at the front is the product's.
-         if Steps.Items (Steps.Held).Folded then
-            Places (Steps.Held - 1).At_Byte := Origin;
-         end if;
+         --  both: the store that has to land at the front is the product's
+         --  -- past a bias folded there too (Bias_Too), two steps back.
+         declare
+            Back : Natural := Steps.Held;
+         begin
+            while Back > 1 and then Steps.Items (Back).Folded loop
+               Places (Back - 1).At_Byte := Origin;
+               Back := Back - 1;
+            end loop;
+         end;
       end if;
 
       --  The shapes are through: what refuses from here is room.
@@ -17060,6 +17098,22 @@ package body Model_Runner.Platform.Device.Products is
            and then (Count /= 1
                      or else Item.Aligned = 0
                      or else Places (Index).Base mod Item.Aligned /= 0)
+         then
+            Item.Refused := Shape_Refused;
+            Release_All;
+            return;
+         end if;
+         --  A bias beside a join is added by the half-precision wave
+         --  kernel alone, the one a plain half product of one position
+         --  takes; any other would store the residual without it.
+         if Steps.Items (Index).Bias_Too /= 0
+           and then (Count /= 1
+                     or else Steps.Items (Index).Packing not in Half_Packing
+                     or else not Waved (Item, Steps.Items (Index).Packing, 1)
+                     or else Row_Line (Item, 1, Steps.Items (Index).Packing,
+                                       Steps.Items (Index).Columns)
+                             /= Item.Half_Wave_Lines (Steps.Items (Index).Packing)
+                     or else Dotted (Index))
          then
             Item.Refused := Shape_Refused;
             Release_All;
@@ -17847,7 +17901,14 @@ package body Model_Runner.Platform.Device.Products is
             --  took every row product after a normalization as reading the
             --  halves that normalization had just written.
             Told (4) :=
-              (if Steps.Items (Index).Routed /= 0
+              --  A bias folded beside a join (Bias_Too): its rows, which
+              --  the product's store adds with the residual.
+              (if Steps.Items (Index).Bias_Too /= 0
+               then (Buffer => Places (Steps.Items (Index).Bias_Too).Buffer,
+                     Offset => Places (Steps.Items (Index).Bias_Too).Base,
+                     Extent => Interfaces.Unsigned_64
+                                 (Steps.Items (Steps.Items (Index).Bias_Too).Each) * 4)
+               elsif Steps.Items (Index).Routed /= 0
                  and then not Listed_Tiled (Index)
                then (Buffer => Item.Result_Buffer,
                      Offset => Places (Steps.Items (Index).Routed).At_Byte,
@@ -20645,7 +20706,10 @@ package body Model_Runner.Platform.Device.Products is
                           C.unsigned
                             (Places (Index).Base
                              + (if Sliced then Slice_Base (Index) else 0)),
-                        Joins   => (if This.Joins then 1 else 0),
+                        --  The residual, and a bias beside it: the second
+                        --  bit, read from the routing binding (Bias_Too).
+                        Joins   => (if This.Bias_Too /= 0 then 3
+                                    elsif This.Joins then 1 else 0),
                         Table   => 0,
                         Members => [others => 0],
                         Stride  =>

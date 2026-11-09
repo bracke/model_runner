@@ -3574,6 +3574,145 @@ package body Tests.Backend_Cases is
               & " away from the host's, of" & N.Wide_Real'Image (Largest));
    end A_Join_Folded_Over_A_Later_Residual_Reads_Its_Own_Operand;
 
+   ------------------------------------------------------------
+   -- A_Bias_And_A_Join_Fold_Into_One_Half_Product --
+   ------------------------------------------------------------
+
+   --  One position through two half-precision products, each biased and
+   --  joined to a residual in its own store (Add_Join's Bias_Too), as
+   --  Whisper's decoder blocks are: the first joined to the activation,
+   --  the second to the first's sum and ending the sequence, so that its
+   --  store is the answer the caller is handed. Both joins are folded, and
+   --  the answer is the host's.
+   procedure A_Bias_And_A_Join_Fold_Into_One_Half_Product
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      use type N.Wide_Real;
+
+      Width : constant N.Element_Count := 1024;
+
+      Ready, Added : Boolean := False;
+      Status : E.Error_Info;
+      Steps  : Products.Sequence;
+
+      First_Weights, Second_Weights : B.Byte_Array_Access;
+      First, Second : T.View;
+      First_Bias, Second_Bias : T.Real_Array_Access;
+      Input  : N.Real_Array (0 .. Width - 1);
+      Answer : N.Real_Array (0 .. Width - 1) := [others => 0.0];
+      Worst, Largest : N.Wide_Real := 0.0;
+      Join_One, Join_Two : Natural := 0;
+
+      function Weight (Seed, Row, Column : N.Element_Count) return N.Real is
+        (N.To_Real (N.To_Half (N.Real ((Row * 7 + Column * 3 + Seed) mod 29) / 29.0 / 32.0 - 0.015)));
+
+      function Matrix (Seed : N.Element_Count; Into : out B.Byte_Array_Access) return T.View is
+         Values : N.Real_Array (0 .. Width * Width - 1);
+      begin
+         for Row in 0 .. Width - 1 loop
+            for Column in 0 .. Width - 1 loop
+               Values (Row * Width + Column) := Weight (Seed, Row, Column);
+            end loop;
+         end loop;
+         declare
+            Encoded : constant B.Byte_Array := Fixtures.Encode_F16 (Values);
+         begin
+            B.Allocate (Encoded'Length, Into);
+            Into.all := Encoded;
+         end;
+         return (Format => G.Type_F16, Rows => Width, Columns => Width, Base => Into.all'Address,
+                 Span => B.Byte_Count (Into.all'Length), Offset => 0, Interleaved => False,
+                 Role => T.Role_Other, Length => B.Byte_Count (Into.all'Length));
+      end Matrix;
+
+   begin
+      Model_Runner.Backend.Device.Close;
+      Model_Runner.Backend.Device.Open (Ready, Share_Host => False);
+      if not Ready then
+         Device_Notes.Skip ("for a bias and a join folded into one half product");
+         return;
+      end if;
+
+      First := Matrix (1, First_Weights);
+      Second := Matrix (5, Second_Weights);
+      T.Allocate (Width, First_Bias);
+      T.Allocate (Width, Second_Bias);
+      for I in First_Bias'Range loop
+         First_Bias (I) := N.Real (I mod 11) / 11.0 - 0.3;
+         Second_Bias (I) := N.Real (I mod 7) / 7.0 - 0.4;
+      end loop;
+      for I in Input'Range loop
+         Input (I) := N.Real ((I * 13) mod 37) / 37.0 - 0.5;
+      end loop;
+
+      --  The first product of the activation, its bias folded into it,
+      --  joined to the activation; the second of the first's sum, joined
+      --  to that sum.
+      Products.Open_Sequence (Steps);
+      Model_Runner.Backend.Device.Add_View_Product_At (Steps, First, 0, Added);
+      if Added then
+         Products.Add_Bias (Steps, First_Bias.all (First_Bias'First)'Address, B.Byte_Count (Width) * 4, 0, 1,
+                            Natural (Width), Products.Length (Steps), 0, Added,
+                            Key => First_Bias.all (First_Bias'First)'Address, Kept => False, Fold => True);
+      end if;
+      if Added then
+         Products.Add_Join (Steps, Added, From_Step => Products.Length (Steps), From_Vector => 0, Kept => False,
+                            Bias_Too => True);
+         Join_One := Products.Length (Steps);
+      end if;
+      if Added then
+         Model_Runner.Backend.Device.Add_View_Product (Steps, Second, Join_One, Added);
+      end if;
+      if Added then
+         Products.Add_Bias (Steps, Second_Bias.all (Second_Bias'First)'Address, B.Byte_Count (Width) * 4, 0, 1,
+                            Natural (Width), Products.Length (Steps), 0, Added,
+                            Key => Second_Bias.all (Second_Bias'First)'Address, Kept => False, Fold => True);
+      end if;
+      if Added then
+         Products.Add_Join (Steps, Added, From_Step => Products.Length (Steps), Residual_Step => Join_One,
+                            Kept => True, Bias_Too => True);
+         Join_Two := Products.Length (Steps);
+      end if;
+      Assert (Added, "the sequence was refused");
+      Assert (Products.Describe (Steps, Join_One) = "join folded"
+              and then Products.Describe (Steps, Join_Two) = "join folded",
+              "a join beside a bias was not folded: " & Products.Describe (Steps, Join_One) & ", "
+              & Products.Describe (Steps, Join_Two));
+      Model_Runner.Backend.Device.Run_Steps (Steps, Input, 1, Answer (0)'Address, Status);
+      Assert (E.Is_Ok (Status), "the sequence would not run: " & Status.Code'Image);
+
+      declare
+         Sum : N.Wide_Real_Array (0 .. Width - 1);
+      begin
+         for R in 0 .. Width - 1 loop
+            Sum (R) := N.Wide_Real (Input (R)) + N.Wide_Real (First_Bias (R));
+            for C in 0 .. Width - 1 loop
+               Sum (R) := Sum (R) + N.Wide_Real (Weight (1, R, C)) * N.Wide_Real (Input (C));
+            end loop;
+         end loop;
+         for R in 0 .. Width - 1 loop
+            declare
+               Want : N.Wide_Real := Sum (R) + N.Wide_Real (Second_Bias (R));
+            begin
+               for C in 0 .. Width - 1 loop
+                  Want := Want + N.Wide_Real (Weight (5, R, C)) * N.Wide_Real (N.Real (Sum (C)));
+               end loop;
+               Worst := N.Wide_Real'Max (Worst, abs (Want - N.Wide_Real (Answer (R))));
+               Largest := N.Wide_Real'Max (Largest, abs Want);
+            end;
+         end loop;
+      end;
+
+      B.Free (First_Weights);
+      B.Free (Second_Weights);
+      T.Free (First_Bias);
+      T.Free (Second_Bias);
+      Model_Runner.Backend.Device.Close;
+      Assert (Worst <= 1.0E-3 * Largest, "the product with its bias and join folded answers"
+              & N.Wide_Real'Image (Worst) & " away from the host's, of" & N.Wide_Real'Image (Largest));
+   end A_Bias_And_A_Join_Fold_Into_One_Half_Product;
+
    ------------------------------------------------------------------
    -- An_Interleaved_Stack_Gathers_Each_Arm_At_Its_Own_Rows --
    ------------------------------------------------------------------
@@ -15733,6 +15872,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, A_Join_Folded_Over_A_Later_Residual_Reads_Its_Own_Operand'Access,
          "a join folded over a residual made after the product's operand reads that operand's halves");
+      Register_Routine
+        (T, A_Bias_And_A_Join_Fold_Into_One_Half_Product'Access,
+         "a half product of one position adds its bias and its residual in its own store, both joins folded");
       Register_Routine
         (T, An_Interleaved_Stack_Gathers_Each_Arm_At_Its_Own_Rows'Access,
          "an interleaved stack's gate and up arms are gathered each at its own rows");
