@@ -35,7 +35,10 @@ package body Model_Runner.Llama is
    --  is the long one, so its cells are counted for it; any other model's
    --  windowed batch stays at Max_Batch.
    function Window_Margin (Settings : Configuration) return Positive
-   is (if Settings.Experts > 0 then Streamed_Batch else Max_Batch);
+   is (Positive'Min
+         ((if Settings.Experts > 0 then Streamed_Batch else Max_Batch),
+          (if Settings.Window_Batch > 0 then Settings.Window_Batch
+           else Positive'Last)));
 
    --  A mixture whole on the device takes the long batch too: each batch
    --  walks every expert stack once, and a 533-token prompt cut 512 and

@@ -256,6 +256,46 @@ is
        else Context_Room + Device_Session_Margin
             - (Driver_Share + Position_Bytes * Lean_Batch));
 
+   --  A windowed mixture short of the room with batches of its own length
+   --  keeps its windowed layers' cells for the batch it can take whole
+   --  (Configuration.Window_Batch): the longest of those below for which
+   --  its matrices, the context's cache with cells for that batch and the
+   --  batch's own room fit, where the margin keeps room for a long batch.
+   --  Gemma 4's 26B at 8,192 positions kept 3,152 cells a windowed layer
+   --  -- a window of 1,024 and a batch of 2,048 -- and was whole only
+   --  with batches of 192; cells for its own batch are 380 MB less.
+   procedure Choose_Window_Batch (Total : Interfaces.Unsigned_64) is
+      type Batch_List is array (Positive range <>) of Positive;
+      Batches : constant Batch_List :=
+        [1536, 1024, 768, 640, 512, 448, 384, 320, 256, 192, 128];
+
+      Share : constant Interfaces.Unsigned_64 :=
+        Device_Session_Margin - Driver_Share;
+
+      function Fits (Batch : Positive) return Boolean
+      is (Context_Room > 0
+          and then Total <= Budget_Room (Item.Able.Memory_Bytes)
+          and then Interfaces.Unsigned_64 (Batch) * Position_Bytes <= Share
+          and then Total
+                   <= Context_Room + Share
+                      - Interfaces.Unsigned_64 (Batch) * Position_Bytes);
+   begin
+      Item.Settings.Window_Batch := 0;
+      if Item.Settings.Window = 0
+        or else Item.Settings.Experts = 0
+        or else Total <= Context_Room
+      then
+         return;
+      end if;
+      for Batch of Batches loop
+         Item.Settings.Window_Batch := Batch;
+         if Fits (Batch) then
+            return;
+         end if;
+      end loop;
+      Item.Settings.Window_Batch := 0;
+   end Choose_Window_Batch;
+
    function Context_Leaves_Room (Total : Interfaces.Unsigned_64) return Boolean
    is ((Total <= Context_Room or else (Context_Room > 0 and then Total <= Lean_Room))
        and then Total <= Budget_Room (Item.Able.Memory_Bytes));
@@ -3221,6 +3261,7 @@ begin
             Budget := Budget - Beside;
          end if;
          Mixture_Bytes (Total, Feed);
+         Choose_Window_Batch (Total);
          --  Split too where the stacks would not leave the context its
          --  room (Context_Leaves_Room), as Stacked is decided below: not
          --  split, a mixture not stacked ran its experts piecemeal on the

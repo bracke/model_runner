@@ -505,6 +505,13 @@ package Model_Runner.Llama is
       --  they are not the same number.
       Window          : Natural := 0;
 
+      --  The longest batch a windowed layer's cells are counted for, where
+      --  it is shorter than the batch the model would take: a mixture
+      --  whose matrices go whole on the device only with shorter batches
+      --  keeps no cells for the longer (Prepare sets it). Nought for the
+      --  model's own (Window_Margin).
+      Window_Batch    : Natural := 0;
+
       --  Bounds on the attention scores and on the logits, as the scaled
       --  hyperbolic tangent the architecture states: a score of s becomes
       --  cap * tanh (s / cap), which leaves small values alone and holds
