@@ -1094,7 +1094,7 @@ package Model_Runner.Llama is
       Cache    : Cache_Precision;
       Values   : Value_Precision := Same_As_Keys) return Natural
    is (if Values_In_Keys (Settings, Cache, Values) then 0
-       else Settings.KV_Heads * Settings.Value_Size);
+       else Value_Row_Width (Settings));
 
    --  The identifier a caller names a cache precision by.
    --

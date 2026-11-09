@@ -5863,12 +5863,18 @@ package body Model_Runner.Llama is
 
    --  A page of one layer, in elements: the positions it holds times a
    --  row of keys and a row of values.
+   --  A position's keys and values in a page, as the kernels read it:
+   --  the key and value rows at the widest layer, which is KV_Heads by the
+   --  head widths everywhere but Gemma4. There it is not: Gemma 4 26B
+   --  counts eight key-value heads (its windowed layers') and 512-wide
+   --  heads (its global layers'), and a page sized by their product held
+   --  8,192 elements a position where the kernels read 4,096 -- half of
+   --  every page empty, and three of its layers on the processor at 8k.
    function Page_Row (Item : Session) return Element_Count
    is (Element_Count
-         (Item.Owner.Settings.KV_Heads
-          * (Item.Owner.Settings.Head_Size
-             + (if Item.Values_In_Keys then 0
-                else Item.Owner.Settings.Value_Size))));
+         (Key_Row_Width (Item.Owner.Settings)
+          + (if Item.Values_In_Keys then 0
+             else Value_Row_Width (Item.Owner.Settings))));
 
    --  Give every page a session holds back to the pool: its slots freed,
    --  the count of pages in use brought down, and where the buffer has been
@@ -8483,8 +8489,7 @@ package body Model_Runner.Llama is
       --  The keys' side and the values', each at its own storage.
       Room : constant A.Checked :=
         (A.To_Checked (Positions)
-         * A.To_Checked (Interfaces.Unsigned_64 (Settings.KV_Heads))
-         * A.To_Checked (Interfaces.Unsigned_64 (Settings.Head_Size))
+         * A.To_Checked (Interfaces.Unsigned_64 (Key_Row_Width (Settings)))
          * A.To_Checked (Cache_Element_Sixteenths (Cache))
          + A.To_Checked (Positions)
            * A.To_Checked

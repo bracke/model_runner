@@ -16215,7 +16215,7 @@ package body Tests.Inference_Cases is
             begin
                Assert (L.Stored_Values (Settings, L.Precision (Live))
                        = (if Absorbed then 0
-                          else Settings.KV_Heads * Settings.Value_Size),
+                          else L.Value_Row_Width (Settings)),
                        "a position's values were counted"
                        & Natural'Image
                            (L.Stored_Values (Settings, L.Precision (Live)))
