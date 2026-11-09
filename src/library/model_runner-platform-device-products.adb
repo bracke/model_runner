@@ -1716,6 +1716,10 @@ package body Model_Runner.Platform.Device.Products is
    function Listed_Pipeline
      (Item : Engine; Packing : Weight_Packing) return Address
    is (if Packing in Low_Packing then Item.Listed_Low_Line
+       --  Q5_0 on its own compilation, which reads it a step ahead: Mellum's
+       --  projections down that are not Q8_0.
+       elsif Packing = Packed_Q5_0 and then Item.Listed_Five_Line /= Null_Handle
+       then Item.Listed_Five_Line
        elsif On_Extra (Packing) then Item.Listed_More_Line
        else Item.Listed_Line);
 
@@ -4645,6 +4649,8 @@ package body Model_Runner.Platform.Device.Products is
               Model_Runner.Shaders.Mid_Tiles.Matrix_Listed;
             Listed_More : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Extra;
+            Listed_Five : aliased constant Model_Runner.Shaders.Word_Array :=
+              Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Five;
             Listed_Wide : aliased constant Model_Runner.Shaders.Word_Array :=
               Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Wide;
             Listed_Wide_More :
@@ -4733,6 +4739,16 @@ package body Model_Runner.Platform.Device.Products is
                              Made'Access) = 0
                   then
                      Item.Listed_Tile_More := Made;
+                  end if;
+
+                  Request.Size :=
+                    Interfaces.C.size_t (Listed_Five'Length * 4);
+                  Request.Code := Listed_Five'Address;
+
+                  if Create (Item.Logical, Request'Address, Null_Handle,
+                             Made'Access) = 0
+                  then
+                     Item.Listed_Tile_Five := Made;
                   end if;
 
                   Request.Size :=
@@ -6144,6 +6160,17 @@ package body Model_Runner.Platform.Device.Products is
                      end if;
                   end if;
 
+                  if Item.Listed_Tile_Five /= Null_Handle then
+                     Request.Stage.Module := Item.Listed_Tile_Five;
+
+                     if Create (Item.Logical, Null_Handle, 1,
+                                Request'Address, Null_Handle,
+                                Made'Access) = 0
+                     then
+                        Item.Listed_Five_Line := Made;
+                     end if;
+                  end if;
+
                   --  And at Listed_Wide_Vectors, for the long runs.
                   if Item.Listed_Tile_Wide /= Null_Handle then
                      Request.Stage.Module := Item.Listed_Tile_Wide;
@@ -6866,6 +6893,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Narrow_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_More_Line, "vkDestroyPipeline");
+      Give_Back (Item.Listed_Five_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Wide_Line, "vkDestroyPipeline");
       Give_Back (Item.Listed_Wide_More_Line, "vkDestroyPipeline");
       Give_Back (Item.Low_Tile_Line, "vkDestroyPipeline");
@@ -6916,6 +6944,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Narrow_More, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_More, "vkDestroyShaderModule");
+      Give_Back (Item.Listed_Tile_Five, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_Wide, "vkDestroyShaderModule");
       Give_Back (Item.Listed_Tile_Wide_More, "vkDestroyShaderModule");
       Give_Back (Item.Low_Tile, "vkDestroyShaderModule");

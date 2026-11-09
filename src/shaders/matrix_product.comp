@@ -1813,6 +1813,55 @@ void q40_place (uvec4 a, uint e, uint row, uint k0, uint half_of, uint into)
         wt[into + 4u * j + 3u] = v.w;
     }
 }
+
+#if defined(LISTED) && defined(Q50_AHEAD)
+//  Q5_0's six words for one row in one step, a step ahead in the listed
+//  tile as Q4_0's are: a twenty-two byte block -- the scale, the fifth
+//  bits and sixteen bytes of nibbles -- begun on a word or two bytes in.
+//  Compiled apart (Q50_AHEAD): the register it adds beside Q4_0's slowed
+//  the Q4_0 experts of Gemma 4's 26B by 2-6% where they shared one.
+void q50_fetch (uint row, uint k0, out uvec4 a, out uint e, out uint f)
+{
+    uint i = (row + (k0 / 32u) * 22u) >> 2u;
+
+    a = uvec4 (w[i], w[i + 1u], w[i + 2u], w[i + 3u]);
+    e = w[i + 4u];
+    f = w[i + 5u];
+}
+
+//  And decoded as the six formats' shared decode does it for Q5_0, so the
+//  answers are the same.
+void q50_place (uvec4 a, uint e, uint f, uint row, uint k0, uint half_of,
+                uint into)
+{
+    uint at = row + (k0 / 32u) * 22u;
+    bool odd = (at & 2u) != 0u;
+
+    uint h0 = odd ? (a.x >> 16u) | (a.y << 16u) : a.x;
+    uint h1 = odd ? (a.y >> 16u) | (a.z << 16u) : a.y;
+    float scale = unpackHalf2x16 (h0).x;
+    uint fifths = ((h0 >> 16u) | (h1 << 16u)) >> (half_of * 16u);
+
+    uvec4 words = odd
+        ? uvec4 (a.z, a.w, e, f)
+        : uvec4 ((a.y >> 16u) | (a.z << 16u), (a.z >> 16u) | (a.w << 16u),
+                 (a.w >> 16u) | (e << 16u), (e >> 16u) | (f << 16u));
+    uint turn = half_of * 4u;
+
+    for (uint j = 0u; j < 4u; ++j) {
+        uint f4 = (fifths >> (4u * j)) & 15u;
+        uint q = ((words[j] >> turn) & 0x0F0F0F0Fu)
+                 | (((f4 & 1u) | ((f4 & 2u) << 7u)
+                     | ((f4 & 4u) << 14u)
+                     | ((f4 & 8u) << 21u)) << 4u);
+        f16vec4 v = f16vec4 (scale * (vec4 (unpack8 (q)) - 16.0) + 0.0);
+        wt[into + 4u * j]      = v.x;
+        wt[into + 4u * j + 1u] = v.y;
+        wt[into + 4u * j + 2u] = v.z;
+        wt[into + 4u * j + 3u] = v.w;
+    }
+}
+#endif
 #endif
 
 #ifdef LISTED
@@ -2147,6 +2196,10 @@ void main() {
     uvec4 q40_a[TILE_R / 32u];
     uint  q40_e[TILE_R / 32u];
     uint  q40_rows[TILE_R / 32u];
+#if defined(LISTED) && defined(Q50_AHEAD)
+    bool q50 = SHAPE_FORMAT == FMT_Q5_0 && shape.members[3] == 0u;
+    uint q50_f[TILE_R / 32u];
+#endif
 
     for (uint it = 0u; it < TILE_R / 32u; ++it) {
         uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
@@ -2162,6 +2215,16 @@ void main() {
             }
         }
     }
+#if defined(LISTED) && defined(Q50_AHEAD)
+    if (q50) {
+        uint k0 = ((gl_LocalInvocationID.x >> 6u) % CHUNKS) * KCH;
+        for (uint it = 0u; it < TILE_R / 32u; ++it) {
+            if (k0 < shape.columns) {
+                q50_fetch (q40_rows[it], k0, q40_a[it], q40_e[it], q50_f[it]);
+            }
+        }
+    }
+#endif
 #endif
 
 #if defined(LOW_BITS) && defined(NARROW)
@@ -2260,6 +2323,20 @@ void main() {
                            + half_of * 16u);
             }
         } else
+#if defined(LISTED) && defined(Q50_AHEAD)
+        if (q50) {
+            uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
+            uint half_of = gl_LocalInvocationID.x & 1u;
+
+            for (uint it = 0u; it < TILE_R / 32u && k0 < shape.columns; ++it) {
+                uint r = it * 32u + ((gl_LocalInvocationID.x & 63u) >> 1u);
+                q50_place (q40_a[it], q40_e[it], q50_f[it], q40_rows[it], k0,
+                           half_of,
+                           chunk * TILE_R * WT_STRIDE + r * WT_STRIDE
+                           + half_of * 16u);
+            }
+        } else
+#endif
 #endif
 #if defined(MORE_FORMATS) && defined(LISTED)
         if (mx) {
@@ -2972,6 +3049,14 @@ void main() {
                 q40_fetch (q40_rows[it], k1, q40_a[it], q40_e[it]);
             }
         }
+#if defined(LISTED) && defined(Q50_AHEAD)
+        if (q50 && k0 + KCH * CHUNKS < shape.columns) {
+            uint k1 = k0 + KCH * CHUNKS;
+            for (uint it = 0u; it < TILE_R / 32u; ++it) {
+                q50_fetch (q40_rows[it], k1, q40_a[it], q40_e[it], q50_f[it]);
+            }
+        }
+#endif
 #endif
 #if defined(MORE_FORMATS) && defined(LISTED)
         if (mx && kb + KCH * CHUNKS < shape.columns) {

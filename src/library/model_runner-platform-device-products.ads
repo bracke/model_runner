@@ -3976,6 +3976,8 @@ private
       Narrow_More : System.Address := System.Null_Address;
       Listed_Tile : System.Address := System.Null_Address;
       Listed_Tile_More : System.Address := System.Null_Address;
+      --  And the same compiled to read Q5_0 a step ahead (Q50_AHEAD).
+      Listed_Tile_Five : System.Address := System.Null_Address;
       Listed_Tile_Wide : System.Address := System.Null_Address;
       Listed_Tile_Wide_More : System.Address := System.Null_Address;
 
@@ -4073,6 +4075,7 @@ private
       --  multiplies all the same.
       Listed_Line : System.Address := System.Null_Address;
       Listed_More_Line : System.Address := System.Null_Address;
+      Listed_Five_Line : System.Address := System.Null_Address;
 
       --  And again at sixty-four, for runs long enough to fill it, in the
       --  two compilations that are not the low-bit one.

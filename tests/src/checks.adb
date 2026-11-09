@@ -7380,6 +7380,18 @@ package body Checks is
                   & "with every shader named");
          end if;
 
+         Result.Performed := Result.Performed + 1;
+
+         if Found
+           and then Digest /= Model_Runner.Shaders.Mid_Tiles.Matrix_Listed_Five_Digest
+         then
+            Fail ("the listed compilation of src/shaders/matrix_product.comp"
+                  & " that reads Q5_0 a step ahead is older than the source; "
+                  & "compile it with -DMORE_FORMATS -DLISTED -DQ50_AHEAD to "
+                  & "matrix_listed_five.spv, and run 'tests shader' again "
+                  & "with every shader named");
+         end if;
+
          --  And the two again with LISTED_WIDE, for the long runs.
          Result.Performed := Result.Performed + 1;
 
