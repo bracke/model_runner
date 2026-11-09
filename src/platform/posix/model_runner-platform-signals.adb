@@ -474,6 +474,15 @@ package body Model_Runner.Platform.Signals is
          Ignored := Hostkit.Signals.Set_Disposition
            (Hostkit.Signals.Signal_Hangup, Hangup_Before);
          Attached := False;
+         --  Woken from its look's wait, it sees nothing to watch and stops:
+         --  left to its next look, the program's ending waited for it --
+         --  25 ms a run on average, 50 at worst. Not waited for where it is
+         --  looking now; it sees the same at the end of that look.
+         select
+            Interrupt_Watch.Start;
+         else
+            null;
+         end select;
       end if;
    exception
       when others =>
