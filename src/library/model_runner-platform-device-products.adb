@@ -15497,12 +15497,14 @@ package body Model_Runner.Platform.Device.Products is
             and then Token_By_Halves
                        (Item, 1, Steps.Items (Which).Head_Size,
                         Steps.Items (Which).Value_Size)
-            and then Fours_Fit
-                       (Steps.Items (Which).Head_Size,
-                        Steps.Items (Which).Value_Size,
-                        Steps.Items (Which).K_Base, Steps.Items (Which).V_Base,
-                        Steps.Items (Which).KV_Width,
-                        Steps.Items (Which).V_Width)
+            --  Read in fours: its bases and widths on fours. Not
+            --  Fours_Fit, whose values are held to the pairs' 128: the
+            --  token's lanes hold a head of 256 (Token_Rows), and Gemma's
+            --  heads of 256 attended on the bundles instead.
+            and then Steps.Items (Which).K_Base mod 4 = 0
+            and then Steps.Items (Which).V_Base mod 4 = 0
+            and then Steps.Items (Which).KV_Width mod 4 = 0
+            and then Steps.Items (Which).V_Width mod 4 = 0
           then Item.Token_Lines
                  (Token_Rows (Steps.Items (Which).Group_Size,
                               Steps.Items (Which).Head_Size))
