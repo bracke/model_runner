@@ -528,6 +528,14 @@ private
       --  bias, which is nought, and its values', as the device's heads step
       --  reads the two.
       Norm_Pairs : T.Real_Array_Access;
+      --  Each decoder block's cross-attention biases as the device's place
+      --  step takes them: nought for the keys, then the values' (see
+      --  Cross_On_The_Device).
+      Cross_Pairs : T.Real_Array_Access;
+      --  Whether the host holds what was heard as keys and values too, and
+      --  laid out a head at a time: made only where a token is decoded on
+      --  the host (Ensure_Cross_Host).
+      Cross_Host : Boolean := False;
       --  And the encoder's blocks' two normalizations, each its weight and
       --  then its bias, kept with the session: the device keeps what it is
       --  given by where it lies, so a pair made afresh for each window could

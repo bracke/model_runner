@@ -847,6 +847,7 @@ package body Model_Runner.Whisper is
       T.Free (Item.Scores);
       T.Free (Item.Decoded);
       T.Free (Item.Norm_Pairs);
+      T.Free (Item.Cross_Pairs);
       for Pairs of Item.Encoder_Pairs loop
          T.Free (Pairs (1));
          T.Free (Pairs (2));
@@ -1518,6 +1519,122 @@ package body Model_Runner.Whisper is
       D.Attend_Exactly (Was_Exact);
    end Encoder_On_Device;
 
+   --  What was heard, each decoder block's keys and values of it, made on
+   --  the host and laid out a head at a time for a token decoded there;
+   --  once a window, and only where one is (Cross_Host).
+   procedure Ensure_Cross_Host (Item : in out Session; Status : in out E.Error_Info) is
+      Source : constant Model_Access := Item.Source;
+      P      : constant Element_Count := Source.Audio_Context;
+      W      : constant Element_Count := Source.Width;
+      Team   : constant Model_Runner.Shares.Team_Access := CPU.Sharing (Item.Team);
+      Heads  : constant Positive := Source.Decoder_Heads;
+      Head   : constant Element_Count := W / Element_Count (Heads);
+      function Cross_Slot (Block, Which : Positive) return Positive is
+        (2 + 6 * Source.Encoder_Blocks + 2 * (Block - 1) + Which);
+   begin
+      if Item.Cross_Host or else E.Is_Error (Status) then
+         return;
+      end if;
+      for L in 1 .. Source.Decoder_Blocks loop
+         Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.K.Weight, Item.Cross_K (L), null, Status,
+                        Cross_Slot (L, 1));
+         Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.V.Weight, Item.Cross_V (L),
+                        Source.Decoder (L).Cross.V.Bias, Status, Cross_Slot (L, 2));
+      end loop;
+      for L in 1 .. Source.Decoder_Blocks loop
+         for H in 1 .. Heads loop
+            exit when E.Is_Error (Status);
+            FP.Pack (Team, Item.Cross_K (L).all, Element_Count (H - 1) * Head, P, Head, W, 1,
+                     Item.Cross_Keys ((L - 1) * Heads + H), Status);
+            exit when E.Is_Error (Status);
+            FP.Pack (Team, Item.Cross_V (L).all, Element_Count (H - 1) * Head, Head, P, 1, W,
+                     Item.Cross_Values ((L - 1) * Heads + H), Status);
+         end loop;
+      end loop;
+      Item.Cross_Host := E.Is_Ok (Status);
+   end Ensure_Cross_Host;
+
+   --  Each decoder block's keys and values of what was heard, made on the
+   --  device from the encoder's answer and placed in the cache where its
+   --  tokens attend to them, blocks at a time a sequence: a product of the
+   --  keys, one of the values and the place step that biases the values as
+   --  it puts both there, as a token puts its own (Feed_On_Device).
+   procedure Cross_On_The_Device (Item : in out Session; Ok : out Boolean) is
+      package D renames Model_Runner.Backend.Device;
+      package P renames Model_Runner.Platform.Device.Products;
+      Source : constant Model_Access := Item.Source;
+      Count  : constant Element_Count := Source.Audio_Context;
+      W      : constant Element_Count := Source.Width;
+      Heads  : constant Positive := Source.Decoder_Heads;
+      Head   : constant Element_Count := W / Element_Count (Heads);
+      Pair   : constant Model_Runner.Bytes.Byte_Count := Model_Runner.Bytes.Byte_Count (2 * W * 4);
+      --  Three steps a block, as many blocks as one sequence holds.
+      Each_Run : constant Positive := Natural'Max (1, P.Sequence_Limit / 3);
+      First  : Positive := 1;
+      Status : E.Error_Info;
+   begin
+      Ok := False;
+      if Item.Cross_Pairs = null then
+         T.Allocate (Element_Count (Source.Decoder_Blocks) * 2 * W, Item.Cross_Pairs);
+         if Item.Cross_Pairs = null then
+            return;
+         end if;
+         for L in 1 .. Source.Decoder_Blocks loop
+            declare
+               At_Pair : constant Element_Count := Element_Count (L - 1) * 2 * W;
+               Bias    : constant T.Real_Array_Access := Source.Decoder (L).Cross.V.Bias;
+            begin
+               Item.Cross_Pairs (At_Pair .. At_Pair + W - 1) := [others => 0.0];
+               if Bias /= null then
+                  Item.Cross_Pairs (At_Pair + W .. At_Pair + 2 * W - 1) := Bias.all;
+               else
+                  Item.Cross_Pairs (At_Pair + W .. At_Pair + 2 * W - 1) := [others => 0.0];
+               end if;
+            end;
+         end loop;
+      end if;
+
+      while First <= Source.Decoder_Blocks loop
+         declare
+            Last  : constant Positive := Positive'Min (Source.Decoder_Blocks, First + Each_Run - 1);
+            Steps : P.Sequence;
+            Added : Boolean := True;
+            Key, Value : Natural := 0;
+         begin
+            for L in First .. Last loop
+               exit when not Added;
+               D.Add_View_Product_At (Steps, Source.Decoder (L).Cross.K.Weight, 0, Added);
+               Key := P.Length (Steps);
+               if Added then
+                  D.Add_View_Product_At (Steps, Source.Decoder (L).Cross.V.Weight, 0, Added);
+                  Value := P.Length (Steps);
+               end if;
+               if Added then
+                  P.Add_Heads (Steps, Key, Heads, Positive (Head), 0, P.Interleaved, System.Null_Address, 0, 0.0,
+                               Added,
+                               Weight => Item.Cross_Pairs (Element_Count (L - 1) * 2 * W)'Address,
+                               Weight_Span => Pair,
+                               Key => Item.Cross_Pairs (Element_Count (L - 1) * 2 * W)'Address,
+                               Into_Cache => True,
+                               At_First => Heard_Keys_At (Item, L), Stride => Natural (W),
+                               V_Step => Value, V_At_First => Heard_Values_At (Item, L),
+                               V_Stride => Natural (W), Kept => False, Bias_Width => Natural (2 * W),
+                               V_Bias_At => Natural (W));
+               end if;
+            end loop;
+            if not Added then
+               return;
+            end if;
+            D.Run_Steps (Steps, Item.Encoded (0 .. Count * W - 1), Positive (Count), System.Null_Address, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+            First := Last + 1;
+         end;
+      end loop;
+      Ok := True;
+   end Cross_On_The_Device;
+
    procedure Encode_Here
      (Item   : in out Session;
       Mel    : Real_Array;
@@ -1533,8 +1650,6 @@ package body Model_Runner.Whisper is
       --  Where each matrix's panels are kept: the two convolutions, six a
       --  block, then two a decoder block.
       function Slot_Of (Block, Which : Positive) return Positive is (2 + 6 * (Block - 1) + Which);
-      function Cross_Slot (Block, Which : Positive) return Positive is
-        (2 + 6 * Source.Encoder_Blocks + 2 * (Block - 1) + Which);
       First_Host : Positive := 1;
    begin
       Status := E.Success;
@@ -1608,50 +1723,35 @@ package body Model_Runner.Whisper is
       end if;
       Item.Encoded (0 .. P * W - 1) := Item.Work_A (0 .. P * W - 1);
 
-      --  Each decoder block's keys and values of what was heard, once.
-      for L in 1 .. Source.Decoder_Blocks loop
-         Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.K.Weight, Item.Cross_K (L), null, Status,
-                        Cross_Slot (L, 1));
-         Multiply_Many (Item, Item.Encoded, P, Source.Decoder (L).Cross.V.Weight, Item.Cross_V (L),
-                        Source.Decoder (L).Cross.V.Bias, Status, Cross_Slot (L, 2));
-      end loop;
-      --  And into the device's cache, where the turn is held: a token's
-      --  blocks attend to them there.
+      --  Each decoder block's keys and values of what was heard, once: on the
+      --  device straight into the cache where the turn is held, a token's
+      --  blocks attending to them there. Made on the host and put there,
+      --  they went to and fro -- 295 MB each way for Whisper medium's 24
+      --  blocks, and their host layout beside -- 0.31 s of an 0.79 s window.
       Item.Cross_On_Device := False;
       Item.Self_On_Device := False;
+      Item.Cross_Host := False;
       if Item.Borrowed and then E.Is_Ok (Status) then
-         declare
-            Ok : Boolean := True;
-         begin
-            for L in 1 .. Source.Decoder_Blocks loop
-               exit when not Ok;
-               Model_Runner.Backend.Device.Put_Cache (Heard_Keys_At (Item, L), Item.Cross_K (L) (0 .. P * W - 1), Ok);
-               if Ok then
-                  Model_Runner.Backend.Device.Put_Cache (Heard_Values_At (Item, L), Item.Cross_V (L) (0 .. P * W - 1),
-                                                         Ok);
-               end if;
-            end loop;
-            Item.Cross_On_Device := Ok;
-         end;
+         Cross_On_The_Device (Item, Item.Cross_On_Device);
       end if;
-      --  And laid out a head at a time for the products a token makes of
-      --  them: its scores against the keys, the values blended by them.
-      declare
-         Team  : constant Model_Runner.Shares.Team_Access := CPU.Sharing (Item.Team);
-         Heads : constant Positive := Source.Decoder_Heads;
-         Head  : constant Element_Count := W / Element_Count (Heads);
-      begin
-         for L in 1 .. Source.Decoder_Blocks loop
-            for H in 1 .. Heads loop
-               exit when E.Is_Error (Status);
-               FP.Pack (Team, Item.Cross_K (L).all, Element_Count (H - 1) * Head, P, Head, W, 1,
-                        Item.Cross_Keys ((L - 1) * Heads + H), Status);
-               exit when E.Is_Error (Status);
-               FP.Pack (Team, Item.Cross_V (L).all, Element_Count (H - 1) * Head, Head, P, 1, W,
-                        Item.Cross_Values ((L - 1) * Heads + H), Status);
-            end loop;
-         end loop;
-      end;
+      if not Item.Cross_On_Device and then E.Is_Ok (Status) then
+         Ensure_Cross_Host (Item, Status);
+         if Item.Borrowed and then E.Is_Ok (Status) then
+            declare
+               Ok : Boolean := True;
+            begin
+               for L in 1 .. Source.Decoder_Blocks loop
+                  exit when not Ok;
+                  Model_Runner.Backend.Device.Put_Cache (Heard_Keys_At (Item, L), Item.Cross_K (L) (0 .. P * W - 1), Ok);
+                  if Ok then
+                     Model_Runner.Backend.Device.Put_Cache (Heard_Values_At (Item, L),
+                                                            Item.Cross_V (L) (0 .. P * W - 1), Ok);
+                  end if;
+               end loop;
+               Item.Cross_On_Device := Ok;
+            end;
+         end if;
+      end if;
       Item.Has_Encoded := E.Is_Ok (Status);
    end Encode_Here;
 
@@ -1709,6 +1809,13 @@ package body Model_Runner.Whisper is
          Drop (Each.Down);
       end loop;
       Drop (Source.Token_Table);
+      if Item.Cross_Pairs /= null then
+         for L in 1 .. Source.Decoder_Blocks loop
+            Model_Runner.Backend.Device.Forget
+              ((T.Empty_View with delta
+                  Base => Item.Cross_Pairs (Element_Count (L - 1) * 2 * Source.Width)'Address, Offset => 0));
+         end loop;
+      end if;
       if Item.Norm_Pairs /= null then
          for N_I in 0 .. 4 * Element_Count (Source.Decoder_Blocks) loop
             Model_Runner.Backend.Device.Forget
@@ -2187,6 +2294,12 @@ package body Model_Runner.Whisper is
          if E.Is_Error (Status) then
             return;
          end if;
+      end if;
+      --  What was heard laid out for the host, where it was put straight
+      --  into the device's cache.
+      Ensure_Cross_Host (Item, Status);
+      if E.Is_Error (Status) then
+         return;
       end if;
 
       Work.Width := W;
