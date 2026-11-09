@@ -1723,9 +1723,9 @@ float e8m0_at (uint at) {
     return uintBitsToFloat (e < 2u ? (0x00200000u << e) : ((e - 1u) << 23u));
 }
 
-#if defined(MORE_FORMATS) && defined(NARROW)
+#if defined(MORE_FORMATS) && (defined(NARROW) || defined(LISTED))
 //  Q4_0's words for one invocation's half of a row in one step, read a
-//  step ahead in the narrow tiles as MXFP4's are in the listed one: the
+//  step ahead in the narrow tiles and the listed one, as MXFP4's are: the
 //  five words an eighteen-byte block lies across, beginning on a word or
 //  two bytes into one. Read where they are decoded, each of a short row's
 //  steps -- forty at 2,560 columns -- waited out its loads between the two
@@ -2077,7 +2077,7 @@ void main() {
     }
 #endif
 
-#if defined(MORE_FORMATS) && defined(NARROW)
+#if defined(MORE_FORMATS) && (defined(NARROW) || defined(LISTED))
     //  Q4_0 a step ahead; see q40_fetch. Never a tap's: the taps take the
     //  first tile.
     bool q40 = SHAPE_FORMAT == FMT_Q4_0 && shape.members[3] == 0u;
@@ -2172,7 +2172,7 @@ void main() {
             }
         } else
 #endif
-#if defined(MORE_FORMATS) && defined(NARROW)
+#if defined(MORE_FORMATS) && (defined(NARROW) || defined(LISTED))
         if (q40) {
             uint chunk   = (gl_LocalInvocationID.x >> 6u) % CHUNKS;
             uint half_of = gl_LocalInvocationID.x & 1u;
@@ -2880,7 +2880,7 @@ void main() {
             }
         }
 #endif
-#if defined(MORE_FORMATS) && defined(NARROW)
+#if defined(MORE_FORMATS) && (defined(NARROW) || defined(LISTED))
         if (q40 && k0 + KCH * CHUNKS < shape.columns) {
             uint k1 = k0 + KCH * CHUNKS;
             for (uint it = 0u; it < TILE_R / 32u; ++it) {

@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A mixture's listed experts read their Q4_0 weights a step ahead: Gemma 4's 26B reads prompts 6-15% faster, ahead of llama.cpp from 269 tokens.** The narrow tiles read a Q4_0 step's words while the step before was multiplied, and the listed tile -- a mixture's experts over their runs -- read them where it decoded them and waited out every load. It now reads them a step ahead too (q40_fetch). At about seventeen positions an expert a tile's time was its decoding: the 26B at 8,192 positions, a 110-token prompt 208-222 -> 233-236 tokens/s (llama.cpp 240), 269 tokens 319-332 -> 378-383 (359), 7,186 350-356 -> 397-412 (346); the same answers.
+
 - **A generated token over heads of 256 takes the token kernel: Gemma 4 E4B level with llama.cpp.** The token kernel's choice asked the paired heads' test, whose values are held to 128, so Gemma's heads of 256 attended on the bundles. They now take the token kernel, its bases and widths on fours: E4B's windowed layers 48 -> 30 us a token. E4B generation 20.4 -> 20.6 tokens/s after 567 positions (llama.cpp 20.6), 18.9 -> 19.1 after 7,186 (19.2); gemma-3-4b, the 12B and the 26B level; the same answers.
 
 - **A generated token's attention reads its slice's pages from shared memory: Gemma 4 E4B 7,186 deep 18.6 -> 18.8 tokens/s.** attention_token.comp looked each position's page up in the table in the device's memory, a read before every key. A workgroup now reads its slice's page bases into shared memory once, where there are at most 64 of them, and its lanes read them there: E4B's global layer 705 -> 577 us a token, under the 603 the same layer took in one block. The same answers; gemma-3-4b, qwen3-8b, gpt-oss-20b and Mellum level.

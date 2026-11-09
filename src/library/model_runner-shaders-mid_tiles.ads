@@ -9,7 +9,7 @@ package Model_Runner.Shaders.Mid_Tiles is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Mid_Digest : constant Interfaces.Unsigned_64 :=
-     16#7FA9CEAD91503A0E#;
+     16#20FF5A841CE148C2#;
 
    --  The compiled words, as the device is given them.
    Matrix_Mid : constant Word_Array :=
@@ -2893,7 +2893,7 @@ package Model_Runner.Shaders.Mid_Tiles is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Mid_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#7FA9CEAD91503A0E#;
+     16#20FF5A841CE148C2#;
 
    --  The compiled words, as the device is given them.
    Matrix_Mid_Extra : constant Word_Array :=
@@ -6281,7 +6281,7 @@ package Model_Runner.Shaders.Mid_Tiles is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Mid_Low_Digest : constant Interfaces.Unsigned_64 :=
-     16#7FA9CEAD91503A0E#;
+     16#20FF5A841CE148C2#;
 
    --  The compiled words, as the device is given them.
    Matrix_Mid_Low : constant Word_Array :=
@@ -10915,7 +10915,7 @@ package Model_Runner.Shaders.Mid_Tiles is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Mid_Wide_Digest : constant Interfaces.Unsigned_64 :=
-     16#7FA9CEAD91503A0E#;
+     16#20FF5A841CE148C2#;
 
    --  The compiled words, as the device is given them.
    Matrix_Mid_Wide : constant Word_Array :=
@@ -13799,7 +13799,7 @@ package Model_Runner.Shaders.Mid_Tiles is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Mid_Wide_Extra_Digest : constant Interfaces.Unsigned_64 :=
-     16#7FA9CEAD91503A0E#;
+     16#20FF5A841CE148C2#;
 
    --  The compiled words, as the device is given them.
    Matrix_Mid_Wide_Extra : constant Word_Array :=
@@ -17188,7 +17188,7 @@ package Model_Runner.Shaders.Mid_Tiles is
    --  Digest of ../src/shaders/matrix_product.comp when these
    --  words were made from it.
    Matrix_Mid_Wide_Low_Digest : constant Interfaces.Unsigned_64 :=
-     16#7FA9CEAD91503A0E#;
+     16#20FF5A841CE148C2#;
 
    --  The compiled words, as the device is given them.
    Matrix_Mid_Wide_Low : constant Word_Array :=
