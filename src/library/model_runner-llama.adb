@@ -2578,7 +2578,11 @@ package body Model_Runner.Llama is
       procedure Lighten (View : in out T.View) is
          Local : E.Error_Info;
       begin
-         if View.Format /= Model_Runner.GGUF.Type_Q8_0
+         --  Eight bits, and six and five in super-blocks: Swift-1.5-
+         --  Qwen3.8-27B's block is Q6_K, a proposal's 4.75 ms of it.
+         if View.Format not in Model_Runner.GGUF.Type_Q8_0
+                             | Model_Runner.GGUF.Type_Q6_K
+                             | Model_Runner.GGUF.Type_Q5_K
            or else Used = Item.Next_Light'Last
          then
             return;

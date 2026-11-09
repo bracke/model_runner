@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **The block a model drafts from is written at four bits from six and five bits too, not only from eight: Swift-1.5-Qwen3.8-27B 5.5% faster.** Its proposals are checked token by token, so its weights change how many are kept and never what the run writes; Swift's block is Q6_K, 4.75 ms of each proposal. Swift on a short prompt 16.5-16.9 -> 17.5-17.7 tokens a second, 100 of 116 proposals kept against 99 of 120, the same text; Qwen3.6-35B-A3B 50.0 -> 50.3, Mellum level.
+
 - **A large dense model drafts four a round from its block, unasked: Swift-1.5-Qwen3.8-27B 8% faster.** Its rounds are held rather than adapting, and were held at three; a position more in the check reads no weight more on the device, and Swift keeps most of four: 15.3-15.6 -> 16.5-16.8 tokens a second on a short prompt (99 of 120 proposals kept), 10.1 -> 10.4 at 24,702 positions, the same text. Draft_Policy.Next_Length says the length, four also for a split dense model as before.
 
 - **`transcribe` opens the device while it reads the recording and the model.** Asked for -- named, or unasked for a model past tiny's 128 MB -- the device opens in a task of its own beside the reading, rather than after it: JFK's eleven seconds from the command line, small 0.67-0.73 -> 0.64 s, medium 1.45-1.48 -> 1.41-1.44 s, the same text. A run that fails before using it gives it back.
