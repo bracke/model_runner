@@ -383,6 +383,10 @@ private
       Q, K, V, Output : Projection;
    end record;
 
+   --  An encoder block's two normalizations' pairs, a block at a time.
+   type Pair_List is array (1 .. 2) of T.Real_Array_Access;
+   type Pair_Lists is array (1 .. 64) of Pair_List;
+
    type Block is record
       Attention_Norm : Norm;
       Attention      : Attention_Weights;
@@ -524,6 +528,11 @@ private
       --  bias, which is nought, and its values', as the device's heads step
       --  reads the two.
       Norm_Pairs : T.Real_Array_Access;
+      --  And the encoder's blocks' two normalizations, each its weight and
+      --  then its bias, kept with the session: the device keeps what it is
+      --  given by where it lies, so a pair made afresh for each window could
+      --  lie where the last one did and be read as it.
+      Encoder_Pairs : Pair_Lists := [others => [others => null]];
       --  Whether the conversation read halves of the cache before the turn
       --  was borrowed, to be put back.
       Halves_Were : Boolean := False;

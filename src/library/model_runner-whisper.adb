@@ -847,6 +847,10 @@ package body Model_Runner.Whisper is
       T.Free (Item.Scores);
       T.Free (Item.Decoded);
       T.Free (Item.Norm_Pairs);
+      for Pairs of Item.Encoder_Pairs loop
+         T.Free (Pairs (1));
+         T.Free (Pairs (2));
+      end loop;
       T.Free (Item.Candidate_K);
       T.Free (Item.Candidate_V);
       T.Free (Item.Candidate_Logits);
@@ -1383,6 +1387,124 @@ package body Model_Runner.Whisper is
    -- Encode --
    ------------
 
+   --  The encoder's blocks on the device, each one sequence -- its two
+   --  normalizations, its attention both ways over the window's positions,
+   --  its feed-forward -- the activation carried from one to the next and
+   --  home after the last, as a picture's encoder's are (Vision): every
+   --  product a dispatch of its own with the normalizations, the units and
+   --  the joins on the host between them sent the window's 1,500 positions
+   --  to and fro some ten times a block, and Whisper small heard eleven
+   --  seconds in 0.82 s where whisper.cpp hears them in 0.63. First_Host is
+   --  the first block left for the host: one past the last, or where the
+   --  device turned one down.
+   procedure Encoder_On_Device
+     (Item       : in out Session;
+      First_Host : out Positive;
+      Status     : in out E.Error_Info)
+   is
+      package D renames Model_Runner.Backend.Device;
+      Source : constant Model_Access := Item.Source;
+      P      : constant Element_Count := Source.Audio_Context;
+      W      : constant Element_Count := Source.Width;
+      Heads  : constant Element_Count := Element_Count (Source.Encoder_Heads);
+      Head   : constant Element_Count := W / Heads;
+      Scale  : constant Real := Real (1.0 / Elementary.Sqrt (Wide_Real (Head)));
+      K_Base : constant Element_Count := Cache_End (Item);
+      V_Base : constant Element_Count := K_Base + P * W;
+      None   : T.View;
+      Ok     : Boolean := True;
+      Carried : Boolean := False;
+      Was_Exact : Boolean;
+   begin
+      First_Host := 1;
+      if not Item.Borrowed or else not D.Is_Ready
+        or else Source.Encoder_Blocks > Item.Encoder_Pairs'Length
+        or else Head mod 16 /= 0
+        or else E.Is_Error (Status)
+      then
+         return;
+      end if;
+
+      D.Reserve_Cache (V_Base + P * W, V_Base + P * W, Ok, Scratch => True);
+      if not Ok then
+         return;
+      end if;
+
+      for L in 1 .. Source.Encoder_Blocks loop
+         declare
+            Each : Block renames Source.Encoder (L);
+
+            procedure Pair (Which : Positive; Of_Norm : Norm) is
+            begin
+               if Item.Encoder_Pairs (L) (Which) = null then
+                  T.Allocate (2 * W, Item.Encoder_Pairs (L) (Which));
+                  if Item.Encoder_Pairs (L) (Which) /= null then
+                     Item.Encoder_Pairs (L) (Which) (0 .. W - 1) := Of_Norm.Weight.all;
+                     Item.Encoder_Pairs (L) (Which) (W .. 2 * W - 1) := Of_Norm.Bias.all;
+                  end if;
+               end if;
+            end Pair;
+         begin
+            Pair (1, Each.Attention_Norm);
+            Pair (2, Each.Feed_Norm);
+            if Item.Encoder_Pairs (L) (1) = null or else Item.Encoder_Pairs (L) (2) = null then
+               return;
+            end if;
+         end;
+      end loop;
+
+      Was_Exact := D.Attends_Exactly;
+      D.Attend_Exactly (False);
+      for L in 1 .. Source.Encoder_Blocks loop
+         declare
+            Each : Block renames Source.Encoder (L);
+            Last : constant Boolean := L = Source.Encoder_Blocks;
+         begin
+            D.Whole_Layer
+              (Item.Encoded.all (0 .. P * W - 1),
+               Item.Encoder_Pairs (L) (1), Item.Encoder_Pairs (L) (2),
+               Source.Epsilon,
+               Each.Attention.Q.Weight, Each.Attention.K.Weight, Each.Attention.V.Weight,
+               D.No_Turns, Natural (Head), 0, False,
+               K_Base, V_Base,
+               Natural (Heads), Natural (Head), 1,
+               0, Natural (P - 1),
+               K_Base, V_Base,
+               Natural (W), Natural (W),
+               Scale, 0.0,
+               Each.Attention.Output.Weight, None, Each.Up.Weight, Each.Down.Weight,
+               6,
+               Item.Work_C, Item.Work_D, Item.Encoded, Ok,
+               Positions  => Natural (P),
+               Causal     => False,
+               Carry_In   => Carried,
+               Carry_Out  => not Last,
+               Mirror     => False,
+               Up_Bias    => Each.Up.Bias,
+               Down_Bias  => Each.Down.Bias,
+               Query_Bias => Each.Attention.Q.Bias,
+               Value_Bias => Each.Attention.V.Bias,
+               Out_Bias   => Each.Attention.Output.Bias,
+               Shifted    => True);
+            exit when not Ok;
+            Carried := not Last;
+            First_Host := L + 1;
+         end;
+      end loop;
+
+      if Carried then
+         declare
+            Back : Boolean;
+         begin
+            D.Fetch_Carried (Item.Encoded.all (0 .. P * W - 1), Back);
+            if not Back then
+               Status := E.Make (E.Backend_Device_Refused);
+            end if;
+         end;
+      end if;
+      D.Attend_Exactly (Was_Exact);
+   end Encoder_On_Device;
+
    procedure Encode_Here
      (Item   : in out Session;
       Mel    : Real_Array;
@@ -1400,6 +1522,7 @@ package body Model_Runner.Whisper is
       function Slot_Of (Block, Which : Positive) return Positive is (2 + 6 * (Block - 1) + Which);
       function Cross_Slot (Block, Which : Positive) return Positive is
         (2 + 6 * Source.Encoder_Blocks + 2 * (Block - 1) + Which);
+      First_Host : Positive := 1;
    begin
       Status := E.Success;
       Item.Has_Encoded := False;
@@ -1438,7 +1561,9 @@ package body Model_Runner.Whisper is
       Rows_Through (Item, Gaussian, Item.Encoded, P, W, Status);
       Rows_Through (Item, Accumulate, Item.Encoded, P, W, Status, Source => Source.Audio_Positions);
 
-      for L in 1 .. Source.Encoder_Blocks loop
+      Encoder_On_Device (Item, First_Host, Status);
+
+      for L in First_Host .. Source.Encoder_Blocks loop
          exit when E.Is_Error (Status);
          declare
             Each : Block renames Source.Encoder (L);
@@ -1545,13 +1670,18 @@ package body Model_Runner.Whisper is
    begin
       Drop (Source.Conv1.Weight);
       Drop (Source.Conv2.Weight);
+      --  Biases too: a block run whole (Encoder_On_Device) keeps them.
       for Each of Source.Encoder.all loop
-         Drop (Each.Attention.Q.Weight);
-         Drop (Each.Attention.K.Weight);
-         Drop (Each.Attention.V.Weight);
-         Drop (Each.Attention.Output.Weight);
-         Drop (Each.Up.Weight);
-         Drop (Each.Down.Weight);
+         Drop (Each.Attention.Q);
+         Drop (Each.Attention.K);
+         Drop (Each.Attention.V);
+         Drop (Each.Attention.Output);
+         Drop (Each.Up);
+         Drop (Each.Down);
+      end loop;
+      for Pairs of Item.Encoder_Pairs loop
+         Drop (Pairs (1));
+         Drop (Pairs (2));
       end loop;
       for Each of Source.Decoder.all loop
          Drop (Each.Attention.Q);

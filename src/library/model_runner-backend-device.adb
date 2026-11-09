@@ -4073,12 +4073,13 @@ package body Model_Runner.Backend.Device is
                               or else Post_Attention_Norm = null
                               or else Post_Feed_Norm = null))
            --  A feed-forward without a gate takes a unit alone on its one
-           --  arm -- the quick Gaussian, five, only there -- and a mixture
-           --  is gated by its stacks.
+           --  arm -- the quick Gaussian, five, and the exact one, six,
+           --  Whisper's encoder's, only there -- and a mixture is gated by
+           --  its stacks.
            or else (not No_Feed
                     and then not Gated and then not Mixed
-                    and then Unit not in 0 | 1 | 5)
-           or else (Gated and then Unit = 5)
+                    and then Unit not in 0 | 1 | 5 | 6)
+           or else (Gated and then Unit in 5 | 6)
            --  The front half alone: its answer is the host's to go on
            --  from, so it is never carried out, and Bert's layout, whose
            --  feed-forward reads a normalization of the sum, is not one.
