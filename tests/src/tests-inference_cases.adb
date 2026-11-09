@@ -152,6 +152,62 @@ package body Tests.Inference_Cases is
       Start (Item, Ready => Ready);
    end Start;
 
+   ----------------------------------------------
+   -- A_Session_Keeps_What_Its_Drafting_Learned --
+   ----------------------------------------------
+
+   --  What a reply drafting from a mixture's block learned of its rounds
+   --  -- the length they go back to, and what a round of each length cost
+   --  -- is the session's to keep for the next reply (Generation reads it
+   --  before its loop and keeps it after). A fresh session has learned
+   --  nothing, it gives back what it was given, and closing it forgets.
+   procedure A_Session_Keeps_What_Its_Drafting_Learned
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+
+      declare
+         Under  : Harness (Image);
+         Live   : L.Session;
+         Status : E.Error_Info;
+         Memo   : L.Draft_Memo;
+      begin
+         Start (Under);
+         L.Open (Live, Under.Ready, Status => Status);
+         Assert (E.Is_Ok (Status), "session did not open");
+
+         Assert (L.Draft_Memo_Of (Live).Base = 0,
+                 "a fresh session had learned a drafting base");
+
+         Memo.Base := 2;
+         Memo.Ns (1) := 1.5e6;
+         Memo.Ns (2) := 2.5e6;
+         Memo.Rounds (1) := 3.0;
+         Memo.Rounds (2) := 4.0;
+         L.Keep_Draft_Memo (Live, Memo);
+
+         declare
+            Kept : constant L.Draft_Memo := L.Draft_Memo_Of (Live);
+         begin
+            Assert (Kept.Base = 2
+                    and then Kept.Ns (2) = 2.5e6
+                    and then Kept.Rounds (1) = 3.0
+                    and then Kept.Rounds (3) = 0.0,
+                    "the session gave back other than it was given");
+         end;
+
+         L.Close (Live);
+         Assert (L.Draft_Memo_Of (Live).Base = 0,
+                 "a closed session kept what its replies learned");
+      end;
+
+      B.Free (Image);
+   end A_Session_Keeps_What_Its_Drafting_Learned;
+
    --------------------------------------------
    -- A_Position_Sees_What_Follows_It --
    --------------------------------------------
@@ -21965,6 +22021,10 @@ package body Tests.Inference_Cases is
          & "the head widths under the _mla keys and the key-value up "
          & "projection split in two -- answers as the same model written "
          & "whole, a token at a time and as a batch");
+      Register_Routine
+        (T, A_Session_Keeps_What_Its_Drafting_Learned'Access,
+         "a session keeps what its replies' drafting learned, for the "
+         & "next, and forgets it closed");
       Register_Routine
         (T, Absorbed_Latent_Answers_As_Expanded'Access,
          "deepseek2 read absorbed answers as read a head at a time, a "

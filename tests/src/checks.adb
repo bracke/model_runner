@@ -5979,7 +5979,7 @@ package body Checks is
             Fail ("src/shaders/row_product.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader "
                   & "src/shaders/row_product.comp OUT.spv' again");
-         elsif Digest /= Model_Runner.Shaders.Low.Row_Product_Low_Digest then
+         elsif Digest /= Model_Runner.Shaders.Low_Dots.Row_Product_Low_Digest then
             Fail ("the LOW_BITS compilation of src/shaders/row_product.comp "
                   & "is older than the source; run ./compile-shaders.sh, "
                   & "which compiles it with -DLOW_BITS to "
@@ -6404,9 +6404,10 @@ package body Checks is
             end Number_After;
 
             --  The shader states its rows under LISTED first, then under
-            --  NARROW, then for the rest, and its vectors under
-            --  NARROW, under LISTED with LISTED_WIDE, under LISTED and then
-            --  for the rest, in that order.
+            --  NARROW, then for the rest, and its vectors under NARROW with
+            --  MID and MID_WIDE, under NARROW with MID, under NARROW, under
+            --  LISTED with LISTED_WIDE, under LISTED and then for the rest,
+            --  in that order.
             Listed_Rows_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_R = ");
             Short_Rows_Said : constant Natural :=
@@ -6419,14 +6420,22 @@ package body Checks is
               Number_After (Engine, "Narrow_Rows : constant := ");
             Wider_Rows_Asked : constant Natural :=
               Number_After (Engine, "Wider_Rows : constant := ");
-            Thin_Said : constant Natural :=
+            Mid_Wide_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ");
-            Wide_Said : constant Natural :=
+            Mid_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 1);
-            Listed_Said : constant Natural :=
+            Thin_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 2);
-            Vecs_Said : constant Natural :=
+            Wide_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 3);
+            Listed_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_V = ", Skip => 4);
+            Vecs_Said : constant Natural :=
+              Number_After (Shader, "const uint TILE_V = ", Skip => 5);
+            Mid_Asked : constant Natural :=
+              Number_After (Engine, "Mid_Vectors : constant := ");
+            Mid_Wide_Asked : constant Natural :=
+              Number_After (Engine, "Mid_Wide_Vectors : constant := ");
             Rows_Asked : constant Natural :=
               Number_After (Engine, "Tile_Rows    : constant := ");
             Vecs_Asked : constant Natural :=
@@ -6455,11 +6464,14 @@ package body Checks is
               or else Listed_Rows_Said = 0 or else Listed_Rows_Asked = 0
               or else Wider_Rows_Said = 0 or else Wider_Rows_Asked = 0
               or else Short_Rows_Said = 0 or else Short_Rows_Asked = 0
+              or else Mid_Said = 0 or else Mid_Asked = 0
+              or else Mid_Wide_Said = 0 or else Mid_Wide_Asked = 0
             then
                Fail ("one of the matrix tile's numbers could not be "
                      & "read: the shader states TILE_R and TILE_V for each "
                      & "of its compilations and the engine states Tile_Rows,"
-                     & " Tile_Vectors, Narrow_Vectors, Narrow_Rows, "
+                     & " Tile_Vectors, Narrow_Vectors, Mid_Vectors, "
+                     & "Mid_Wide_Vectors, Narrow_Rows, "
                      & "Listed_Vectors, Listed_Wide_Vectors and Listed_Rows,"
                      & " and this check "
                      & "reads them all as text");
@@ -6470,12 +6482,16 @@ package body Checks is
               or else Listed_Rows_Said /= Listed_Rows_Asked
               or else Wider_Rows_Said /= Wider_Rows_Asked
               or else Short_Rows_Said /= Short_Rows_Asked
+              or else Mid_Said /= Mid_Asked
+              or else Mid_Wide_Said /= Mid_Wide_Asked
             then
                Fail ("src/shaders/matrix_product.comp answers a tile of"
                      & Natural'Image (Rows_Said) & " rows by"
                      & Natural'Image (Vecs_Said) & " vectors, or"
                      & Natural'Image (Thin_Said) & " under NARROW ("
-                     & Natural'Image (Short_Rows_Said) & " rows), or"
+                     & Natural'Image (Short_Rows_Said) & " rows) and"
+                     & Natural'Image (Mid_Said) & " and"
+                     & Natural'Image (Mid_Wide_Said) & " under MID, or"
                      & Natural'Image (Listed_Rows_Said) & " by"
                      & Natural'Image (Listed_Said) & " under LISTED or"
                      & Natural'Image (Wide_Said) & " with LISTED_WIDE, or"
@@ -6483,7 +6499,9 @@ package body Checks is
                      & "the engine dispatches for" & Natural'Image (Rows_Asked)
                      & " by" & Natural'Image (Vecs_Asked) & " or"
                      & Natural'Image (Thin_Asked) & " ("
-                     & Natural'Image (Short_Rows_Asked) & " rows) or"
+                     & Natural'Image (Short_Rows_Asked) & " rows) and"
+                     & Natural'Image (Mid_Asked) & " and"
+                     & Natural'Image (Mid_Wide_Asked) & " or"
                      & Natural'Image (Listed_Rows_Asked) & " by"
                      & Natural'Image (Listed_Asked) & " or"
                      & Natural'Image (Wide_Asked) & " or"

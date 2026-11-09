@@ -20,6 +20,13 @@ layout(std430, binding = 1) readonly  buffer Downs    { float d[]; };
 layout(std430, binding = 2) writeonly buffer Target   { float y[]; };
 layout(std430, binding = 4) readonly  buffer Residual { float rj[]; };
 
+//  An expert's scale on what it projected down, a row a width an expert,
+//  where the mix takes it in (table): Gemma 4's, which a biasing step
+//  multiplied into a copy of every slot's answer before the mix read it.
+//  The expert a slot holds is the routing's, at the position's rank.
+layout(std430, binding = 3) readonly  buffer Scales   { float sc[]; };
+layout(std430, binding = 5) readonly  buffer Chosen   { uint  ch[]; };
+
 layout(push_constant) uniform Shape {
     //  The width of one position's answer, and how many experts it is
     //  summed over.
@@ -32,6 +39,10 @@ layout(push_constant) uniform Shape {
 
     //  Whether the residual is added.
     uint joins;
+
+    //  Where the experts' scales begin at binding 3, in floats and plus
+    //  one; nought for none. Only a mix over listed answers takes them.
+    uint table;
 } shape;
 
 void main() {
@@ -60,7 +71,13 @@ void main() {
         for (uint k = 0u; k < shape.used; ++k) {
             uint slot = r[slot_at + pos * shape.used + k];
             float share = uintBitsToFloat(r[share_at + slot]);
-            precise float term = share * d[slot * shape.width + w];
+            //  Scaled first and rounded, as the biasing step stored it.
+            precise float down = d[slot * shape.width + w];
+            if (shape.table != 0u) {
+                uint expert = ch[pos * 2u * shape.used + k];
+                down = down * sc[shape.table - 1u + expert * shape.width + w];
+            }
+            precise float term = share * down;
             acc = acc + term;
         }
     } else {

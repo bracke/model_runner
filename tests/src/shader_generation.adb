@@ -287,21 +287,25 @@ package body Shader_Generation is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
          --  The name is a slice of the path, so it does not begin at one.
-         return (Ada.Strings.Fixed.Index (Name, "Row_Product_Wave") = Name'First
-                 and then not Is_Low_Dots (Pair))
-           or else (Name'Length >= 4
-                    and then Name (Name'Last - 3 .. Name'Last) = "_Low"
-                    and then Ada.Strings.Fixed.Index (Name, "Matrix")
-                             /= Name'First);
+         return not Is_Low_Dots (Pair)
+           and then
+             (Ada.Strings.Fixed.Index (Name, "Row_Product_Wave") = Name'First
+              or else (Name'Length >= 4
+                       and then Name (Name'Last - 3 .. Name'Last) = "_Low"
+                       and then Ada.Strings.Fixed.Index (Name, "Matrix")
+                                /= Name'First));
       end Is_Low;
 
       --  And the generating kernels' walks as integers to one of their own,
-      --  once the codebooks' put the low-bit child past that size again.
+      --  once the codebooks' put the low-bit child past that size again;
+      --  and the plain row kernel's LOW_BITS compilation beside them, once
+      --  the wave walks' staggered bands put it past that size once more.
       function Is_Low_Dots (Pair : Shader_Pair) return Boolean is
          Name : constant String := Ada_Name (Pair.Compiled.all);
       begin
-         return Ada.Strings.Fixed.Index (Name, "Row_Product_Wave") = Name'First
-           and then Ada.Strings.Fixed.Index (Name, "_Dots") /= 0;
+         return (Ada.Strings.Fixed.Index (Name, "Row_Product_Wave") = Name'First
+                 and then Ada.Strings.Fixed.Index (Name, "_Dots") /= 0)
+           or else Name = "Row_Product_Low";
       end Is_Low_Dots;
 
       --  And the narrow tile's compilations at sixty-four and ninety-six

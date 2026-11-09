@@ -3246,7 +3246,7 @@ package body Model_Runner.Platform.Device.Products is
       declare
          Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
          Words  : aliased constant Model_Runner.Shaders.Word_Array :=
-           Model_Runner.Shaders.Low.Row_Product_Low;
+           Model_Runner.Shaders.Low_Dots.Row_Product_Low;
          Request : aliased Shader_Create_Info;
       begin
          Request.Size := Interfaces.C.size_t (Words'Length * 4);
@@ -15745,6 +15745,42 @@ package body Model_Runner.Platform.Device.Products is
           elsif Fold_Gate (Which - 1) = 2 then Which + 3
           else Which + 1);
 
+      --  Whether a biasing step multiplies an expert's scale into the
+      --  answers a listed projection down gave by slot, for the mix right
+      --  after it alone to read: the mix takes the scale in as it reads
+      --  each slot (mix.comp's table), the step is not run, and its room
+      --  is the projection's. Gemma 4's 26B wrote a copy of every slot's
+      --  answer to scale it, a tenth of a layer's room a position and
+      --  three milliseconds a layer of a batch of 754.
+      function Scale_Mixed (S : Positive) return Boolean
+      is (S < Steps.Held
+          and then Steps.Items (S).Biases
+          and then Steps.Items (S).Scales
+          and then not Steps.Items (S).Per_Member
+          and then not Steps.Items (S).Fresh
+          and then not Steps.Items (S).Kept
+          and then Steps.Items (S).Base /= System.Null_Address
+          and then Model_Runner.Numerics."=" (Steps.Items (S).Cap, 0.0)
+          and then Steps.Items (S).Reads_Stride = 0
+          and then Steps.Items (S).Reads_At = 0
+          and then Steps.Items (S).Reads in 1 .. S - 1
+          and then Steps.Items (Steps.Items (S).Reads).Rows = Steps.Items (S).Rows
+          and then Steps.Items (S).Reads_Two in 1 .. S - 1
+          and then Steps.Items (Steps.Items (S).Reads_Two).Inverts
+          and then Steps.Items (Steps.Items (S).Reads_Two).Reads in 1 .. S - 1
+          and then Steps.Items (S + 1).Mixes
+          and then Steps.Items (S + 1).Reads = S
+          and then Steps.Items (S + 1).Reads_Two = Steps.Items (S).Reads_Two
+          and then Steps.Items (S + 1).Rows = Steps.Items (S).Each
+          --  No other step reads the scaled answers.
+          and then (for all Other in S + 2 .. Steps.Held =>
+                      Steps.Items (Other).Reads /= S
+                      and then Steps.Items (Other).Reads_Two /= S
+                      and then Steps.Items (Other).Joined /= S));
+
+      function Mix_Scaled (M : Positive) return Boolean
+      is (M > 1 and then Scale_Mixed (M - 1));
+
       --  Who reads each step's answer, as Reusing says. Counted wide: a
       --  step is taken to read the two before it whatever it names, and
       --  every step it names by Reads, Reads_Two, Joined (and what that
@@ -15831,6 +15867,24 @@ package body Model_Runner.Platform.Device.Products is
                   end loop;
                end if;
             end;
+         end loop;
+
+         for Index in 2 .. Steps.Held loop
+            if Mix_Scaled (Index) then
+               --  The mix reads the routing for each slot's expert.
+               Note (Index, Steps.Items (Steps.Items (Index).Reads_Two).Reads);
+            end if;
+         end loop;
+
+         --  A scale taken into the mix is the projection's room.
+         for Index in reverse 2 .. Steps.Held loop
+            if Scale_Mixed (Index) then
+               declare
+                  Down : constant Positive := Steps.Items (Index).Reads;
+               begin
+                  Last_Use (Down) := Natural'Max (Last_Use (Down), Last_Use (Index));
+               end;
+            end if;
          end loop;
 
          for Index in reverse 2 .. Steps.Held loop
@@ -16671,7 +16725,12 @@ package body Model_Runner.Platform.Device.Products is
                     else This.Rows)
                  * Wide;
             end if;
-            if This.Folded then
+            if Scale_Mixed (Index) then
+               --  Taken into the mix after it: nothing written, and the
+               --  mix reads the projection's answers where they are.
+               Places (Index).At_Byte := Places (This.Reads).At_Byte;
+               Places (Index).Bytes := Places (This.Reads).Bytes;
+            elsif This.Folded then
                --  A join folded into the product before it writes nothing
                --  of its own: the product's store is the sum, and this
                --  step's place is that store, so a later step naming this
@@ -17528,6 +17587,24 @@ package body Model_Runner.Platform.Device.Products is
 
                Told (6) := Copy_Descriptor (Item);
 
+               --  A scale taken in: the scales' stack, and the routing
+               --  that says each slot's expert.
+               if Mix_Scaled (Index) then
+                  declare
+                     Scale : constant Positive := Index - 1;
+                     Route : constant Positive :=
+                       Steps.Items (Steps.Items (Index).Reads_Two).Reads;
+                  begin
+                     Told (4) :=
+                       (Buffer => Places (Scale).Buffer, Offset => 0,
+                        Extent => Places (Scale).Base + Places (Scale).Weight);
+                     Told (6) :=
+                       (Buffer => Item.Result_Buffer,
+                        Offset => Places (Route).At_Byte,
+                        Extent => Places (Route).Bytes);
+                  end;
+               end if;
+
                for Binding in Told'Range loop
                   Notes (Binding).Target := Item.Sets (Index);
                   Notes (Binding).Binding := C.unsigned (Binding - 1);
@@ -18260,7 +18337,7 @@ package body Model_Runner.Platform.Device.Products is
 
                --  Nor a folded mixture's combination, which its up stored,
                --  nor its biases, which its gate and up added (Fold_Role).
-               if Fold_Role (Index) in 3 | 5 then
+               if Fold_Role (Index) in 3 | 5 or else Scale_Mixed (Index) then
                   goto Next_Dispatch;
                end if;
 
@@ -19196,6 +19273,10 @@ package body Model_Runner.Platform.Device.Products is
                            else 0),
                         Base    => (if Listed then 1 else 0),
                         Joins   => (if This.Joined /= 0 then 1 else 0),
+                        Table   =>
+                          (if Mix_Scaled (Index)
+                           then C.unsigned (Places (Index - 1).Base / 4 + 1)
+                           else 0),
                         others  => <>);
                   begin
                      Push (Item.Buffer, Item.Layout, Stage_Compute, 0,
