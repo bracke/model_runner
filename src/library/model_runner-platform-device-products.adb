@@ -15246,6 +15246,33 @@ package body Model_Runner.Platform.Device.Products is
 
       Places : array (1 .. Sequence_Limit) of Place;
 
+      --  Whether the result buffer's room is dealt again within the run
+      --  (Plan_Reuse), and for each step: the last step that reads its
+      --  answer (Natural'Last where the host reads it after the run, or
+      --  the next sequence does), the first step that writes it, and the
+      --  last reader of the room it took over, which a barrier before its
+      --  first write has to have published.
+      --
+      --  Every step had room of its own, so a batch's buffer was every
+      --  step's answer laid end to end: Gemma 4's 26B, thirty-odd steps
+      --  of a mixture's layer, held 2.2 MB a position -- 1.1 GB at a
+      --  batch of 512 -- which is what capped its batch and kept two of
+      --  its layers off the device at a context of 8k.
+      Reusing  : Boolean := False;
+      Last_Use : array (1 .. Sequence_Limit) of Natural := [others => 0];
+      Born     : array (1 .. Sequence_Limit) of Natural := [others => 0];
+      Wait_At  : array (1 .. Sequence_Limit) of Natural := [others => 0];
+
+      --  The rooms dealt so far: where each begins, how large it is, and
+      --  the last step that reads what was last put in it.
+      type Room_Note is record
+         At_Byte    : Interfaces.Unsigned_64 := 0;
+         Bytes      : Interfaces.Unsigned_64 := 0;
+         Free_After : Natural := 0;
+      end record;
+      Rooms      : array (1 .. Sequence_Limit) of Room_Note;
+      Room_Count : Natural := 0;
+
       --  What the activation buffer has to hold. The first step's own
       --  reading of it, and past that whatever a step reading at an offset
       --  needs -- a residual join reads the residual, which travels behind
@@ -15718,6 +15745,106 @@ package body Model_Runner.Platform.Device.Products is
           elsif Fold_Gate (Which - 1) = 2 then Which + 3
           else Which + 1);
 
+      --  Who reads each step's answer, as Reusing says. Counted wide: a
+      --  step is taken to read the two before it whatever it names, and
+      --  every step it names by Reads, Reads_Two, Joined (and what that
+      --  join reads) and Routed. A mixture's folded gate, up, biases,
+      --  combination and down write one another's rooms out of order, so
+      --  a fold's steps are one: written from its gate, read to its last
+      --  reader. A folded join is its product's room. The last two steps
+      --  may be carried out to the next sequence, and a kept step is read
+      --  by the host after the run, so neither room is dealt again.
+      --  A sequence with a step whose shape names other steps of its own
+      --  -- the linear, RWKV, Mamba and convolution steps -- or with taps
+      --  keeps a room a step, as every sequence did.
+      procedure Plan_Reuse is
+         procedure Note (Reader, Read : Natural) is
+         begin
+            if Read in 1 .. Steps.Held then
+               Last_Use (Read) := Natural'Max (Last_Use (Read), Reader);
+            end if;
+         end Note;
+      begin
+         Reusing := Steps.Held > 2;
+         for Index in 1 .. Steps.Held loop
+            declare
+               This : Step renames Steps.Items (Index);
+            begin
+               if This.Mambas or else This.Rwkvs or else This.Wkvs
+                 or else This.Convolves or else This.Rules
+                 or else This.Tap_Row /= 0
+               then
+                  Reusing := False;
+               end if;
+            end;
+         end loop;
+         if not (for some Index in 1 .. Steps.Held =>
+                   Steps.Items (Index).Chained or else Steps.Items (Index).Attends)
+         then
+            Reusing := False;
+         end if;
+         if not Reusing then
+            return;
+         end if;
+
+         for Index in 1 .. Steps.Held loop
+            Born (Index) := Index;
+            Last_Use (Index) :=
+              (if Steps.Items (Index).Kept then Natural'Last else Index);
+         end loop;
+
+         for Index in 1 .. Steps.Held loop
+            declare
+               This : Step renames Steps.Items (Index);
+            begin
+               Note (Index, This.Reads);
+               Note (Index, This.Reads_Two);
+               Note (Index, This.Routed);
+               Note (Index, This.Joined);
+               if This.Joined in 1 .. Steps.Held then
+                  Note (Index, Steps.Items (This.Joined).Reads);
+                  Note (Index, Steps.Items (This.Joined).Reads_Two);
+               end if;
+               if Index > 1 then
+                  Note (Index, Index - 1);
+               end if;
+               if Index > 2 then
+                  Note (Index, Index - 2);
+               end if;
+            end;
+         end loop;
+
+         for G in 1 .. Steps.Held loop
+            declare
+               Form : constant Natural := Fold_Gate (G);
+               Last : constant Natural :=
+                 Natural'Min (Steps.Held, G + (if Form = 1 then 3 else 5));
+               Most : Natural := 0;
+            begin
+               if Form /= 0 then
+                  for J in G .. Last loop
+                     Most := Natural'Max (Most, Last_Use (J));
+                  end loop;
+                  for J in G .. Last loop
+                     Last_Use (J) := Most;
+                     Born (J) := Natural'Min (Born (J), G);
+                  end loop;
+               end if;
+            end;
+         end loop;
+
+         for Index in reverse 2 .. Steps.Held loop
+            if Steps.Items (Index).Folded then
+               Last_Use (Index - 1) :=
+                 Natural'Max (Last_Use (Index - 1), Last_Use (Index));
+               Born (Index - 1) := Natural'Min (Born (Index - 1), Born (Index));
+            end if;
+         end loop;
+
+         Last_Use (Steps.Held) := Natural'Last;
+         Last_Use (Steps.Held - 1) := Natural'Last;
+      end Plan_Reuse;
+
       function Split_Listed (Which : Positive) return Boolean
       is (Fold_Role (Which) = 0
           and then Listed_Tiled (Which)
@@ -15964,6 +16091,8 @@ package body Model_Runner.Platform.Device.Products is
          end if;
       end loop;
 
+      Plan_Reuse;
+
       --  What the whole run needs, and whether it is askable at all. Every
       --  product reads the same activation, so they must agree about how
       --  wide it is; they may differ in every other way.
@@ -16020,6 +16149,19 @@ package body Model_Runner.Platform.Device.Products is
             Most_Slices : constant Natural :=
               (if This.Attends and then This.Packed.K_Bits /= 0
                then Packed_Most
+               --  The latent kernel cuts as Latent_Slices says, the
+               --  deepest cache's at its most: one slice where a batch of
+               --  its rows or more is attending, which is a prompt's. It
+               --  was counted at the few-position kernel's thirty-two, and
+               --  Gemma 4's 26B kept 695 MB a batch of 512 for records its
+               --  global layers' attention never cut but one of.
+               elsif This.Attends
+                 and then (Latent_Batch (Index)
+                           or else Few_Line (Index) = Item.Latent_Attend)
+               then (if Latent_Batch (Index) then 1
+                     else Natural'Min
+                            (Few_Most_Slices,
+                             Latent_Slices (2 ** 24, Attending_Of (Index))))
                elsif This.Attends and then Few_Line (Index) /= Null_Handle
                then Few_Most_Slices
                --  Counted as the dispatch counts them: rows attending as
@@ -16042,7 +16184,10 @@ package body Model_Runner.Platform.Device.Products is
               --  records its slices leave for the merge: a blend and two
               --  numbers a slice, position and head, for the most slices
               --  it can cut.
+              --  A few at once leave records however many slices they
+              --  cut, one included, and merge them.
               + (if Most_Slices > 1
+                   or else (This.Attends and then Few_Line (Index) /= Null_Handle)
                  then Interfaces.Unsigned_64 (Most_Slices)
                       * Interfaces.Unsigned_64 (Room)
                       * Interfaces.Unsigned_64
@@ -16534,12 +16679,42 @@ package body Model_Runner.Platform.Device.Products is
                Places (Index).At_Byte := Places (Index - 1).At_Byte;
                Places (Index).Bytes := Places (Index - 1).Bytes;
             else
-               Places (Index).At_Byte := Result_Bytes;
-               Places (Index).Bytes := Mine;
+               declare
+                  Size  : constant Interfaces.Unsigned_64 :=
+                    (Mine + Alignment - 1) / Alignment * Alignment;
+                  Found : Natural := 0;
+               begin
+                  --  The smallest room free before this step first writes
+                  --  that holds it, where rooms are dealt again.
+                  if Reusing then
+                     for R in 1 .. Room_Count loop
+                        if Rooms (R).Free_After < Born (Index)
+                          and then Rooms (R).Bytes >= Size
+                          and then (Found = 0
+                                    or else Rooms (R).Bytes < Rooms (Found).Bytes)
+                        then
+                           Found := R;
+                        end if;
+                     end loop;
+                  end if;
 
-               Result_Bytes :=
-                 Result_Bytes
-                 + (Mine + Alignment - 1) / Alignment * Alignment;
+                  if Found /= 0 then
+                     Places (Index).At_Byte := Rooms (Found).At_Byte;
+                     Wait_At (Born (Index)) :=
+                       Natural'Max (Wait_At (Born (Index)), Rooms (Found).Free_After);
+                     Rooms (Found).Free_After := Last_Use (Index);
+                  else
+                     Places (Index).At_Byte := Result_Bytes;
+                     if Reusing then
+                        Room_Count := Room_Count + 1;
+                        Rooms (Room_Count) :=
+                          (At_Byte => Result_Bytes, Bytes => Size,
+                           Free_After => Last_Use (Index));
+                     end if;
+                     Result_Bytes := Result_Bytes + Size;
+                  end if;
+                  Places (Index).Bytes := Mine;
+               end;
             end if;
 
             Wanted := Wanted
@@ -18237,9 +18412,11 @@ package body Model_Runner.Platform.Device.Products is
                          (Gated (Index),
                           --  A folded up reads the gate's halves.
                           (if Fold_Role (Index) = 2 then Index - 1 else 0)),
-                       (if Writes_Copy then Index - 1
-                        elsif This.Attends then Natural'Max (Source, Cached)
-                        else Source));
+                       Natural'Max
+                         (Wait_At (Index),
+                          (if Writes_Copy then Index - 1
+                           elsif This.Attends then Natural'Max (Source, Cached)
+                           else Source)));
                begin
                   Reading := (if Is_Product (Index) then Operand else Source);
                   if Wanted > Fenced then
