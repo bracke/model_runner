@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`transcribe` opens the device while it reads the recording and the model.** Asked for -- named, or unasked for a model past tiny's 128 MB -- the device opens in a task of its own beside the reading, rather than after it: JFK's eleven seconds from the command line, small 0.67-0.73 -> 0.64 s, medium 1.45-1.48 -> 1.41-1.44 s, the same text. A run that fails before using it gives it back.
+
 - **A half-precision product of one position adds its bias and its residual in its own store: Whisper's tokens 1% faster.** A join may now fold onto a bias already folded into the product before it (Add_Join's Bias_Too): the half-precision wave kernel adds the bias, bound where a plain product reads no routing, beside the residual. Whisper's decoder blocks fold all three of theirs, where the attention's was a join dispatched alone and the other two a bias added to the residual first: a medium block 583 -> 578 us of device time, its tokens' decoding 0.5-1% sooner in six of seven alternated pairs, the same text. A sequence ending in such a chain stores at the front through the whole chain, which with one folded step it had not needed to.
 
 - **`transcribe` hears a tiny model's single window on the processor unless the device is named.** Opening the device is 0.065 s, more than it saves for a model of 128 MB or less on a recording of one thirty-second window: JFK's eleven seconds by tiny 0.32 -> 0.29 s. A longer recording (45 s of Danish by tiny: 0.76 s with the device, 0.93 without) and every larger model still open it; `--backend device` still asks for it.

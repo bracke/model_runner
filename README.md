@@ -1016,8 +1016,8 @@ file read before: 45 s of Danish is heard in 4.2 s by small f16 on the
 processor (1.2 GB resident) and 2.2 s with the device (0.5 GB), 1.8 s by
 small Q8_0 with the device; 11 s of English in 0.29 s by tiny on the
 processor and 0.32 s with the device (opening it is 0.065 s of that), 45 s
-of Danish by tiny in 0.93 s and 0.76 s; 11 s of English in 0.68
-s by small (whisper.cpp 0.68) and 1.45 s by medium (whisper.cpp 1.78).
+of Danish by tiny in 0.93 s and 0.76 s; 11 s of English in 0.64
+s by small (whisper.cpp 0.68) and 1.42 s by medium (whisper.cpp 1.78).
 Warm, a token of medium is 15.5 ms on the device, its products at the
 memory's rate. A window the reference decodes
 again draws its five candidates together, as the reference does: 5 s of

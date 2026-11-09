@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Audio;
@@ -52,6 +53,65 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       Samples    : Tn.Real_Array_Access;
       Condition  : E.Error_Info;
       Ignored    : E.Error_Info;
+
+      --  The device asked for -- named, or unasked for a model past tiny's
+      --  size -- is opened beside the reading of the recording and the
+      --  model rather than after it: its 0.065 s and their 0.015 overlap.
+      use type Ada.Directories.File_Kind;
+      use type Ada.Directories.File_Size;
+      Device_Wanted : constant Boolean :=
+        not Item.Backend_Set
+        or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device);
+      Open_Early : constant Boolean :=
+        Device_Wanted
+        and then (Item.Backend_Set
+                  or else (Ada.Directories.Exists (Model_Path)
+                           and then Ada.Directories.Kind (Model_Path) = Ada.Directories.Ordinary_File
+                           and then Ada.Directories.Size (Model_Path)
+                                    > Ada.Directories.File_Size (Processor_Model_Most)));
+
+      task type Opener is
+         --  Whether the device opened; asked once, before anything else
+         --  asks the device.
+         entry Finish (Ready : out Boolean);
+      end Opener;
+
+      task body Opener is
+         Got : Boolean := False;
+      begin
+         begin
+            Model_Runner.Backend.Device.Open
+              (Got, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
+               Which => Item.Device_Index);
+         exception
+            when others =>
+               Got := False;
+         end;
+         select
+            accept Finish (Ready : out Boolean) do
+               Ready := Got;
+            end Finish;
+         or
+            terminate;
+         end select;
+      end Opener;
+
+      type Opener_Access is access Opener;
+      Opening : Opener_Access;
+
+      --  The device opened early given back, where the run ends before it
+      --  is used.
+      procedure Abandon is
+         Got : Boolean;
+      begin
+         if Opening /= null then
+            Opening.Finish (Got);
+            Opening := null;
+            if Got then
+               Model_Runner.Backend.Device.Close;
+            end if;
+         end if;
+      end Abandon;
 
       procedure Fail (Problem : E.Error_Info) is
       begin
@@ -127,17 +187,23 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
          return;
       end if;
 
+      if Open_Early then
+         Opening := new Opener;
+      end if;
+
       --  A file is not a microphone: an hour unless the length was asked.
       Model_Runner.Audio.Read_Wave
         (Audio_Path,
          (if Item.Speech_Max_Seconds_Set then Item.Speech_Max_Seconds else Model_Runner.Speech.Max_Recording_Seconds),
          Samples, Condition);
       if E.Is_Error (Condition) then
+         Abandon;
          Fail (Condition);
          return;
       end if;
       W.Prepare (Whisper, Model_Path, Condition);
       if E.Is_Error (Condition) then
+         Abandon;
          E.Add_Text (Condition, "path", Model_Path, E.Param_Path);
          Tn.Free (Samples);
          Fail (Condition);
@@ -153,12 +219,15 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       --  processor, 0.32 with the device. A second window repays it
       --  (45 s of Danish 0.93 against 0.76), as does any larger model
       --  (small, JFK: 1.25 against 0.67).
-      if not Item.Backend_Set
+      if Opening /= null then
+         Opening.Finish (On_Device);
+         Opening := null;
+      elsif not Item.Backend_Set
         and then Model_Runner.Bytes."<=" (W.Weight_Bytes (Whisper), Processor_Model_Most)
         and then Samples'Length <= W.Window_Samples
       then
          null;
-      elsif not Item.Backend_Set or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
+      elsif Device_Wanted then
          Model_Runner.Backend.Device.Open
            (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
             Which => Item.Device_Index);
