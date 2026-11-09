@@ -1497,6 +1497,23 @@ package body Tests.Speech_Cases is
                Assert (Device.Cache_Claimed = Reserved, "the transcription moved the conversation's claim");
                Device.Release_Cache;
             end;
+            --  A window drawn, not decoded greedily: the candidates' rows,
+            --  reserved only when a window is first drawn, hold every
+            --  candidate's tokens on the device.
+            declare
+               Drawn_Settings : W.Options := Settings;
+               Drawn : W.Transcript;
+            begin
+               Drawn_Settings.Temperatures := [0.5, others => 0.0];
+               Drawn_Settings.Temperature_Count := 1;
+               Drawn_Settings.Best_Of := 3;
+               Drawn_Settings.Seed := 11;
+               W.Transcribe (Session, Sound, Drawn_Settings, Drawn, Status);
+               Assert (E.Is_Ok (Status), "the device did not draw: " & Status.Code'Image);
+               Assert (Drawn.Figures.Device_Positions >= Drawn.Figures.Tokens,
+                       "the device drew" & Drawn.Figures.Device_Positions'Image & " positions of"
+                       & Drawn.Figures.Tokens'Image & " tokens");
+            end;
             Assert (Device.Resident = Held, "the decoder's matrices were left on the device");
          end;
 
