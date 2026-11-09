@@ -881,9 +881,22 @@ package body Model_Runner.Whisper is
    function Is_Open (Item : Session) return Boolean is (Item.Source /= null);
 
    procedure Use_Device (Item : in out Session; On : Boolean; Keep : Boolean := False) is
+      use type Interfaces.Unsigned_64;
    begin
       Item.On_Device := On;
       Item.Keep_On_Device := Keep;
+      --  The file's pages kept where the model is small beside the device,
+      --  as a language model's are (Prepare): read past the cache, Whisper
+      --  small's 490 MB came from the drive at every run's first window --
+      --  JFK's eleven seconds 1.46 s from the command line, where
+      --  whisper.cpp, its file held from the run before, took 0.69. A
+      --  language model already open that gave its pages back keeps them
+      --  given back (Keep_File_Pages).
+      if On and then Model_Runner.Backend.Device.Is_Ready then
+         Model_Runner.Backend.Device.Keep_File_Pages
+           (Interfaces.Unsigned_64 (Weight_Bytes (Item.Source.all))
+            <= Model_Runner.Backend.Device.Heap_Bytes / 5 * 2);
+      end if;
    end Use_Device;
 
    procedure Open
