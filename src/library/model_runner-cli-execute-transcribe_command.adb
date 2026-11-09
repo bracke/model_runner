@@ -33,6 +33,11 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
    -- Do_Transcribe --
    -------------------
 
+   --  The largest model heard on the processor unasked when the recording
+   --  is one window: tiny (75 MB in f16) and its quantized files, not base
+   --  (148 MB) or larger.
+   Processor_Model_Most : constant := 128 * 1_048_576;
+
    procedure Do_Transcribe
      (Item   : Opt.Command;
       Screen : in out Pres.Console;
@@ -142,7 +147,18 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       --  The encoder on the device unless --backend names the processor:
       --  nothing else here uses it, so its matrices are kept between the
       --  windows and given back when it closes.
-      if not Item.Backend_Set or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
+      --  Unasked, a model of tiny's size hearing one window stays on the
+      --  processor: opening the device is 0.065 s, more than it saves
+      --  there -- JFK's eleven seconds by tiny 0.29-0.31 s on the
+      --  processor, 0.32 with the device. A second window repays it
+      --  (45 s of Danish 0.93 against 0.76), as does any larger model
+      --  (small, JFK: 1.25 against 0.67).
+      if not Item.Backend_Set
+        and then Model_Runner.Bytes."<=" (W.Weight_Bytes (Whisper), Processor_Model_Most)
+        and then Samples'Length <= W.Window_Samples
+      then
+         null;
+      elsif not Item.Backend_Set or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
          Model_Runner.Backend.Device.Open
            (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
             Which => Item.Device_Index);

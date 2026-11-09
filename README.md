@@ -1006,14 +1006,17 @@ Whisper tiny and small the tokens, times and text of English and Danish
 recordings are the reference's own (docs/plan-speech.md).
 
 Whisper runs on the device when one is open, its encoder and every token
-of its decoder: `transcribe` opens it unless `--backend cpu` is given,
-and in a session it is borrowed while the conversation's model, there
+of its decoder: `transcribe` opens it unless `--backend cpu` is given or,
+`--backend` not given, the model is tiny's size (128 MB or less) and the
+recording one window of thirty seconds, which the processor hears sooner
+than the device can be opened; in a session it is borrowed while the conversation's model, there
 already, waits for the line -- never while that model runs, and not at
 all where the device has no room beside it. From the command line, its
 file read before: 45 s of Danish is heard in 4.2 s by small f16 on the
 processor (1.2 GB resident) and 2.2 s with the device (0.5 GB), 1.8 s by
 small Q8_0 with the device; 11 s of English in 0.29 s by tiny on the
-processor and 0.32 s with the device (opening it is 0.065 s of that), 0.68
+processor and 0.32 s with the device (opening it is 0.065 s of that), 45 s
+of Danish by tiny in 0.93 s and 0.76 s; 11 s of English in 0.68
 s by small (whisper.cpp 0.68) and 1.45 s by medium (whisper.cpp 1.78).
 Warm, a token of medium is 15.5 ms on the device, its products at the
 memory's rate. A window the reference decodes

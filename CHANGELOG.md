@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **`transcribe` hears a tiny model's single window on the processor unless the device is named.** Opening the device is 0.065 s, more than it saves for a model of 128 MB or less on a recording of one thirty-second window: JFK's eleven seconds by tiny 0.32 -> 0.29 s. A longer recording (45 s of Danish by tiny: 0.76 s with the device, 0.93 without) and every larger model still open it; `--backend device` still asks for it.
+
 - **A program ends without waiting on its interrupt watcher's next look: every command 25 ms sooner on average.** The task that hands recorded interrupts on looked every 50 ms, and the program's ending waited for its next look after the watching was removed; removing it now wakes it. Whisper medium from the command line, JFK's eleven seconds: 1.50 -> 1.45-1.49 s.
 
 - **Whisper's first window waits for less: a recording heard from the command line 12% sooner, ahead of whisper.cpp.** The best-of candidates' rows of the device's cache -- 110 M of Whisper medium's 212 M elements -- are reserved when a window is first drawn again, not with the first window, which a greedy decode never needs; the encoder's attention uses the scratch the host's way already keeps. Each encoder block's next block's matrices and a decoder block's go up while the device runs the block before, rather than as each is first read. Whisper medium, JFK's eleven seconds, release builds, consecutive runs: 1.70 -> 1.50 s (whisper.cpp 1.76-1.79 with its file held); the same text.
