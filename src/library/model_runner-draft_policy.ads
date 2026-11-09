@@ -22,7 +22,7 @@ package Model_Runner.Draft_Policy is
    --  from three, four and five read 20.6, 20.5 and 20.6 -- the adapting
    --  finds the length -- against 19.6, 20.0 and 20.5 held at those).
    Next_Draft_Tokens       : constant := 3;
-   Split_Next_Draft_Tokens : constant := 4;
+   Large_Next_Draft_Tokens : constant := 4;
    Store_Draft_Tokens      : constant := 3;
 
    --  Whether rounds from the block follow what the rounds before kept,
@@ -40,6 +40,25 @@ package Model_Runner.Draft_Policy is
    --  @return True where the block's rounds adapt.
    function Next_Adapts (Experts : Natural; Token_Bytes : Float) return Boolean
    is (Experts > 0 or else Token_Bytes < Large_Dense_Bytes);
+
+   --  How many a round proposes from the block, unasked: four for a split
+   --  dense model, whose round streams its feed-forward once a proposal
+   --  (ThinkingCap 7.80 -> 7.93 tokens a second at four over three), and
+   --  for a large dense one, whose rounds are held (Next_Adapts) and
+   --  whose check reads no weight more for a position more --
+   --  Swift-1.5-Qwen3.8-27B 15.3-15.6 -> 16.5-16.8 tokens a second on a
+   --  short prompt, the same text, 10.1 -> 10.4 at 24,702 positions;
+   --  three for the rest, which adapt from it.
+   --
+   --  @param Experts The model's experts, nought for a dense one.
+   --  @param Token_Bytes What a generated token reads of its weights.
+   --  @param Split Whether the model is dense and split, its feed-forward
+   --    streamed.
+   --  @return The round's length.
+   function Next_Length
+     (Experts : Natural; Token_Bytes : Float; Split : Boolean) return Positive
+   is (if Split or else not Next_Adapts (Experts, Token_Bytes)
+       then Large_Next_Draft_Tokens else Next_Draft_Tokens);
 
    --  What the caller asked of drafting.
    type Asked is record

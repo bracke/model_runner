@@ -20804,6 +20804,13 @@ package body Tests.Inference_Cases is
               "a large mixture's block rounds hold their length");
       Assert (not P.Next_Adapts (0, Large),
               "a large dense model's block rounds adapt");
+      Assert (P.Next_Length (0, Large, Split => False) = 4,
+              "a large dense model's block rounds are not four");
+      Assert (P.Next_Length (0, Large * 0.9, Split => False) = 3
+              and then P.Next_Length (256, Large * 2.0, Split => False) = 3,
+              "a small dense model's or a mixture's block rounds do not start at three");
+      Assert (P.Next_Length (0, Large * 0.9, Split => True) = 4,
+              "a split dense model's block rounds are not four");
    end Block_Rounds_Adapt_But_A_Large_Dense_Models;
 
    --  Nor is a draft looked for beside a model nothing drafts on: the

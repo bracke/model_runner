@@ -79,15 +79,10 @@ package body Model_Runner.Draft_Policy is
                                      or else L.Config (Prepared).Experts > 0)));
 
       Result.Tokens :=
-        (if Result.From_Next
-           and then not Request.Tokens_Set
-           and then L.Batch_Limit (Prepared) = L.Dense_Streamed_Batch
-         --  A split dense model's round streams its feed-forward once for
-         --  every proposal it checks, so a longer round pays: ThinkingCap
-         --  7.80 -> 7.93 tokens a second at four over three.
-         then Split_Next_Draft_Tokens
-         elsif Result.From_Next and then not Request.Tokens_Set
-         then Next_Draft_Tokens
+        (if Result.From_Next and then not Request.Tokens_Set
+         then Next_Length
+                (L.Config (Prepared).Experts, L.Token_Bytes (Prepared),
+                 Split => L.Batch_Limit (Prepared) = L.Dense_Streamed_Batch)
          --  A found draft starts at its own length -- but a length named
          --  is the length, whichever draft it is: a paired sidecar took
          --  the store's three over --draft-tokens.

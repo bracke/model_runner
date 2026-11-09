@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **A large dense model drafts four a round from its block, unasked: Swift-1.5-Qwen3.8-27B 8% faster.** Its rounds are held rather than adapting, and were held at three; a position more in the check reads no weight more on the device, and Swift keeps most of four: 15.3-15.6 -> 16.5-16.8 tokens a second on a short prompt (99 of 120 proposals kept), 10.1 -> 10.4 at 24,702 positions, the same text. Draft_Policy.Next_Length says the length, four also for a split dense model as before.
+
 - **`transcribe` opens the device while it reads the recording and the model.** Asked for -- named, or unasked for a model past tiny's 128 MB -- the device opens in a task of its own beside the reading, rather than after it: JFK's eleven seconds from the command line, small 0.67-0.73 -> 0.64 s, medium 1.45-1.48 -> 1.41-1.44 s, the same text. A run that fails before using it gives it back.
 
 - **A half-precision product of one position adds its bias and its residual in its own store: Whisper's tokens 1% faster.** A join may now fold onto a bias already folded into the product before it (Add_Join's Bias_Too): the half-precision wave kernel adds the bias, bound where a plain product reads no routing, beside the residual. Whisper's decoder blocks fold all three of theirs, where the attention's was a join dispatched alone and the other two a bias added to the residual first: a medium block 583 -> 578 us of device time, its tokens' decoding 0.5-1% sooner in six of seven alternated pairs, the same text. A sequence ending in such a chain stores at the front through the whole chain, which with one folded step it had not needed to.
