@@ -1,6 +1,6 @@
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
-with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Configuration_Records;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Schemas;
@@ -281,7 +281,7 @@ package body Model_Runner.Framework.Authority is
 
       --  The configuration's settings, each its own subject by the field
       --  it is kept in, so a decision about one names that field.
-      Config := Configurations.Required (Item);
+      Config := Configuration_Records.Required (Item);
       for Index in 1 .. Records.Field_Count (Config) loop
          declare
             Field : constant String := Records.Field_Name (Config, Index);

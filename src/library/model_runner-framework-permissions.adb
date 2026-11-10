@@ -6,7 +6,7 @@ with Ada.Strings.Unbounded;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 
-with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Configuration_Records;
 
 package body Model_Runner.Framework.Permissions is
 
@@ -251,7 +251,7 @@ package body Model_Runner.Framework.Permissions is
       Config : Records.Item;
    begin
       Present := False;
-      Config := Configurations.Required (Item);
+      Config := Configuration_Records.Required (Item);
       return Level_Of (Config, Level, Present);
    end Level_Of;
 

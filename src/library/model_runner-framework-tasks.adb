@@ -5,7 +5,6 @@ with Ada.Strings.Maps;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Identifiers;
-with Model_Runner.Framework.Inference_Policy;
 with Model_Runner.Framework.Intent;
 with Model_Runner.Framework.Leases;
 with Model_Runner.Framework.Permissions;
@@ -13,6 +12,7 @@ with Model_Runner.Framework.Read_Memory;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
 with Model_Runner.Framework.Task_Eligibility;
+with Model_Runner.Framework.Task_Profile_Validation;
 with Model_Runner.Framework.Task_Workspaces;
 
 package body Model_Runner.Framework.Tasks is
@@ -174,7 +174,7 @@ package body Model_Runner.Framework.Tasks is
 
    function Config (Item : Stores.Store) return Records.Item is
    begin
-      return Configurations.Required (Item);
+      return Configuration_Records.Required (Item);
    end Config;
 
    ---------------
@@ -440,18 +440,7 @@ package body Model_Runner.Framework.Tasks is
       Rest   : constant String := (if Space = 0 then "" else Trim (Schema (Space + 1 .. Schema'Last)));
    begin
       if Name = "inference" and then Value /= "" then
-         declare
-            Settings : Inference_Policy.Overrides;
-            Named    : Unbounded_String;
-            Said     : constant String := Inference_Policy.Parse (Value, Settings, Named);
-         begin
-            return (if Said /= "" then Said
-                    elsif Named /= Null_Unbounded_String
-                      and then not Inference_Policy.Is_Profile (Config (Item), To_String (Named))
-                    then "there is no inference profile " & To_String (Named) & "; the built-in ones are analysis,"
-                         & " architecture, coding, testing, debugging, exploration, reporting and verification"
-                    else "");
-         end;
+         return Task_Profile_Validation.Problem (Item, Value);
       end if;
       if Is_Core (Name) or else Value = "" then
          return "";
@@ -585,7 +574,7 @@ package body Model_Runner.Framework.Tasks is
       --  than carried.
       for Position in Fields.Iterate loop
          declare
-            Name : constant String := Configurations.Value_Maps.Key (Position);
+            Name : constant String := Configuration_Records.Value_Maps.Key (Position);
          begin
             if not Is_Core (Name) and then not Allowed.Contains (Name) then
                No_Such_Field (Status, Name, Kind, Allowed);
@@ -594,12 +583,12 @@ package body Model_Runner.Framework.Tasks is
                Status := E.Make (E.Framework_Name_Invalid);
                E.Add_Text (Status, "value", Name);
                return;
-            elsif Field_Problem (Item, Name, Trim (Configurations.Value_Maps.Element (Position))) /= ""
+            elsif Field_Problem (Item, Name, Trim (Configuration_Records.Value_Maps.Element (Position))) /= ""
             then
                Status := E.Make (E.Framework_Schema_Violation);
                E.Add_Text (Status, "name", Name);
                E.Add_Text (Status, "detail",
-                           Field_Problem (Item, Name, Trim (Configurations.Value_Maps.Element (Position))));
+                           Field_Problem (Item, Name, Trim (Configuration_Records.Value_Maps.Element (Position))));
                return;
             elsif Name = "permissions" then
                --  A restriction that does not read is refused here, where it
@@ -609,7 +598,7 @@ package body Model_Runner.Framework.Tasks is
                   Ignored : Model_Runner.Framework.Permissions.Permission_Set;
                begin
                   Model_Runner.Framework.Permissions.Restriction
-                    (Configurations.Value_Maps.Element (Position), Ignored, Status);
+                    (Configuration_Records.Value_Maps.Element (Position), Ignored, Status);
                   if E.Is_Error (Status) then
                      return;
                   end if;
@@ -728,9 +717,9 @@ package body Model_Runner.Framework.Tasks is
          for Position in Fields.Iterate loop
             declare
                Name  : constant String :=
-                 Configurations.Value_Maps.Key (Position);
+                 Configuration_Records.Value_Maps.Key (Position);
                Value : constant String :=
-                 Trim (Configurations.Value_Maps.Element (Position));
+                 Trim (Configuration_Records.Value_Maps.Element (Position));
             begin
                if Value /= "" then
                   Records.Set
@@ -2307,7 +2296,7 @@ package body Model_Runner.Framework.Tasks is
    function Components (Item : Stores.Store) return Name_Lists.Vector is
       Settings : Records.Item;
    begin
-      Settings := Configurations.Required (Item);
+      Settings := Configuration_Records.Required (Item);
       return Components_Of (Settings);
    end Components;
 
@@ -2490,8 +2479,8 @@ package body Model_Runner.Framework.Tasks is
          Kind_Fields (Item, Kind, Required_Here, Ignored);
          for Position in Fields.Iterate loop
             declare
-               Name  : constant String := Configurations.Value_Maps.Key (Position);
-               Given : constant String := Trim (Configurations.Value_Maps.Element (Position));
+               Name  : constant String := Configuration_Records.Value_Maps.Key (Position);
+               Given : constant String := Trim (Configuration_Records.Value_Maps.Element (Position));
                Field : constant String := (if Is_Core (Name) then Name else "field." & Name);
             begin
                if Name = "kind" then

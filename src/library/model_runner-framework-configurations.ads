@@ -1,7 +1,7 @@
-with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Framework.Configuration_Records;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Templates;
@@ -27,8 +27,7 @@ with Model_Runner.Framework.Templates;
 package Model_Runner.Framework.Configurations is
 
    --  Names to values: the inputs given, found or resolved.
-   package Value_Maps is new Ada.Containers.Indefinite_Ordered_Maps
-     (Key_Type => String, Element_Type => String);
+   package Value_Maps renames Configuration_Records.Value_Maps;
 
    --  What initializing a project will do.
    type Plan is record

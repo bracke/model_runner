@@ -72,32 +72,17 @@ package body Model_Runner.Framework.Configurations is
       return Result;
    end Choices_Of;
 
-   type Text_Access is access constant String;
-
-   --  Where a configuration came from, which is not what it says: two
-   --  templates that resolve to the same declarations configure a project
-   --  the same way.
-   Provenance : constant array (1 .. 5) of Text_Access :=
-     [new String'("template_id"),
-      new String'("template_version"),
-      new String'("template_fingerprint"),
-      new String'("template_origin"),
-      new String'("template_order")];
-
    --  A record's fields copied onto another header.
    function Copy
      (Value     : Records.Item;
       Entity_Id : String) return Records.Item
    is
       Result : Records.Item :=
-        Records.Create
-          (Records.Schema_Id (Value), Records.Schema_Version (Value), Entity_Id,
-           1);
+        Records.Create (Records.Schema_Id (Value), Records.Schema_Version (Value), Entity_Id, 1);
    begin
       for Index in 1 .. Records.Field_Count (Value) loop
          Records.Set
-           (Result, Records.Field_Name (Value, Index),
-            Records.Get (Value, Records.Field_Name (Value, Index)));
+           (Result, Records.Field_Name (Value, Index), Records.Get (Value, Records.Field_Name (Value, Index)));
       end loop;
       return Result;
    end Copy;
@@ -107,13 +92,8 @@ package body Model_Runner.Framework.Configurations is
    -------------------------------
 
    function Configuration_Fingerprint (Value : Records.Item) return String is
-      Meaning : Records.Item := Copy (Value, Current_Entity);
    begin
-      Records.Remove (Meaning, "configuration_fingerprint");
-      for Field of Provenance loop
-         Records.Remove (Meaning, Field.all);
-      end loop;
-      return Records.Fingerprint_Of (Meaning);
+      return Configuration_Records.Fingerprint (Value);
    end Configuration_Fingerprint;
 
    ------------------------------
@@ -4047,18 +4027,11 @@ package body Model_Runner.Framework.Configurations is
    --------------
 
    function Required (Item : Stores.Store) return Records.Item is
-      Value  : Records.Item;
-      None   : Records.Item;
-      Status : E.Error_Info;
    begin
-      Read (Item, Value, Status);
-      if Unreadable (Status) then
-         raise Configuration_Unavailable
-           with "the project's configuration cannot be read: "
-                & E.Error_Code'Image (Status.Code)
-                & (if E.Text_Of (Status, "detail") = "" then "" else " (" & E.Text_Of (Status, "detail") & ")");
-      end if;
-      return (if E.Is_Error (Status) then None else Value);
+      return Configuration_Records.Required (Item);
+   exception
+      when Configuration_Records.Configuration_Unavailable =>
+         raise Configuration_Unavailable with "the project's configuration cannot be read";
    end Required;
 
    -------------

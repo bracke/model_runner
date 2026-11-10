@@ -13,6 +13,7 @@ package Model_Runner.Framework.Task_Workspaces is
       Project_Unchanged_Only : Boolean) return Name_Lists.Vector;
    procedure Register
      (Every_Active : Every_Active_Checker; Abandon : Abandon_Action; Conflicts : Conflict_Checker);
+   function Is_Available return Boolean;
    function Every_Active (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector;
    procedure Abandon
      (Item : Stores.Store; Change : in out Stores.Transaction; Id : String;

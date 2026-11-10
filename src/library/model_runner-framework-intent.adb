@@ -4,7 +4,7 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Hash;
 
-with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Configuration_Records;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Identifiers;
@@ -154,7 +154,7 @@ package body Model_Runner.Framework.Intent is
       if State = "" or else Core_Requirement_States.Contains (State) then
          return State;
       end if;
-      Config := Configurations.Required (Item);
+      Config := Configuration_Records.Required (Item);
       declare
          Meaning : constant String := Records.Get (Config, "map.requirement.state." & State);
          Stop    : constant Natural := Ada.Strings.Fixed.Index (Meaning, ",");
@@ -182,7 +182,7 @@ package body Model_Runner.Framework.Intent is
       if Kind /= Requirement then
          return Result;
       end if;
-      Config := Configurations.Required (Item);
+      Config := Configuration_Records.Required (Item);
       for Index in 1 .. Records.Field_Count (Config) loop
          declare
             Name : constant String := Records.Field_Name (Config, Index);
@@ -847,8 +847,8 @@ package body Model_Runner.Framework.Intent is
                Config : Records.Item;
                Read   : E.Error_Info;
             begin
-               Configurations.Read (Item, Config, Read);
-               if Configurations.Unreadable (Read) then
+               Configuration_Records.Read (Item, Config, Read);
+               if Configuration_Records.Unreadable (Read) then
                   Status := Read;
                   return;
                end if;

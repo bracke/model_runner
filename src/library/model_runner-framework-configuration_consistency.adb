@@ -4,9 +4,21 @@ package body Model_Runner.Framework.Configuration_Consistency is
 
    procedure Register (Value : Checker) is
    begin
+      if Active /= null then
+         raise Program_Error with "configuration consistency service is already registered";
+      end if;
       Active := Optional_Checker (Value);
    end Register;
 
+   function Is_Available return Boolean is (Active /= null);
+
    function Check (Item : Stores.Store) return Result is
-     (if Active = null then (Findings => Name_Lists.Empty_Vector, Broken => False) else Active (Item));
+   begin
+      if Active = null then
+         return
+           (Findings => Name_Lists.To_Vector ("whole-project consistency service is not linked", 1),
+            Broken   => True);
+      end if;
+      return Active (Item);
+   end Check;
 end Model_Runner.Framework.Configuration_Consistency;

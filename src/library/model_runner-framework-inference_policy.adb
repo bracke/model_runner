@@ -2,6 +2,7 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Task_Profile_Validation;
 with Model_Runner.Framework.Tasks;
 
 package body Model_Runner.Framework.Inference_Policy is
@@ -1180,4 +1181,20 @@ package body Model_Runner.Framework.Inference_Policy is
       return "";
    end Read_Request;
 
+   function Validate_Task_Field (Item : Stores.Store; Value : String) return String is
+      Settings : Overrides;
+      Named    : Unbounded_String;
+      Said     : constant String := Parse (Value, Settings, Named);
+   begin
+      return
+        (if Said /= "" then Said
+         elsif Named /= Null_Unbounded_String and then
+           not Is_Profile (Configurations.Required (Item), To_String (Named))
+         then "there is no inference profile " & To_String (Named) & "; the built-in ones are analysis, architecture,"
+           & " coding, testing, debugging, exploration, reporting and verification"
+         else "");
+   end Validate_Task_Field;
+
+begin
+   Task_Profile_Validation.Register (Validate_Task_Field'Access);
 end Model_Runner.Framework.Inference_Policy;

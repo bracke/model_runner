@@ -1,16 +1,19 @@
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
 with Ada.Directories;
+with Ada.Strings.Fixed;
 with Ada.Streams;
 with Ada.Streams.Stream_IO;
 with Ada.Unchecked_Deallocation;
 with Interfaces;
 
 with Hostkit.Fs;
+with Hostkit.Durability;
+with Hostkit.Host;
 
+with Model_Runner.Durable_Syncs;
 with Model_Runner.Framework.Records;
 with Model_Runner.Text;
-with Model_Runner.Tools.Editing;
 with Model_Runner.Heap_Buffers;
 
 package body Model_Runner.Framework.Files is
@@ -26,6 +29,20 @@ package body Model_Runner.Framework.Files is
 
    type String_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, String_Access);
+
+   protected Partial_Numbers is
+      procedure Take (Value : out Natural);
+   private
+      Last : Natural := 0;
+   end Partial_Numbers;
+
+   protected body Partial_Numbers is
+      procedure Take (Value : out Natural) is
+      begin
+         Last := Last + 1;
+         Value := Last;
+      end Take;
+   end Partial_Numbers;
 
    ------------------
    -- Write_Failed --
@@ -182,23 +199,51 @@ package body Model_Runner.Framework.Files is
    procedure Write_Whole
      (Path   : String;
       Text   : String;
-      Status : out E.Error_Info) is
+      Status : out E.Error_Info)
+   is
+      use Ada.Streams;
+      use type Hostkit.Durability.Outcome;
+      Folder : constant String := Ada.Directories.Containing_Directory (Path);
+      Number : Natural;
+      File   : Stream_IO.File_Type;
    begin
-      --  The one replacement the agent's edits take too (Editing.Replace):
-      --  a partial file of this writer's own beside it, synced, renamed
-      --  over, the folder synced and the file's permissions kept -- one
-      --  fixed PATH.partial was shared by any two writers of a path.
+      Partial_Numbers.Take (Number);
       declare
-         Put : Model_Runner.Tools.Editing.Said;
+         Partial : constant String :=
+           Folder & "/." & Ada.Directories.Simple_Name (Path) & ".framework-partial." &
+             Ada.Strings.Fixed.Trim (Integer'Image (Hostkit.Host.Own_Process_Id), Ada.Strings.Both) & "." &
+             Ada.Strings.Fixed.Trim (Natural'Image (Number), Ada.Strings.Both);
+         Block : constant Stream_Element_Array (1 .. Stream_Element_Offset (Text'Length))
+           with Import, Address => Text'Address;
       begin
-         Model_Runner.Tools.Editing.Replace (Path, Text, Put);
-         Status := E.Success;
-         --  A file not made durable is refused before it is put in place
-         --  (Replace); once in place, it is written -- a folder that would
-         --  not sync after is no write that failed.
-         if Put.Failed then
+         Stream_IO.Create (File, Stream_IO.Out_File, Partial, Form => "shared=no");
+         Stream_IO.Write (File, Block);
+         Stream_IO.Close (File);
+         if Model_Runner.Durable_Syncs.Sync_File (Partial) = Hostkit.Durability.Failed or else
+           not Hostkit.Fs.Replace_File (Partial, Path)
+         then
+            if Ada.Directories.Exists (Partial) then
+               Ada.Directories.Delete_File (Partial);
+            end if;
             Write_Failed (Path, Status);
+            return;
          end if;
+         --  Unsupported directory syncing is the strongest guarantee the
+         --  host offers. A reported failure is retained as a failed write.
+         if Model_Runner.Durable_Syncs.Sync_Directory (Folder) = Hostkit.Durability.Failed then
+            Write_Failed (Path, Status);
+            return;
+         end if;
+         Status := E.Success;
+      exception
+         when others =>
+            if Stream_IO.Is_Open (File) then
+               Stream_IO.Close (File);
+            end if;
+            if Ada.Directories.Exists (Partial) then
+               Ada.Directories.Delete_File (Partial);
+            end if;
+            Write_Failed (Path, Status);
       end;
    end Write_Whole;
 

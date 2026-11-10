@@ -1,7 +1,7 @@
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
-with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Configuration_Records;
 with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Stores;
 with Model_Runner.Framework.Transitions;
@@ -32,7 +32,7 @@ package Model_Runner.Framework.Tasks is
    --  kind, component, requirements and depends_on (comma-separated),
    --  priority, acceptance, parent, notes; anything else is a custom field
    --  its kind must allow.
-   subtype Field_Map is Configurations.Value_Maps.Map;
+   subtype Field_Map is Configuration_Records.Value_Maps.Map;
 
    --  Why a task is not ready, one reason a line.
    type Readiness is record

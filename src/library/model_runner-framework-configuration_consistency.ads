@@ -10,5 +10,6 @@ package Model_Runner.Framework.Configuration_Consistency is
 
    type Checker is not null access function (Item : Stores.Store) return Result;
    procedure Register (Value : Checker);
+   function Is_Available return Boolean;
    function Check (Item : Stores.Store) return Result;
 end Model_Runner.Framework.Configuration_Consistency;

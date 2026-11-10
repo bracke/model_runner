@@ -13,7 +13,7 @@ with Ada.Strings.Maps;
 with Hostkit.Fs;
 with Hostkit.Metadata;
 
-with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Configuration_Records;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Repository.Languages;
 with Model_Runner.Framework.Schemas;
@@ -477,7 +477,7 @@ package body Model_Runner.Framework.Repository is
    ---------------------
 
    function Component_Roots (Item : Stores.Store; Component : String) return Name_Lists.Vector
-   is (Component_Roots (Configurations.Required (Item), Component));
+   is (Component_Roots (Configuration_Records.Required (Item), Component));
 
    function Component_Roots (Config : Records.Item; Component : String) return Name_Lists.Vector is
       Result : Name_Lists.Vector;
@@ -526,7 +526,7 @@ package body Model_Runner.Framework.Repository is
    ------------------
 
    function In_Component (Item : Stores.Store; Component, Path : String) return Boolean
-   is (In_Component (Configurations.Required (Item), Component, Path));
+   is (In_Component (Configuration_Records.Required (Item), Component, Path));
 
    function In_Component (Config : Records.Item; Component, Path : String) return Boolean is
       function Clean (Text : String) return String is
@@ -605,7 +605,7 @@ package body Model_Runner.Framework.Repository is
          end if;
       end Take;
    begin
-      Config := Configurations.Required (Item);
+      Config := Configuration_Records.Required (Item);
       Take ("skip", Result.Skip);
       Take ("tests", Result.Tests);
       Take ("documentation", Result.Documentation);
