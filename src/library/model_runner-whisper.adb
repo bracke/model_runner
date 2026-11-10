@@ -1770,7 +1770,8 @@ package body Model_Runner.Whisper is
             begin
                for L in 1 .. Source.Decoder_Blocks loop
                   exit when not Ok;
-                  Model_Runner.Backend.Device.Put_Cache (Heard_Keys_At (Item, L), Item.Cross_K (L) (0 .. P * W - 1), Ok);
+                  Model_Runner.Backend.Device.Put_Cache
+                    (Heard_Keys_At (Item, L), Item.Cross_K (L) (0 .. P * W - 1), Ok);
                   if Ok then
                      Model_Runner.Backend.Device.Put_Cache (Heard_Values_At (Item, L),
                                                             Item.Cross_V (L) (0 .. P * W - 1), Ok);

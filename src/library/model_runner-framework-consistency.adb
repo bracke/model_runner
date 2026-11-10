@@ -6,6 +6,7 @@ with Model_Runner.Errors;
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Configurations;
+with Model_Runner.Framework.Configuration_Consistency;
 with Model_Runner.Framework.Files;
 with Model_Runner.Framework.Git;
 with Model_Runner.Framework.Intent;
@@ -1464,4 +1465,24 @@ package body Model_Runner.Framework.Consistency is
    function Element (From : Finding_List; Index : Positive) return Finding
    is (From.Findings (Index));
 
+   function Initialization_Check (Item : Stores.Store) return Configuration_Consistency.Result is
+      Found  : constant Finding_List := Check (Item);
+      Result : Configuration_Consistency.Result;
+   begin
+      for Index in 1 .. Length (Found) loop
+         declare
+            Value : constant Finding := Element (Found, Index);
+         begin
+            Result.Findings.Append
+              (To_String (Value.Subject) & ": " & Kind_Word (Value.Kind) & ": " & To_String (Value.Detail));
+            Result.Broken := Result.Broken
+              or else Value.Kind
+                        in Schema_Mismatch | Duplicate_Identifier | Incomplete_Transaction | Index_Mismatch;
+         end;
+      end loop;
+      return Result;
+   end Initialization_Check;
+
+begin
+   Configuration_Consistency.Register (Initialization_Check'Access);
 end Model_Runner.Framework.Consistency;

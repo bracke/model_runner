@@ -29,6 +29,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Results;
 with Model_Runner.Framework.Tasks;
+with Model_Runner.Framework.Task_Eligibility;
 with Model_Runner.Framework.Verification;
 with Model_Runner.Framework.Views;
 with Model_Runner.Tools.Builtin;
@@ -3513,4 +3514,6 @@ package body Model_Runner.Framework.Work is
       end if;
    end Cancel;
 
+begin
+   Task_Eligibility.Register (Unable_Reason'Access);
 end Model_Runner.Framework.Work;

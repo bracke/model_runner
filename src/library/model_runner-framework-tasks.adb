@@ -12,8 +12,8 @@ with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Read_Memory;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Schemas;
-with Model_Runner.Framework.Work;
-with Model_Runner.Framework.Workspaces;
+with Model_Runner.Framework.Task_Eligibility;
+with Model_Runner.Framework.Task_Workspaces;
 
 package body Model_Runner.Framework.Tasks is
 
@@ -1032,8 +1032,8 @@ package body Model_Runner.Framework.Tasks is
       --  one: given up is what each would be, and none is chosen over the
       --  others.
       if Next in "failed" | "cancelled" | "rejected" then
-         for Space of Workspaces.Every_Active (Item, Id) loop
-            Workspaces.Abandon (Item, Change, Space, Status);
+         for Space of Task_Workspaces.Every_Active (Item, Id) loop
+            Task_Workspaces.Abandon (Item, Change, Space, Status);
             if E.Is_Error (Status) then
                return;
             end if;
@@ -1126,11 +1126,11 @@ package body Model_Runner.Framework.Tasks is
                  and then Records.Get (Runtime_Value, "current_workspace") /= ""
                then "its work waits in " & Records.Get (Runtime_Value, "current_workspace")
                     & " to be taken in: "
-                    & (if Workspaces.Conflict_Files
+                    & (if Task_Workspaces.Conflict_Files
                             (Item, Records.Get (Runtime_Value, "current_workspace")).Is_Empty
                        then "/task integrate " & Id
                        else "it conflicts with the project in "
-                            & Joined (Workspaces.Conflict_Files
+                            & Joined (Task_Workspaces.Conflict_Files
                                         (Item, Records.Get (Runtime_Value, "current_workspace")),
                                       ", ")
                             & "; settle them in the workspace, then /task integrate " & Id
@@ -1296,7 +1296,7 @@ package body Model_Runner.Framework.Tasks is
    begin
       if Result.Ready then
          declare
-            Unable : constant String := Work.Unable_Reason (Item, Id);
+            Unable : constant String := Task_Eligibility.Unable_Reason (Item, Id);
          begin
             if Unable /= "" then
                Result.Ready := False;
@@ -1408,7 +1408,7 @@ package body Model_Runner.Framework.Tasks is
             --  Held as Ready holds it: one that cannot be worked on here
             --  is not said to be ready.
             Now  : constant Boolean :=
-              Ready_In (Item, Change, Id).Ready and then Work.Unable_Reason (Item, Id) = "";
+              Ready_In (Item, Change, Id).Ready and then Task_Eligibility.Unable_Reason (Item, Id) = "";
             Held : constant String := Records.Get (Cache, "task." & Id);
          begin
             if Now and then Held /= "ready" then

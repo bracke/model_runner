@@ -4,6 +4,10 @@
 /lib/
 /alire/
 /config/
+/framework/obj/
+/framework/bin/
+/framework/alire/
+/framework/config/
 /tests/obj/
 /tests/bin/
 /tests/alire/

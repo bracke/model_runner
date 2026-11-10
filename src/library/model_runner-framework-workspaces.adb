@@ -23,6 +23,7 @@ with Model_Runner.Framework.Records;
 with Model_Runner.Framework.Repository;
 with Model_Runner.Framework.Retrieval;
 with Model_Runner.Framework.Schemas;
+with Model_Runner.Framework.Task_Workspaces;
 with Model_Runner.Race_Points;
 with Model_Runner.Tools.Editing;
 
@@ -2987,4 +2988,6 @@ package body Model_Runner.Framework.Workspaces is
       Files.Discard (Conflict_Record (Item, Id));
    end Abandon;
 
+begin
+   Task_Workspaces.Register (Every_Active'Access, Abandon'Access, Conflict_Files'Access);
 end Model_Runner.Framework.Workspaces;

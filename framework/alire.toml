@@ -1,0 +1,23 @@
+name = "model_runner_framework"
+description = "Typed project task and transaction framework from model_runner"
+version = "0.1.0"
+licenses = "MIT"
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+website = "https://github.com/bracke/model_runner"
+tags = ["ada", "tasks", "workflow"]
+project-files = ["model_runner_framework.gpr"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+hostkit = "*"
+
+[build-profiles]
+"*" = "development"
+
+[[pins]]
+hostkit = { path = "../../hostkit" }
+

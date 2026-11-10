@@ -11,7 +11,7 @@ with Hostkit.Fs;
 with Hostkit.Process;
 
 with Model_Runner.Framework.Automation;
-with Model_Runner.Framework.Consistency;
+with Model_Runner.Framework.Configuration_Consistency;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
@@ -1446,27 +1446,18 @@ package body Model_Runner.Framework.Configurations is
       --  half made, an index that disagrees -- undoes the initialization:
       --  the state, and the files and directories it made.
       declare
-         use type Consistency.Finding_Kind;
-         Found  : constant Consistency.Finding_List := Consistency.Check (Item);
-         Broken : Boolean := False;
+         Found : constant Configuration_Consistency.Result := Configuration_Consistency.Check (Item);
       begin
-         for Index in 1 .. Consistency.Length (Found) loop
-            Done.Findings.Append
-              (To_String (Consistency.Element (Found, Index).Subject) & ": "
-               & Consistency.Kind_Word (Consistency.Element (Found, Index).Kind) & ": "
-               & To_String (Consistency.Element (Found, Index).Detail));
-            Broken := Broken
-              or else Consistency.Element (Found, Index).Kind
-                        in Consistency.Schema_Mismatch | Consistency.Duplicate_Identifier
-                         | Consistency.Incomplete_Transaction | Consistency.Index_Mismatch;
+         for Finding of Found.Findings loop
+            Done.Findings.Append (Finding);
          end loop;
-         if Broken then
+         if Found.Broken then
             Undo;
             Status := E.Make (E.Framework_Schema_Violation);
             E.Add_Text (Status, "name", "the project as initialized");
             E.Add_Text (Status, "detail", Done.Findings.First_Element
-                        & (if Consistency.Length (Found) > 1
-                           then " (and" & Natural'Image (Consistency.Length (Found) - 1) & " more)"
+                        & (if Natural (Found.Findings.Length) > 1
+                           then " (and" & Natural'Image (Natural (Found.Findings.Length) - 1) & " more)"
                            else "")
                         & "; nothing was kept");
          end if;
