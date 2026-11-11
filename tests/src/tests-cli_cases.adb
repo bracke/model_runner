@@ -83,6 +83,7 @@ with Ada.Environment_Variables;
 with Ada.Streams.Stream_IO;
 with GNAT.OS_Lib;
 with Ada.Strings.Fixed;
+with Model_Runner.CLI.Prefill_Slots;
 with Ada.Text_IO;
 
 with Expectations;
@@ -15563,6 +15564,196 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_Tree (Home);
    end The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking;
 
+   --  The prefill cache keeps a file for each thing asked rather than one
+   --  for the model: two prompts asked in turn each wrote over the other's
+   --  file, and both were read whole every time. Each finds its own now,
+   --  and a prompt that goes on from one reads that one and takes its
+   --  place.
+   procedure The_Prefill_Cache_Keeps_A_File_For_Each_Prompt
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Env renames Ada.Environment_Variables;
+      Model  : constant String := "obj/prefill-slots-model.gguf";
+      Home   : constant String :=
+        Ada.Directories.Full_Name ("obj/prefill-slots-cache");
+      Was    : constant String :=
+        (if Env.Exists ("XDG_CACHE_HOME") then Env.Value ("XDG_CACHE_HOME")
+         else "");
+      Had    : constant Boolean := Env.Exists ("XDG_CACHE_HOME");
+      First  : constant String := Ada.Strings.Fixed."*" (150, "ab");
+      Second : constant String := Ada.Strings.Fixed."*" (150, "ba");
+
+      Reused : Boolean := False;
+
+      procedure Ask (Prompt : String) is
+         use Ada.Text_IO;
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Errors : File_Type;
+         Path   : constant String := "obj/prefill-slots-errors.txt";
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Add (Source, "--max-tokens");
+         Add (Source, "2");
+         Add (Source, "--show-stats");
+         Add (Source, "--backend");
+         Add (Source, "cpu");
+         Create (Errors, Out_File, Path);
+         Set_Error (Errors);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Close (Errors);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Close (Errors);
+         Assert (Status = 0, "a run with the cache on failed");
+         Reused :=
+           Ada.Strings.Fixed.Index (Text_Of (Path), "of them read before") > 0;
+      end Ask;
+
+      function Kept return Natural is
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+         Count  : Natural := 0;
+         Folder : constant String := Home & "/model_runner/prefill";
+      begin
+         if not Ada.Directories.Exists (Folder) then
+            return 0;
+         end if;
+         Ada.Directories.Start_Search (Search, Folder, "*.kv");
+         while Ada.Directories.More_Entries (Search) loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            Count := Count + 1;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         return Count;
+      end Kept;
+
+      procedure Restore is
+      begin
+         if Had then
+            Env.Set ("XDG_CACHE_HOME", Was);
+         else
+            Env.Clear ("XDG_CACHE_HOME");
+         end if;
+      end Restore;
+   begin
+      if Ada.Directories.Exists (Home) then
+         Ada.Directories.Delete_Tree (Home);
+      end if;
+      Ada.Directories.Create_Path (Home);
+      Tiny_Model.Write (Model, Room => 1024);
+      Env.Set ("XDG_CACHE_HOME", Home);
+      begin
+         Ask (First);
+         Assert (not Reused, "the first run read a prompt from no cache");
+         Ask (Second);
+         Assert (not Reused and then Kept = 2,
+                 "a second prompt kept" & Natural'Image (Kept)
+                 & " prefill caches, not one each, or read the first's");
+         Ask (First);
+         Assert (Reused, "the first prompt asked again was read whole");
+         Ask (Second);
+         Assert (Reused, "the second prompt asked again was read whole");
+         Ask (First & "abab");
+         Assert (Reused and then Kept = 2,
+                 "a prompt going on from the first kept" & Natural'Image (Kept)
+                 & " prefill caches, not the two, or did not read the first's");
+      exception
+         when others =>
+            Restore;
+            raise;
+      end;
+      Restore;
+      Ada.Directories.Delete_Tree (Home);
+   end The_Prefill_Cache_Keeps_A_File_For_Each_Prompt;
+
+   --  How a run chooses among the prefill cache's files, without a model:
+   --  the file whose asking begins most as the run's does, never one that
+   --  shares only a few bytes, and none whose cache file is gone.
+   procedure Prefill_Slots_Choose_By_What_Was_Asked
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Slots renames Model_Runner.CLI.Prefill_Slots;
+      Folder : constant String :=
+        Ada.Directories.Full_Name ("obj/prefill-slots-choose");
+      Base   : constant String := Folder & "/1234.kv";
+      Long   : constant String := Ada.Strings.Fixed."*" (300, "x");
+      First  : constant String := Slots.Asking ("", False, Long & "one");
+      Second : constant String := Slots.Asking ("", False, Long & "two");
+      Other  : constant String := Slots.Asking ("", False, "yy" & Long);
+
+      procedure Keep (Asked : String) is
+         use Ada.Text_IO;
+         File : File_Type;
+      begin
+         Create (File, Out_File, Slots.Slot_Path (Base, Asked));
+         Put (File, "cache");
+         Close (File);
+         Slots.Record_Asked (Slots.Slot_Path (Base, Asked), Asked);
+      end Keep;
+   begin
+      if Ada.Directories.Exists (Folder) then
+         Ada.Directories.Delete_Tree (Folder);
+      end if;
+      Ada.Directories.Create_Path (Folder);
+
+      Assert (Slots.Slot_Path (Base, First) = Slots.Slot_Path (Base, First)
+              and then Slots.Slot_Path (Base, First)
+                       /= Slots.Slot_Path (Base, Second),
+              "two askings were given one file, or one asking two");
+      Assert (Slots.Asking ("s", True, "p") /= Slots.Asking ("", False, "sp"),
+              "a system text read as the prompt's beginning");
+      Assert (Slots.Nearest (Base, First) = "", "a file chosen from none");
+
+      Keep (First);
+      Assert (Slots.Contents (Slots.Slot_Path (Base, First), 3) = "cac",
+              "a file's contents not cut at the most asked for");
+      Assert (Slots.Nearest (Base, Second) = Slots.Slot_Path (Base, First),
+              "a file sharing all but the end of the asking was not chosen");
+      Assert (Slots.Nearest (Base, Other) = "",
+              "a file sharing nothing was chosen");
+
+      Keep (Second);
+      Assert (Slots.Nearest (Base, Second) = Slots.Slot_Path (Base, Second),
+              "the file asked exactly was not the one chosen");
+      Assert (Slots.Covered (Slots.Slot_Path (Base, First), First & "more")
+              and then not Slots.Covered
+                             (Slots.Slot_Path (Base, First), Second),
+              "a file's asking said to begin an asking it does not");
+
+      --  A cache file gone leaves its asking, which is not chosen and is
+      --  then dropped; one forgotten takes its asking with it.
+      Ada.Directories.Delete_File (Slots.Slot_Path (Base, Second));
+      Assert (Slots.Nearest (Base, Second) = Slots.Slot_Path (Base, First),
+              "an asking whose cache file is gone was chosen");
+      Slots.Drop_Orphans (Folder);
+      Assert (not Ada.Directories.Exists
+                    (Folder & "/" & Ada.Directories.Base_Name
+                                      (Slots.Slot_Path (Base, Second))
+                     & ".asked")
+              and then Ada.Directories.Exists
+                         (Folder & "/" & Ada.Directories.Base_Name
+                                           (Slots.Slot_Path (Base, First))
+                          & ".asked"),
+              "an asking whose cache file is gone was kept, or one whose "
+              & "file is there dropped");
+      Slots.Forget (Slots.Slot_Path (Base, First));
+      Assert (Slots.Nearest (Base, First) = "",
+              "a forgotten file was still chosen");
+      Ada.Directories.Delete_Tree (Folder);
+   end Prefill_Slots_Choose_By_What_Was_Asked;
+
    --  A draft named for a model numbers its tokens as the model does, by
    --  text and not by count alone: two vocabularies of the same size that
    --  share almost no text -- Llama 2's and Mistral's, both 32,000 -- were
@@ -16187,6 +16378,14 @@ package body Tests.CLI_Cases is
         (T, The_Prefill_Cache_Is_Keyed_By_Backend_And_Repacking'Access,
          "the prefill cache is keyed by the backend and repacking run, and "
          & "two runs that differ keep one each");
+      Register_Routine
+        (T, Prefill_Slots_Choose_By_What_Was_Asked'Access,
+         "the prefill cache's file is chosen by what was asked, and only "
+         & "one sharing enough of it");
+      Register_Routine
+        (T, The_Prefill_Cache_Keeps_A_File_For_Each_Prompt'Access,
+         "the prefill cache keeps a file for each prompt, and one going on "
+         & "from another takes its place");
       Register_Routine
         (T, A_Named_Draft_Shares_The_Text'Access,
          "a draft named for a model shares its text, not only its count "

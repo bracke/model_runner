@@ -155,6 +155,36 @@ is
          return;
       end if;
 
+      --  And into a session of halves, the default, a run copied as it
+      --  lies: an element at a time this was 1.6 s of a 0.5 GB file, most
+      --  of what a run that found its prompt in the prefill cache spent
+      --  before reading it. A half is not finite where its exponent is
+      --  all ones.
+      if Narrow and then Item.Held = Halved and then not Trouble then
+         if At_Byte + B.Byte_Count (Count) * 2 > From'Length then
+            Refuse (E.Lifecycle_Cache_Unreadable, "truncated");
+            return;
+         end if;
+
+         declare
+            Halves : N.Half_Array (0 .. Count - 1)
+              with Import, Address => From (From'First + At_Byte)'Address;
+            Into   : constant Model_Runner.Tensors.Half_Array_Access :=
+              (if Keys then Item.Half_Keys else Item.Half_Values);
+            use type N.Half;
+         begin
+            for Index in 0 .. Count - 1 loop
+               if (Halves (Index) and 16#7C00#) = 16#7C00# then
+                  Refuse (E.Lifecycle_Cache_Unreadable, "not a number");
+                  return;
+               end if;
+            end loop;
+            Into.all (First .. First + Count - 1) := Halves;
+         end;
+         At_Byte := At_Byte + B.Byte_Count (Count) * 2;
+         return;
+      end if;
+
       for Index in 0 .. Count - 1 loop
          declare
             Bits : constant Interfaces.Unsigned_32 := Get_Element;

@@ -197,6 +197,18 @@ is
    procedure Put_Run
      (From : N.Real_Array; First : Element_Count; Count : Element_Count);
 
+   --  And a run of a session of halves, the default, copied as it lies:
+   --  the file holds the same two bytes an element.
+   procedure Put_Halves
+     (From : N.Half_Array; First : Element_Count; Count : Element_Count)
+   is
+      Halves : N.Half_Array (0 .. Count - 1)
+        with Import, Address => Into.all (Into.all'First + At_Byte)'Address;
+   begin
+      Halves := From (First .. First + Count - 1);
+      At_Byte := At_Byte + B.Byte_Count (Count) * 2;
+   end Put_Halves;
+
    procedure Put_Element (Bits : Interfaces.Unsigned_32) is
       use type Interfaces.Unsigned_32;
       At_First : constant B.Byte_Count := Into.all'First + At_Byte;
@@ -341,6 +353,11 @@ begin
                Put_Run (Item.Keys.all, First,
                         Element_Count (Run_Of (Layer_Index) * KV_Width));
             end if;
+         elsif Item.Held = Halved then
+            if Run_Of (Layer_Index) > 0 then
+               Put_Halves (Item.Half_Keys.all, First,
+                           Element_Count (Run_Of (Layer_Index) * KV_Width));
+            end if;
          else
             for Index in 0 .. Element_Count (Run_Of (Layer_Index) * KV_Width)
                                - 1
@@ -379,6 +396,11 @@ begin
             if Run_Of (Layer_Index) > 0 then
                Put_Run (Item.Values.all, First,
                         Element_Count (Run_Of (Layer_Index) * V_Width));
+            end if;
+         elsif Item.Held = Halved then
+            if Run_Of (Layer_Index) > 0 then
+               Put_Halves (Item.Half_Values.all, First,
+                           Element_Count (Run_Of (Layer_Index) * V_Width));
             end if;
          else
             for Index in 0 .. Element_Count (Run_Of (Layer_Index) * V_Width)

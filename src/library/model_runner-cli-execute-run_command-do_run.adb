@@ -1,6 +1,7 @@
 with Model_Runner.Grammar.Rooms;
 with Model_Runner.CLI.Pictures.Rooms;
 with Model_Runner.CLI.Options.Rooms;
+with Model_Runner.CLI.Prefill_Slots;
 
 separate (Model_Runner.CLI.Execute.Run_Command)
 procedure Do_Run
@@ -46,10 +47,54 @@ is
               --  And the build that saved it: see Program_Stamp.
               & "|" & Model_Runner.Platform.Program_Stamp)
       else "");
+   --  What the run was asked, which chooses among the prefill cache's
+   --  files for this model and settings (Prefill_Slots): the system text
+   --  and the prompt as given. Empty where it cannot be told before the
+   --  prompt is read -- standard input, which is read once -- and then the
+   --  one file the model and its settings name, as there was before.
+   function Prefill_Asked return String is
+      package Slots renames Model_Runner.CLI.Prefill_Slots;
+      Most : constant Natural :=
+        Model_Runner.Limits.Default_Session_Limits.Max_Prompt_Bytes;
+
+      function System return String is
+        (if not Item.Has_System then ""
+         elsif Item.System_Text /= null then Item.System_Text.all
+         else Slots.Contents (T.To_String (Item.System_Path), Most));
+
+      function Prompt return String is
+        (case Item.Prompt_Kind is
+            when Opt.Prompt_Inline =>
+              (if Item.Prompts (1) /= null then Item.Prompts (1).all
+               else ""),
+            when Opt.Prompt_Parts =>
+              (if Item.Prompt_Parts_Text /= null
+               then Conv.Text_Of_Parts (Item.Prompt_Parts_Text.all)
+               else ""),
+            when Opt.Prompt_File =>
+              Slots.Contents (T.To_String (Item.Prompt_Path), Most),
+            when others => "");
+   begin
+      if Item.Prompt_Kind not in Opt.Prompt_Inline | Opt.Prompt_Parts
+                                 | Opt.Prompt_File
+      then
+         return "";
+      end if;
+      return Slots.Asking (System, Item.Has_System, Prompt);
+   exception
+      when others =>
+         return "";
+   end Prefill_Asked;
+
+   Asked : constant String :=
+     (if Cache_Path /= "" then Prefill_Asked else "");
+
    Load_Path : constant String :=
      (if not T.Is_Empty (Item.Load_Session)
       then Model_Runner.Platform.Resolve_Session_Path
              (T.To_String (Item.Load_Session), For_Saving => False)
+      elsif Cache_Path /= "" and then Asked /= ""
+      then Model_Runner.CLI.Prefill_Slots.Nearest (Cache_Path, Asked)
       elsif Cache_Path /= ""
             and then Ada.Directories.Exists (Cache_Path)
       then Cache_Path
@@ -58,6 +103,8 @@ is
      (if not T.Is_Empty (Item.Save_Session)
       then Model_Runner.Platform.Resolve_Session_Path
              (T.To_String (Item.Save_Session), For_Saving => True)
+      elsif Cache_Path /= "" and then Asked /= ""
+      then Model_Runner.CLI.Prefill_Slots.Slot_Path (Cache_Path, Asked)
       elsif Cache_Path /= "" then Cache_Path
       else "");
 

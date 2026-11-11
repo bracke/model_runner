@@ -485,8 +485,7 @@ begin
          --  The auto cache is tolerant: a stale or unreadable one is
          --  no failure, only a prompt read in full. An explicit
          --  session was asked for and its failure ends the run.
-         Auto : constant Boolean :=
-           Cache_Path /= "" and then Load_Path = Cache_Path;
+         Auto : constant Boolean := Cache_Path /= "";
          Kept : Files.File_Source;
       begin
          Files.Open (Kept, Load_Path, Status => Condition);
@@ -498,6 +497,25 @@ begin
                Fail (Condition);
                return;
             end if;
+         elsif Auto and then Files.Is_Mapped (Kept)
+           and then Model_Runner.Bytes.">" (Files.Size (Kept), 0)
+         then
+            --  The prefill cache read where it is mapped rather than
+            --  copied first: allocating and filling a copy was half of
+            --  what adopting a 0.5 GB one took. Only the cache's own
+            --  file, which is only ever replaced by a rename and never
+            --  written in place, so the pages under the map stay whole; a
+            --  session the caller names could be cut short under it.
+            declare
+               use type Model_Runner.Bytes.Byte_Count;
+               Mapped : constant Model_Runner.Bytes.Byte_Array
+                          (0 .. Files.Size (Kept) - 1)
+                 with Import, Address => Files.Base (Kept);
+            begin
+               L.Adopt (Session, Prepared, Mapped, Condition);
+               Files.Close (Kept);
+               Prefix_Reused := not E.Is_Error (Condition);
+            end;
          else
             declare
                Length : constant Model_Runner.Bytes.Byte_Count :=
@@ -1910,8 +1928,7 @@ begin
             --  Writing the auto cache is tolerant: the run already
             --  produced its answer, so a snapshot or write that fails
             --  costs the next run a cache, not this run its output.
-            Auto : constant Boolean :=
-              Cache_Path /= "" and then Save_Path = Cache_Path;
+            Auto : constant Boolean := Cache_Path /= "";
             Room : Model_Runner.Bytes.Byte_Array_Access;
          begin
             L.Snapshot (Session, Prepared, Room, Condition);
@@ -1928,6 +1945,20 @@ begin
                --  The cache kept to its bound, the file just written
                --  whatever its size.
                if Auto and then not E.Is_Error (Condition) then
+                  --  What this run was asked, beside its file, so a later
+                  --  one can choose it; and the file it read gone where
+                  --  this one holds all of it -- its run was asked the
+                  --  beginning of what this one was.
+                  if Asked /= "" then
+                     Model_Runner.CLI.Prefill_Slots.Record_Asked
+                       (Save_Path, Asked);
+                     if Load_Path /= "" and then Load_Path /= Save_Path
+                       and then Model_Runner.CLI.Prefill_Slots.Covered
+                                  (Load_Path, Asked)
+                     then
+                        Model_Runner.CLI.Prefill_Slots.Forget (Load_Path);
+                     end if;
+                  end if;
                   Model_Runner.Platform.Trim_Directory
                     (Model_Runner.Platform.Cache_Directory, "*.kv",
                      Model_Runner.Platform.Prefill_Cache_Most,
@@ -1940,6 +1971,8 @@ begin
                   Model_Runner.Platform.Trim_Directory
                     (Model_Runner.Platform.Cache_Directory, "*.kv*.partial", 0,
                      Keep => Save_Path, Settled => 600.0);
+                  Model_Runner.CLI.Prefill_Slots.Drop_Orphans
+                    (Model_Runner.Platform.Cache_Directory);
                end if;
 
                if E.Is_Error (Condition) and then not Auto then
