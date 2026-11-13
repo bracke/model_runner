@@ -2110,9 +2110,10 @@ package Model_Runner.Llama is
    --  positions hold the same placeholder token, so the history alone took
    --  the second picture asked about at a position for the first.
    --
-   --  A rewind forgets the notes past it, a reset all of them, and a
-   --  session adopted from a file holds none: a position without a note is
-   --  one whose picture is not known.
+   --  A rewind forgets the notes past it and a reset all of them; a
+   --  snapshot keeps them and Adopt reads them back, but a file written
+   --  before they were kept holds none. A position without a note is one
+   --  whose picture is not known.
    --
    --  @param Item Session the position is committed in.
    --  @param Position Zero-based position.

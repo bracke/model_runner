@@ -26,6 +26,9 @@ is
    At_Byte : B.Byte_Count := 0;
    Trouble : Boolean := False;
 
+   --  Which section past the caches comes next; nought for none.
+   Section : Interfaces.Unsigned_64 := 0;
+
    procedure Refuse (Code : E.Error_Code; What : String) is
    begin
       if not Trouble then
@@ -525,10 +528,11 @@ begin
    --  The block past the stack's keys and values, where the file carries
    --  them (Snapshot): into the block's cache where this session drafts
    --  from it, read past where it does not.
-   if not Trouble and then At_Byte < From'Length then
-      if Get /= 1 then
-         Refuse (E.Lifecycle_Cache_Unreadable, "the block past the stack");
-      else
+   --  The sections past the caches each begin with a number saying which
+   --  it is: 1 the block, 2 the pictures' notes, in that order.
+   Section := (if not Trouble and then At_Byte < From'Length then Get else 0);
+   if not Trouble and then Section = 1 then
+      begin
          declare
             Into    : constant Boolean := Drafts_Next (Item);
             Own     : constant Boolean := Item.Next_Keys /= null;
@@ -570,7 +574,35 @@ begin
                end;
             end loop;
          end;
+      end;
+      Section :=
+        (if not Trouble and then At_Byte < From'Length then Get else 0);
+   end if;
+
+   --  The row each position was given, where a picture was: what lets a
+   --  prompt that asks about the same picture keep it (Note_Row).
+   if not Trouble and then Section = 2 then
+      if From'Length < At_Byte + B.Byte_Count (Held) * 8 then
+         Refuse (E.Lifecycle_Cache_Unreadable, "the pictures' notes");
+      else
+         --  Read whole, kept where the session has room for notes: the
+         --  committed count is set only once all of the file is read.
+         for Index in 0 .. Natural (Held) - 1 loop
+            declare
+               Digest : constant Interfaces.Unsigned_64 := Get;
+            begin
+               if Item.Notes /= null and then Index in Item.Notes.all'Range
+               then
+                  Item.Notes.all (Index) := Digest;
+               end if;
+            end;
+         end loop;
       end if;
+      Section := 0;
+   end if;
+
+   if not Trouble and then Section /= 0 then
+      Refuse (E.Lifecycle_Cache_Unreadable, "a section not known");
    end if;
 
    --  And nothing past what the header says: a file two writers

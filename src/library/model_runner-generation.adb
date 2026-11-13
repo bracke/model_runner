@@ -1744,13 +1744,12 @@ package body Model_Runner.Generation is
                --  A soft position is shared only where the session noted
                --  the row it was given and it is this prompt's row there:
                --  the same picture. One with no note -- a session read
-               --  from a file, a turn cancelled while its picture was read
-               --  -- is a picture not known, and reuse stops at it.
+               --  from a file written before notes were kept, a turn
+               --  cancelled while its picture was read -- is a picture
+               --  not known, and reuse stops at it.
                while Shared < Committed and then Shared < Prompt_Count
                  and then L.Committed_Token (Session, Shared)
                           = Tokens.all (Shared + 1)
-                 and then not (Item.Pictures_Unverified
-                               and then Is_Soft (Tokens.all (Shared + 1)))
                  and then (not Is_Soft (Tokens.all (Shared + 1))
                            or else (L.Row_Note (Session, Shared) /= 0
                                     and then L.Row_Note (Session, Shared)

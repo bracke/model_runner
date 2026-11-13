@@ -77,6 +77,33 @@ is
       then 8 + Held * (KV_Width + Block_V) * 4
       else 0);
 
+   --  Whether any committed position was noted the picture row it was
+   --  given (Note_Row).
+   function Any_Noted return Boolean is
+   begin
+      if Item.Notes = null then
+         return False;
+      end if;
+      for Index in 0 .. Natural'Min (Item.Committed, Item.Notes.all'Length)
+                        - 1
+      loop
+         if Item.Notes.all (Item.Notes.all'First + Index) /= 0 then
+            return True;
+         end if;
+      end loop;
+      return False;
+   end Any_Noted;
+
+   --  And after it, where a position was given a picture's row, every
+   --  position's note: a number saying so, then eight bytes a position.
+   --  Without them a session read back knew none of its pictures, and a
+   --  prompt asking about one read the picture and all after it again. A
+   --  reader that finds the section missing -- a file from before it was
+   --  written, or a conversation without a picture -- notes nothing,
+   --  which stops reuse at the first picture as it did.
+   Noted : constant Boolean := Any_Noted;
+   Notes : constant B.Byte_Count := (if Noted then 8 + Held * 8 else 0);
+
    --  Whether the caches go as halves: a session holding halves, or an
    --  exact one whose every key and value is a half already -- which is
    --  what a device keeping its cache in halves gives back.
@@ -155,7 +182,8 @@ is
        + Spans * V_Width * Width
        + States * 4
        + Marks
-       + Block);
+       + Block
+       + Notes);
 
    At_Byte : B.Byte_Count := 0;
 
@@ -496,5 +524,12 @@ begin
             Put_Bits (N.Bits (Values.all (V_Base + Index)));
          end loop;
       end;
+   end if;
+
+   if Noted then
+      Put_Count (2);
+      for Index in 0 .. Item.Committed - 1 loop
+         Put (Row_Note (Item, Index));
+      end loop;
    end if;
 end Snapshot;

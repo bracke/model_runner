@@ -1235,10 +1235,13 @@ package body Tests.Vision_Cases is
                     "the same picture twice answered differently");
 
             --  A prefix held from a file -- a saved session, the prefill
-            --  cache -- is not taken past its first picture: the soft
-            --  positions hold the same token whatever the picture, and a
-            --  second picture asked the same way was answered about the
-            --  first.
+            --  cache -- keeps what row each picture position was given: a
+            --  second picture asked the same way is read again from its
+            --  first row, and the same picture asked again is taken whole.
+            --  Without the notes the soft positions hold the same token
+            --  whatever the picture, and the second was answered about the
+            --  first -- or, refused at the first picture, a document's
+            --  picture was read again on every cache hit.
             declare
                Other     : Gen.Picture_Set := Pictures;
                Kept_Rows : constant T.Real_Array_Access := Pictures.Rows;
@@ -1252,18 +1255,32 @@ package body Tests.Vision_Cases is
 
                declare
                   Reused : Gen.Request := Request;
+                  Saved  : Model_Runner.Bytes.Byte_Array_Access;
+                  Status : E.Error_Info;
+
+                  --  The session read back from the snapshot of the first
+                  --  picture's run.
+                  procedure Read_Back is
+                  begin
+                     L.Adopt (Live, Ready, Saved.all, Status);
+                     Assert (E.Is_Ok (Status),
+                             "a session with a picture was not read back: "
+                             & E.Error_Code'Image (Status.Code));
+                  end Read_Back;
                begin
-                  --  The first picture committed, then the other asked
-                  --  about over the held prefix: read again from the
-                  --  picture's first row, not taken whole.
                   L.Reset (Live);
                   Gen.Release (Outcome);
                   Gen.Generate
                     (Ready, Live, "cab", Request, Stop, null, null, null,
                      null, null, null, Pictures => Pictures, Outcome => Outcome);
                   Gen.Release (Outcome);
+                  L.Snapshot (Live, Ready, Saved, Status);
+                  Assert (E.Is_Ok (Status),
+                          "a session with a picture was not written: "
+                          & E.Error_Code'Image (Status.Code));
                   Reused.Reuse_Committed_Prefix := True;
-                  Reused.Pictures_Unverified := True;
+
+                  Read_Back;
                   Gen.Generate
                     (Ready, Live, "cab", Reused, Stop, null, null, null,
                      null, null, null, Pictures => Other, Outcome => Outcome);
@@ -1272,6 +1289,20 @@ package body Tests.Vision_Cases is
                           & Natural'Image (Outcome.Reused_Tokens) & " of"
                           & Natural'Image (Outcome.Prompt_Tokens)
                           & " tokens reused, the other picture's rows unread");
+                  Gen.Release (Outcome);
+
+                  Read_Back;
+                  Gen.Generate
+                    (Ready, Live, "cab", Reused, Stop, null, null, null,
+                     null, null, null, Pictures => Pictures,
+                     Outcome => Outcome);
+                  Assert (Outcome.Reused_Tokens + 1 >= Outcome.Prompt_Tokens,
+                          "the same picture read back from a file was read "
+                          & "again:" & Natural'Image (Outcome.Reused_Tokens)
+                          & " of" & Natural'Image (Outcome.Prompt_Tokens)
+                          & " tokens reused");
+                  Gen.Release (Outcome);
+                  Model_Runner.Bytes.Free (Saved);
                end;
 
                --  And the session held from the run before -- interactive
@@ -1330,25 +1361,42 @@ package body Tests.Vision_Cases is
                   Assert (E.Is_Ok (Status), "a shift past the picture was "
                           & "refused: " & E.Error_Code'Image (Status.Code));
 
-                  --  And a session read back from a snapshot knows no
-                  --  picture: its soft positions are read again.
+                  --  And a session read back from a snapshot knows its
+                  --  picture: the same one is taken whole, another read
+                  --  again from its first row.
                   declare
                      Saved : B.Byte_Array_Access;
+
+                     procedure Read_Back is
+                     begin
+                        L.Adopt (Live, Ready, Saved.all, Status);
+                        Assert (E.Is_Ok (Status),
+                                "the session was not read back");
+                        Gen.Release (Outcome);
+                     end Read_Back;
                   begin
                      L.Snapshot (Live, Ready, Saved, Status);
                      Assert (E.Is_Ok (Status), "the session was not saved");
-                     L.Adopt (Live, Ready, Saved.all, Status);
-                     Assert (E.Is_Ok (Status), "the session was not read back");
+                     Read_Back;
+                     Gen.Generate
+                       (Ready, Live, "cab", Kept, Stop, null, null, null,
+                        null, null, null, Pictures => Other,
+                        Outcome => Outcome);
+                     Assert (Outcome.Reused_Tokens > At_Picture + Per,
+                             "a session read back did not know its picture:"
+                             & Natural'Image (Outcome.Reused_Tokens)
+                             & " tokens reused");
+                     Read_Back;
+                     Gen.Generate
+                       (Ready, Live, "cab", Kept, Stop, null, null, null,
+                        null, null, null, Pictures => Pictures,
+                        Outcome => Outcome);
+                     Assert (Outcome.Reused_Tokens <= At_Picture,
+                             "a session read back took another picture for "
+                             & "its own:" & Natural'Image (Outcome.Reused_Tokens)
+                             & " tokens reused");
                      B.Free (Saved);
                   end;
-                  Gen.Release (Outcome);
-                  Gen.Generate
-                    (Ready, Live, "cab", Kept, Stop, null, null, null,
-                     null, null, null, Pictures => Other, Outcome => Outcome);
-                  Assert (Outcome.Reused_Tokens <= At_Picture,
-                          "a session read back took its picture as known:"
-                          & Natural'Image (Outcome.Reused_Tokens)
-                          & " tokens reused");
                end;
                T.Free (Other.Rows);
                Pictures.Rows := Kept_Rows;
