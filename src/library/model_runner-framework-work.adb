@@ -2173,7 +2173,14 @@ package body Model_Runner.Framework.Work is
    procedure Spend
      (Host          : in out Child_Host;
       Tokens        : Natural;
-      Prompt_Tokens : Natural := 0)
+      Prompt_Tokens : Natural := 0;
+      Prompt_Read_Tokens : Natural := 0;
+      Prompt_Reused_Tokens : Natural := 0;
+      Prompt_Milliseconds : Natural := 0;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event)
    is
       Change : Stores.Transaction;
       Status : E.Error_Info;
@@ -2194,6 +2201,17 @@ package body Model_Runner.Framework.Work is
       if Natural (Host.Open.Length) = 1 then
          Host.Root_Out := Host.Root_Out + Tokens;
          Host.Root_Prompt := Natural'Max (Host.Root_Prompt, Prompt_Tokens);
+         Host.Root_Prompt_Read := Host.Root_Prompt_Read + Prompt_Read_Tokens;
+         Host.Root_Prompt_Reused := Host.Root_Prompt_Reused + Prompt_Reused_Tokens;
+         Host.Root_Prompt_Milliseconds :=
+           Host.Root_Prompt_Milliseconds + Prompt_Milliseconds;
+         if Model_Runner.Generation."="
+              (Host.Root_First_Cache_Event,
+               Model_Runner.Generation.No_Cache_Event)
+         then
+            Host.Root_First_Cache_Event := First_Cache_Event;
+         end if;
+         Host.Root_Last_Cache_Event := Last_Cache_Event;
       end if;
    end Spend;
 
@@ -2325,7 +2343,14 @@ package body Model_Runner.Framework.Work is
       Ran    : Model_Runner.Errors.Error_Info;
       Told   : out Ada.Strings.Unbounded.Unbounded_String;
       Retry  : out Boolean;
-      Prompt_Tokens : Natural := 0)
+      Prompt_Tokens : Natural := 0;
+      Prompt_Read_Tokens : Natural := 0;
+      Prompt_Reused_Tokens : Natural := 0;
+      Prompt_Milliseconds : Natural := 0;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event)
    is separate;
 
    --  Children still open when their parent stopped: each is recorded
@@ -2346,7 +2371,7 @@ package body Model_Runner.Framework.Work is
          if Host.Calls.Last_Element /= "" then
             Invocations.Finish
               (Host.Item.all, Change, Host.Calls.Last_Element, Invocations.Failed,
-               (others => 0), "", "its parent stopped before it answered", Status);
+               (others => <>), "", "its parent stopped before it answered", Status);
             if E.Is_Error (Status) then
                Stores.Spoil (Change, Status);
             end if;
@@ -3434,7 +3459,7 @@ package body Model_Runner.Framework.Work is
             Ended  : E.Error_Info;
          begin
             Invocations.Finish
-              (Item, Change, To_String (Result.Invocation_Id), Invocations.Failed, (others => 0), "",
+              (Item, Change, To_String (Result.Invocation_Id), Invocations.Failed, (others => <>), "",
                (if Faulted then "the work stopped on a fault, where in it is not known, and what the model"
                                 & " spent with it"
                 else "the work stopped before its model ran")

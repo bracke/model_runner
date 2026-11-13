@@ -142,6 +142,10 @@ package Model_Runner.Agent is
       Reply_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
       Read_Tokens   : Natural := 0;
       Reused_Tokens : Natural := 0;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
 
       --  How many times the conversation was compacted to keep rendering --
       --  the oldest turns dropped to make room. Zero for a run that stayed

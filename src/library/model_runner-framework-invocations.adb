@@ -663,6 +663,30 @@ package body Model_Runner.Framework.Invocations is
       Records.Set (Value, "ended_project_revision", Image (Events.Revision (Item)));
       Records.Set (Value, "ended_workspace_revision", Image (Events.Workspace_Revision (Item)));
       Records.Set (Value, "prompt_tokens", Image (Used.Prompt_Tokens));
+      Records.Set (Value, "prompt_read_tokens", Image (Used.Prompt_Read_Tokens));
+      Records.Set (Value, "prompt_reused_tokens", Image (Used.Prompt_Reused_Tokens));
+      Records.Set (Value, "prompt_milliseconds", Image (Used.Prompt_Milliseconds));
+      Records.Set
+        (Value, "prompt_first_cache_event",
+         Lower (Model_Runner.Generation.Prefix_Cache_Event'Image
+           (Used.First_Cache_Event)));
+      Records.Set
+        (Value, "prompt_last_cache_event",
+         Lower (Model_Runner.Generation.Prefix_Cache_Event'Image
+           (Used.Last_Cache_Event)));
+      declare
+         Total : constant Long_Long_Integer :=
+           Long_Long_Integer (Used.Prompt_Read_Tokens)
+           + Long_Long_Integer (Used.Prompt_Reused_Tokens);
+      begin
+         Records.Set
+           (Value, "prompt_cache_hit_percent",
+            Image
+              (if Total = 0 then 0
+               else Natural
+                 ((Long_Long_Integer (Used.Prompt_Reused_Tokens) * 100)
+                  / Total)));
+      end;
       Records.Set (Value, "output_tokens", Image (Used.Output_Tokens));
       Records.Set (Value, "seconds", Image (Used.Seconds));
       if Result_Id /= "" then

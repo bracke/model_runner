@@ -406,6 +406,8 @@ package body Model_Runner.CLI.Interactive is
       --  The session's own model, as the agent /work runs on a task.
       Asked_For : aliased constant Opt.Command := Item;
       Worker_Notes : aliased Model_Runner.CLI.Project_Commands.Run_Notes;
+      Work_Session : aliased L.Session;
+      Helper_Session : aliased L.Session;
       Worker    : Model_Runner.CLI.Project_Commands.Session_Agent
         (Prepared'Unchecked_Access, Session'Unchecked_Access,
          Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
@@ -1796,6 +1798,8 @@ package body Model_Runner.CLI.Interactive is
 
    begin
       Status := E.Exit_Success;
+      Worker.Work_Session := Work_Session'Unchecked_Access;
+      Worker.Helper_Session := Helper_Session'Unchecked_Access;
 
       --  Speech input, where a speech model is named; nothing is read or
       --  recorded until the shortcut is pressed.

@@ -6,7 +6,14 @@ procedure Close_Child
    Ran    : Model_Runner.Errors.Error_Info;
    Told   : out Ada.Strings.Unbounded.Unbounded_String;
    Retry  : out Boolean;
-   Prompt_Tokens : Natural := 0)
+   Prompt_Tokens : Natural := 0;
+   Prompt_Read_Tokens : Natural := 0;
+   Prompt_Reused_Tokens : Natural := 0;
+   Prompt_Milliseconds : Natural := 0;
+   First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+     Model_Runner.Generation.No_Cache_Event;
+   Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+     Model_Runner.Generation.No_Cache_Event)
 is
    Change  : Stores.Transaction;
    Status  : E.Error_Info;
@@ -151,6 +158,11 @@ begin
              elsif E.Is_Ok (Ran) then Invocations.Completed
              else Invocations.Failed),
             (Prompt_Tokens => Prompt_Tokens,
+             Prompt_Read_Tokens => Prompt_Read_Tokens,
+             Prompt_Reused_Tokens => Prompt_Reused_Tokens,
+             Prompt_Milliseconds => Prompt_Milliseconds,
+             First_Cache_Event => First_Cache_Event,
+             Last_Cache_Event => Last_Cache_Event,
              Output_Tokens => Tokens,
              Seconds       =>
                Natural (Duration'Max

@@ -972,6 +972,24 @@ begin
                   Read   : E.Error_Info;
                   Spent  : Natural := 0;
                   Seen   : Natural := 0;
+                  Prompt_Read : Natural := 0;
+                  Prompt_Reused : Natural := 0;
+                  Prompt_Milliseconds : Natural := 0;
+                  First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+                    Model_Runner.Generation.No_Cache_Event;
+                  Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+                    Model_Runner.Generation.No_Cache_Event;
+
+                  function Cache_Event_Of
+                    (Text : String) return Model_Runner.Generation.Prefix_Cache_Event
+                  is
+                  begin
+                     return Model_Runner.Generation.Prefix_Cache_Event'Value
+                       (Trim (Text));
+                  exception
+                     when Constraint_Error =>
+                        return Model_Runner.Generation.No_Cache_Event;
+                  end Cache_Event_Of;
                begin
                   Files.Read_Text (Usage_Beside (Prompt), Text, Read);
                   --  What it spent, not read, is not taken for nothing: the
@@ -982,6 +1000,16 @@ begin
                         Spent := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
                      elsif Ada.Strings.Fixed.Index (Line, "prompt_tokens ") = Line'First then
                         Seen := Number_Of (Trim (Line (Line'First + 14 .. Line'Last)), 0);
+                     elsif Ada.Strings.Fixed.Index (Line, "prompt_read_tokens ") = Line'First then
+                        Prompt_Read := Number_Of (Trim (Line (Line'First + 19 .. Line'Last)), 0);
+                     elsif Ada.Strings.Fixed.Index (Line, "prompt_reused_tokens ") = Line'First then
+                        Prompt_Reused := Number_Of (Trim (Line (Line'First + 21 .. Line'Last)), 0);
+                     elsif Ada.Strings.Fixed.Index (Line, "prompt_milliseconds ") = Line'First then
+                        Prompt_Milliseconds := Number_Of (Trim (Line (Line'First + 20 .. Line'Last)), 0);
+                     elsif Ada.Strings.Fixed.Index (Line, "prompt_first_cache_event ") = Line'First then
+                        First_Cache_Event := Cache_Event_Of (Line (Line'First + 25 .. Line'Last));
+                     elsif Ada.Strings.Fixed.Index (Line, "prompt_last_cache_event ") = Line'First then
+                        Last_Cache_Event := Cache_Event_Of (Line (Line'First + 24 .. Line'Last));
                      elsif Ada.Strings.Fixed.Index (Line, "settings ") = Line'First then
                         --  What it fitted its calls to, kept as the session's
                         --  own are, on its invocation.
@@ -1030,7 +1058,13 @@ begin
                         end;
                      end if;
                   end loop;
-                  Spend (Host, Spent, Seen);
+                  Spend
+                    (Host, Spent, Seen,
+                     Prompt_Read_Tokens => Prompt_Read,
+                     Prompt_Reused_Tokens => Prompt_Reused,
+                     Prompt_Milliseconds => Prompt_Milliseconds,
+                     First_Cache_Event => First_Cache_Event,
+                     Last_Cache_Event => Last_Cache_Event);
                   Files.Discard (Usage_Beside (Prompt));
                end;
             end if;
@@ -1044,6 +1078,11 @@ begin
          Used :=
            (Prompt_Tokens =>
               (if Host.Root_Prompt > 0 then Host.Root_Prompt else Context.Cost (Built)),
+            Prompt_Read_Tokens => Host.Root_Prompt_Read,
+            Prompt_Reused_Tokens => Host.Root_Prompt_Reused,
+            Prompt_Milliseconds => Host.Root_Prompt_Milliseconds,
+            First_Cache_Event => Host.Root_First_Cache_Event,
+            Last_Cache_Event => Host.Root_Last_Cache_Event,
             Output_Tokens => Host.Root_Out,
             Seconds       =>
               Natural (Duration'Max

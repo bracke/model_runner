@@ -679,6 +679,60 @@ package body Model_Runner.Framework.Context is
       return To_String (Result);
    end Numbered;
 
+   ---------------------
+   -- Order_For_Cache --
+   ---------------------
+
+   --  Keep the longest-lived material at the front of the prompt. Exact
+   --  prefix verification still decides what can actually be reused; this
+   --  order merely lets a later task retain project-wide rules and facts
+   --  before its task, files, and observations diverge. The sort is stable,
+   --  so retrieval ranking within a class is unchanged.
+   procedure Order_For_Cache (Candidates : in out Item_Vectors.Vector) is
+      function Volatility (One : Context.Item) return Natural is
+         Kind : constant String := To_String (One.Kind);
+      begin
+         if Kind = "rules" then
+            return 0;
+         elsif Kind = "configuration" then
+            return 1;
+         elsif Kind = "specification" then
+            return 2;
+         elsif Kind in "task" | "parent" | "requirement" | "decision"
+                       | "authority" | "helped" | "brief"
+         then
+            return 3;
+         elsif Kind in "symbols" | "tests" then
+            return 4;
+         elsif Kind in "runtime" | "results" | "observation" then
+            return 6;
+         else
+            --  Source, tests, excerpts ("code: ..."), and dynamically
+            --  named users of a symbol all move with the repository.
+            return 5;
+         end if;
+      end Volatility;
+   begin
+      for Right in 2 .. Natural (Candidates.Length) loop
+         declare
+            Place : Positive := Right;
+         begin
+            while Place > 1
+              and then Volatility (Candidates (Place))
+                         < Volatility (Candidates (Place - 1))
+            loop
+               declare
+                  Before : constant Context.Item := Candidates (Place - 1);
+               begin
+                  Candidates.Replace_Element (Place - 1, Candidates (Place));
+                  Candidates.Replace_Element (Place, Before);
+               end;
+               Place := Place - 1;
+            end loop;
+         end;
+      end loop;
+   end Order_For_Cache;
+
    --  Fit what is offered to the model's room -- mandatory whatever it
    --  costs, the rest by priority while it fits, the same text once -- and
    --  take the fingerprint of everything the manifest says.
@@ -2048,6 +2102,7 @@ package body Model_Runner.Framework.Context is
          end if;
       end;
 
+      Order_For_Cache (Candidates);
       Settle (Candidates, Task_Id, Result, Status);
       --  The files it shows, at the revisions they were read at: each
       --  revision found by its item's name, once -- matched against every
@@ -2192,6 +2247,7 @@ package body Model_Runner.Framework.Context is
                null;
          end;
       end loop;
+      Order_For_Cache (Candidates);
       Settle (Candidates, Task_Id, Result, Status);
    end Build_Brief;
 

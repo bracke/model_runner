@@ -62,12 +62,25 @@ package Model_Runner.CLI.Project_Commands is
       --  Replies taken in place of the model's, for a test of what the
       --  session's work does around them; null for the model's own.
       Script : Model_Runner.Agent.Script_Reference := null;
+
+      --  A session reserved for project work, separate from the conversation
+      --  on the screen. It is opened lazily from Session's geometry and kept
+      --  between /work calls, so an identical prefix remains committed. Null
+      --  keeps the former one-session behaviour (and is useful to callers
+      --  which do not own a second Session object).
+      Work_Session : Model_Runner.Llama.Session_Access := null;
+
+      --  The serial helpers' session. A delegate call keeps this cache for a
+      --  retry and the next helper, exact prefix comparison deciding what is
+      --  reusable. It is never the parent's Work_Session.
+      Helper_Session : Model_Runner.Llama.Session_Access := null;
    end record;
 
    --  Run the agent without children: a fresh conversation holding the
-   --  task's context, the agent loop with the file tools, and the session
-   --  left reset so the conversation on the screen is read again on its next
-   --  turn.
+   --  task's context and the agent loop with the file tools. Where
+   --  Work_Session is set, its longest matching committed prefix is retained
+   --  between runs; otherwise Session is reset so the conversation on the
+   --  screen is read again on its next turn.
    --
    --  @param Self The agent.
    --  @param Prompt_Path Where the task's context is.
@@ -83,9 +96,11 @@ package Model_Runner.CLI.Project_Commands is
 
    --  Run the agent with children: as Run, and where its permissions let
    --  it, it may hand a part of the work to a helper with the delegate tool.
-   --  The harness makes the child through Children; it runs on the same
-   --  session in a conversation of its own, with the tools its own
-   --  permissions give, and its parent is told only its result.
+   --  The harness makes the child through Children; it runs in an isolated
+   --  KV session over the same prepared model, with the tools its own
+   --  permissions give, and its parent is told only its result. Where
+   --  Helper_Session is supplied, failure to open it fails the helper rather
+   --  than letting its unrelated prompt replace the parent's cache.
    --
    --  @param Self The agent.
    --  @param Prompt_Path Where the task's context is.

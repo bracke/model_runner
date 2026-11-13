@@ -4,6 +4,7 @@ with Ada.Strings.Unbounded;
 
 with Model_Runner.Agent;
 with Model_Runner.Errors;
+with Model_Runner.Generation;
 with Model_Runner.Framework.Context;
 with Model_Runner.Framework.Agents;
 with Model_Runner.Framework.Inference_Policy;
@@ -55,7 +56,8 @@ package Model_Runner.Framework.Work is
 
    --  Where a runner that runs its agent apart -- as a process of its own,
    --  whose calls the harness does not see -- says what the agent used, for
-   --  the harness to account as its own: a line each of prompt_tokens N,
+   --  the harness to account as its own: lines of prompt_tokens N,
+   --  prompt_read_tokens N, prompt_reused_tokens N, prompt_milliseconds N,
    --  output_tokens N, call NAME, a tab and its arguments, and settings
    --  LINE for what its calls were set to (Inference_Policy.Line_Of).
    --
@@ -184,6 +186,11 @@ package Model_Runner.Framework.Work is
    --  @param Told What its parent is told: the result, not the transcript.
    --  @param Retry Whether it is to be run again, with Retry_Of naming it.
    --  @param Prompt_Tokens How long its conversation came to be, in tokens.
+   --  @param Prompt_Read_Tokens Prompt tokens evaluated rather than reused.
+   --  @param Prompt_Reused_Tokens Prompt tokens retained in its KV cache.
+   --  @param Prompt_Milliseconds Time spent evaluating prompt tokens.
+   --  @param First_Cache_Event Why its first prompt did or did not reuse.
+   --  @param Last_Cache_Event Why its last prompt did or did not reuse.
    procedure Close_Child
      (Host   : in out Child_Host;
       Answer : String;
@@ -191,7 +198,14 @@ package Model_Runner.Framework.Work is
       Ran    : Model_Runner.Errors.Error_Info;
       Told   : out Ada.Strings.Unbounded.Unbounded_String;
       Retry  : out Boolean;
-      Prompt_Tokens : Natural := 0);
+      Prompt_Tokens : Natural := 0;
+      Prompt_Read_Tokens : Natural := 0;
+      Prompt_Reused_Tokens : Natural := 0;
+      Prompt_Milliseconds : Natural := 0;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event);
 
    --  Record a tool call the agent now working made, on its invocation.
    --
@@ -733,10 +747,22 @@ package Model_Runner.Framework.Work is
    --  @param Host The host.
    --  @param Tokens How many.
    --  @param Prompt_Tokens How long its conversation came to be.
+   --  @param Prompt_Read_Tokens Prompt tokens evaluated rather than reused.
+   --  @param Prompt_Reused_Tokens Prompt tokens retained in its KV cache.
+   --  @param Prompt_Milliseconds Time spent evaluating prompt tokens.
+   --  @param First_Cache_Event Why its first prompt did or did not reuse.
+   --  @param Last_Cache_Event Why its last prompt did or did not reuse.
    procedure Spend
      (Host          : in out Child_Host;
       Tokens        : Natural;
-      Prompt_Tokens : Natural := 0);
+      Prompt_Tokens : Natural := 0;
+      Prompt_Read_Tokens : Natural := 0;
+      Prompt_Reused_Tokens : Natural := 0;
+      Prompt_Milliseconds : Natural := 0;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event);
 
    --  An agent that can have children: it is given the host they are made
    --  through as it runs.
@@ -1159,8 +1185,15 @@ private
       Pace        : aliased Model_Runner.Agent.Pace_State;
 
       --  What the root generated, and how long its conversation came to be.
-      Root_Out    : Natural := 0;
-      Root_Prompt : Natural := 0;
+      Root_Out                 : Natural := 0;
+      Root_Prompt              : Natural := 0;
+      Root_Prompt_Read         : Natural := 0;
+      Root_Prompt_Reused       : Natural := 0;
+      Root_Prompt_Milliseconds : Natural := 0;
+      Root_First_Cache_Event   : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Root_Last_Cache_Event    : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
 
       --  Whether the root went over its token budget.
       Root_Over   : Boolean := False;

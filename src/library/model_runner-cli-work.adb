@@ -395,8 +395,23 @@ package body Model_Runner.CLI.Work is
             return (if Stop = First then "0" else Trace (First .. Stop - 1));
          end Count_Of;
 
+         --  A string after "KEY": in the trace, or empty.
+         function Text_Of (Key : String) return String is
+            Found : Boolean := False;
+         begin
+            return Model_Runner.Tools.Builtin.Text_Argument (Trace, Key, Found);
+         exception
+            when others =>
+               return "";
+         end Text_Of;
+
          Usage : Unbounded_String :=
            To_Unbounded_String ("prompt_tokens " & Count_Of ("prompt_tokens") & ASCII.LF
+                                & "prompt_read_tokens " & Count_Of ("prompt_read_tokens") & ASCII.LF
+                                & "prompt_reused_tokens " & Count_Of ("prompt_reused_tokens") & ASCII.LF
+                                & "prompt_milliseconds " & Count_Of ("prompt_milliseconds") & ASCII.LF
+                                & "prompt_first_cache_event " & Text_Of ("prompt_first_cache_event") & ASCII.LF
+                                & "prompt_last_cache_event " & Text_Of ("prompt_last_cache_event") & ASCII.LF
                                 & "output_tokens " & Count_Of ("generated_tokens") & ASCII.LF);
          --  And what its calls were set to, as it fitted the policy.
          Settled : Boolean := False;

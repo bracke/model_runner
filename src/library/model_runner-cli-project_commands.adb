@@ -7,6 +7,7 @@ with Ada.Directories;
 with Ada.Environment_Variables;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
+with Interfaces;
 
 with Hostkit.Descriptors;
 with Hostkit.Fs;
@@ -14,6 +15,7 @@ with Hostkit.Terminal_Control;
 
 with Model_Runner.Agent.Recall;
 with Model_Runner.Agent_Runtime;
+with Model_Runner.Backend;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Platform.Signals;
 with Model_Runner.CLI.Init;
@@ -51,6 +53,8 @@ with Model_Runner.Framework.Views;
 with Model_Runner.Framework.Workspaces;
 with Model_Runner.Generation;
 with Model_Runner.Localization;
+with Model_Runner.Limits;
+with Model_Runner.Platform;
 with Model_Runner.Templates;
 with Model_Runner.Text;
 with Model_Runner.Tools;
@@ -86,6 +90,8 @@ package body Model_Runner.CLI.Project_Commands is
    package Nt renames Model_Runner.Framework.Intent;
    package Vf renames Model_Runner.Framework.Verification;
    package L renames Model_Runner.Llama;
+   use type L.Session_Access;
+   use type L.Session_State;
    package Names renames Model_Runner.Framework.Name_Lists;
 
    --  The project is where the session was started.
@@ -567,7 +573,8 @@ package body Model_Runner.CLI.Project_Commands is
    --  and delegate, which makes a child through the harness and runs it.
    type Work_Tools
      (Agent : not null access constant Session_Agent;
-      Host  : Host_Access)
+      Host  : Host_Access;
+      Live  : not null L.Session_Access)
    is new Model_Runner.Tools.Builtin.Instance with record
       --  The calls this agent has made, against its tool budget.
       Made : Natural := 0;
@@ -605,6 +612,10 @@ package body Model_Runner.CLI.Project_Commands is
       Reply_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
       Read          : Natural := 0;
       Reused        : Natural := 0;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event  : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
       Check_Ns      : Model_Runner.Clocks.Nanoseconds := 0;
       Helper_Ns     : Model_Runner.Clocks.Nanoseconds := 0;
       Tool_Ns       : Model_Runner.Clocks.Nanoseconds := 0;
@@ -650,12 +661,20 @@ package body Model_Runner.CLI.Project_Commands is
       Tokens : out Natural;
       Status : out Model_Runner.Errors.Error_Info;
       Prompt_Tokens : out Natural;
+      Prompt_Read_Tokens : out Natural;
+      Prompt_Reused_Tokens : out Natural;
+      Prompt_Milliseconds : out Natural;
+      First_Cache_Event : out Model_Runner.Generation.Prefix_Cache_Event;
+      Last_Cache_Event : out Model_Runner.Generation.Prefix_Cache_Event;
       Tree   : String;
-      Spent_All : out Natural)
+      Spent_All : out Natural;
+      Live   : L.Session_Access := null)
    is
+      Using    : constant L.Session_Access :=
+        (if Live = null then Self.Session else Live);
       Messages : Conv.History;
       Offered  : Model_Runner.Tools.Definitions;
-      Runner   : Work_Tools (Self'Unchecked_Access, Host);
+      Runner   : Work_Tools (Self'Unchecked_Access, Host, Using);
       Guard    : aliased Fence (Self.Screen);
       Watcher  : aliased Watch (Self.Screen, Host);
       Sink     : aliased Watching_Sink :=
@@ -719,6 +738,16 @@ package body Model_Runner.CLI.Project_Commands is
       --  answer it was to wait for -- a Steelman-14B helper wrote each of
       --  its calls' errors back as <tool_response> blocks, and went on.
       Work_Stops : Model_Runner.Stops.Set;
+
+      function Milliseconds_Of
+        (Span : Model_Runner.Clocks.Nanoseconds) return Natural
+      is
+         Milliseconds : constant Model_Runner.Clocks.Nanoseconds := Span / 1_000_000;
+      begin
+         return
+           (if Milliseconds > Model_Runner.Clocks.Nanoseconds (Natural'Last)
+            then Natural'Last else Natural (Milliseconds));
+      end Milliseconds_Of;
    begin
       Model_Runner.Stops.Copy (Self.Stop_Set.all, Work_Stops);
       if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON) then
@@ -751,6 +780,11 @@ package body Model_Runner.CLI.Project_Commands is
       Tokens := 0;
       Spent_All := 0;
       Prompt_Tokens := 0;
+      Prompt_Read_Tokens := 0;
+      Prompt_Reused_Tokens := 0;
+      Prompt_Milliseconds := 0;
+      First_Cache_Event := Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event := Model_Runner.Generation.No_Cache_Event;
       Watcher.Stop := Self.Cancel;
       Sink.Stop := Self.Cancel;
       Watcher.Output := Sink'Unchecked_Access;
@@ -772,7 +806,7 @@ package body Model_Runner.CLI.Project_Commands is
       --  Opt.Reply_Tokens. A model that answers sooner stops sooner; the
       --  run's budget bounds the whole.
       Request.Max_Tokens :=
-        Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all));
+        Opt.Reply_Tokens (Self.Item.all, L.Capacity (Using.all));
       Request.Sampling := Opt.Sampling_For (Self.Item.all, Self.Prepared.all);
       Request.Seed := Self.Item.Seed;
       Request.Has_Seed := Self.Item.Has_Seed;
@@ -807,7 +841,7 @@ package body Model_Runner.CLI.Project_Commands is
                 Given        => Self.Item.Sampling_Given,
                 Thinking     => Self.Item.Thinking,
                 Effort       => Self.Item.Effort,
-                Output_Room  => Positive'Max (1, Opt.Reply_Tokens (Self.Item.all, L.Capacity (Self.Session.all))),
+                Output_Room  => Positive'Max (1, Opt.Reply_Tokens (Self.Item.all, L.Capacity (Using.all))),
                 Output_Given => Self.Item.Max_Tokens_Set,
                 Family       => To_Unbounded_String (L.Architecture_Name (L.Config (Self.Prepared.all).Kind))),
                Model_Runner.Templates.Controls_Of (L.Template (Self.Prepared.all).all),
@@ -823,7 +857,7 @@ package body Model_Runner.CLI.Project_Commands is
          --  knows what the first answered and which revisions it saw.
          Model_Runner.Agent.Run
            (Source      => Self.Prepared.all,
-            Session     => Self.Session.all,
+            Session     => Using.all,
             Messages    => Messages,
             Offered     => Offered,
             Executor    => Runner,
@@ -912,6 +946,13 @@ package body Model_Runner.CLI.Project_Commands is
          Runner.Reply_Ns := Runner.Reply_Ns + Outcome.Reply_Ns;
          Runner.Read := Runner.Read + Outcome.Read_Tokens;
          Runner.Reused := Runner.Reused + Outcome.Reused_Tokens;
+         if Model_Runner.Generation."="
+              (Runner.First_Cache_Event,
+               Model_Runner.Generation.No_Cache_Event)
+         then
+            Runner.First_Cache_Event := Outcome.First_Cache_Event;
+         end if;
+         Runner.Last_Cache_Event := Outcome.Last_Cache_Event;
          --  What comes of the round, decided from how it ended (Wk.Next_Step).
          declare
             Last_Own : constant Boolean :=
@@ -1062,6 +1103,11 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
       Conv.Close (Messages);
       Model_Runner.Tools.Close (Offered);
+      Prompt_Read_Tokens := Runner.Read;
+      Prompt_Reused_Tokens := Runner.Reused;
+      Prompt_Milliseconds := Milliseconds_Of (Runner.Prompt_Ns);
+      First_Cache_Event := Runner.First_Cache_Event;
+      Last_Cache_Event := Runner.Last_Cache_Event;
 
       --  What the stop asks decides what the task is told: a person's stop
       --  is a cancellation, a budget spent or a run going round is a limit
@@ -1169,6 +1215,42 @@ package body Model_Runner.CLI.Project_Commands is
               else E.Error_Code'Image (Status.Code));
    end Refusal;
 
+   -----------------
+   -- Open_Beside --
+   -----------------
+
+   --  Open another KV state over the same prepared weights and with the
+   --  same geometry as Parent. The model is shared; only the mutable session
+   --  state is separate.
+   procedure Open_Beside
+     (Self   : Session_Agent;
+      Parent : L.Session;
+      Item   : in out L.Session;
+      Status : out E.Error_Info)
+   is
+      use type Interfaces.Unsigned_64;
+      Bounds : Model_Runner.Limits.Session_Limits :=
+        Model_Runner.Limits.Default_Session_Limits;
+   begin
+      if Self.Item.Memory_Limit /= 0 then
+         Bounds.Max_Session_Bytes := Self.Item.Memory_Limit;
+      elsif Model_Runner.Platform.Physical_Memory > 0 then
+         Bounds.Max_Session_Bytes := Model_Runner.Platform.Physical_Memory / 2;
+      end if;
+      L.Open
+        (Item, Self.Prepared.all,
+         Context => L.Capacity (Parent),
+         Session_Bounds => Bounds,
+         Workers => L.Workers (Parent),
+         Cache   => L.Precision (Parent),
+         Values  => Self.Item.Values,
+         Paged   =>
+           (if Self.Item.Paged_Named then Self.Item.Paged
+            else Model_Runner.Backend."="
+                   (Self.Item.Backend, Model_Runner.Backend.Backend_Device)),
+         Status  => Status);
+   end Open_Beside;
+
    --  A child asked for, made by the harness, run on the session and
    --  answered for; run again when the harness says so.
    function Delegate
@@ -1267,9 +1349,19 @@ package body Model_Runner.CLI.Project_Commands is
             --  went past the task's budget with every run inside its cap.
             All_Of  : Natural;
             Prompt  : Natural;
+            Prompt_Read : Natural;
+            Prompt_Reused : Natural;
+            Prompt_Milliseconds : Natural;
+            First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event;
+            Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event;
             Ran     : E.Error_Info;
             Now     : Unbounded_String;
             Retry   : Boolean;
+            Child   : aliased L.Session;
+            Child_Status : E.Error_Info;
+            Child_Live   : constant L.Session_Access :=
+              (if Self.Agent.Helper_Session = null
+               then Child'Unchecked_Access else Self.Agent.Helper_Session);
          begin
             Self.Host.Open_Child
               (Role, Need, Brief, To_String (Retry_Of), Id, Context, Budget, Status,
@@ -1299,6 +1391,22 @@ package body Model_Runner.CLI.Project_Commands is
                    else To_String (Told) & ASCII.LF)
                   & "error: no helper was made: " & Refusal (Status));
             end if;
+
+            --  Helpers are serial, so one retained cache serves them all.
+            --  Exact prefix verification reuses only an agreeing beginning.
+            --  Never run on Self.Live: a failed allocation must not turn
+            --  isolation into eviction of the parent's committed prefix.
+            if L.State (Child_Live.all) /= L.Closed
+              and then L.State (Child_Live.all) /= L.Ready
+            then
+               L.Close (Child_Live.all);
+            end if;
+            if L.State (Child_Live.all) = L.Closed then
+               Open_Beside (Self.Agent.all, Self.Live.all,
+                            Child_Live.all, Child_Status);
+            else
+               Child_Status := E.Success;
+            end if;
             --  Where a helper's lines begin and end, said: what it does is
             --  shown as it does it, and told apart from its parent's.
             Pres.Put_Aside (Self.Agent.Screen.all, "cli.agent.helper_starts",
@@ -1307,9 +1415,29 @@ package body Model_Runner.CLI.Project_Commands is
                              Loc.Named ("detail", (if Brief'Length > 80
                                                    then Brief (Brief'First .. Brief'First + 76) & "..."
                                                    else Brief))]);
-            Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
-                      Root => False, Answer => Answer, Tokens => Tokens, Status => Ran,
-                      Prompt_Tokens => Prompt, Tree => Self.Base, Spent_All => All_Of);
+            if E.Is_Error (Child_Status) then
+               Answer := Null_Unbounded_String;
+               Tokens := 0;
+               Prompt := 0;
+               Prompt_Read := 0;
+               Prompt_Reused := 0;
+               Prompt_Milliseconds := 0;
+               First_Cache_Event := Model_Runner.Generation.No_Cache_Event;
+               Last_Cache_Event := Model_Runner.Generation.No_Cache_Event;
+               All_Of := 0;
+               Ran := Child_Status;
+            else
+               Run_Loop (Self.Agent.all, To_String (Context), Self.Host, Budget,
+                         Root => False, Answer => Answer, Tokens => Tokens, Status => Ran,
+                         Prompt_Tokens => Prompt,
+                         Prompt_Read_Tokens => Prompt_Read,
+                         Prompt_Reused_Tokens => Prompt_Reused,
+                         Prompt_Milliseconds => Prompt_Milliseconds,
+                         First_Cache_Event => First_Cache_Event,
+                         Last_Cache_Event => Last_Cache_Event,
+                         Tree => Self.Base, Spent_All => All_Of,
+                         Live => Child_Live);
+            end if;
 
             --  The work cancelled while the helper ran: it is cancelled
             --  with it, however it came to stop.
@@ -1319,7 +1447,12 @@ package body Model_Runner.CLI.Project_Commands is
                Ran := E.Make (E.Generation_Cancelled);
             end if;
             Self.Host.Close_Child (To_String (Answer), Tokens, Ran, Now, Retry,
-                                   Prompt_Tokens => Prompt);
+                                   Prompt_Tokens => Prompt,
+                                   Prompt_Read_Tokens => Prompt_Read,
+                                   Prompt_Reused_Tokens => Prompt_Reused,
+                                   Prompt_Milliseconds => Prompt_Milliseconds,
+                                   First_Cache_Event => First_Cache_Event,
+                                   Last_Cache_Event => Last_Cache_Event);
             Spent := Spent + All_Of;
             --  A run that failed and is run again is said now, before the
             --  next starts; the answer then names it, and says the last.
@@ -1992,8 +2125,16 @@ package body Model_Runner.CLI.Project_Commands is
       Prompt : Unbounded_String;
       Tokens : Natural;
       Read   : Natural;
+      Prompt_Read : Natural;
+      Prompt_Reused : Natural;
+      Prompt_Milliseconds : Natural;
+      First_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event;
+      Last_Cache_Event : Model_Runner.Generation.Prefix_Cache_Event;
       --  The root's run, with its helpers': its record holds them apart.
       Whole  : Natural;
+      Live   : L.Session_Access := Self.Session;
+      Isolated_Session : Boolean := False;
+      Opened : E.Error_Info;
    begin
       --  The task's context, read: a context that would not read is the
       --  work failing, not an agent sent off with nothing to go on.
@@ -2002,13 +2143,43 @@ package body Model_Runner.CLI.Project_Commands is
          Answer := Null_Unbounded_String;
          return;
       end if;
-      --  The work is done where the task's files are -- the tree its tools
-      --  are given, the process's own directory left where it is -- and
-      --  its own conversation, and each child's, is on the session, which
-      --  the screen's is read back into afterwards.
-      L.Reset (Self.Session.all);
+      --  A work session is separate from the screen's conversation and is
+      --  retained: exact prefix verification in Generation decides how much
+      --  of an earlier task is still valid. It is opened only on first use.
+      --  Failure to open it is reported: silently borrowing the screen's
+      --  session would replace that conversation's committed prefix.
+      if Self.Work_Session /= null then
+         if L.State (Self.Work_Session.all) /= L.Closed
+           and then L.State (Self.Work_Session.all) /= L.Ready
+         then
+            L.Close (Self.Work_Session.all);
+         end if;
+         if L.State (Self.Work_Session.all) = L.Closed then
+            Open_Beside (Self, Self.Session.all, Self.Work_Session.all, Opened);
+         else
+            Opened := E.Success;
+         end if;
+         if E.Is_Ok (Opened) then
+            Live := Self.Work_Session;
+            Isolated_Session := True;
+         else
+            Answer := Null_Unbounded_String;
+            Status := Opened;
+            return;
+         end if;
+      end if;
+      if not Isolated_Session then
+         L.Reset (Self.Session.all);
+      end if;
       Run_Loop (Self, To_String (Prompt), Host, (if Host = null then 0 else Host.Token_Budget), True,
-                Answer, Tokens, Status, Read, Tree => Ada.Directories.Full_Name (Project), Spent_All => Whole);
+                Answer, Tokens, Status, Read,
+                Prompt_Read_Tokens => Prompt_Read,
+                Prompt_Reused_Tokens => Prompt_Reused,
+                Prompt_Milliseconds => Prompt_Milliseconds,
+                First_Cache_Event => First_Cache_Event,
+                Last_Cache_Event => Last_Cache_Event,
+                Tree => Ada.Directories.Full_Name (Project), Spent_All => Whole,
+                Live => Live);
       --  Stopped at Ctrl-C, however the model's run then ended -- a closed
       --  backend among them: interrupted, and the task set aside.
       if E.Is_Error (Status)
@@ -2017,13 +2188,25 @@ package body Model_Runner.CLI.Project_Commands is
       then
          Status := E.Make (E.Generation_Cancelled);
       end if;
-      L.Reset (Self.Session.all);
+      if not Isolated_Session then
+         L.Reset (Self.Session.all);
+      end if;
       if Host /= null then
-         Host.Spend (Tokens, Prompt_Tokens => Read);
+         Host.Spend
+           (Tokens, Prompt_Tokens => Read,
+            Prompt_Read_Tokens => Prompt_Read,
+            Prompt_Reused_Tokens => Prompt_Reused,
+            Prompt_Milliseconds => Prompt_Milliseconds,
+            First_Cache_Event => First_Cache_Event,
+            Last_Cache_Event => Last_Cache_Event);
       end if;
    exception
       when Failure : others =>
-         L.Reset (Self.Session.all);
+         if Isolated_Session then
+            L.Close (Live.all);
+         else
+            L.Reset (Self.Session.all);
+         end if;
          Answer := Null_Unbounded_String;
          Status := E.Unexpected (Failure, "work");
    end Work_On;
@@ -2844,7 +3027,13 @@ package body Model_Runner.CLI.Project_Commands is
    -- Project_Revision --
    ----------------------
 
-   function Project_Revision return Natural is
+   --  The project a caller's revision belongs to. Project_Revision starts
+   --  a new observation at the current directory; Changes_Since reads the
+   --  revision without changing that association. Keeping the two apart
+   --  matters when a process has visited another project earlier.
+   Seen_In : Unbounded_String;
+
+   function Current_Project_Revision return Natural is
       Store  : S.Store;
       Opened : E.Error_Info;
    begin
@@ -2861,19 +3050,21 @@ package body Model_Runner.CLI.Project_Commands is
    exception
       when others =>
          return 0;
+   end Current_Project_Revision;
+
+   function Project_Revision return Natural is
+   begin
+      Seen_In := To_Unbounded_String (Ada.Directories.Current_Directory);
+      return Current_Project_Revision;
    end Project_Revision;
 
    -------------------
    -- Changes_Since --
    -------------------
 
-   --  The project Changes_Since last counted for: another, and what was
-   --  seen is of the other.
-   Seen_In : Unbounded_String;
-
    function Changes_Since (Seen : in out Natural) return String is
       package Ev renames Model_Runner.Framework.Events;
-      Now    : constant Natural := Project_Revision;
+      Now    : constant Natural := Current_Project_Revision;
       Store  : S.Store;
       Opened : E.Error_Info;
       Said   : Unbounded_String;

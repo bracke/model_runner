@@ -3,6 +3,7 @@ private with Ada.Containers.Indefinite_Ordered_Maps;
 with Ada.Strings.Unbounded;
 
 with Model_Runner.Errors;
+with Model_Runner.Generation;
 with Model_Runner.Framework.Stores;
 
 --  Each call made to a model, kept as history, and what it may answer.
@@ -25,9 +26,19 @@ package Model_Runner.Framework.Invocations is
 
    --  What an invocation used.
    type Usage is record
-      Prompt_Tokens : Natural := 0;
-      Output_Tokens : Natural := 0;
-      Seconds       : Natural := 0;
+      --  The final conversation's size, and across all its turns the prompt
+      --  tokens evaluated and those retained in the session. The latter two
+      --  are the raw cache-hit measure and may sum past Prompt_Tokens.
+      Prompt_Tokens        : Natural := 0;
+      Prompt_Read_Tokens   : Natural := 0;
+      Prompt_Reused_Tokens : Natural := 0;
+      Prompt_Milliseconds  : Natural := 0;
+      First_Cache_Event     : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event      : Model_Runner.Generation.Prefix_Cache_Event :=
+        Model_Runner.Generation.No_Cache_Event;
+      Output_Tokens        : Natural := 0;
+      Seconds              : Natural := 0;
    end record;
 
    --  What a model's answer must hold: one field a line, as

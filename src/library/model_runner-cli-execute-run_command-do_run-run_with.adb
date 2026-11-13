@@ -2,6 +2,7 @@ with Model_Runner.Conversation.Rooms;
 
 separate (Model_Runner.CLI.Execute.Run_Command.Do_Run)
 procedure Run_With (Team : Workers_CPU.Pool_Reference) is
+   use type Model_Runner.Clocks.Nanoseconds;
 
    --  Why the first layer that did not go over whole did not, as a
    --  message key, or the empty string where every layer did.
@@ -903,6 +904,16 @@ begin
                      & ",""generated_tokens"":"
                      & N (Loop_Out.Generated_Tokens)
                      & ",""prompt_tokens"":" & N (Loop_Out.Prompt_Tokens)
+                     & ",""prompt_read_tokens"":" & N (Loop_Out.Read_Tokens)
+                     & ",""prompt_reused_tokens"":" & N (Loop_Out.Reused_Tokens)
+                     & ",""prompt_milliseconds"":"
+                     & N (Natural (Loop_Out.Prompt_Ns / 1_000_000))
+                     & ",""prompt_first_cache_event"":"""
+                     & Model_Runner.Generation.Prefix_Cache_Event'Image
+                         (Loop_Out.First_Cache_Event) & """"
+                     & ",""prompt_last_cache_event"":"""
+                     & Model_Runner.Generation.Prefix_Cache_Event'Image
+                         (Loop_Out.Last_Cache_Event) & """"
                      & ",""compactions"":" & N (Loop_Out.Compactions)
                      & (if US.Length (Agent_Settings) = 0 then ""
                         else ",""settings"":""" & JSON_Escape (US.To_String (Agent_Settings)) & """")

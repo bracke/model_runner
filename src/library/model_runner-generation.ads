@@ -249,6 +249,20 @@ package Model_Runner.Generation is
    Most_Proposals : constant := 16;
    type Round_Counts is array (1 .. Most_Proposals) of Natural;
 
+   --  Why this prompt did or did not reuse a committed prefix. This is
+   --  diagnostic only: token and picture-row equality, followed by the
+   --  session's rewind boundary, remains the authority.
+   type Prefix_Cache_Event is
+     (No_Cache_Event,
+      Reuse_Disabled,
+      Cache_Empty,
+      Prefix_Extended,
+      Prompt_Repeated,
+      Token_Changed,
+      Picture_Changed,
+      Rewind_Unavailable,
+      Rewind_Failed);
+
    type Result is record
       Reason           : Completion_Reason := Runtime_Error;
       Prompt_Tokens    : Natural := 0;
@@ -257,6 +271,7 @@ package Model_Runner.Generation is
       --  back, or a turn's shared beginning -- and were not read again.
       --  The prompt rate is of the rest.
       Reused_Tokens    : Natural := 0;
+      Cache_Event      : Prefix_Cache_Event := No_Cache_Event;
       Generated_Tokens : Natural := 0;
       Final_Position   : Natural := 0;
 

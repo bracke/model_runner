@@ -1458,8 +1458,15 @@ package body Model_Runner.Framework.Configurations is
          begin
             Undo;
          exception
-            when others =>
-               null;
+            when Undo_Failure : others =>
+               --  Cleanup failed too: report that failure, since claiming
+               --  only the original error would hide a half-made project.
+               Status := E.Unexpected (Undo_Failure, "undoing /init");
+               E.Add_Text
+                 (Status, "detail",
+                  "cleanup after " & Ada.Exceptions.Exception_Name (Failure)
+                  & " failed; the project may need removing before /init is tried again");
+               return;
          end;
          Status := E.Unexpected (Failure, "/init");
    end Initialize;

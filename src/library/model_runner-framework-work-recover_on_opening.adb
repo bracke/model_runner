@@ -155,7 +155,7 @@ begin
             Stores.Read (Item, Invocations_Area, Name, Value, Read);
             if E.Is_Ok (Read) and then not Live (Records.Get (Value, "agent")) then
                Invocations.Finish
-                 (Item, Change, Name, Invocations.Failed, (others => 0), "",
+                 (Item, Change, Name, Invocations.Failed, (others => <>), "",
                   "abandoned: nothing was running it", Read);
                if E.Is_Ok (Read) then
                   Said.Append (Name & " was abandoned");

@@ -34,6 +34,7 @@ with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Project_Requests;
 with Model_Runner.CLI.Work;
 with Model_Runner.Errors;
+with Model_Runner.Generation;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Authority;
 with Model_Runner.Framework.Bootstrap;
@@ -6003,13 +6004,20 @@ package body Tests.Framework_Cases is
                                                        ("status: done" & LF & "summary: looked"),
                                            Broken => False)
                            with Usage => To_Unbounded_String
-                             ("prompt_tokens 300" & LF & "output_tokens 42" & LF
+                             ("prompt_tokens 300" & LF
+                              & "prompt_read_tokens 75" & LF
+                              & "prompt_reused_tokens 225" & LF
+                              & "prompt_milliseconds 18" & LF
+                              & "output_tokens 42" & LF
                               & "call read_file" & ASCII.HT & "{""path"": ""README.md""}" & LF)),
          Model_Runner.Framework.Context.Profile (Store, ""), Done, Status);
       S.Read (Store, Model_Runner.Framework.Invocations_Area, To_String (Done.Invocation_Id),
               Call, Status);
       Model_Runner.Framework.Agents.Read (Store, To_String (Done.Agent_Id), Held, Status);
       Assert (R.Get (Call, "output_tokens") = "42" and then R.Get (Call, "prompt_tokens") = "300"
+              and then R.Get (Call, "prompt_read_tokens") = "75"
+              and then R.Get (Call, "prompt_reused_tokens") = "225"
+              and then R.Get (Call, "prompt_milliseconds") = "18"
               and then Ada.Strings.Fixed.Index (R.Get (Call, "call.0001"), "read_file") = 1
               and then Held.Used = 42,
               "what an agent run apart used was not accounted: " & R.Get (Call, "output_tokens")
@@ -6046,7 +6054,8 @@ package body Tests.Framework_Cases is
         (Store, "context",
          "map model.small = context=900, reserve=100, tools=yes, class=laptop"
          & LF & "map model.tiny = context=120, reserve=100" & LF
-         & "scalar task.output_reserve.analysis = 300" & LF);
+         & "scalar task.output_reserve.analysis = 300" & LF
+         & "fact language = Ada" & LF);
       Dirs.Create_Path (Fresh_Root (Store) & "/src");
       Put_File (Fresh_Root (Store) & "/src/parser.adb", Big);
       Put_File (Fresh_Root (Store) & "/src/parser_copy.adb", Big);
@@ -6107,6 +6116,19 @@ package body Tests.Framework_Cases is
       Assert (Cx.Excluded_Count (Two) = 1,
               "the same source twice was not given once: "
               & Natural'Image (Cx.Excluded_Count (Two)));
+      declare
+         Text          : constant String := Cx.Rendered (Two);
+         Configuration : constant Natural :=
+           Ada.Strings.Fixed.Index (Text, "## The project's configuration");
+         Task_Section  : constant Natural := Ada.Strings.Fixed.Index (Text, "## The task");
+         Source        : constant Natural := Ada.Strings.Fixed.Index (Text, "## The file");
+      begin
+         Assert (Configuration > 0 and then Task_Section > Configuration
+                 and then Source > Task_Section,
+                 "context sections were not stable-to-volatile:"
+                 & Natural'Image (Configuration) & Natural'Image (Task_Section)
+                 & Natural'Image (Source));
+      end;
       Cx.Build (Store, To_String (Id), Profile, Two, Status);
       Assert (Cx.Manifest_Id (Two) = Cx.Manifest_Id (One)
               and then Cx.Rendered (Two) = Cx.Rendered (One),
@@ -6423,12 +6445,30 @@ package body Tests.Framework_Cases is
       end;
 
       Iv.Finish (Store, Change, To_String (First), Iv.Failed,
-                 (Prompt_Tokens => 10, Output_Tokens => 2, Seconds => 1), "",
+                 (Prompt_Tokens => 10, Prompt_Read_Tokens => 3,
+                  Prompt_Reused_Tokens => 7, Prompt_Milliseconds => 4,
+                  First_Cache_Event => Model_Runner.Generation.Cache_Empty,
+                  Last_Cache_Event => Model_Runner.Generation.Prefix_Extended,
+                  Output_Tokens => 2, Seconds => 1), "",
                  "the model stopped", Status);
       S.Commit (Store, Change, Status);
       Assert (Iv.State_Of (Store, To_String (First)) = "failed",
               "a failed call is not recorded as failed");
-      Iv.Finish (Store, Change, To_String (First), Iv.Completed, (others => 0),
+      declare
+         Recorded : R.Item;
+      begin
+         S.Read (Store, Model_Runner.Framework.Invocations_Area,
+                 To_String (First), Recorded, Status);
+         Assert (E.Is_Ok (Status)
+                 and then R.Get (Recorded, "prompt_read_tokens") = "3"
+                 and then R.Get (Recorded, "prompt_reused_tokens") = "7"
+                 and then R.Get (Recorded, "prompt_milliseconds") = "4"
+                 and then R.Get (Recorded, "prompt_cache_hit_percent") = "70"
+                 and then R.Get (Recorded, "prompt_first_cache_event") = "cache_empty"
+                 and then R.Get (Recorded, "prompt_last_cache_event") = "prefix_extended",
+                 "an invocation did not retain its cache diagnostics");
+      end;
+      Iv.Finish (Store, Change, To_String (First), Iv.Completed, (others => <>),
                  "", "", Status);
       Assert (Status.Code = E.Framework_Transition_Invalid,
               "an ended call was ended again");
@@ -10855,6 +10895,8 @@ package body Tests.Framework_Cases is
          Parsed  : Model_Runner.GGUF.Containers.Container;
          Ready   : aliased Model_Runner.Llama.Model;
          Session : aliased Model_Runner.Llama.Session;
+         Work_Session : aliased Model_Runner.Llama.Session;
+         Helper_Session : aliased Model_Runner.Llama.Session;
          Stop    : aliased Model_Runner.Stops.Set;
          Catalog : aliased Model_Runner.Localization.Catalog;
          Screen  : aliased Model_Runner.Presentation.Console;
@@ -10879,6 +10921,8 @@ package body Tests.Framework_Cases is
               (Ready'Access, Session'Access, Stop'Access, Screen'Access, Item'Access, null, Notes'Access);
          begin
             Agent.Script := Replies'Unchecked_Access;
+            Agent.Work_Session := Work_Session'Unchecked_Access;
+            Agent.Helper_Session := Helper_Session'Unchecked_Access;
             Ada.Text_IO.Create (Said, Ada.Text_IO.Out_File, "obj/session-work.txt");
             Ada.Text_IO.Set_Error (Said);
             Wk.Execute (Store, Task_Id, Agent, Cx.Profile (Store, ""), Done, Status);
@@ -10893,6 +10937,15 @@ package body Tests.Framework_Cases is
                raise;
          end;
          Shown := To_Unbounded_String (Read_Whole ("obj/session-work.txt"));
+         Assert
+           (Model_Runner.Llama."="
+              (Model_Runner.Llama.State (Work_Session), Model_Runner.Llama.Ready),
+            "session work did not use its dedicated retained session");
+         Assert
+           (Model_Runner.Llama.Position (Session) = 0,
+            "session work changed the interactive session's KV position");
+         Model_Runner.Llama.Close (Helper_Session);
+         Model_Runner.Llama.Close (Work_Session);
          Model_Runner.Llama.Close (Session);
       end;
    end On_Session;
@@ -18624,9 +18677,22 @@ package body Tests.Framework_Cases is
       Later_Build_Event (Store, To_String (Stuck));
       declare
          Root : constant String := Fresh_Root (Store);
+         Seen_Elsewhere : Natural := 0;
+         Ignored_Change : constant String :=
+           Model_Runner.CLI.Project_Commands.Changes_Since (Seen_Elsewhere);
+         pragma Unreferenced (Ignored_Change);
       begin
          S.Close (Store);
          Dirs.Set_Directory (Root);
+         declare
+            Absolute_Root : constant String := Dirs.Full_Name (".");
+         begin
+            Assert
+           (Model_Runner.CLI.Project_Commands.From_Session_Start (Absolute_Root) = Absolute_Root
+            and then Model_Runner.CLI.Project_Commands.From_Session_Start ("") = ""
+            and then Model_Runner.CLI.Project_Commands.From_Session_Start ("~/model") = "~/model",
+            "paths already rooted at the session start were changed");
+         end;
          Model_Runner.CLI.Project_Commands.Run
            ("/work " & To_String (First), Screen, Agent);
          Model_Runner.CLI.Project_Commands.Run ("/work count the stars", Screen, Agent);
@@ -19349,7 +19415,7 @@ package body Tests.Framework_Cases is
       Ended  : E.Error_Info;
    begin
       Iv.Finish (Unkept_Store.all, Change, Iv.Last_For (Unkept_Store.all, To_String (Unkept_Task)), Iv.Failed,
-                 (others => 0), "", "ended for the test", Ended);
+                 (others => <>), "", "ended for the test", Ended);
       if E.Is_Ok (Ended) then
          S.Commit (Unkept_Store.all, Change, Ended);
       end if;

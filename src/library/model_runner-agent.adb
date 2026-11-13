@@ -476,6 +476,10 @@ package body Model_Runner.Agent is
            Result.Read_Tokens
            + (Generated.Prompt_Tokens - Natural'Min (Generated.Prompt_Tokens, Generated.Reused_Tokens));
          Result.Reused_Tokens := Result.Reused_Tokens + Generated.Reused_Tokens;
+         if Gen."=" (Result.First_Cache_Event, Gen.No_Cache_Event) then
+            Result.First_Cache_Event := Generated.Cache_Event;
+         end if;
+         Result.Last_Cache_Event := Generated.Cache_Event;
       end Count_Time;
 
       --  The reply as a whole: what came before a closed thought, and what

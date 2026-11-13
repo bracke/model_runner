@@ -203,14 +203,24 @@ names.
 
 `/work` gives the session's own model the task in a conversation of its
 own, built from the project state, with the file tools and nothing else;
-the conversation on the screen is left as it was. It may hand a part of the
-work -- a review, an investigation -- to a helper with `delegate`: the
-harness makes that child agent within what its parent was given (by default
-at most two, one level down), gives it a context of its own, keeps its
-result and tells the parent only that. A required child that fails is run
-once more; if it still fails the task is blocked (`scalar
-agents.on_child_failure = fail` fails it instead), and cancelling a task
-cancels its agent's children.
+the conversation on the screen is left as it was. That work conversation
+has a KV session of its own, retained between `/work` calls; project-stable
+rules, configuration and specifications lead each context, then task facts,
+repository excerpts and run-specific results, so exact prefix matching can
+keep only what still agrees. One lazily opened helper session is retained as
+a serial, bounded pool: model weights remain shared, while at most two extra
+KV contexts (work and helper) are resident. It may hand a part of the work -- a review, an
+investigation -- to a helper with `delegate`: the harness makes that child
+agent within what its parent was given (by default at most two, one level
+down), gives it a context and KV session of its own so it cannot evict its
+parent's prefix, keeps its result and tells the parent only that. Each
+invocation records its total prompt tokens, those read and reused, and its
+prompt milliseconds, cache-hit percentage, and why its first and last prompt
+did or did not reuse a prefix (`cache_empty`, `prefix_extended`,
+`token_changed`, `picture_changed`, or a rewind outcome). `/task audit` shows
+those figures. A required child that fails is run once more; if it
+still fails the task is blocked (`scalar agents.on_child_failure = fail`
+fails it instead), and cancelling a task cancels its agent's children.
 
 What an agent may do is checked as it does it. Its file tools stay inside
 the project and within its `read_source`/`read_specs` and

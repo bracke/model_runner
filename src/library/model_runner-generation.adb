@@ -1734,6 +1734,10 @@ package body Model_Runner.Generation is
          Back_To   : Natural := 0;
          Rewound   : E.Error_Info;
       begin
+         Outcome.Cache_Event :=
+           (if not Item.Reuse_Committed_Prefix then Reuse_Disabled
+            elsif Committed = 0 then Cache_Empty
+            else Token_Changed);
          if Item.Reuse_Committed_Prefix and then Committed > 0 then
             declare
                use type Interfaces.Unsigned_64;
@@ -1760,6 +1764,12 @@ package body Model_Runner.Generation is
                   end if;
                   Shared := Shared + 1;
                end loop;
+               if Shared < Committed and then Shared < Prompt_Count
+                 and then L.Committed_Token (Session, Shared)
+                          = Tokens.all (Shared + 1)
+               then
+                  Outcome.Cache_Event := Picture_Changed;
+               end if;
             end;
          end if;
 
@@ -1769,7 +1779,11 @@ package body Model_Runner.Generation is
          --  first draw is from; with nothing read there was none.
          if Shared = Committed and then Committed > 0 and then Committed < Prompt_Count then
             First_Token := Committed + 1;
+            Outcome.Cache_Event := Prefix_Extended;
          else
+            if Shared = Prompt_Count and then Prompt_Count > 0 then
+               Outcome.Cache_Event := Prompt_Repeated;
+            end if;
             --  At least one token left to read, so the last position's
             --  distribution is the session's own.
             Back_To :=
@@ -1779,12 +1793,16 @@ package body Model_Runner.Generation is
                L.Rewind (Session, Back_To, Rewound);
                if E.Is_Error (Rewound) then
                   Back_To := 0;
+                  Outcome.Cache_Event := Rewind_Failed;
                end if;
             end if;
 
             if Back_To > 0 then
                First_Token := Back_To + 1;
             else
+               if Shared > 0 and then Outcome.Cache_Event /= Rewind_Failed then
+                  Outcome.Cache_Event := Rewind_Unavailable;
+               end if;
                if Committed > 0 then
                   L.Reset (Session);
                end if;

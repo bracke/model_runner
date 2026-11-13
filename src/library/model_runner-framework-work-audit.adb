@@ -123,6 +123,15 @@ begin
    Say ("agent", (if Records.Get (State, "runner") /= "" then Records.Get (State, "runner")
                   else Records.Get (Call, "model_profile"))
         & (if Invocation = "" then "" else ", in " & Invocation));
+   if Invocation /= "" then
+      Say
+        ("prompt cache",
+         Records.Get (Call, "prompt_reused_tokens") & " reused, "
+         & Records.Get (Call, "prompt_read_tokens") & " evaluated ("
+         & Records.Get (Call, "prompt_cache_hit_percent") & "% hit); first "
+         & Records.Get (Call, "prompt_first_cache_event") & ", last "
+         & Records.Get (Call, "prompt_last_cache_event"));
+   end if;
    --  What its calls were set to, each round's settings and where each
    --  came from, and what selected them.
    if Invocation /= "" then

@@ -12989,6 +12989,7 @@ package body Tests.Inference_Cases is
       use type Model_Runner.Progress.Event_Kind;
       use type Model_Runner.Progress.Generation_Stage;
       use type Gen.Completion_Reason;
+      use type Gen.Prefix_Cache_Event;
       use type B.Byte_Array;
 
       --  Where prefill began, which is the only outside sign that a prefix
@@ -13038,7 +13039,10 @@ package body Tests.Inference_Cases is
             Reuse   : Boolean;
             Started : out Natural;
             Text    : out Model_Runner.Bytes.Byte_Array_Access;
-            Length  : out Natural)
+            Length  : out Natural;
+            Cache_Event : out Gen.Prefix_Cache_Event;
+            Reused : out Natural;
+            Prompt_Tokens : out Natural)
          is
             Live    : L.Session;
             Logits  : Logit_Vector;
@@ -13084,6 +13088,9 @@ package body Tests.Inference_Cases is
             Started := Watch.First_Report;
             Text := Outcome.Text;
             Length := Outcome.Text_Length;
+            Cache_Event := Outcome.Cache_Event;
+            Reused := Outcome.Reused_Tokens;
+            Prompt_Tokens := Outcome.Prompt_Tokens;
 
             Model_Runner.Stops.Close (Stop);
             L.Close (Live);
@@ -13112,20 +13119,49 @@ package body Tests.Inference_Cases is
             Fresh_At, Reused_At, Reset_At : Natural;
             Fresh_Text, Reused_Text, Reset_Text : B.Byte_Array_Access;
             Fresh_N, Reused_N, Reset_N : Natural;
+            Fresh_Event, Reused_Event, Reset_Event : Gen.Prefix_Cache_Event;
+            Fresh_Held, Reused_Held, Reset_Held : Natural;
+            Fresh_Prompt, Reused_Prompt, Reset_Prompt : Natural;
          begin
             Wrong (Wrong'Last) :=
               (if Tokens (Last - 1) = 4 then 5 else 4);
 
             --  No prefix to keep, so prefill starts at the beginning. This
             --  is the answer the other two have to match.
-            Turn ([], False, Fresh_At, Fresh_Text, Fresh_N);
+            Turn ([], False, Fresh_At, Fresh_Text, Fresh_N,
+                  Fresh_Event, Fresh_Held, Fresh_Prompt);
 
             --  An exact prefix, kept. Prefill reports past it.
-            Turn (Exact, True, Reused_At, Reused_Text, Reused_N);
+            Turn (Exact, True, Reused_At, Reused_Text, Reused_N,
+                  Reused_Event, Reused_Held, Reused_Prompt);
 
             --  The same number of tokens, one of them different, so the
             --  session is reset and everything is evaluated again.
-            Turn (Wrong, True, Reset_At, Reset_Text, Reset_N);
+            Turn (Wrong, True, Reset_At, Reset_Text, Reset_N,
+                  Reset_Event, Reset_Held, Reset_Prompt);
+
+            Assert
+              (Fresh_Event = Gen.Reuse_Disabled
+               and then Reused_Event = Gen.Prefix_Extended
+               and then Reset_Event = Gen.Token_Changed,
+               "cache invalidation reasons were not reported: fresh "
+               & Gen.Prefix_Cache_Event'Image (Fresh_Event) & ", reused "
+               & Gen.Prefix_Cache_Event'Image (Reused_Event) & ", changed "
+               & Gen.Prefix_Cache_Event'Image (Reset_Event));
+
+            --  This is the benchmark that matters independently of wall
+            --  clock noise: an exact retained prefix must remove those
+            --  token evaluations, while a fresh session reads them all.
+            Assert
+              (Reused_Held = Exact'Length
+               and then Reused_Prompt - Reused_Held
+                        < Fresh_Prompt - Fresh_Held
+               and then Reused_Prompt - Reused_Held
+                        < Reset_Prompt - Reset_Held,
+               "prefix reuse did not reduce prompt evaluation: fresh read"
+               & Natural'Image (Fresh_Prompt - Fresh_Held)
+               & ", reused read"
+               & Natural'Image (Reused_Prompt - Reused_Held));
 
             Assert (Reused_At > Exact'Length,
                     "prefill began at" & Natural'Image (Reused_At)

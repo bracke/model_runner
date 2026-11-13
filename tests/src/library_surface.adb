@@ -111,7 +111,6 @@ package body Library_Surface is
       --  Helpers.
       new String'("Equal_Ignore_Case"),
       new String'("Failure_Name"),
-      new String'("Has_Controls"),
       new String'("In_Range"),
       new String'("Is_NaN"),
       new String'("To_Natural"),
