@@ -1,4 +1,5 @@
 with Model_Runner.Framework;
+with Model_Runner.Localization;
 with Model_Runner.Framework.Execution;
 with Ada.Strings.Fixed;
 
@@ -107,15 +108,42 @@ package body Model_Runner.CLI.Held_Output is
             Skipped  : Natural := 0;
             In_Fence : Boolean := False;
 
+            --  Its lines, blank ones too: a paragraph's break and a blank
+            --  line in code were lost with them.
+            function Every_Line (Text : String) return Model_Runner.Framework.Name_Lists.Vector is
+               Result : Model_Runner.Framework.Name_Lists.Vector;
+               Start  : Positive := Text'First;
+            begin
+               for Index in Text'Range loop
+                  if Text (Index) = ASCII.LF then
+                     Result.Append (Text (Start .. Index - 1));
+                     Start := Index + 1;
+                  end if;
+               end loop;
+               if Start <= Text'Last then
+                  Result.Append (Text (Start .. Text'Last));
+               end if;
+               return Result;
+            end Every_Line;
+
+            --  JSON in a fence: one opened ``` or ```json, not ```python.
+            Json_Fence : Boolean := False;
+
             procedure Flush_Skipped is
+               Count : constant String := Ada.Strings.Fixed.Trim (Natural'Image (Skipped), Ada.Strings.Both);
             begin
                if Skipped > 0 then
-                  Append (Shown, "... the same line" & Natural'Image (Skipped) & " times more" & ASCII.LF);
+                  Append (Shown,
+                          (if Self.Screen /= null
+                           then Pres.Next_Step_Value (Self.Screen.all, "cli.output.same_line",
+                                                      [Model_Runner.Localization.Named ("count", Count)])
+                           else "... the same line " & Count & " times more")
+                          & ASCII.LF);
                   Skipped := 0;
                end if;
             end Flush_Skipped;
          begin
-            for Said of Model_Runner.Framework.Lines_Of (To_String (Self.Held)) loop
+            for Said of Every_Line (To_String (Self.Held)) loop
                declare
                   --  The model's line as the screen shows it, its controls
                   --  written out, before the colour is put on: coloured
@@ -130,14 +158,24 @@ package body Model_Runner.CLI.Held_Output is
                   Line  : constant String :=
                     (if not Self.Styled then Raw
                      elsif Fence then Raw
-                     elsif In_Fence or else Pres.Looks_Like_JSON (To_String (Self.Held))
+                     elsif (In_Fence and then Json_Fence) or else Pres.Looks_Like_JSON (To_String (Self.Held))
                      then Pres.JSON_Coloured (Raw)
                      else Raw);
                begin
                   if Fence then
                      In_Fence := not In_Fence;
+                     if In_Fence then
+                        declare
+                           Fenced : constant String := Ada.Strings.Fixed.Trim (Raw, Ada.Strings.Both);
+                           Tag    : constant String :=
+                             Ada.Strings.Fixed.Trim (Fenced (Fenced'First + 3 .. Fenced'Last), Ada.Strings.Both);
+                        begin
+                           Json_Fence := Tag in "" | "json" | "JSON";
+                        end;
+                     end if;
                   end if;
-                  if Raw = To_String (Last) then
+                  --  A blank line is no repetition to fold.
+                  if Raw /= "" and then Raw = To_String (Last) then
                      Same := Same + 1;
                   else
                      Flush_Skipped;

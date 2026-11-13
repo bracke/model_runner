@@ -375,7 +375,14 @@ package body Model_Runner.UTF8 is
       while Index <= Item'Last loop
          Step (Item, Index, Bytes, Width);
          if Item (Index) = ASCII.HT then
-            Total := (Total / 8 + 1) * 8;
+            --  To the next stop of eight in the row it is on, and no further
+            --  than the row's last column: a tab never wraps.
+            declare
+               Column : constant Natural := Total mod Row;
+               Stop   : constant Natural := Natural'Min ((Column / 8 + 1) * 8, Row - 1);
+            begin
+               Total := Total - Column + Natural'Max (Column, Stop);
+            end;
          else
             if Width = 2 and then Row > 1 and then Total mod Row = Row - 1 then
                Total := Total + 1;

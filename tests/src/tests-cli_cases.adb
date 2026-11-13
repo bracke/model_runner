@@ -2296,6 +2296,20 @@ package body Tests.CLI_Cases is
                 ("abc" & Character'Val (16#E4#) & Character'Val (16#B8#) & Character'Val (16#AD#), 4) = 6,
               "a wide character at a row's last column was counted where it would not fit");
       Assert (Model_Runner.UTF8.Wrapped_Columns ("abcd", 4) = 4, "narrow text was counted wrongly");
+      --  A tab goes to a stop in its own row, and never past the row's end.
+      Assert (Model_Runner.UTF8.Wrapped_Columns ("0123456789" & ASCII.HT, 10) = 18,
+              "a tab on the second row was counted from the text's start");
+      Assert (Model_Runner.UTF8.Wrapped_Columns ("abcde" & ASCII.HT, 7) = 6,
+              "a tab past the row's end wrapped");
+      --  A carriage return alone is shown, before a line feed it is the line's end.
+      declare
+         Lead : Boolean := False;
+      begin
+         Assert (Model_Runner.Text.Show_Controls ("ok" & ASCII.CR & "rm", Lead) = "ok\x0Drm",
+                 "a lone carriage return was obeyed");
+         Assert (Model_Runner.Text.Show_Controls ("ok" & ASCII.CR & ASCII.LF, Lead) = "ok" & ASCII.CR & ASCII.LF,
+                 "a CR LF line end was shown escaped");
+      end;
 
       --  Shown, not obeyed, with tabs kept where asked; and a long text
       --  with controls escaped whole, built off the stack.
@@ -15045,12 +15059,15 @@ package body Tests.CLI_Cases is
       Acute : constant String := [B (16#C3#), B (16#A9#)];
       Smile : constant String := [B (16#F0#), B (16#9F#), B (16#98#), B (16#80#)];
    begin
-      --  1. Line feed, tab and carriage return pass; an escape, DEL and a
-      --  C1 control are written out; UTF-8 text passes byte for byte.
-      Assert (UT.Show_Controls ("a" & ASCII.LF & ASCII.HT & ASCII.CR & "b", Lead)
-                = "a" & ASCII.LF & ASCII.HT & ASCII.CR & "b"
+      --  1. Line feed, tab and a carriage return before a line feed pass;
+      --  a carriage return alone, an escape, DEL and a C1 control are
+      --  written out; UTF-8 text passes byte for byte.
+      Assert (UT.Show_Controls ("a" & ASCII.LF & ASCII.HT & ASCII.CR & ASCII.LF & "b", Lead)
+                = "a" & ASCII.LF & ASCII.HT & ASCII.CR & ASCII.LF & "b"
               and then not Lead,
-              "a line break, tab or return was escaped");
+              "a line break, tab or line-ending return was escaped");
+      Assert (UT.Show_Controls ("a" & ASCII.CR & "b", Lead) = "a\x0Db" and then not Lead,
+              "a carriage return alone was obeyed");
       Assert (UT.Show_Controls (ESC & "]52;c;aGk=" & ASCII.BEL & ASCII.DEL, Lead)
                 = "\x1B]52;c;aGk=\x07\x7F",
               "an escape, bell or DEL from the model reached the terminal: "

@@ -40,6 +40,8 @@ procedure Show_Result (Store : in out S.Store) is
       Found : Unbounded_String;
       Count : Natural := 0;
    begin
+      --  Each word's own: what an earlier one left was read as this one's.
+      Several := Null_Unbounded_String;
       --  Only a start of a result's identifier is looked for: hex
       --  digits, with RES- or without.
       if Given = "" or else S.Exists (Store, Model_Runner.Framework.Results_Area, Given)
@@ -1254,7 +1256,9 @@ begin
                Same := Same + 1;
             else
                if Skipped > 0 then
-                  Pres.Put_Line (Screen, "      ... the same line" & Natural'Image (Skipped) & " times more");
+                  Pres.Put_Line (Screen, "      " & Pres.Next_Step_Value
+                                    (Screen, "cli.output.same_line",
+                                     [Loc.Named ("count", Image (Skipped))]));
                   Skipped := 0;
                end if;
                Same := 0;
@@ -1276,7 +1280,9 @@ begin
             end if;
          end loop;
          if Skipped > 0 then
-            Pres.Put_Line (Screen, "      ... the same line" & Natural'Image (Skipped) & " times more");
+            Pres.Put_Line (Screen, "      " & Pres.Next_Step_Value
+                                    (Screen, "cli.output.same_line",
+                                     [Loc.Named ("count", Image (Skipped))]));
          end if;
       end;
    else

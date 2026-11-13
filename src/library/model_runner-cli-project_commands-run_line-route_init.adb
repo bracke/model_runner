@@ -110,6 +110,8 @@ begin
          begin
             Ada.Directories.Set_Directory (There);
             Below_Top := Null_Unbounded_String;
+            --  As it would have started there: paths typed are read from it.
+            Started_In := To_Unbounded_String (There);
             Pres.Put_Note (Screen, "cli.project.found_above", [Loc.Named ("path", There)]);
             Recover_Here (Screen);
          exception

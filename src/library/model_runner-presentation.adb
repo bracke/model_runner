@@ -461,6 +461,30 @@ package body Model_Runner.Presentation is
    -- Put_Marked --
    ----------------
 
+   --  Where Mark stands in Line as a word of its own -- "open" is not
+   --  marked inside "reopened" -- or zero where it does not.
+   function Whole_Word_At (Line, Mark : String) return Natural is
+      function Letter (C : Character) return Boolean
+      is (Ada.Characters.Handling.Is_Alphanumeric (C) or else C in '_' | '-');
+      From    : Positive := Line'First;
+      At_Mark : Natural;
+   begin
+      if Mark = "" then
+         return 0;
+      end if;
+      while From <= Line'Last loop
+         At_Mark := Ada.Strings.Fixed.Index (Line (From .. Line'Last), Mark);
+         exit when At_Mark = 0;
+         if (At_Mark = Line'First or else not Letter (Line (At_Mark - 1)))
+           and then (At_Mark + Mark'Length > Line'Last or else not Letter (Line (At_Mark + Mark'Length)))
+         then
+            return At_Mark;
+         end if;
+         From := At_Mark + 1;
+      end loop;
+      return 0;
+   end Whole_Word_At;
+
    procedure Put_Marked
      (Item      : in out Console;
       Key       : String;
@@ -632,6 +656,12 @@ package body Model_Runner.Presentation is
    is
       Label : constant String := Message (Item, Key);
    begin
+      --  For a program, a record on standard output as every other line
+      --  there is: a heading written as text broke the JSON lines.
+      if Item.Structured and then Where = Answer then
+         Put_Record (Item, "heading", Key, Loc.Empty_Arguments, Label);
+         return;
+      end if;
       if Gap and then not Item.Structured then
          Write_Line (Item, Where, "");
       end if;
@@ -662,6 +692,10 @@ package body Model_Runner.Presentation is
       Shown : constant Natural := (if Width = 0 then Label'Length else Width);
       Padding : constant Natural := (if Shown >= 32 then 1 else 32 - Shown);
    begin
+      if Item.Structured and then Where = Answer then
+         Put_Record (Item, "field", Key, [Loc.Named ("value", Value)], Label);
+         return;
+      end if;
       Write_Line
         (Item, Where,
          "  "
@@ -884,7 +918,7 @@ package body Model_Runner.Presentation is
       Mark_Tone : Tone)
    is
       Line    : constant String := Message (Item, Key, Arguments);
-      At_Mark : constant Natural := (if Mark = "" then 0 else Ada.Strings.Fixed.Index (Line, Mark));
+      At_Mark : constant Natural := Whole_Word_At (Line, Mark);
    begin
       if Item.Structured then
          Put_Record (Item, "note", Key, Arguments, Line);
@@ -919,6 +953,25 @@ package body Model_Runner.Presentation is
       Item.Next_Held := Held;
    end Hold_Next_Steps;
 
+   --  A rendered message's lines with the indent its rendering gave them
+   --  taken off, for it to be given to another message as its detail:
+   --  rendered again, each line after the first was set in twice over.
+   function Unindented (Said : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Index  : Natural := Said'First;
+   begin
+      while Index <= Said'Last loop
+         Ada.Strings.Unbounded.Append (Result, Said (Index));
+         if Said (Index) = ASCII.LF and then Index + 4 <= Said'Last
+           and then Said (Index + 1 .. Index + 4) = "    "
+         then
+            Index := Index + 4;
+         end if;
+         Index := Index + 1;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Unindented;
+
    procedure Put_Note
      (Item      : in out Console;
       Key       : String;
@@ -942,8 +995,8 @@ package body Model_Runner.Presentation is
          --  Coloured once rendered: an argument's escapes are escaped.
          Line    : constant String :=
            (if Styles_Diagnostics (Item)
-            then Commands_Coloured (Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]))
-            else Message (Item, "diagnostic.note", [Loc.Named ("detail", Said)]));
+            then Commands_Coloured (Message (Item, "diagnostic.note", [Loc.Named ("detail", Unindented (Said))]))
+            else Message (Item, "diagnostic.note", [Loc.Named ("detail", Unindented (Said))]));
          Lead    : constant String := Message (Item, "diagnostic.next_lead");
          --  Its way on dimmed wherever the note begins with one.
          At_Lead : constant Natural :=
@@ -1086,17 +1139,24 @@ package body Model_Runner.Presentation is
       if Item.Level = Opt.Quiet then
          return;
       end if;
-      Error_Line
-        (Item,
-         Glyph & " "
-         & Message
-             (Item, "cli.agent.stopped",
-              [Loc.Named ("state",
-                          (if Styled
-                           then Terminal_Styles.Decorate (State, Role)
-                           else State)),
-               Loc.Named ("count", T.Image (Long_Long_Integer (Steps))),
-               Loc.Named ("total", T.Image (Long_Long_Integer (Calls)))]));
+      --  Coloured once rendered: a coloured argument has its escapes
+      --  escaped, and the colour was printed as text.
+      declare
+         Said : constant String :=
+           Message (Item, "cli.agent.stopped",
+                    [Loc.Named ("state", State),
+                     Loc.Named ("count", T.Image (Long_Long_Integer (Steps))),
+                     Loc.Named ("total", T.Image (Long_Long_Integer (Calls)))]);
+         At_State : constant Natural := (if State = "" then 0 else Ada.Strings.Fixed.Index (Said, State));
+      begin
+         Error_Line
+           (Item,
+            Glyph & " "
+            & (if Styled and then At_State > 0
+               then Said (Said'First .. At_State - 1) & Terminal_Styles.Decorate (State, Role)
+                    & Said (At_State + State'Length .. Said'Last)
+               else Said));
+      end;
    end Put_Agent_Outcome;
 
    ------------------
@@ -1222,7 +1282,7 @@ package body Model_Runner.Presentation is
              (Item, "diagnostic.line",
               [Loc.Named ("severity", Severity),
                Loc.Named ("code", E.Diagnostic_Code (Condition.Code)),
-               Loc.Named ("detail", Detail)]);
+               Loc.Named ("detail", Unindented (Detail))]);
          At_Label : constant Natural :=
            (if Severity'Length = 0 then 0
             else Ada.Strings.Fixed.Index (Line, Severity));
@@ -1357,7 +1417,8 @@ package body Model_Runner.Presentation is
       declare
          Line     : constant String :=
            Message (Item, "diagnostic.warning_line",
-                    [Loc.Named ("severity", Severity), Loc.Named ("detail", Message (Item, Key, Arguments))]);
+                    [Loc.Named ("severity", Severity),
+                     Loc.Named ("detail", Unindented (Message (Item, Key, Arguments)))]);
          At_Label : constant Natural := (if Severity = "" then 0 else Ada.Strings.Fixed.Index (Line, Severity));
       begin
          if Styles_Diagnostics (Item) and then At_Label > 0 then
@@ -1824,6 +1885,8 @@ package body Model_Runner.Presentation is
          Self.Lead := False;
          String'Write
            (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), "\xC2");
+         --  A line open again: what follows starts on a line of its own.
+         Self.Open := True;
       end if;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
       Closed := False;

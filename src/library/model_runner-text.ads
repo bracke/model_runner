@@ -86,7 +86,7 @@ package Model_Runner.Text is
       Keep_Tabs        : Boolean := False) return String;
 
    --  Generated text as a terminal is to show it: the C0 controls but line
-   --  feed, tab and carriage return, DEL and the C1 controls (U+0080 to
+   --  feed, tab and a carriage return before a line feed, DEL and the C1 controls (U+0080 to
    --  U+009F, written C2 80 to C2 9F) are written \xNN, so what a model
    --  says cannot move the cursor, retitle the window or write to the
    --  clipboard. Everything else passes byte for byte.

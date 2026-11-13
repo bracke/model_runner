@@ -147,7 +147,7 @@ package body Model_Runner.CLI.Choosers is
                      when 'F' => return (End_Key, ' ');
                      when others => return (Nothing, ' ');
                   end case;
-               when ' ' .. 'N' | 'P' .. 'Z' | '\' .. '~' =>
+               when ' ' .. 'N' | 'P' .. 'Z' | '\' .. '~' | ASCII.DEL =>
                   --  Alt and a key: neither Escape, which would close the
                   --  list, nor the key, which would start a filter.
                   Used := 2;
@@ -882,9 +882,10 @@ package body Model_Runner.CLI.Choosers is
          --  all the same.
          return Next (Byte) or else True;
       end if;
-      --  Anything else after it -- a second Escape, a key typed fast --
-      --  and the escape was Escape: the question is given up.
-      return False;
+      --  Alt and a key -- Alt+b, Alt+Backspace -- mean nothing here, and
+      --  are let go as an arrow is; a second Escape, or anything else, and
+      --  the escape was Escape: the question is given up.
+      return Byte in ' ' .. '~' | ASCII.DEL;
    end Key_Sequence_Skipped;
 
    --  Take back the last character typed at a line on the screen: as many
@@ -1506,10 +1507,16 @@ package body Model_Runner.CLI.Choosers is
             return True;
       end Still_Offered;
 
+      --  The line a suggestion was found for: one found for a line since
+      --  changed -- keys that came in a burst, before it was looked for
+      --  again -- is not taken.
+      Ghost_For : Unbounded_String;
+
       procedure Find_Ghost is
          Line  : constant String := To_String (Text);
       begin
          Ghost := Null_Unbounded_String;
+         Ghost_For := Text;
          --  A line typed before that this one begins, the newest: the rest
          --  of it, as it was typed.
          if Complete /= null and then Line /= "" and then Cursor = Line'Length and then Line (Line'First) = '/' then
@@ -1559,6 +1566,8 @@ package body Model_Runner.CLI.Choosers is
                   Shared := Head (Shared, Same);
                end;
             end loop;
+            --  To a whole character, as Tab inserts it.
+            Shared := Head (Shared, Model_Runner.UTF8.Safe_Prefix_Length (To_String (Shared)));
             if Length (Shared) > Word'Length then
                Ghost := To_Unbounded_String (Slice (Shared, Word'Length + 1, Length (Shared)));
             end if;
@@ -1572,22 +1581,54 @@ package body Model_Runner.CLI.Choosers is
       --  line until the next key.
       Status : Unbounded_String;
 
+      --  What speech says is shown, not obeyed: a line feed in an error's
+      --  words moved the row without the column, and the rows counted were
+      --  not the rows drawn.
       function Status_Shown return String is
-        (if Status = Null_Unbounded_String then "" else "  " & To_String (Status));
+        (if Status = Null_Unbounded_String then ""
+         else "  " & T.Escape_Controls (To_String (Status)));
+
+      --  The line as it is drawn: a line feed a paste put in it as a mark
+      --  of its own (U+21B5), which takes one column and moves no row.
+      function Visible (Part : String) return String is
+         Mark   : constant String := Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#B5#);
+         Result : Unbounded_String;
+      begin
+         if Ada.Strings.Fixed.Index (Part, [1 => ASCII.LF]) = 0 then
+            return Part;
+         end if;
+         for C of Part loop
+            if C = ASCII.LF then
+               Append (Result, Mark);
+            else
+               Append (Result, C);
+            end if;
+         end loop;
+         return To_String (Result);
+      end Visible;
 
       --  The prompt and the line drawn again from the prompt's row, the
       --  cursor put where it is in the line.
       procedure Redraw is
          W        : constant Positive := Columns;
-         Line     : constant String := To_String (Text);
+         Typed    : constant String := To_String (Text);
+         Line     : constant String := Visible (Typed);
+         --  The suggestion cut to what is left of the line's last row: a
+         --  long one -- an earlier line of kilobytes -- was drawn whole on
+         --  every key.
+         Line_End : constant Natural := Model_Runner.UTF8.Wrapped_Columns (Prompt & Line, W) mod W;
+         Room     : constant Integer := W - Line_End - 1;
+         Shown_Ghost : constant String :=
+           (if Ghost = Null_Unbounded_String or else Room <= 0 then ""
+            else To_String (Ghost) (1 .. Model_Runner.UTF8.Fitting (To_String (Ghost), Room)));
          --  Measured from the prompt on, as one text: a tab in the line
          --  goes to a stop counted from the row's start.
          --  Counted as the terminal wraps it, a wide character that met
          --  the edge on the next row.
          Shown_Total : constant Natural :=
-           Model_Runner.UTF8.Wrapped_Columns (Prompt & Line & To_String (Ghost) & Status_Shown, W);
+           Model_Runner.UTF8.Wrapped_Columns (Prompt & Line & Shown_Ghost & Status_Shown, W);
          At_Cursor : constant Natural :=
-           Model_Runner.UTF8.Wrapped_Columns (Prompt & Line (Line'First .. Line'First + Cursor - 1), W);
+           Model_Runner.UTF8.Wrapped_Columns (Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1)), W);
          Wrapped  : Boolean := False;
          End_Row  : Natural;
       begin
@@ -1599,8 +1640,8 @@ package body Model_Runner.CLI.Choosers is
          end if;
          Put (ASCII.CR & ASCII.ESC & "[J" & Prompt & Pres.Coloured_Commands (Screen, Line));
          --  What Right would take, dimmed after it.
-         if Ghost /= Null_Unbounded_String then
-            Put (ASCII.ESC & "[2m" & To_String (Ghost) & ASCII.ESC & "[0m");
+         if Shown_Ghost /= "" then
+            Put (ASCII.ESC & "[2m" & Shown_Ghost & ASCII.ESC & "[0m");
          end if;
          if Status /= Null_Unbounded_String then
             Put (ASCII.ESC & "[2m" & Status_Shown & ASCII.ESC & "[0m");
@@ -1622,7 +1663,7 @@ package body Model_Runner.CLI.Choosers is
          end if;
          Drawn_Row := At_Cursor / W;
          Drawn_Width := W;
-         Drawn_Before := To_Unbounded_String (Prompt & Line (Line'First .. Line'First + Cursor - 1));
+         Drawn_Before := To_Unbounded_String (Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1)));
          Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       end Redraw;
 
@@ -1706,14 +1747,26 @@ package body Model_Runner.CLI.Choosers is
          if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
             return False;
          end if;
-         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
-           or else Last < Buffer'First
-         then
-            return False;
-         end if;
+         --  A read a signal broke is read again, not taken for the end.
+         declare
+            Got : Hostkit.Descriptors.Transfer_Outcome;
+         begin
+            loop
+               Got := Hostkit.Descriptors.Read (Input, Buffer, Last);
+               exit when Got /= Hostkit.Descriptors.Transfer_Interrupted;
+            end loop;
+            if Got /= Hostkit.Descriptors.Transfer_Ok or else Last < Buffer'First then
+               return False;
+            end if;
+         end;
          Into := Character'Val (Buffer (Buffer'First));
          return True;
       end Next;
+
+      --  How long the rest of a key's sequence is waited for, in
+      --  milliseconds: over a slow link 30 took an arrow for Escape, and
+      --  Escape drops the line.
+      Key_Wait : constant := 100;
 
       --  Whether the key before was a Tab that completed nothing more:
       --  a second lists what the word may be.
@@ -2010,6 +2063,12 @@ package body Model_Runner.CLI.Choosers is
       end if;
       Put (ASCII.ESC & "[?2004h");
       Guard.Bracketed := True;
+      --  A paste goes on into this line only while its bytes are still
+      --  coming: with none waiting, its closing mark was lost -- thrown
+      --  away with the input a cancel discarded -- and the paste is over.
+      if Pasting and then not Hostkit.Descriptors.Wait_Readable (Input, 0) then
+         Pasting := False;
+      end if;
       Redraw;
       loop
          if not Next (Into => Key) then
@@ -2017,8 +2076,37 @@ package body Model_Runner.CLI.Choosers is
             exit;
          end if;
          Status := Null_Unbounded_String;
-         if Dictate /= null and then Key = Shortcut and then not Pasting then
+         if Text /= Ghost_For then
+            Ghost := Null_Unbounded_String;
+         end if;
+         --  Pasted text is the text's, controls and all: a line's end is a
+         --  line feed in it, not Enter -- a paragraph's blank line sent
+         --  the first half on its own, and a pasted form feed cleared the
+         --  screen, a pasted ^U erased what came before it. Only the
+         --  escape that ends the paste is read as keys.
+         if Pasting and then Key in ASCII.CR | ASCII.LF then
+            declare
+               After : Character;
+            begin
+               --  CR LF is one line end.
+               if Key = ASCII.CR and then Next (30, After) and then After /= ASCII.LF then
+                  Append (Held_Keys, After);
+               end if;
+            end;
+            Insert (Text, Cursor + 1, [1 => ASCII.LF]);
+            Cursor := Cursor + 1;
+         elsif Pasting and then Key /= ASCII.ESC and then Key /= ASCII.HT
+           and then (Key < ' ' or else Key = ASCII.DEL)
+         then
+            null;
+         elsif Dictate /= null and then Key = Shortcut and then not Pasting then
             Dictation_Round;
+            --  What speech said, shown now: keys held while it worked
+            --  waited, and the first of them cleared it before a redraw.
+            if Status /= Null_Unbounded_String then
+               Find_Ghost;
+               Redraw;
+            end if;
          elsif Key = Character'Val (16#1F#) then
             --  Ctrl-_: the last transcript taken out again, where nothing
             --  has changed the line since it went in.
@@ -2101,7 +2189,7 @@ package body Model_Runner.CLI.Choosers is
                   declare
                      Second : Character;
                   begin
-                     if not Next (30, Second) then
+                     if not Next (Key_Wait, Second) then
                         Outcome := Escaped;
                         exit;
                      elsif Second in '[' | 'O' then
@@ -2110,14 +2198,26 @@ package body Model_Runner.CLI.Choosers is
                            Final  : Character := ASCII.NUL;
                            Part   : Character;
                         begin
-                           while Next (30, Part) loop
+                           while Next (Key_Wait, Part) loop
                               if Part in '0' .. '9' then
                                  --  Held, not grown past: a pasted run of digits
                                  --  is no key, and overflowed out of the editor.
                                  if Number <= 9_999 then
                                     Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
                                  end if;
-                              elsif Part /= ';' then
+                              --  The rest of a sequence's parameters and its
+                              --  intermediates -- ; < = > ? and the like --
+                              --  are read through to its final byte, not
+                              --  taken for it and the rest typed.
+                              elsif Part in ' ' .. '/' | ':' .. '?' then
+                                 null;
+                              elsif Part = '[' and then Second = '[' then
+                                 --  The Linux console's F1-F5: ESC [ [ A.
+                                 if Next (Key_Wait, Part) then
+                                    null;
+                                 end if;
+                                 exit;
+                              else
                                  Final := Part;
                                  exit;
                               end if;
@@ -2249,7 +2349,11 @@ package body Model_Runner.CLI.Choosers is
         and then (History.Is_Empty or else History.Last_Element /= To_String (Text))
       then
          History.Append (To_String (Text));
-         Keep_In_History (To_String (Text));
+         --  A pasted line of several is kept for this session's recall,
+         --  not in the file, which keeps a line a line.
+         if Ada.Strings.Fixed.Index (To_String (Text), [1 => ASCII.LF]) = 0 then
+            Keep_In_History (To_String (Text));
+         end if;
          Last_Read_Kept := True;
       end if;
       return To_String (Text);

@@ -1528,6 +1528,26 @@ package body Tests.Tools_Cases is
          Assert (Init.Settings.First_Element = "check_command=make test",
                  "a template's input to /init did not run on: " & Cl.Canonical (Init));
       end;
+      --  A number a comma groups stays one; a list of bare numbers names
+      --  tasks; a number in a reason stays a number; a quoted title after
+      --  a setting that names loses its quotes; a backslash keeps a space.
+      declare
+         Rows   : constant Cl.Request := Pc.Request_Of ("/task new Support 1,000 users kind=code");
+         Listed : constant Cl.Request := Pc.Request_Of ("/task show 3,4");
+         Why    : constant Cl.Request := Pc.Request_Of ("/task reject 5 reason=fails 2 tests");
+         Titled : constant Cl.Request := Pc.Request_Of ("/task new kind=code 'Fix parser'");
+         Spaced : constant Cl.Request := Pc.Request_Of ("/bootstrap my\ notes.md");
+      begin
+         Assert (Rows.Positional.Contains ("1,000"), "a grouped number was split: " & Cl.Canonical (Rows));
+         Assert (Listed.Positional.Contains ("TASK-003") and then Listed.Positional.Contains ("TASK-004"),
+                 "a list of numbers was not read as tasks: " & Cl.Canonical (Listed));
+         Assert (Why.Settings.First_Element = "reason=fails 2 tests",
+                 "a number in a reason became an ID: " & Cl.Canonical (Why));
+         Assert (Titled.Positional.Contains ("Fix parser"),
+                 "a quoted title kept its quotes: " & Cl.Canonical (Titled));
+         Assert (Spaced.Positional.Contains ("my notes.md"),
+                 "an escaped space did not join the name: " & Cl.Canonical (Spaced));
+      end;
    end Command_Lines_Read_Back;
 
    --  Every built-in tool answers the same way every time.

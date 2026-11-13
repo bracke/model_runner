@@ -53,9 +53,26 @@ package body Model_Runner.CLI.Checkpoint is
       Buf     : US.Unbounded_String;
       --  A link is written through, to the file it names: renamed over,
       --  the link became a plain file and what it named was never updated.
-      Target  : constant String :=
-        (if Hostkit.Fs.Is_Link (Path) and then Hostkit.Fs.Real_Path (Path) /= ""
-         then Hostkit.Fs.Real_Path (Path) else Path);
+      --  A link that names nothing yet is written through as well: to
+      --  what it names, made there.
+      function Through_Link return String is
+         Named : US.Unbounded_String;
+      begin
+         if not Hostkit.Fs.Is_Link (Path) then
+            return Path;
+         elsif Hostkit.Fs.Real_Path (Path) /= "" then
+            return Hostkit.Fs.Real_Path (Path);
+         elsif Hostkit.Fs.Read_Link_Target (Path, Named) and then US.Length (Named) > 0 then
+            declare
+               Said : constant String := US.To_String (Named);
+            begin
+               return (if Said (Said'First) = '/' then Said
+                       else Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Path), Said));
+            end;
+         end if;
+         return Path;
+      end Through_Link;
+      Target  : constant String := Through_Link;
       Partial : constant String := Model_Runner.CLI.Partials.Beside (Target);
       --  The file's own access kept, not the creation mask's: a private
       --  conversation saved again came back readable by all.
@@ -65,8 +82,11 @@ package body Model_Runner.CLI.Checkpoint is
       use type Hostkit.Durability.Outcome;
       use type GNAT.OS_Lib.File_Descriptor;
       use type Hostkit.Metadata.Identity_Field;
-      --  Its permission bits, as the host gave them.
-      Kept_Mode : constant Natural := (if Had.Available then Natural (Had.Mode mod 8#1000#) else 8#644#);
+      --  Its permission bits, as the host gave them -- where the host's
+      --  are permission bits: Windows gives its attributes in their place.
+      Native    : constant Boolean := Hostkit.Metadata.Mode_Bits_Are_Native;
+      Kept_Mode : constant Natural := (if Had.Available then Natural (Had.Mode mod 8#1000#) else 8#666#);
+      Made      : GNAT.OS_Lib.File_Descriptor := GNAT.OS_Lib.Invalid_FD;
 
       procedure LP (S : String) is
       begin
@@ -113,17 +133,14 @@ package body Model_Runner.CLI.Checkpoint is
       --  at a time from where it was built, not copied whole onto a stack.
       --  Made new, nothing that is there followed: a link planted at the
       --  partial's name would have had what it names written over.
-      declare
-         Made : constant GNAT.OS_Lib.File_Descriptor :=
-           Hostkit.Regular_Files.Create_New
-             (Partial, Mode => Kept_Mode);
-      begin
-         if Made = GNAT.OS_Lib.Invalid_FD then
-            raise Ada.IO_Exceptions.Use_Error;
-         end if;
-         GNAT.OS_Lib.Close (Made);
-      end;
-      Open (File, Out_File, Partial, Form => "shared=no");
+      --  Written through the descriptor it was made with: closed and opened
+      --  again by name, a link put there between the two was followed.
+      --  Made writable by its owner, as a new file is less the creation
+      --  mask; the file's own access is put on it once it is written.
+      Made := Hostkit.Regular_Files.Create_New (Partial, Mode => 8#666#);
+      if Made = GNAT.OS_Lib.Invalid_FD then
+         raise Ada.IO_Exceptions.Use_Error;
+      end if;
       declare
          Slice_Bytes : constant := 64 * 1024;
          Length      : constant Natural := US.Length (Buf);
@@ -131,20 +148,19 @@ package body Model_Runner.CLI.Checkpoint is
       begin
          while From <= Length loop
             declare
-               Upto  : constant Natural := Natural'Min (Length, From + Slice_Bytes - 1);
-               S     : constant String := US.Slice (Buf, From, Upto);
-               Block : Stream_Element_Array (1 .. Stream_Element_Offset (S'Length));
+               Upto : constant Natural := Natural'Min (Length, From + Slice_Bytes - 1);
+               S    : aliased constant String := US.Slice (Buf, From, Upto);
             begin
-               for I in S'Range loop
-                  Block (Stream_Element_Offset (I - S'First + 1)) := Stream_Element (Character'Pos (S (I)));
-               end loop;
-               Write (File, Block);
+               if GNAT.OS_Lib.Write (Made, S'Address, S'Length) /= S'Length then
+                  raise Ada.IO_Exceptions.Use_Error;
+               end if;
                From := Upto + 1;
             end;
          end loop;
       end;
-      Close (File);
-      if Had.Available then
+      GNAT.OS_Lib.Close (Made);
+      Made := GNAT.OS_Lib.Invalid_FD;
+      if Had.Available and then Native then
          declare
             Kept : constant Boolean := Hostkit.Metadata.Set_Permissions (Partial, Kept_Mode);
             pragma Unreferenced (Kept);
@@ -169,6 +185,9 @@ package body Model_Runner.CLI.Checkpoint is
       when Failure : others =>
          if Is_Open (File) then
             Close (File);
+         end if;
+         if Made /= GNAT.OS_Lib.Invalid_FD then
+            GNAT.OS_Lib.Close (Made);
          end if;
          begin
             if Ada.Directories.Exists (Partial) then

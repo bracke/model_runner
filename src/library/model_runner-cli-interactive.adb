@@ -502,9 +502,7 @@ package body Model_Runner.CLI.Interactive is
 
       --  What /load reads, asked before it takes the conversation's place:
       --  its system message first if it has one, a developer's beside it,
-      --  no turn of a person or of the model twice in a row, the last turn
-      --  not a person's still unanswered -- a template that alternates
-      --  could render no turn after any of those -- and its pictures
+      --  and its pictures
       --  gathered, which every turn after does again: a picture missing,
       --  or no projector, and every turn after was refused, while the load
       --  had said it loaded.
@@ -532,19 +530,12 @@ package body Model_Runner.CLI.Interactive is
                then
                   Refuse ("a developer message stands at turn" & Natural'Image (Index) & ", not first");
                   return;
-               elsif Index > 1 and then Said in Conv.User_Role | Conv.Assistant_Role
-                 and then Conv.Sender_At (Trial, Index - 1) = Said
-               then
-                  Refuse ("turns" & Natural'Image (Index - 1) & " and" & Natural'Image (Index)
-                          & " are both the " & Conv.Role_Name (Said) & "'s");
-                  return;
                end if;
             end;
          end loop;
-         if Count > 0 and then Conv."=" (Conv.Sender_At (Trial, Count), Conv.User_Role) then
-            Refuse ("it ends on a turn of the person's with no answer");
-            return;
-         end if;
+         --  Two turns of a side in a row, or a last turn unanswered, are
+         --  left be: an agent's checkpoint holds both -- its nudges are the
+         --  person's -- and run --checkpoint takes it up again.
          --  The pictures the loaded one names, gathered in place of the
          --  ones held: refused, the set is empty, and the conversation
          --  kept gathers its own again at its next turn.
@@ -1704,6 +1695,10 @@ package body Model_Runner.CLI.Interactive is
       --  A project in the session's directory is looked at before anything
       --  is asked of it.
       Model_Runner.CLI.Project_Commands.Recover_Here (Screen);
+      --  Seen as of the project the session is on: read before the move
+      --  up to its top, it was nought, and the first turn told the model
+      --  the project's history as news.
+      Project_Seen := Model_Runner.CLI.Project_Commands.Project_Revision;
 
       --  A stop the set refuses, or a token the vocabulary has not got,
       --  refused as run refuses it: taken in silence, the conversation ran

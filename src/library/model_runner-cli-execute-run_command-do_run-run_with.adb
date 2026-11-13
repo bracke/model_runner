@@ -795,6 +795,7 @@ begin
               US.To_Unbounded_String
                 (T.To_String (Item.Checkpoint_File_Path));
             Watcher.Text := Agent_Sink'Unchecked_Access;
+            Agent_Sink.Screen := Screen'Unchecked_Access;
 
             --  In groups, as /work is: the run, then how it came out.
             Pres.Put_Heading (Screen, "cli.work.section.run", Pres.Diagnostic);

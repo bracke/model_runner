@@ -101,6 +101,11 @@ package body Model_Runner.Output.Harmony is
    begin
       Self.Only_Final := On;
       Self.Shown := False;
+      --  A turn starts at its header: what a turn cut short held -- a stray
+      --  <| -- was glued to the next turn's first marker, and its header
+      --  was shown as reply text or its reply hidden whole.
+      Self.Where := In_Header;
+      Self.Used := 0;
    end Answer_Only;
 
    function Showed_Nothing (Self : Filter) return Boolean is (not Self.Shown);
@@ -124,6 +129,10 @@ package body Model_Runner.Output.Harmony is
         and then Ada.Strings.Fixed.Index (Self.Held (1 .. Self.Used), "<|") = 0
       then
          Self.Where := Showing;
+         Show (Self, Self.Held (1 .. Self.Used));
+         Self.Used := 0;
+      --  The reply's end held as a possible marker -- a last < -- shown.
+      elsif Self.Where = Showing and then Self.Used > 0 then
          Show (Self, Self.Held (1 .. Self.Used));
          Self.Used := 0;
       end if;

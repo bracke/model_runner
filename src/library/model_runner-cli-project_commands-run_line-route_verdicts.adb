@@ -25,7 +25,9 @@ begin
          --  What still waits, as one decided alone says it: several
          --  turned down, or entries -- not tasks -- accepted.
          if Word = "/reject"
-           or else (for some One of Named => Ada.Strings.Fixed.Head (One, 5) /= "TASK-")
+           or else (for some One of Named =>
+                      Ada.Strings.Fixed.Head (Ada.Characters.Handling.To_Upper (One), 5) /= "TASK-"
+                      and then not (One /= "" and then (for all C of One => C in '0' .. '9')))
          then
             With_Store (Say_Still_Waiting'Access);
          end if;

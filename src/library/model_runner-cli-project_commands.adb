@@ -1,3 +1,4 @@
+with Hostkit.Path_Text;
 with Ada.Text_IO;
 with Ada.Characters.Handling;
 with Ada.Containers.Ordered_Maps;
@@ -658,7 +659,8 @@ package body Model_Runner.CLI.Project_Commands is
       Guard    : aliased Fence (Self.Screen);
       Watcher  : aliased Watch (Self.Screen, Host);
       Sink     : aliased Watching_Sink :=
-        (Pres.Standard_Output_Sink with Styled => Pres.Styles_Answers (Self.Screen.all), others => <>);
+        (Pres.Standard_Output_Sink with Styled => Pres.Styles_Answers (Self.Screen.all),
+         Screen => Self.Screen.all'Unchecked_Access, others => <>);
       use type Model_Runner.Clocks.Nanoseconds;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
@@ -2571,13 +2573,25 @@ package body Model_Runner.CLI.Project_Commands is
 
    function From_Session_Start (Path : String) return String is
    begin
-      if Path = "" or else Path (Path'First) = '/' or else Started_In = Null_Unbounded_String
+      if Path = "" or else Hostkit.Path_Text.Root_Length (Path) > 0 or else Started_In = Null_Unbounded_String
         or else To_String (Started_In) = Ada.Directories.Current_Directory
         or else (Path (Path'First) = '~')
       then
          return Path;
       end if;
-      return To_String (Started_In) & "/" & Path;
+      declare
+         From_Start : constant String := Hostkit.Fs.Join (To_String (Started_In), Path);
+      begin
+         --  A path Tab offered from the project's top -- what is not below
+         --  where the session started -- is read from there, as offered.
+         if not Ada.Directories.Exists (From_Start) and then Ada.Directories.Exists (Path) then
+            return Path;
+         end if;
+         return From_Start;
+      end;
+   exception
+      when others =>
+         return Path;
    end From_Session_Start;
 
    -----------------
@@ -2681,10 +2695,17 @@ package body Model_Runner.CLI.Project_Commands is
                      declare
                         Started : constant String := Ada.Directories.Current_Directory;
                      begin
-                        if Started'Length > Parent'Length + 1 then
-                           Below_Top := To_Unbounded_String
-                             (Started (Started'First + Parent'Length + 1 .. Started'Last));
-                        end if;
+                        --  Its separator skipped, where the top has none
+                        --  at its end -- / has.
+                        declare
+                           Skip : constant Natural :=
+                             (if Hostkit.Path_Text.Is_Separator_In (Parent, Parent (Parent'Last)) then 0 else 1);
+                        begin
+                           if Started'Length > Parent'Length + Skip then
+                              Below_Top := To_Unbounded_String
+                                (Started (Started'First + Parent'Length + Skip .. Started'Last));
+                           end if;
+                        end;
                      end;
                      Ada.Directories.Set_Directory (Parent);
                      Pres.Put_Note (Screen, "cli.project.found_above", [Loc.Named ("path", Parent)]);
@@ -2854,9 +2875,12 @@ package body Model_Runner.CLI.Project_Commands is
       Said   : Unbounded_String;
       Shown  : Natural := 0;
       Most   : constant := 8;
+      Told_To : Natural := 0;
    begin
+      --  Behind what was seen: another project, the session moved to it --
+      --  what it has is from now on, not past the other's revision.
       if Now <= Seen then
-         Seen := Natural'Max (Seen, Now);
+         Seen := Now;
          return "";
       end if;
       S.Open_To_Read (Store, Here, Opened);
@@ -2873,6 +2897,9 @@ package body Model_Runner.CLI.Project_Commands is
                           & (if Length (One.Detail) = 0 then "" else ": " & To_String (One.Detail))
                           & ASCII.LF);
                   Shown := Shown + 1;
+                  --  Told up to the last event told, read after Now was:
+                  --  not told again next turn.
+                  Told_To := Natural'Max (Told_To, One.Sequence);
                end;
             end loop;
             if Count > Shown then
@@ -2881,7 +2908,7 @@ package body Model_Runner.CLI.Project_Commands is
          end;
          S.Close (Store);
       end if;
-      Seen := Now;
+      Seen := Natural'Max (Now, Told_To);
       return (if Said = Null_Unbounded_String then ""
               else "(note from the harness, not the user: the project's state changed since your last"
                    & " turn -- what was said before about it may be out of date; the project is"
@@ -2925,6 +2952,26 @@ package body Model_Runner.CLI.Project_Commands is
       end if;
    end Help;
 
+   --  Whether a setting's value is words, which a bare value runs on
+   --  into: what a person writes rather than names.
+   function Is_Wordy (Name : String) return Boolean;
+
+   --  Whether the latest NAME=VALUE among words is one whose value is words.
+   function Latest_Setting_Is_Wordy (Words : Names.Vector) return Boolean is
+   begin
+      for Index in reverse 1 .. Natural (Words.Length) loop
+         declare
+            Word  : constant String := Words (Index);
+            Equal : constant Natural := Ada.Strings.Fixed.Index (Word, "=");
+         begin
+            if Equal > Word'First and then Word (Word'First) /= '-' then
+               return Is_Wordy (Ada.Characters.Handling.To_Lower (Word (Word'First .. Equal - 1)));
+            end if;
+         end;
+      end loop;
+      return False;
+   end Latest_Setting_Is_Wordy;
+
    --  Whether a line leaves a quote open: the rest of it taken as quoted.
    Left_Open : Boolean := False;
 
@@ -2951,7 +2998,9 @@ package body Model_Runner.CLI.Project_Commands is
             Char : constant Character := Line (Index);
          begin
             if Single then
-               if Char = ''' and then (Index = Line'Last or else Line (Index + 1) in ' ' | ASCII.HT) then
+               --  Closed before a space, a comma or a semicolon, or the end:
+               --  title='Fix parser', notes=x took the rest of the line.
+               if Char = ''' and then (Index = Line'Last or else Line (Index + 1) in ' ' | ASCII.HT | ',' | ';') then
                   Single := False;
                   --  Quoted words inside a field's value are its words,
                   --  quotes and all: returns 'Hello' keeps them.
@@ -2969,9 +3018,9 @@ package body Model_Runner.CLI.Project_Commands is
             then
                Single := True;
                --  A word of a value after NAME= went before: its quotes kept.
-               Kept_Quote := not Started
-                 and then (for some Word of Result =>
-                             Ada.Strings.Fixed.Index (Word, "=") > 1 and then Word (Word'First) /= '-');
+               --  The latest NAME= being one whose value is words: after
+               --  kind=code, 'Fix parser' is a title, its quotes not kept.
+               Kept_Quote := not Started and then Latest_Setting_Is_Wordy (Result);
                if Kept_Quote then
                   Append (Current, Char);
                end if;
@@ -2979,7 +3028,8 @@ package body Model_Runner.CLI.Project_Commands is
 
             --  A quote or a backslash after a backslash is itself.
             elsif Escape then
-               if Char not in '"' | '\' | ''' then
+               --  A space after a backslash too: my\ notes.md is one name.
+               if Char not in '"' | '\' | ''' | ' ' then
                   Append (Current, '\');
                end if;
                Append (Current, Char);
@@ -3135,6 +3185,11 @@ package body Model_Runner.CLI.Project_Commands is
             end if;
          end loop;
          return "";
+      --  A folder that cannot be read names no label: raised here, it
+      --  left Run_Line before its own handler was in force.
+      exception
+         when others =>
+            return "";
       end Labelled;
 
       --  A number that names both the padded entry and a document's own
@@ -3149,6 +3204,21 @@ package body Model_Runner.CLI.Project_Commands is
             Number_Ambiguity := To_Unbounded_String (Prefix & Padded (Number) & " and " & Prefix & Bare);
          end if;
       end Check_Both;
+
+      --  A number as the register numbers it: REQ-1 where it holds that
+      --  and no REQ-001, else padded.
+      function As_Kept_Number (Prefix, Number : String) return String is
+         Bare : constant String := Ada.Strings.Fixed.Trim (Number, Ada.Strings.Maps.To_Set ("0"),
+                                                           Ada.Strings.Maps.Null_Set);
+      begin
+         if Bare /= "" and then not Held_As (Prefix & Padded (Number)) and then Held_As (Prefix & Bare) then
+            return Prefix & Bare;
+         end if;
+         return Prefix & Padded (Number);
+      end As_Kept_Number;
+
+      --  Whether a NAME=VALUE has come: the words after it are its value's.
+      After_Setting : Boolean := False;
 
       function Kept (Word : String) return String is
          Upper : constant String := Ada.Characters.Handling.To_Upper (Word);
@@ -3210,7 +3280,7 @@ package body Model_Runner.CLI.Project_Commands is
          elsif Command = "/task" and then Index >= 3
            and then Act in "show" | "audit" | "accept" | "reject" | "cancel" | "complete" | "verify"
                          | "integrate" | "diff" | "depend" | "reopen" | "reconsider"
-                         | "rehome" | "context" | "plan"
+                         | "context" | "plan"
          then
             return "TASK-";
          --  The task alone: a note's words, a capability, a reason, a part's
@@ -3264,23 +3334,44 @@ package body Model_Runner.CLI.Project_Commands is
          declare
             Word : constant String := Words (Index);
          begin
+            if Index > 2 then
+               declare
+                  Before : constant String := Words (Index - 1);
+               begin
+                  if Ada.Strings.Fixed.Index (Before, "=") > Before'First and then Before (Before'First) /= '-' then
+                     After_Setting := True;
+                  end if;
+               end;
+            end if;
             --  A number alone where an identifier is named: a task's, or
             --  the register's the command is about.
-            if All_Digits (Word) and then Number_Kind (Index) /= "" then
+            --  Not past a NAME=VALUE: what follows it is its value's words
+            --  -- reason=waiting 2 weeks -- not identifiers for being numbers.
+            if All_Digits (Word) and then Number_Kind (Index) /= "" and then not After_Setting then
                Check_Both (Number_Kind (Index), Word);
-               --  The register's own way of numbering: REQ-1 where it holds
-               --  that and no REQ-001.
+               Result.Append (As_Kept_Number (Number_Kind (Index), Word));
+
+            --  3,4 where identifiers are named: each a task's, or the
+            --  register's -- the list was split later, and each stayed a
+            --  bare number.
+            elsif Number_Kind (Index) /= "" and then not After_Setting
+              and then Ada.Strings.Fixed.Index (Word, ",") > 0
+              and then (for all C of Word => C in '0' .. '9' | ',')
+              and then Word (Word'First) /= ',' and then Word (Word'Last) /= ','
+              and then Ada.Strings.Fixed.Index (Word, ",,") = 0
+            then
                declare
-                  Bare : constant String := Ada.Strings.Fixed.Trim (Word, Ada.Strings.Maps.To_Set ("0"),
-                                                                    Ada.Strings.Maps.Null_Set);
+                  Out_W : Unbounded_String;
+                  Start : Positive := Word'First;
                begin
-                  if Bare /= "" and then not Held_As (Number_Kind (Index) & Padded (Word))
-                    and then Held_As (Number_Kind (Index) & Bare)
-                  then
-                     Result.Append (Number_Kind (Index) & Bare);
-                  else
-                     Result.Append (Number_Kind (Index) & Padded (Word));
-                  end if;
+                  for At_Index in Word'First .. Word'Last + 1 loop
+                     if At_Index > Word'Last or else Word (At_Index) = ',' then
+                        Append (Out_W, (if Start = Word'First then "" else ",")
+                                       & As_Kept_Number (Number_Kind (Index), Word (Start .. At_Index - 1)));
+                        Start := At_Index + 1;
+                     end if;
+                  end loop;
+                  Result.Append (To_String (Out_W));
                end;
 
             --  parent=2, depends_on=1,3, requirements=4: the identifiers a
@@ -3304,7 +3395,7 @@ package body Model_Runner.CLI.Project_Commands is
                            declare
                               One : constant String := Value (Start .. At_Index - 1);
                            begin
-                              Append (Out_V, (if All_Digits (One) then Kind & Padded (One)
+                              Append (Out_V, (if All_Digits (One) then As_Kept_Number (Kind, One)
                                               elsif One = "" then "" else Kept (One))
                                              & (if At_Index > Value'Last then "" else ","));
                            end;
@@ -3382,9 +3473,14 @@ package body Model_Runner.CLI.Project_Commands is
          if Result = Null_Unbounded_String then
             Result := To_Unbounded_String (Ada.Strings.Fixed.Trim (Line, Ada.Strings.Both));
          elsif not Placed and then Ada.Strings.Fixed.Index (Line, ".adb:") > 0 then
-            Append (Result, ", in " & Ada.Strings.Fixed.Trim
-                                         (Line (Ada.Strings.Fixed.Index (Line, " ", Line'First + 3) .. Line'Last),
-                                          Ada.Strings.Both));
+            declare
+               Gap : constant Natural :=
+                 (if Line'Length > 3 then Ada.Strings.Fixed.Index (Line, " ", Line'First + 3) else 0);
+            begin
+               Append (Result, ", in " & Ada.Strings.Fixed.Trim
+                                            (Line ((if Gap = 0 then Line'First else Gap) .. Line'Last),
+                                             Ada.Strings.Both));
+            end;
             Placed := True;
          end if;
       end loop;
@@ -3395,12 +3491,23 @@ package body Model_Runner.CLI.Project_Commands is
    -- Request_Of --
    ----------------
 
-   --  Whether a setting's value is words, which a bare value runs on
-   --  into: what a person writes rather than names.
    function Is_Wordy (Name : String) return Boolean
    is (Name in "title" | "notes" | "note" | "reason" | "summary" | "text" | "detail" | "criteria"
              | "acceptance" | "meaning" | "ruling" | "scope" | "claim" | "evidence" | "statement"
              | "description" | "rationale" | "subject");
+
+   --  Whether a word is the name of a template /init could start from.
+   function Names_A_Template (Word : String) return Boolean is
+   begin
+      return Word /= ""
+        and then (for all C of Word => C in 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-')
+        and then (for some Folder of Names.Vector'([Model_Runner.Platform.Installed_Templates_Directory,
+                                                    Model_Runner.Platform.User_Templates_Directory]) =>
+                    Folder /= "" and then Ada.Directories.Exists (Hostkit.Fs.Join (Folder, Word & ".template")));
+   exception
+      when others =>
+         return False;
+   end Names_A_Template;
 
    function Request_Of (Line : String) return Model_Runner.CLI.Command_Lines.Request is
       All_Words : constant Names.Vector := Identifiers_As_Kept (Split (Line));
@@ -3465,7 +3572,10 @@ package body Model_Runner.CLI.Project_Commands is
                     and then (All_Words.First_Element in "/reconfigure" | "/init" | "/obs"
                               or else Is_Wordy (Name));
                end;
-            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
+            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
+              --  /init's template typed after an input is the template.
+              and then not (All_Words.First_Element = "/init" and then Names_A_Template (Part))
+            then
                --  A value runs on to the next NAME=, as /reconfigure takes
                --  one: notes=for users is one value, not a word dropped.
                Result.Settings.Replace_Element
@@ -3475,9 +3585,10 @@ package body Model_Runner.CLI.Project_Commands is
                --  IDs a comma apart, as a list is written: TASK-008, TASK-009,
                --  or TASK-008,TASK-009 -- each its own.
                if Ada.Strings.Fixed.Index (Part, ",") > 0
-                 and then (Part (Part'First) in '0' .. '9'
-                           or else (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
-                                      Ada.Strings.Fixed.Head (Part, Prefix'Length) = Prefix))
+                 --  Not a number a comma groups -- 1,000 -- which a list of
+                 --  bare numbers is not: those were made IDs already.
+                 and then (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
+                             Ada.Strings.Fixed.Head (Part, Prefix'Length) = Prefix)
                then
                   declare
                      From : Natural := Part'First;

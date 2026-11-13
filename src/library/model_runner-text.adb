@@ -175,8 +175,12 @@ package body Model_Runner.Text is
                Put_Escaped (Char);
                Put_Escaped (Whole (Index + 1));
                Index := Index + 1;
+            --  A carriage return before a line feed is a line's end; one
+            --  alone returns the cursor, and what follows is written over
+            --  what was shown -- a command made to read as another.
             elsif Is_Control (Char)
-              and then Char not in ASCII.LF | ASCII.HT | ASCII.CR
+              and then Char not in ASCII.LF | ASCII.HT
+              and then not (Char = ASCII.CR and then Index < Whole'Last and then Whole (Index + 1) = ASCII.LF)
             then
                Put_Escaped (Char);
             else

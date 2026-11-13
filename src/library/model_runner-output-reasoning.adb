@@ -78,6 +78,12 @@ package body Model_Runner.Output.Reasoning is
 
    overriding procedure Flush (Self : in out Filter; Closed : out Boolean) is
    begin
+      --  The reply's end held as a possible marker -- a last <, <t, </th --
+      --  is text after all, shown where text is.
+      for Index in 1 .. Self.Used loop
+         Put (Self, Self.Held (Index));
+      end loop;
+      Self.Used := 0;
       Flush_Sink (Self.Target, Closed);
       Self.Shut := Self.Shut or else Closed;
       Closed := Self.Shut;

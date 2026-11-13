@@ -30,6 +30,10 @@ package Model_Runner.CLI.Held_Output is
 
       --  Whether standard output shows colour: an answer's JSON coloured.
       Styled        : Boolean := False;
+
+      --  The console whose language says a repeated line's count; null
+      --  for English.
+      Screen        : access constant Pres.Console := null;
    end record;
 
    --  What was held back was a call: not written.

@@ -1,3 +1,4 @@
+with Hostkit.Path_Text;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
@@ -54,7 +55,7 @@ package body Model_Runner.CLI.Intents is
    begin
       return Whole'Length > Root'Length + 1
         and then Whole (Whole'First .. Whole'First + Root'Length - 1) = Root
-        and then Whole (Whole'First + Root'Length) = '/';
+        and then Hostkit.Path_Text.Is_Separator_In (Whole, Whole (Whole'First + Root'Length));
    exception
       when others =>
          return False;
@@ -69,7 +70,7 @@ package body Model_Runner.CLI.Intents is
       Below : constant String := Model_Runner.CLI.Project_Commands.Started_Below;
    begin
       --  From where it was started first, as Tab and /impact take it.
-      if Below = "" or else Word = "" or else Word (Word'First) = '/'
+      if Below = "" or else Word = "" or else Hostkit.Path_Text.Root_Length (Word) > 0
         or else (Ada.Directories.Exists (Hostkit.Fs.Join (Project, Word))
                  and then not Ada.Directories.Exists (Hostkit.Fs.Join (Hostkit.Fs.Join (Project, Below), Word)))
       then
@@ -82,7 +83,7 @@ package body Model_Runner.CLI.Intents is
       begin
          if Ada.Directories.Exists (Whole) and then Whole'Length > Top'Length + 1
            and then Whole (Whole'First .. Whole'First + Top'Length - 1) = Top
-           and then Whole (Whole'First + Top'Length) = '/'
+           and then Hostkit.Path_Text.Is_Separator_In (Whole, Whole (Whole'First + Top'Length))
          then
             return Whole (Whole'First + Top'Length + 1 .. Whole'Last);
          end if;
