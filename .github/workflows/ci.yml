@@ -148,6 +148,10 @@ jobs:
         shell: bash
         run: alr settings --global --set solver.timeout 600
 
+      - name: Make Git Unix tools visible to native test processes
+        shell: pwsh
+        run: '"C:\Program Files\Git\usr\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append'
+
       - name: Build model_runner
         working-directory: model_runner
         run: alr --non-interactive build
