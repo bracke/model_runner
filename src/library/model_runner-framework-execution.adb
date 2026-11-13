@@ -59,6 +59,16 @@ package body Model_Runner.Framework.Execution is
    function Trim (Text : String) return String
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
+   --  GNAT's generic predicate has differed between the native and MSYS
+   --  views used by Windows builds.  A drive-rooted path is absolute in
+   --  either view and must remain eligible for command resolution.
+   function Is_Absolute (Path : String) return Boolean
+   is (GNAT.OS_Lib.Is_Absolute_Path (Path)
+       or else (GNAT.OS_Lib.Directory_Separator = '\'
+                and then Path'Length >= 3
+                and then Path (Path'First + 1) = ':'
+                and then Path (Path'First + 2) in '/' | '\'));
+
    --  Resolve the command before env clears PATH. This matters especially on
    --  Windows, where the native PATH uses semicolons but the MSYS env utility
    --  interprets the replacement PATH as a POSIX search path. A name with a
@@ -84,7 +94,7 @@ package body Model_Runner.Framework.Execution is
                declare
                   Folder : constant String := Search (From .. Index - 1);
                begin
-                  if Folder /= "" and then GNAT.OS_Lib.Is_Absolute_Path (Folder) then
+                  if Folder /= "" and then Is_Absolute (Folder) then
                      --  And with the suffix a program has where one is
                      --  named so -- env.exe -- as the path search adds it.
                      for Suffix of Name_Lists.Vector'

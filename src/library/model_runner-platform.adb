@@ -277,7 +277,13 @@ package body Model_Runner.Platform is
                declare
                   Folder : constant String := Search (From .. Index - 1);
                begin
-                  if Folder /= "" and then GNAT.OS_Lib.Is_Absolute_Path (Folder) then
+                  if Folder /= ""
+                    and then (GNAT.OS_Lib.Is_Absolute_Path (Folder)
+                              or else (GNAT.OS_Lib.Directory_Separator = '\'
+                                       and then Folder'Length >= 3
+                                       and then Folder (Folder'First + 1) = ':'
+                                       and then Folder (Folder'First + 2) in '/' | '\'))
+                  then
                      if Ada.Strings.Unbounded.Length (Kept) > 0 then
                         Ada.Strings.Unbounded.Append (Kept, GNAT.OS_Lib.Path_Separator);
                      end if;
