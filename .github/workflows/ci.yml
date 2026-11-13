@@ -5,6 +5,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# model_runner uses the Git additions on versionlib's published feature branch.
+# The sibling action deliberately clones default branches, so pin the exact API
+# revision here until that branch reaches versionlib's default branch.
+env:
+  VERSIONLIB_REV: 2d6f12d2618ef82a90350cf061b73a66b2c8eb3f
+
 jobs:
   linux-release-check:
     name: Linux release checklist
@@ -26,6 +32,11 @@ jobs:
         uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
           root: model_runner
+      - name: Pin versionlib API revision
+        shell: bash
+        run: |
+          git -C versionlib fetch --depth 1 origin "$VERSIONLIB_REV"
+          git -C versionlib checkout --detach FETCH_HEAD
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:
@@ -72,6 +83,11 @@ jobs:
         uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
           root: model_runner
+      - name: Pin versionlib API revision
+        shell: bash
+        run: |
+          git -C versionlib fetch --depth 1 origin "$VERSIONLIB_REV"
+          git -C versionlib checkout --detach FETCH_HEAD
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:
@@ -114,6 +130,11 @@ jobs:
         uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
         with:
           root: model_runner
+      - name: Pin versionlib API revision
+        shell: bash
+        run: |
+          git -C versionlib fetch --depth 1 origin "$VERSIONLIB_REV"
+          git -C versionlib checkout --detach FETCH_HEAD
       - name: Set up Alire
         uses: alire-project/setup-alire@v6
         with:

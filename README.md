@@ -218,7 +218,8 @@ invocation records its total prompt tokens, those read and reused, and its
 prompt milliseconds, cache-hit percentage, and why its first and last prompt
 did or did not reuse a prefix (`cache_empty`, `prefix_extended`,
 `token_changed`, `picture_changed`, or a rewind outcome). `/task audit` shows
-those figures. A required child that fails is run once more; if it
+those figures. The measured production check and regression thresholds are in
+[`docs/cache-session-baseline.md`](docs/cache-session-baseline.md). A required child that fails is run once more; if it
 still fails the task is blocked (`scalar agents.on_child_failure = fail`
 fails it instead), and cancelling a task cancels its agent's children.
 
