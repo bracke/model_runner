@@ -1147,7 +1147,7 @@ package body Model_Runner.Presentation is
                     [Loc.Named ("state", State),
                      Loc.Named ("count", T.Image (Long_Long_Integer (Steps))),
                      Loc.Named ("total", T.Image (Long_Long_Integer (Calls)))]);
-         At_State : constant Natural := (if State = "" then 0 else Ada.Strings.Fixed.Index (Said, State));
+         At_State : constant Natural := Whole_Word_At (Said, State);
       begin
          Error_Line
            (Item,
@@ -1794,7 +1794,7 @@ package body Model_Runner.Presentation is
          Self.Terminal := Model_Runner.Platform.Is_Terminal (1);
          Self.Asked := True;
       end if;
-      return (if Self.Terminal then T.Show_Controls (Item, Self.Lead) else Item);
+      return (if Self.Terminal then T.Show_Controls (Item, Self.Lead, Self.Held_CR) else Item);
    end Shown;
 
    -----------------
@@ -1886,6 +1886,13 @@ package body Model_Runner.Presentation is
          String'Write
            (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), "\xC2");
          --  A line open again: what follows starts on a line of its own.
+         Self.Open := True;
+      end if;
+      --  A carriage return held for a line feed that never came: one alone.
+      if Self.Held_CR then
+         Self.Held_CR := False;
+         String'Write
+           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), "\x0D");
          Self.Open := True;
       end if;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);

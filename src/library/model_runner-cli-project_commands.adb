@@ -2867,6 +2867,10 @@ package body Model_Runner.CLI.Project_Commands is
    -- Changes_Since --
    -------------------
 
+   --  The project Changes_Since last counted for: another, and what was
+   --  seen is of the other.
+   Seen_In : Unbounded_String;
+
    function Changes_Since (Seen : in out Natural) return String is
       package Ev renames Model_Runner.Framework.Events;
       Now    : constant Natural := Project_Revision;
@@ -2877,8 +2881,16 @@ package body Model_Runner.CLI.Project_Commands is
       Most   : constant := 8;
       Told_To : Natural := 0;
    begin
-      --  Behind what was seen: another project, the session moved to it --
-      --  what it has is from now on, not past the other's revision.
+      --  Another project than the one seen -- the session moved to it --
+      --  is told of from now on, not from the other's revision.
+      if Seen_In = Null_Unbounded_String then
+         Seen_In := To_Unbounded_String (Ada.Directories.Current_Directory);
+      elsif Seen_In /= To_Unbounded_String (Ada.Directories.Current_Directory) then
+         Seen_In := To_Unbounded_String (Ada.Directories.Current_Directory);
+         Seen := Now;
+         return "";
+      end if;
+      --  Behind what was seen: what it has is from now on.
       if Now <= Seen then
          Seen := Now;
          return "";
@@ -3338,8 +3350,14 @@ package body Model_Runner.CLI.Project_Commands is
                declare
                   Before : constant String := Words (Index - 1);
                begin
-                  if Ada.Strings.Fixed.Index (Before, "=") > Before'First and then Before (Before'First) /= '-' then
-                     After_Setting := True;
+                  --  Only a value that runs on: after kind=x, 4 is a task;
+                  --  after reason=waiting, a number of the reason's.
+                  if Ada.Strings.Fixed.Index (Before, "=") > Before'First and then Before (Before'First) /= '-'
+                  then
+                     After_Setting :=
+                       Command in "/reconfigure" | "/init" | "/obs"
+                       or else Is_Wordy (Ada.Characters.Handling.To_Lower
+                                           (Before (Before'First .. Ada.Strings.Fixed.Index (Before, "=") - 1)));
                   end if;
                end;
             end if;

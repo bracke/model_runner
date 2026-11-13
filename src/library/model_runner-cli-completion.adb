@@ -1,9 +1,11 @@
+with Ada.Containers.Indefinite_Hashed_Sets;
+with Ada.Strings.Hash;
+with Model_Runner.Framework.Templates;
 with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
-with Ada.Text_IO;
 
 with Model_Runner.CLI.Interactive;
 with Model_Runner.CLI.Intents;
@@ -32,6 +34,8 @@ package body Model_Runner.CLI.Completion is
    package R renames Model_Runner.Framework.Records;
 
    package Sorting is new Names.Generic_Sorting;
+   package Name_Sets is new Ada.Containers.Indefinite_Hashed_Sets
+     (String, Ada.Strings.Hash, "=");
 
    --  The project's own commands, beside the session's: from the table
    --  they are run from, so none is left out.
@@ -111,13 +115,13 @@ package body Model_Runner.CLI.Completion is
    --  space, or one begun with a quote, is offered quoted -- a file's
    --  quote closed, a directory's left open to go on into -- because the
    --  commands split their words at a space outside quotes.
-   function Bare_Paths (Prefix : String) return Names.Vector;
+   function Bare_Paths (Prefix : String; Project_Only : Boolean := True) return Names.Vector;
 
-   function Paths (Prefix : String) return Names.Vector is
+   function Paths (Prefix : String; Project_Only : Boolean := True) return Names.Vector is
       Quoted : constant Boolean := Prefix'Length > 0 and then Prefix (Prefix'First) = '"';
       Result : Names.Vector;
    begin
-      for Path of Bare_Paths (if Quoted then Unquoted (Prefix) else Prefix) loop
+      for Path of Bare_Paths ((if Quoted then Unquoted (Prefix) else Prefix), Project_Only) loop
          if Quoted or else Ada.Strings.Fixed.Index (Path, " ") > 0 then
             Result.Append ('"' & Path & (if Path (Path'Last) = '/' then "" else """"));
          else
@@ -127,7 +131,7 @@ package body Model_Runner.CLI.Completion is
       return Result;
    end Paths;
 
-   function Bare_Paths (Prefix : String) return Names.Vector is
+   function Bare_Paths (Prefix : String; Project_Only : Boolean := True) return Names.Vector is
       Result : Names.Vector;
       Slash  : constant Natural := Ada.Strings.Fixed.Index (Prefix, "/", Ada.Strings.Backward);
       Dir    : constant String := (if Slash = 0 then "" else Prefix (Prefix'First .. Slash));
@@ -141,12 +145,19 @@ package body Model_Runner.CLI.Completion is
            and then (Up or else not (Dir /= "" and then Ada.Directories.Exists (Dir)))
          then Below & "/" & (if Dir = "" then "." else Dir)
          elsif Dir = "" then "." else Dir);
-      --  Nothing outside the project is one of its files.
+      --  The name being typed in that folder.
+      Leaf   : constant String := Prefix (Prefix'First + Dir'Length .. Prefix'Last);
+      --  Nothing outside the project is one of its files: src/../../ and
+      --  /etc/ too, not only a path begun with .. -- where the command
+      --  takes the project's files.
       Inside : constant Boolean :=
-        not Up
+        not Project_Only
         or else (Ada.Directories.Exists (Where)
                  and then Ada.Strings.Fixed.Index (Ada.Directories.Full_Name (Where) & "/",
                                                    Ada.Directories.Current_Directory & "/") = 1);
+      --  A folder of a hundred thousand names is no list to read: those
+      --  the leaf begins are looked at, and no more than this many.
+      Most   : constant := 2_000;
       Search : Ada.Directories.Search_Type;
       Found  : Ada.Directories.Directory_Entry_Type;
    begin
@@ -159,11 +170,17 @@ package body Model_Runner.CLI.Completion is
          declare
             Simple : constant String := Ada.Directories.Simple_Name (Found);
          begin
-            if Simple not in "." | ".." and then (Simple (Simple'First) /= '.' or else Prefix'Length > Dir'Length)
+            --  A hidden one only where a dot begins what is typed: typing
+            --  "git" offered .git/.
+            if Simple not in "." | ".."
+              and then (Simple (Simple'First) /= '.' or else (Leaf /= "" and then Leaf (Leaf'First) = '.'))
+              and then Ada.Characters.Handling.To_Lower (Ada.Strings.Fixed.Head (Simple, Leaf'Length))
+                       = Ada.Characters.Handling.To_Lower (Leaf)
             then
                Result.Append (Dir & Simple
                               & (if Ada.Directories."=" (Ada.Directories.Kind (Found), Ada.Directories.Directory)
                                  then "/" else ""));
+               exit when Natural (Result.Length) >= Most;
             end if;
          end;
       end loop;
@@ -234,32 +251,15 @@ package body Model_Runner.CLI.Completion is
       return Result;
    end Values_Of;
 
-   --  Whether a template is only a part others include: standalone = false.
-   function Is_Part (Path : String) return Boolean is
-      File : Ada.Text_IO.File_Type;
+   --  Whether a word is a register's identifier, as TASK-013 or REQ-CALC-2.
+   function Is_Identifier (Word : String) return Boolean is
+      Upper : constant String := Ada.Characters.Handling.To_Upper (Word);
+      Dash  : constant Natural := Ada.Strings.Fixed.Index (Upper, "-", Ada.Strings.Backward);
    begin
-      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
-      while not Ada.Text_IO.End_Of_File (File) loop
-         declare
-            Line : constant String := Ada.Text_IO.Get_Line (File);
-         begin
-            if Ada.Strings.Fixed.Index (Line, "standalone") = Line'First
-              and then Ada.Strings.Fixed.Index (Line, "false") > 0
-            then
-               Ada.Text_IO.Close (File);
-               return True;
-            end if;
-         end;
-      end loop;
-      Ada.Text_IO.Close (File);
-      return False;
-   exception
-      when others =>
-         if Ada.Text_IO.Is_Open (File) then
-            Ada.Text_IO.Close (File);
-         end if;
-         return False;
-   end Is_Part;
+      return Dash > Upper'First and then Dash < Upper'Last
+        and then (for all C of Upper (Dash + 1 .. Upper'Last) => C in '0' .. '9')
+        and then (for all C of Upper (Upper'First .. Dash - 1) => C in 'A' .. 'Z' | '-');
+   end Is_Identifier;
 
    function Candidates (Before : String) return Names.Vector is
       Words   : constant Names.Vector := Words_Of (Before);
@@ -274,9 +274,16 @@ package body Model_Runner.CLI.Completion is
       Offered : Names.Vector;
       Result  : Names.Vector;
 
+      --  Each offered once, looked up in a set: a list's Contains made a
+      --  long listing -- a repository's symbols -- quadratic.
+      Seen : Name_Sets.Set;
+
       procedure Offer (Word : String) is
+         Where    : Name_Sets.Cursor;
+         Inserted : Boolean;
       begin
-         if not Offered.Contains (Word) then
+         Seen.Insert (Word, Where, Inserted);
+         if Inserted then
             Offered.Append (Word);
          end if;
       end Offer;
@@ -287,6 +294,34 @@ package body Model_Runner.CLI.Completion is
             Offer (One);
          end loop;
       end Offer_All;
+
+      --  The templates /init can start a project from, as /init finds them:
+      --  the person's own as well as those installed, each that composes.
+      procedure Offer_Templates is
+         Places   : Names.Vector;
+         Registry : Model_Runner.Framework.Templates.Registry;
+      begin
+         if Model_Runner.Platform.User_Templates_Directory /= "" then
+            Places.Append (Model_Runner.Platform.User_Templates_Directory);
+         end if;
+         Places.Append (Model_Runner.Platform.Installed_Templates_Directory);
+         Model_Runner.Framework.Templates.Discover (Places, Registry);
+         for Index in 1 .. Model_Runner.Framework.Templates.Count (Registry) loop
+            declare
+               One : constant Model_Runner.Framework.Templates.Template :=
+                 Model_Runner.Framework.Templates.Template_At (Registry, Index);
+            begin
+               if Model_Runner.Framework.Templates.Is_Standalone (One)
+                 and then E.Is_Ok (Model_Runner.Framework.Templates.Problem (Registry, Index))
+               then
+                  Offer (Model_Runner.Framework.Templates.Id (One));
+               end if;
+            end;
+         end loop;
+      exception
+         when others =>
+            null;
+      end Offer_Templates;
 
       procedure Offer_Words (Text : String) is
       begin
@@ -567,7 +602,23 @@ package body Model_Runner.CLI.Completion is
                            Ada.Directories.Start_Search (Search, Folder, "*.gguf");
                            while Ada.Directories.More_Entries (Search) loop
                               Ada.Directories.Get_Next_Entry (Search, Found);
-                              Values.Append (Ada.Directories.Simple_Name (Found));
+                              declare
+                                 Name  : constant String := Ada.Directories.Simple_Name (Found);
+                                 Lower : constant String := Ada.Characters.Handling.To_Lower (Name);
+                              begin
+                                 --  A model to run, not a part of one: a
+                                 --  vision projector, a prediction head or
+                                 --  a reranker is no model /work runs.
+                                 if Ada.Strings.Fixed.Index (Lower, "mmproj") = 0
+                                   and then Ada.Strings.Fixed.Index (Lower, "-mtp.gguf") = 0
+                                   and then Ada.Strings.Fixed.Index (Lower, "rerank") = 0
+                                 then
+                                    --  Quoted where it has a space, as the
+                                    --  command reads its words.
+                                    Values.Append (if Ada.Strings.Fixed.Index (Name, " ") > 0
+                                                   then '"' & Name & '"' else Name);
+                                 end if;
+                              end;
                            end loop;
                            Ada.Directories.End_Search (Search);
                         end if;
@@ -588,7 +639,14 @@ package body Model_Runner.CLI.Completion is
                          & " state=verification state=to-integrate state=conflict state=checks-failed"
                          & " state=blocked state=stopped state=waiting-for-parts state=failed state=complete"
                          & " state=cancelled state=rejected");
-         elsif Command = "/task" and then Position = 3 then
+         --  The actions that take several: each ID after the first too.
+         elsif Command = "/task"
+           and then (Position = 3
+                     or else (Position >= 4
+                              and then Action in "accept" | "reject" | "cancel" | "reopen" | "reconsider"
+                                               | "complete" | "verify" | "integrate" | "show" | "audit" | "diff"
+                              and then Ada.Strings.Fixed.Head (Words (3), 5) = "TASK-"))
+         then
             if Action = "kept" then
                Offer_Words ("list diff restore drop");
             elsif Action in "list" | "plan" | "new" then
@@ -617,6 +675,7 @@ package body Model_Runner.CLI.Completion is
                end loop;
                --  All of them, where there is one at least.
                if Action in "accept" | "reject" | "complete" | "verify" | "integrate"
+                 and then Position = 3
                  and then Natural (Offered.Length) > 0
                then
                   Offer ("all");
@@ -953,32 +1012,15 @@ package body Model_Runner.CLI.Completion is
             Offer (Word (Word'First + 1 .. Word'Last));
          end loop;
          Offer ("project");
-      --  A project here already: no template to start one with.
+      --  A project here already, started at its top: no template to start
+      --  one with. Started below it, /init makes one there.
       elsif Command = "/init" and then Position = 2
         and then S.Is_Initialized (Ada.Directories.Current_Directory)
+        and then Model_Runner.CLI.Project_Commands.Started_Below = ""
       then
          null;
       elsif Command = "/init" and then Position = 2 then
-         declare
-            Search : Ada.Directories.Search_Type;
-            Found  : Ada.Directories.Directory_Entry_Type;
-            Where  : constant String := Model_Runner.Platform.Installed_Templates_Directory;
-         begin
-            if Ada.Directories.Exists (Where) then
-               Ada.Directories.Start_Search (Search, Where, "*.template");
-               while Ada.Directories.More_Entries (Search) loop
-                  Ada.Directories.Get_Next_Entry (Search, Found);
-                  --  A kind of project, not a part others include.
-                  if not Is_Part (Ada.Directories.Full_Name (Found)) then
-                     Offer (Ada.Directories.Base_Name (Ada.Directories.Simple_Name (Found)));
-                  end if;
-               end loop;
-               Ada.Directories.End_Search (Search);
-            end if;
-         exception
-            when others =>
-               null;
-         end;
+         Offer_Templates;
       elsif Position = 2 and then Actions_Of (Command) /= "" then
          Offer_Words (Actions_Of (Command));
          From_Project;
@@ -998,17 +1040,24 @@ package body Model_Runner.CLI.Completion is
             end;
          end loop;
       elsif Command = "/init" and then Position >= 3 and then Words (Position - 1) = "--directory" then
-         for Path of Paths (Current) loop
+         --  Where a project is made: any folder, ../sib too, as /init takes it.
+         for Path of Paths (Current, Project_Only => False) loop
             if Path (Path'Last) = '/' then
                Offer (Path);
             end if;
          end loop;
       elsif Command = "/init" and then Position >= 3 then
          Offer_Words ("--directory --set");
+         --  /init --directory X, and then the template.
+         if Position = 4 and then Words (2) = "--directory" then
+            Offer_Templates;
+         end if;
       elsif Command in "/refs" | "/sym" | "/deps" | "/users" | "/impact" | "/tree" | "/save"
                      | "/load" | "/image" | "/video"
       then
-         Offer_All (Paths (Current));
+         --  A conversation or a picture may be anywhere; a project's file
+         --  is in the project.
+         Offer_All (Paths (Current, Project_Only => Command not in "/save" | "/load" | "/image" | "/video"));
          --  The symbols the repository knows, where a name is asked for:
          --  whole, and by their last part.
          if Command in "/refs" | "/sym" | "/users" | "/impact" and then Current /= ""
@@ -1136,7 +1185,9 @@ package body Model_Runner.CLI.Completion is
       end;
       --  Nothing at all: the one it was most likely meant to be, a letter
       --  or two off -- /tsak is /task.
-      if Result.Is_Empty and then Current'Length >= 3 then
+      --  Not for an identifier: TASK-013 a letter from TASK-012 is another
+      --  task, and Enter would act on it.
+      if Result.Is_Empty and then Current'Length >= 3 and then not Is_Identifier (Current) then
          declare
             Near : constant String := Model_Runner.Framework.Nearest (Current, Offered);
          begin

@@ -828,6 +828,8 @@ private
       Lead     : Boolean := False;
       --  Whether the last text written left its line open.
       Open     : Boolean := False;
+      --  A carriage return that ended the last piece, held for the next.
+      Held_CR  : Boolean := False;
    end record;
 
    type Progress_Reporter (Owner : access Console)

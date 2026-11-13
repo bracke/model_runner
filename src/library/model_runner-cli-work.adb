@@ -78,6 +78,22 @@ package body Model_Runner.CLI.Work is
               else " (" & Ada.Strings.Unbounded.To_String (Said) & ": its work not done)");
    end Cancelled_Parts;
 
+   --  Text on one line: a line feed, a carriage return and a backslash
+   --  written as JSON writes them.
+   function One_Line (Text : String) return String is
+      Result : Unbounded_String;
+   begin
+      for C of Text loop
+         case C is
+            when ASCII.LF => Append (Result, "\n");
+            when ASCII.CR => Append (Result, "\r");
+            when '\'      => Append (Result, "\\");
+            when others   => Append (Result, C);
+         end case;
+      end loop;
+      return To_String (Result);
+   end One_Line;
+
    type Text_Access is access String;
    procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
 
@@ -414,8 +430,17 @@ package body Model_Runner.CLI.Work is
                   exit when Start = 0;
                   Next := Ada.Strings.Fixed.Index (Trace (Start + 1 .. Trace'Last), Mark);
                   declare
+                     --  The last event ends where the list of them does:
+                     --  "}]" and the trace's own close after it are no
+                     --  part of it, and read with it it was no JSON.
+                     Last_End : constant Natural :=
+                       (if Next = 0
+                        then Ada.Strings.Fixed.Index (Trace (Start .. Trace'Last), "}]", Ada.Strings.Backward)
+                        else 0);
                      One  : constant String :=
-                       Trace (Start .. (if Next = 0 then Trace'Last else Next - 2));
+                       Trace (Start .. (if Next /= 0 then Next - 2
+                                        elsif Last_End > 0 then Last_End
+                                        else Trace'Last));
                      Have : Boolean;
                   begin
                      --  Each call and what it gave back, shown as a run in the
@@ -431,10 +456,13 @@ package body Model_Runner.CLI.Work is
                            & Model_Runner.Tools.Builtin.Text_Argument (One, "result", Have));
                      end if;
                      if Ada.Strings.Fixed.Index (One, Call) > 0 then
+                        --  A line a call: its arguments' own line ends
+                        --  written out, or a line of a file's content read
+                        --  back as a record of the usage.
                         Append (Usage, "call "
                                 & Model_Runner.Tools.Builtin.Text_Argument (One, "name", Have)
                                 & ASCII.HT
-                                & Model_Runner.Tools.Builtin.Text_Argument (One, "arguments", Have)
+                                & One_Line (Model_Runner.Tools.Builtin.Text_Argument (One, "arguments", Have))
                                 & ASCII.LF);
                      end if;
                   end;
@@ -455,11 +483,23 @@ package body Model_Runner.CLI.Work is
             Usage_Unknown := True;
          end if;
          Free (Held_Trace);
+         --  Read or not, the trace is not kept: an empty one stayed.
+         if Ada.Directories.Exists (Prompt_Path & ".trace") then
+            Ada.Directories.Delete_File (Prompt_Path & ".trace");
+         end if;
       exception
          --  Not told, it is not taken for none: what it spent is not known.
          when others =>
             Usage_Unknown := True;
             Free (Held_Trace);
+            begin
+               if Ada.Directories.Exists (Prompt_Path & ".trace") then
+                  Ada.Directories.Delete_File (Prompt_Path & ".trace");
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
       end;
       --  Out of time is the work's bound, as the session's agent has it --
       --  the task set aside, not failed; anything else says why, in its
@@ -517,6 +557,9 @@ package body Model_Runner.CLI.Work is
       Config    : R.Item;
       Done      : W.Report;
       Remaining : Model_Runner.Framework.Name_Lists.Vector;
+      --  Whether the tasks to run were narrowed by a selector: "all" is then
+      --  all of those, not every task the plan can start.
+      Narrowed  : Boolean := False;
       --  Under all: those started, and how each ended.
       Tried     : Model_Runner.Framework.Name_Lists.Vector;
       Ended     : Model_Runner.Framework.Name_Lists.Vector;
@@ -948,9 +991,11 @@ package body Model_Runner.CLI.Work is
          return;
       end if;
       Config := Model_Runner.Framework.Configurations.Required (Store);
-      --  A profile it names is one the configuration has.
-      if Given.Contains ("profile") and then Given ("profile") /= "default"
-        and then not R.Has (Config, "map.model." & Given ("profile"))
+      --  A profile it names is one the configuration has -- named here or
+      --  by work.profile, which a configuration changed since may name no
+      --  longer: planned without it, the task had none of its room.
+      if Setting ("profile", "") not in "" | "default"
+        and then not R.Has (Config, "map.model." & Setting ("profile", ""))
       then
          declare
             Known : Unbounded_String :=
@@ -965,9 +1010,9 @@ package body Model_Runner.CLI.Work is
                end if;
             end loop;
             Outcome := E.Make (E.Framework_Input_Invalid);
-            E.Add_Text (Outcome, "name", "profile");
-            E.Add_Text (Outcome, "value", Given ("profile"));
-            E.Add_Text (Outcome, "detail", "there is no map.model." & Given ("profile")
+            E.Add_Text (Outcome, "name", (if Given.Contains ("profile") then "profile" else "work.profile"));
+            E.Add_Text (Outcome, "value", Setting ("profile", ""));
+            E.Add_Text (Outcome, "detail", "there is no map.model." & Setting ("profile", "")
                         & (if Known = Null_Unbounded_String then "; /reconfigure map.model.NAME=context=N,... makes one"
                            else "; there are " & To_String (Known)));
             S.Close (Store);
@@ -1071,6 +1116,23 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
 
+      --  Several tasks named by their identifiers -- /work TASK-001 TASK-002
+      --  -- each in turn, as a batch: not one selector to match a title.
+      declare
+         Named : constant Model_Runner.Framework.Name_Lists.Vector :=
+           Model_Runner.Framework.Lines_Of
+             (Ada.Strings.Fixed.Translate (To_String (Chosen), Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF])));
+      begin
+         if Natural (Named.Length) > 1
+           and then (for all One of Named => S.Exists (Store, Model_Runner.Framework.Tasks_Area, One))
+         then
+            Chosen := To_Unbounded_String (Named.First_Element);
+            for Index in 2 .. Natural (Named.Length) loop
+               Remaining.Append (Named (Index));
+            end loop;
+         end if;
+      end;
+
       --  A selector that is no task's identifier picks among the accepted
       --  tasks by their identifiers and titles: one match is the task, more
       --  are offered on a terminal and named elsewhere, none is an error.
@@ -1082,6 +1144,18 @@ package body Model_Runner.CLI.Work is
               Ada.Characters.Handling.To_Lower (To_String (Chosen));
             Found  : Unbounded_String;
 
+            --  Every word of the selector in the task's identifier or title,
+            --  in any order: /work parser bug finds "Fix bug in parser".
+            function Matches (Id, Title : String) return Boolean is
+               Said : constant String :=
+                 Ada.Characters.Handling.To_Lower (Id) & " " & Ada.Characters.Handling.To_Lower (Title);
+            begin
+               return (for all Word of Model_Runner.Framework.Lines_Of
+                                         (Ada.Strings.Fixed.Translate
+                                            (Wanted, Ada.Strings.Maps.To_Mapping (" ", [1 => ASCII.LF]))) =>
+                         Ada.Strings.Fixed.Index (Said, Word) > 0);
+            end Matches;
+
             --  Every task it matches, whatever its state: one that is not
             --  accepted is said as it is, not missed.
             Any_State : Model_Runner.Framework.Name_Lists.Vector;
@@ -1092,10 +1166,7 @@ package body Model_Runner.CLI.Work is
                   Read    : E.Error_Info;
                begin
                   Tk.Definition (Store, Id, Defined, Read);
-                  if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Id), Wanted) > 0
-                    or else Ada.Strings.Fixed.Index
-                              (Ada.Characters.Handling.To_Lower (R.Get (Defined, "title")), Wanted) > 0
-                  then
+                  if Matches (Id, R.Get (Defined, "title")) then
                      Any_State.Append (Id);
                   end if;
                end;
@@ -1106,11 +1177,7 @@ package body Model_Runner.CLI.Work is
                   Read    : E.Error_Info;
                begin
                   Tk.Definition (Store, Id, Defined, Read);
-                  if Ada.Strings.Fixed.Index (Ada.Characters.Handling.To_Lower (Id), Wanted) > 0
-                    or else Ada.Strings.Fixed.Index
-                              (Ada.Characters.Handling.To_Lower (R.Get (Defined, "title")),
-                               Wanted) > 0
-                  then
+                  if Matches (Id, R.Get (Defined, "title")) then
                      Matching.Append (Id);
                      Append (Found, (if Found = Null_Unbounded_String then "" else ", ") & Id);
                   end if;
@@ -1148,6 +1215,8 @@ package body Model_Runner.CLI.Work is
                S.Close (Store);
                return;
             else
+               --  Several match: chosen among them, and "all" is all of them.
+               Narrowed := True;
                Chosen := Null_Unbounded_String;
             end if;
          end;
@@ -1285,10 +1354,10 @@ package body Model_Runner.CLI.Work is
 
             --  Nothing workable: said, with what makes something so --
             --  not a list to choose from that takes nothing.
+            --  Nothing failed: ended as /work all ends with nothing ready.
             if Ready.Is_Empty then
                Pres.Put_Note (Screen, "cli.work.nothing_ready");
                Say_What_Is_Ready;
-               Status := E.Exit_Cancelled;
                S.Close (Store);
                return;
             end if;
@@ -1308,8 +1377,17 @@ package body Model_Runner.CLI.Work is
                end if;
                if Listed (Picked) = "all" then
                   Given.Include ("all", "yes");
-                  Chosen := To_Unbounded_String (Ready.First_Element);
-                  Remaining := Ready;
+                  --  As /work all takes them: none a document ticks done.
+                  Remaining.Clear;
+                  for Id of Ready loop
+                     if Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) = "" then
+                        Remaining.Append (Id);
+                     end if;
+                  end loop;
+                  if Remaining.Is_Empty then
+                     Remaining := Ready;
+                  end if;
+                  Chosen := To_Unbounded_String (Remaining.First_Element);
                   Remaining.Delete_First;
                else
                   Chosen := To_Unbounded_String (Listed (Picked));
@@ -1378,7 +1456,15 @@ package body Model_Runner.CLI.Work is
                then Model_Runner.Framework.Context.Within_Configured
                       (Store, W.Parenting_Runner'Class (Given_Runner.all).Profile, Setting ("profile", ""))
                else Model_Runner.Framework.Context.Profile (Store, Setting ("profile", "")));
-            Path    : constant String := Setting ("model", "");
+            --  As the session reads a path, and whole: the run apart is
+            --  started in the project, where ./m.gguf named another file.
+            Typed   : constant String := Setting ("model", "");
+            --  A name of the models folder's stays the name it is.
+            Located : constant String :=
+              (if Typed = "" then "" else Model_Runner.CLI.Project_Commands.From_Session_Start (Typed));
+            Path    : constant String :=
+              (if Located /= "" and then Ada.Directories.Exists (Located)
+               then Ada.Directories.Full_Name (Located) else Typed);
 
             --  How long the agent may work: its task's time.
             Agent_Seconds : constant Natural := W.Time_Allowed (Store, To_String (Chosen));
@@ -1422,6 +1508,14 @@ package body Model_Runner.CLI.Work is
                   Probe.Check_Start (Store, Got);
                   if E.Is_Error (Got) then
                      Fail (Got);
+                     --  In a batch the model is every task's: none after
+                     --  this starts either, and how the ones before ended
+                     --  is still said, the status theirs too.
+                     if Batch then
+                        Not_Started;
+                        Remaining.Clear;
+                        goto After_Task;
+                     end if;
                      S.Close (Store);
                      return;
                   end if;
@@ -1577,6 +1671,11 @@ package body Model_Runner.CLI.Work is
          if Pres.In_Session (Screen) and then Model_Runner.Platform.Signals.Ending_Asked then
             Pres.Put_Note (Screen, "cli.work.session_ending");
             Pres.Use_Session (Screen, False);
+         end if;
+         --  Told to end, no task more is started: the next was taken, set
+         --  running and stopped at once.
+         if Model_Runner.Platform.Signals.Ending_Asked then
+            Remaining.Clear;
          end if;
 
          if E.Is_Error (Outcome) then
@@ -2347,9 +2446,12 @@ package body Model_Runner.CLI.Work is
                then "stopped"
                else Model_Runner.Framework.State_Said (To_String (Done.Final_State))));
          <<After_Task>>
-         if Remaining.Is_Empty and then Setting ("all", "") = "yes" then
+         --  The plan asked again for what it can start now -- not where
+         --  "all" was all of those a selector matched, which are run; and
+         --  none a document ticks done, as the first plan left them out.
+         if Remaining.Is_Empty and then Setting ("all", "") = "yes" and then not Narrowed then
             for Id of Model_Runner.Framework.Orchestration.Plan (Store).Start loop
-               if not Tried.Contains (Id) then
+               if not Tried.Contains (Id) and then Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) = "" then
                   Remaining.Append (Id);
                end if;
             end loop;

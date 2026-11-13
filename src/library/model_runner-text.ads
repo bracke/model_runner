@@ -100,6 +100,18 @@ package Model_Runner.Text is
    --  @return The piece, controls shown.
    function Show_Controls (Item : String; Lead : in out Boolean) return String;
 
+   --  The same, a carriage return that ends a piece held back too, as a
+   --  C2 is: the next piece says whether it ends a line.
+   --
+   --  @param Item Next piece of generated text.
+   --  @param Lead In: a C2 is held from the last piece. Out: one is now.
+   --  @param Held_CR In: a carriage return is held. Out: one is now.
+   --  @return The piece, controls shown.
+   function Show_Controls
+     (Item    : String;
+      Lead    : in out Boolean;
+      Held_CR : in out Boolean) return String;
+
    --  Report whether Item contains a C0 or C7F control character, or a C1
    --  control written in UTF-8 (C2 and one of 80 to 9F).
    --

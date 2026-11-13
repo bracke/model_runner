@@ -137,7 +137,11 @@ package body Model_Runner.CLI.Checkpoint is
       --  again by name, a link put there between the two was followed.
       --  Made writable by its owner, as a new file is less the creation
       --  mask; the file's own access is put on it once it is written.
-      Made := Hostkit.Regular_Files.Create_New (Partial, Mode => 8#666#);
+      --  Made with the access it is to keep: set afterwards by name, the
+      --  name was gone back to, and a link put there had its target's
+      --  access changed. A new file is made as any is, less the mask.
+      Made := Hostkit.Regular_Files.Create_New
+        (Partial, Mode => (if Had.Available and then Native then Kept_Mode else 8#666#));
       if Made = GNAT.OS_Lib.Invalid_FD then
          raise Ada.IO_Exceptions.Use_Error;
       end if;
@@ -158,19 +162,13 @@ package body Model_Runner.CLI.Checkpoint is
             end;
          end loop;
       end;
+      --  On the device through the descriptor, not by name.
+      if Hostkit.Durability.Sync_Descriptor (Integer (Made)) = Hostkit.Durability.Failed then
+         raise Ada.IO_Exceptions.Use_Error;
+      end if;
       GNAT.OS_Lib.Close (Made);
       Made := GNAT.OS_Lib.Invalid_FD;
-      if Had.Available and then Native then
-         declare
-            Kept : constant Boolean := Hostkit.Metadata.Set_Permissions (Partial, Kept_Mode);
-            pragma Unreferenced (Kept);
-         begin
-            null;
-         end;
-      end if;
-      if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
-        or else not Hostkit.Fs.Replace_File (Partial, Target)
-      then
+      if not Hostkit.Fs.Replace_File (Partial, Target) then
          raise Ada.IO_Exceptions.Use_Error;
       end if;
       declare

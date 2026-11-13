@@ -2297,8 +2297,10 @@ package body Tests.CLI_Cases is
               "a wide character at a row's last column was counted where it would not fit");
       Assert (Model_Runner.UTF8.Wrapped_Columns ("abcd", 4) = 4, "narrow text was counted wrongly");
       --  A tab goes to a stop in its own row, and never past the row's end.
-      Assert (Model_Runner.UTF8.Wrapped_Columns ("0123456789" & ASCII.HT, 10) = 18,
+      Assert (Model_Runner.UTF8.Wrapped_Columns ("0123456789a" & ASCII.HT, 10) = 18,
               "a tab on the second row was counted from the text's start");
+      Assert (Model_Runner.UTF8.Wrapped_Columns ("0123456789" & ASCII.HT, 10) = 10,
+              "a tab after a row filled exactly moved the cursor");
       Assert (Model_Runner.UTF8.Wrapped_Columns ("abcde" & ASCII.HT, 7) = 6,
               "a tab past the row's end wrapped");
       --  A carriage return alone is shown, before a line feed it is the line's end.
@@ -2339,6 +2341,25 @@ package body Tests.CLI_Cases is
          end;
          Ada.Directories.Delete_Directory (Dir);
       end;
+
+      --  A pasted block of several lines is text, whatever it begins with.
+      declare
+         use type Model_Runner.CLI.Interactive.Line_Effect;
+         Typing : Model_Runner.CLI.Interactive.Turn;
+         Ready  : Boolean;
+         Effect : Model_Runner.CLI.Interactive.Line_Effect;
+      begin
+         Typing.Open (Ready);
+         Assert (Ready, "a turn could not be opened");
+         Typing.Offer ("/home/x.log:" & ASCII.LF & "error: it broke", Effect);
+         Assert (Effect = Model_Runner.CLI.Interactive.Held,
+                 "a pasted block beginning with a slash was read as a command");
+         Typing.Close;
+      end;
+
+      --  A typed identifier is not swapped for one a letter from it.
+      Assert (not Model_Runner.CLI.Completion.Candidates ("/task cancel TASK-999").Contains ("TASK-998"),
+              "Tab offered another task for one typed");
 
       --  A line of no words is no command, and not an exception.
       declare

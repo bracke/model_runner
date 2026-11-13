@@ -178,7 +178,10 @@ package body Model_Runner.CLI.Interactive is
       --  of a prompt is the text it looks like: someone typing "and then
       --  run" and "/usr/bin/ls" means the path, and reading it as a command
       --  would drop the half they had already typed.
+      --  A pasted block of several lines is text whatever it begins with:
+      --  a log beginning /home/x.log: is no command, and none was pasted.
       if Item.Used = 0
+        and then Ada.Strings.Fixed.Index (Line, [1 => ASCII.LF]) = 0
         and then Parse (Trimmed).Kind /= Not_A_Command
       then
          Effect := Is_Command;
@@ -190,6 +193,7 @@ package body Model_Runner.CLI.Interactive is
       --  into it as its text. The session's own commands, a project command
       --  that waits for the message, and a path are the text they are.
       if Item.Used > 0
+        and then Ada.Strings.Fixed.Index (Line, [1 => ASCII.LF]) = 0
         and then Model_Runner.CLI.Project_Commands.Runs_Mid_Message
                    (Trimmed (Trimmed'First
                              .. (if Ada.Strings.Fixed.Index (Trimmed, " ") = 0 then Trimmed'Last
@@ -341,6 +345,7 @@ package body Model_Runner.CLI.Interactive is
    end Page_Toucher;
 
    type Toucher_Access is access Page_Toucher;
+   procedure Free_Toucher is new Ada.Unchecked_Deallocation (Page_Toucher, Toucher_Access);
 
    --  Stops the toucher and waits for it as Run is left, however it is.
    --  The device's turn lent again however a session ends, as it is
@@ -370,6 +375,8 @@ package body Model_Runner.CLI.Interactive is
             delay 0.01;
          end loop;
          Touch_Stop.Reset;
+         --  Ended, its object given back: each session left one behind.
+         Free_Toucher (Guard.Running);
       end if;
    end Finalize;
 
@@ -534,8 +541,29 @@ package body Model_Runner.CLI.Interactive is
             end;
          end loop;
          --  Two turns of a side in a row, or a last turn unanswered, are
-         --  left be: an agent's checkpoint holds both -- its nudges are the
-         --  person's -- and run --checkpoint takes it up again.
+         --  asked of the model's own template rather than refused outright:
+         --  an agent's checkpoint holds both -- its nudges are the person's
+         --  -- and a template that does not alternate takes it, while one
+         --  that does (Gemma's, Mistral's) would refuse every turn after.
+         declare
+            Buffer : Text_Access := new String (1 .. Bounds.Max_Rendered_Bytes);
+            Last   : Natural;
+         begin
+            Model_Runner.Templates.Render
+              (L.Template (Prepared).all, Trial,
+               Vocab.Token_Text (Words.all, Vocab.Beginning_Token (Words.all)),
+               Vocab.Token_Text (Words.all, Vocab.End_Token (Words.all)),
+               True, Buffer.all, Last, Status,
+               Thinking => Item.Thinking, Tools => Tools,
+               Image_Marker => Model_Runner.CLI.Pictures.Picture_Marker (Seer),
+               Video_Marker => Model_Runner.CLI.Pictures.Video_Marker (Seer),
+               Literal => Content_Text'Access,
+               Effort => Item.Effort);
+            Free_Text (Buffer);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end;
          --  The pictures the loaded one names, gathered in place of the
          --  ones held: refused, the set is empty, and the conversation
          --  kept gathers its own again at its next turn.
@@ -700,6 +728,37 @@ package body Model_Runner.CLI.Interactive is
          end Leave_Line;
       end Warming;
 
+      --  What stops the warming where nothing else would: leaving waits for
+      --  it, and a run of half a minute on a slow drive held /exit as long.
+      Warm_Stop : aliased Model_Runner.Cancellation.Token;
+
+      function Warm_Token return Model_Runner.Cancellation.Token_Reference
+      is (if Model_Runner.Cancellation."/=" (Cancel, null) then Cancel else Warm_Stop'Unchecked_Access);
+
+      --  Asked to stop warming, leaving: the session is not used after.
+      procedure Stop_Warming is
+      begin
+         Warm_Token.Request;
+      end Stop_Warming;
+
+      --  The calls the model's last reply made that no tool's answer has
+      --  answered yet: an answer to none -- after a plain reply, or a
+      --  second to one call -- is to a question nobody put.
+      function Calls_Unanswered return Natural is
+         Answers : Natural := 0;
+      begin
+         for Index in reverse 1 .. Conv.Length (Messages) loop
+            if Conv."=" (Conv.Sender_At (Messages, Index), Conv.Tool_Role) then
+               Answers := Answers + 1;
+            elsif Conv."=" (Conv.Sender_At (Messages, Index), Conv.Assistant_Role) then
+               return Natural'Max (0, Conv.Call_Count (Messages, Index) - Answers);
+            else
+               return 0;
+            end if;
+         end loop;
+         return 0;
+      end Calls_Unanswered;
+
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
          Asked : constant Parsed_Command := Parse (Line);
@@ -711,6 +770,10 @@ package body Model_Runner.CLI.Interactive is
             return False;
          end if;
 
+         --  Leaving does not wait for the warming to finish: it is stopped.
+         if Asked.Kind = Leave then
+            Stop_Warming;
+         end if;
          if not Model_Runner.CLI.Project_Commands.Is_Project_Command (First)
            or else Model_Runner.CLI.Project_Commands.Runs_Model (First)
          then
@@ -885,7 +948,39 @@ package body Model_Runner.CLI.Interactive is
             --  How full it is, in the colour of how near the end that is,
             --  and what fills it: the conversation's turns by who said them.
             declare
-               Used     : constant Natural := L.Position (Session);
+               --  What the conversation is, as the next turn will read it:
+               --  rendered and counted. The cache's position said nought
+               --  after /load or /system, which read the session back, and
+               --  counted a cancelled turn's prompt the conversation lost.
+               function Conversation_Tokens return Natural is
+                  Rendered : Text_Access := null;
+                  Outcome  : E.Error_Info;
+               begin
+                  if Conv.Length (Messages) = 0 then
+                     return L.Position (Session);
+                  end if;
+                  Render (Rendered, Outcome);
+                  if E.Is_Error (Outcome) or else Rendered = null then
+                     return L.Position (Session);
+                  end if;
+                  declare
+                     type Token_Access is access Vocab.Token_Array;
+                     procedure Free is new Ada.Unchecked_Deallocation (Vocab.Token_Array, Token_Access);
+                     Room : Token_Access := new Vocab.Token_Array (1 .. Rendered'Length + 8);
+                     Last : Natural := 0;
+                     Read : E.Error_Info;
+                  begin
+                     Vocab.Encode (Words.all, Rendered.all, True, False, Room.all, Last, Read);
+                     Free (Room);
+                     Free_Text (Rendered);
+                     return (if E.Is_Error (Read) then L.Position (Session) else Last);
+                  end;
+               exception
+                  when others =>
+                     Free_Text (Rendered);
+                     return L.Position (Session);
+               end Conversation_Tokens;
+               Used     : constant Natural := Conversation_Tokens;
                Capacity : constant Natural := L.Capacity (Session);
                Percent  : constant Natural := (if Capacity = 0 then 0 else Used * 100 / Capacity);
                Counts   : array (Conv.Role) of Natural := [others => 0];
@@ -970,10 +1065,29 @@ package body Model_Runner.CLI.Interactive is
                      Definition : constant String := Model_Runner.Tools.Definition (Tools.all, Index);
 
                      --  The first string a key holds: "description": "...".
+                     --  The tool's own, ahead of its parameters: one with no
+                     --  description showed its first parameter's.
+                     At_Parameters : constant Natural := Ada.Strings.Fixed.Index (Definition, """parameters""");
+                     Own : constant String :=
+                       (if At_Parameters = 0 then Definition else Definition (Definition'First .. At_Parameters - 1));
+
                      function String_Of (Key : String) return String is
-                        At_Key : constant Natural := Ada.Strings.Fixed.Index (Definition, '"' & Key & '"');
+                        At_Key : constant Natural := Ada.Strings.Fixed.Index (Own, '"' & Key & '"');
                         Open   : Natural;
                         Stop   : Natural;
+
+                        --  A quote is escaped by an odd run of backslashes
+                        --  before it: "\\" ends its string.
+                        function Escaped (At_Quote : Positive) return Boolean is
+                           Run : Natural := 0;
+                        begin
+                           while At_Quote - Run - 1 >= Definition'First
+                             and then Definition (At_Quote - Run - 1) = '\'
+                           loop
+                              Run := Run + 1;
+                           end loop;
+                           return Run mod 2 = 1;
+                        end Escaped;
                      begin
                         if At_Key = 0 then
                            return "";
@@ -984,7 +1098,7 @@ package body Model_Runner.CLI.Interactive is
                         end if;
                         Stop := Open + 1;
                         while Stop <= Definition'Last
-                          and then (Definition (Stop) /= '"' or else Definition (Stop - 1) = '\')
+                          and then (Definition (Stop) /= '"' or else Escaped (Stop))
                         loop
                            Stop := Stop + 1;
                         end loop;
@@ -1064,17 +1178,18 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.no_tools");
             elsif Asked.First = 0 then
                Pres.Put_Note (Screen, "cli.interactive.tool_needs_text");
-            elsif Conv.Length (Messages) = 0
-              or else Conv.Sender_At (Messages, Conv.Length (Messages))
-                      not in Conv.Assistant_Role | Conv.Tool_Role
-            then
-               --  Nothing asked for it. A tool answer before the model has
-               --  said anything is an answer to a question nobody put.
-               Pres.Put_Note (Screen, "cli.interactive.tool_unasked");
             elsif not Model_Runner.UTF8.Is_Valid (Line (Asked.First .. Asked.Last))
             then
                --  Refused as a typed turn is: see Submit.
                Pres.Report (Screen, E.Make (E.IO_Invalid_UTF8));
+            elsif Conv.Length (Messages) = 0
+              or else Conv.Sender_At (Messages, Conv.Length (Messages))
+                      not in Conv.Assistant_Role | Conv.Tool_Role
+              or else Calls_Unanswered = 0
+            then
+               --  Nothing asked for it. A tool answer before the model has
+               --  said anything is an answer to a question nobody put.
+               Pres.Put_Note (Screen, "cli.interactive.tool_unasked");
             else
                Take_Turn (Line (Asked.First .. Asked.Last), Conv.Tool_Role);
             end if;
@@ -1526,6 +1641,8 @@ package body Model_Runner.CLI.Interactive is
             --  for its own: a picture set counts what it holds, not which.
             Model_Runner.CLI.Pictures.Release (Pictures);
             L.Reset (Session);
+            --  Its figures are of a turn the conversation does not hold.
+            Have_Stats := False;
             return;
          end if;
 
@@ -1652,9 +1769,16 @@ package body Model_Runner.CLI.Interactive is
                     (L.Config (Prepared).Vocabulary),
                   Logits);
                if Logits /= null then
-                  L.Evaluate
-                    (Session, Prepared, Words.Beginning_Token, Logits,
-                     Status => Local);
+                  begin
+                     L.Evaluate
+                       (Session, Prepared, Words.Beginning_Token, Logits,
+                        Cancel => Warm_Token, Status => Local);
+                  exception
+                     --  Raised rather than said: the session read back to
+                     --  nothing all the same, and the logits freed.
+                     when others =>
+                        null;
+                  end;
                   L.Reset (Session);
                   Model_Runner.Tensors.Free (Logits);
                end if;
@@ -1682,6 +1806,7 @@ package body Model_Runner.CLI.Interactive is
       if not L.Template_Ready (Prepared) then
          Pres.Report (Screen, L.Template_Condition (Prepared));
          Status := E.Exit_Status (L.Template_Condition (Prepared));
+         Stop_Warming;
          return;
       end if;
 
@@ -1689,6 +1814,7 @@ package body Model_Runner.CLI.Interactive is
       if E.Is_Error (Condition) then
          Pres.Report (Screen, Condition);
          Status := E.Exit_Status (Condition);
+         Stop_Warming;
          return;
       end if;
 
@@ -1729,6 +1855,7 @@ package body Model_Runner.CLI.Interactive is
          Status := E.Exit_Status (Condition);
          Model_Runner.Stops.Close (Stop_Set);
          Conv.Close (Messages);
+         Stop_Warming;
          return;
       end if;
 
@@ -1748,6 +1875,7 @@ package body Model_Runner.CLI.Interactive is
             Model_Runner.Stops.Close (Stop_Set);
             Conv.Close (Messages);
             Status := E.Exit_Resource;
+            Stop_Warming;
             return;
          end if;
       end;
@@ -2103,9 +2231,13 @@ package body Model_Runner.CLI.Interactive is
          Keys_Hidden := Hostkit.Terminal_Control.Show_Control_Keys (Hostkit.Descriptors.Standard_Input, True);
       end if;
 
-      --  At end of file a pending prompt is submitted, then the session ends.
+      --  At end of file a pending prompt is submitted, then the session ends
+      --  -- as a cancellation where it was told to end while it ran.
       if not Leaving then
          Submit;
+         if Model_Runner.Platform.Signals.Ending_Asked then
+            Status := E.Exit_Cancelled;
+         end if;
       end if;
 
       Gen.Release (Last_Result);

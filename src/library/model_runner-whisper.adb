@@ -1915,13 +1915,22 @@ package body Model_Runner.Whisper is
       if not Took then
          return;
       end if;
-      if not Item.Keep_On_Device then
-         Forget_Matrices (Item);
-      end if;
-      --  What the cache holds is the conversation's to overwrite now.
-      Item.Cross_On_Device := False;
-      Item.Self_On_Device := False;
-      Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
+      --  The turn given back whatever the tidying raises: kept borrowed,
+      --  every later Take_Turn of the conversation waited for ever.
+      begin
+         if not Item.Keep_On_Device then
+            Forget_Matrices (Item);
+         end if;
+         --  What the cache holds is the conversation's to overwrite now.
+         Item.Cross_On_Device := False;
+         Item.Self_On_Device := False;
+         Model_Runner.Backend.Device.Attend_In_Halves (Item.Halves_Were);
+      exception
+         when others =>
+            Model_Runner.Backend.Device.Return_Turn;
+            Item.Borrowed := False;
+            raise;
+      end;
       Model_Runner.Backend.Device.Return_Turn;
       Item.Borrowed := False;
    end Let_Go;

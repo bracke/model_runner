@@ -467,6 +467,17 @@ package body Model_Runner.CLI.Init is
             Cf.Prepare (Composed, Directory, Given, Planned, Outcome);
             exit when E.Is_Ok (Outcome);
 
+            --  An input given that will not do, at a terminal: said, and
+            --  asked for again as a missing one is -- it ended the command,
+            --  and all of it was typed again.
+            if Outcome.Code = E.Framework_Input_Invalid and then Interactive
+              and then Given.Contains (E.Text_Of (Outcome, "name"))
+            then
+               Pres.Report (Screen, Outcome);
+               Given.Exclude (E.Text_Of (Outcome, "name"));
+               goto Prepare_Again;
+            end if;
+
             --  A program reading the answer is given an entry for each input
             --  missing, each named in a field of its own.
             if Outcome.Code = E.Framework_Input_Missing and then not Interactive
@@ -552,6 +563,7 @@ package body Model_Runner.CLI.Init is
                   end;
                end loop;
             end loop;
+            <<Prepare_Again>>
          end loop;
 
          --  The plan and what it will not be able to do, worked out before
@@ -1201,10 +1213,22 @@ package body Model_Runner.CLI.Init is
                        and then Picked = 2 + (if Fixes.Is_Empty then 0 else 1)
                      then
                         --  Planned again, there.
+                        --  With what was chosen and answered here: the
+                        --  template picked from the list and every input
+                        --  typed at the terminal, not asked for again.
                         declare
                            There : Model_Runner.CLI.Project_Requests.Request := Item;
                         begin
                            There.Project_Directory := T.To_Bounded (To_String (Root_Instead));
+                           There.Template_Name := T.To_Bounded (To_String (Chosen));
+                           There.Input_Count := 0;
+                           for Position in Planned.Inputs.Iterate loop
+                              exit when There.Input_Count >= There.Inputs'Last;
+                              There.Input_Count := There.Input_Count + 1;
+                              There.Inputs (There.Input_Count) :=
+                                T.To_Bounded (Cf.Value_Maps.Key (Position) & "="
+                                              & Cf.Value_Maps.Element (Position));
+                           end loop;
                            Run (There, Screen, Status);
                         end;
                         return;

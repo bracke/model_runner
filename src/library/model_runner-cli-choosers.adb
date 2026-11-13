@@ -856,12 +856,22 @@ package body Model_Runner.CLI.Choosers is
 
       function Next (Byte : out Character) return Boolean is
       begin
-         if not Hostkit.Descriptors.Wait_Readable (Input, 30)
-           or else Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
-           or else Last < Buffer'First
-         then
+         --  As long as the editor waits for a key's rest, a read a signal
+         --  broke read again.
+         if not Hostkit.Descriptors.Wait_Readable (Input, 100) then
             return False;
          end if;
+         declare
+            Got : Hostkit.Descriptors.Transfer_Outcome;
+         begin
+            loop
+               Got := Hostkit.Descriptors.Read (Input, Buffer, Last);
+               exit when Got /= Hostkit.Descriptors.Transfer_Interrupted;
+            end loop;
+            if Got /= Hostkit.Descriptors.Transfer_Ok or else Last < Buffer'First then
+               return False;
+            end if;
+         end;
          Byte := Character'Val (Buffer (Buffer'First));
          return True;
       end Next;
@@ -1524,7 +1534,10 @@ package body Model_Runner.CLI.Choosers is
                declare
                   Earlier : constant String := History (Index);
                begin
+                  --  One line, as a suggestion is drawn: a pasted entry of
+                  --  several is not offered.
                   if Earlier'Length > Line'Length
+                    and then Ada.Strings.Fixed.Index (Earlier, [1 => ASCII.LF]) = 0
                     and then Earlier (Earlier'First .. Earlier'First + Line'Length - 1) = Line
                     and then Still_Offered (Line, Earlier (Earlier'First + Line'Length .. Earlier'Last))
                   then
@@ -1726,27 +1739,6 @@ package body Model_Runner.CLI.Choosers is
          if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
             return False;
          end if;
-         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
-           or else Last < Buffer'First
-         then
-            return False;
-         end if;
-         Into := Character'Val (Buffer (Buffer'First));
-         return True;
-      end Read_Terminal;
-
-      --  Read one byte, the held keys first, where one comes within a wait
-      --  in milliseconds.
-      function Next (Wait : Integer := -1; Into : out Character) return Boolean is
-      begin
-         if Held_Keys /= Null_Unbounded_String then
-            Into := Element (Held_Keys, 1);
-            Delete (Held_Keys, 1, 1);
-            return True;
-         end if;
-         if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
-            return False;
-         end if;
          --  A read a signal broke is read again, not taken for the end.
          declare
             Got : Hostkit.Descriptors.Transfer_Outcome;
@@ -1761,6 +1753,18 @@ package body Model_Runner.CLI.Choosers is
          end;
          Into := Character'Val (Buffer (Buffer'First));
          return True;
+      end Read_Terminal;
+
+      --  Read one byte, the held keys first, where one comes within a wait
+      --  in milliseconds.
+      function Next (Wait : Integer := -1; Into : out Character) return Boolean is
+      begin
+         if Held_Keys /= Null_Unbounded_String then
+            Into := Element (Held_Keys, 1);
+            Delete (Held_Keys, 1, 1);
+            return True;
+         end if;
+         return Read_Terminal (Wait, Into);
       end Next;
 
       --  How long the rest of a key's sequence is waited for, in
@@ -2088,14 +2092,24 @@ package body Model_Runner.CLI.Choosers is
             declare
                After : Character;
             begin
-               --  CR LF is one line end.
-               if Key = ASCII.CR and then Next (30, After) and then After /= ASCII.LF then
-                  Append (Held_Keys, After);
+               --  CR LF is one line end; a byte after a CR alone is read
+               --  next, before any held after it.
+               if Key = ASCII.CR and then Next (Key_Wait, After) and then After /= ASCII.LF then
+                  Held_Keys := After & Held_Keys;
                end if;
             end;
+            --  Nothing after it, not even the paste's closing mark: the
+            --  mark was lost, and this line end is Enter -- held as a
+            --  paste, the line could not be ended at all.
+            if Held_Keys = Null_Unbounded_String and then not Hostkit.Descriptors.Wait_Readable (Input, Key_Wait)
+            then
+               Pasting := False;
+               Outcome := Entered;
+               exit;
+            end if;
             Insert (Text, Cursor + 1, [1 => ASCII.LF]);
             Cursor := Cursor + 1;
-         elsif Pasting and then Key /= ASCII.ESC and then Key /= ASCII.HT
+         elsif Pasting and then Key not in ASCII.ESC | ASCII.HT | ASCII.ETX
            and then (Key < ' ' or else Key = ASCII.DEL)
          then
             null;
@@ -2330,6 +2344,12 @@ package body Model_Runner.CLI.Choosers is
       end loop;
       --  Drawn as it ended, the cursor after it, and the line left: no
       --  suggestion on it.
+      --  A paste's last line end is no part of the message: copied with
+      --  its line, /clear came as "/clear" and a line feed, and was no
+      --  command.
+      while Outcome = Entered and then Length (Text) > 0 and then Element (Text, Length (Text)) = ASCII.LF loop
+         Delete (Text, Length (Text), Length (Text));
+      end loop;
       Cursor := Length (Text);
       Ghost := Null_Unbounded_String;
       Redraw;

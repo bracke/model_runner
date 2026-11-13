@@ -265,6 +265,13 @@ package body Model_Runner.Speech is
                   end;
                end if;
                Model_Runner.Tensors.Free (Read);
+            --  Whatever stopped it, the capture is said to have ended: a task
+            --  ended unsaid left Hear waiting for it, dictation hearing for
+            --  ever, and the program unable to end.
+            exception
+               when others =>
+                  Model_Runner.Tensors.Free (Read);
+                  Owner.Common.Capture_Ended (Refusal ("the recording could not be read"), False);
             end;
          elsif Work = Begin_Recording then
             begin
@@ -295,7 +302,14 @@ package body Model_Runner.Speech is
                Chunk := [others => 0];
             exception
                when others =>
-                  Hostkit.Microphone.Close (Device);
+                  --  Closed if it can be: a close that fails too still
+                  --  leaves the capture said to have ended.
+                  begin
+                     Hostkit.Microphone.Close (Device);
+                  exception
+                     when others =>
+                        null;
+                  end;
                   Owner.Common.Capture_Ended (Refusal ("the recording failed"), False);
             end;
          end if;

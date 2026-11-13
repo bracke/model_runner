@@ -1101,6 +1101,14 @@ package body Model_Runner.Framework.Configurations is
 
                case Given_Setting.Kind is
                   when Templates.Set_Setting | Templates.List_Setting =>
+                     --  A directory to make is one inside the project, as a
+                     --  file is: ../x was made beside it.
+                     if Given_Setting.Kind = Templates.Set_Setting and then Key = Directories_Key
+                       and then not Templates.Is_Project_Path (Value)
+                     then
+                        Invalid (Value & " is not a path inside the project");
+                        return;
+                     end if;
                      Records.Set
                        (Config, Field,
                         (if Records.Has (Config, Field)
@@ -1442,6 +1450,18 @@ package body Model_Runner.Framework.Configurations is
                         & "; nothing was kept");
          end if;
       end;
+   --  Raised part way -- a read that failed, an allocation -- what was
+   --  made is taken back as a refusal takes it back: left, the project was
+   --  half made, and the next /init refused it as made.
+   exception
+      when Failure : others =>
+         begin
+            Undo;
+         exception
+            when others =>
+               null;
+         end;
+         Status := E.Unexpected (Failure, "/init");
    end Initialize;
 
    --  The settings a reconfiguration may change, by the start of their name.

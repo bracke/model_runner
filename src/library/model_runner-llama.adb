@@ -2721,6 +2721,10 @@ package body Model_Runner.Llama is
             while At_Byte <= View.Span loop
                Seen := Seen xor Held (At_Byte);
                At_Byte := At_Byte + Page;
+               --  Asked to stop, it stops within a few megabytes, not at
+               --  the end of a view of gigabytes: leaving waits for it.
+               exit when At_Byte mod (1024 * Page) = 1
+                 and then Model_Runner.Cancellation.Is_Cancelled (Stop);
             end loop;
          end;
       end Touch;

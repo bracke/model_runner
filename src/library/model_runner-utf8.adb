@@ -381,7 +381,11 @@ package body Model_Runner.UTF8 is
                Column : constant Natural := Total mod Row;
                Stop   : constant Natural := Natural'Min ((Column / 8 + 1) * 8, Row - 1);
             begin
-               Total := Total - Column + Natural'Max (Column, Stop);
+               --  After a row filled exactly the cursor still stands in its
+               --  last column, the wrap not yet made: a tab moves it nowhere.
+               if not (Column = 0 and then Total > 0) then
+                  Total := Total - Column + Natural'Max (Column, Stop);
+               end if;
             end;
          else
             if Width = 2 and then Row > 1 and then Total mod Row = Row - 1 then

@@ -147,8 +147,21 @@ package body Model_Runner.Text is
    -------------------
 
    function Show_Controls (Item : String; Lead : in out Boolean) return String is
+      Held : Boolean := False;
+      Said : constant String := Show_Controls (Item, Lead, Held);
+   begin
+      --  No piece after it: a carriage return at the end is one alone.
+      return (if Held then Said & "\x0D" else Said);
+   end Show_Controls;
+
+   function Show_Controls
+     (Item    : String;
+      Lead    : in out Boolean;
+      Held_CR : in out Boolean) return String
+   is
       Lead_Byte : constant Character := Character'Val (16#C2#);
-      Whole     : constant String := (if Lead then Lead_Byte & Item else Item);
+      Whole     : constant String :=
+        (if Lead then [1 => Lead_Byte] else "") & (if Held_CR then [1 => ASCII.CR] else "") & Item;
       Result    : String (1 .. Whole'Length * 8);
       Last      : Natural := 0;
       Index     : Natural := Whole'First;
@@ -163,12 +176,18 @@ package body Model_Runner.Text is
       end Put_Escaped;
    begin
       Lead := False;
+      Held_CR := False;
       while Index <= Whole'Last loop
          declare
             Char : constant Character := Whole (Index);
          begin
             if Char = Lead_Byte and then Index = Whole'Last then
                Lead := True;
+            --  The piece's last byte a carriage return: whether a line feed
+            --  follows is the next piece's to say -- a tokenizer gives the
+            --  two as two tokens.
+            elsif Char = ASCII.CR and then Index = Whole'Last then
+               Held_CR := True;
             elsif Char = Lead_Byte
               and then Character'Pos (Whole (Index + 1)) in 16#80# .. 16#9F#
             then

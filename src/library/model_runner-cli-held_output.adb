@@ -116,7 +116,9 @@ package body Model_Runner.CLI.Held_Output is
             begin
                for Index in Text'Range loop
                   if Text (Index) = ASCII.LF then
-                     Result.Append (Text (Start .. Index - 1));
+                     --  A CR LF line end is a line end, its CR no character.
+                     Result.Append (Text (Start .. (if Index > Start and then Text (Index - 1) = ASCII.CR
+                                                    then Index - 2 else Index - 1)));
                      Start := Index + 1;
                   end if;
                end loop;

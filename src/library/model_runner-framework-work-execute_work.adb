@@ -893,7 +893,13 @@ begin
       else
          Files.Write_Failed (Scratch, Status);
       end if;
+      --  What was written beside the prompt goes with it however the work
+      --  ends: the task's whole context, what it may do and its policy were
+      --  left in runtime/exec, where nothing swept them.
       if E.Is_Error (Status) then
+         Files.Discard (Prompt);
+         Files.Discard (Permissions.Permissions_Beside (Prompt));
+         Files.Discard (Inference_Policy.Policy_Beside (Prompt));
          return;
       end if;
 
@@ -950,6 +956,9 @@ begin
                   --  back all the same, before the fault goes on.
                   when others =>
                      Stores.Restore_State (Item, State, Tampered, Tamper_Left);
+                     Files.Discard (Prompt);
+                     Files.Discard (Permissions.Permissions_Beside (Prompt));
+                     Files.Discard (Inference_Policy.Policy_Beside (Prompt));
                      raise;
                end;
                Stores.Restore_State (Item, State, Tampered, Tamper_Left);
@@ -993,10 +1002,31 @@ begin
                            Rest : constant String := Line (Line'First + 5 .. Line'Last);
                            Tab  : constant Natural :=
                              Ada.Strings.Fixed.Index (Rest, [1 => ASCII.HT]);
+
+                           --  The arguments as the call gave them: written on
+                           --  one line, their line ends as \n and \r.
+                           function Lines_Back (Text : String) return String is
+                              Result : Unbounded_String;
+                              Index  : Natural := Text'First;
+                           begin
+                              while Index <= Text'Last loop
+                                 if Text (Index) = '\' and then Index < Text'Last then
+                                    Append (Result, (case Text (Index + 1) is
+                                                        when 'n' => [1 => ASCII.LF],
+                                                        when 'r' => [1 => ASCII.CR],
+                                                        when others => [1 => Text (Index + 1)]));
+                                    Index := Index + 2;
+                                 else
+                                    Append (Result, Text (Index));
+                                    Index := Index + 1;
+                                 end if;
+                              end loop;
+                              return To_String (Result);
+                           end Lines_Back;
                         begin
                            Note_Call
                              (Host, (if Tab = 0 then Rest else Rest (Rest'First .. Tab - 1)),
-                              (if Tab = 0 then "" else Rest (Tab + 1 .. Rest'Last)), "");
+                              (if Tab = 0 then "" else Lines_Back (Rest (Tab + 1 .. Rest'Last))), "");
                         end;
                      end if;
                   end loop;
