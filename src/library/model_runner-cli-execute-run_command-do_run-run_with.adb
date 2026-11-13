@@ -24,6 +24,112 @@ procedure Run_With (Team : Workers_CPU.Pool_Reference) is
             return "statistics.handed.refused";
       end case;
    end Handed_Key;
+
+   --  The draft model's session, kept beside a prefill cache file. A hit
+   --  had the draft read the last 1,024 tokens of the prompt again --
+   --  0.45 s on qwen3-8b's 3.3k-token prompt drafted by Qwen3-0.6B --
+   --  because only the target's session was kept. Its eight leading bytes
+   --  are a mark and how much of the text's front the draft never read
+   --  (L.Skipped), which a snapshot does not hold. The generation keeps
+   --  of it only what agrees with the prompt, as it does the target's.
+   Draft_Mark : constant Model_Runner.Bytes.Byte_Array (0 .. 3) :=
+     [16#4D#, 16#52#, 16#44#, 16#31#];   --  "MRD1"
+
+   --  Read the draft's kept session, where there is one and it fits the
+   --  draft model. Any trouble leaves the draft empty, which reads the
+   --  end of the prompt as it did before there was one.
+   procedure Load_Draft (Path : String) is
+      use type Model_Runner.Bytes.Byte_Count;
+      use type Model_Runner.Bytes.Byte_Array;
+      Kept  : Files.File_Source;
+      Room  : Model_Runner.Bytes.Byte_Array_Access;
+      Local : E.Error_Info;
+   begin
+      if not Ada.Directories.Exists (Path) then
+         return;
+      end if;
+      Files.Open (Kept, Path, Status => Local);
+      if E.Is_Error (Local) then
+         return;
+      end if;
+      if Files.Size (Kept) > 8 then
+         Model_Runner.Bytes.Allocate (Files.Size (Kept), Room, Zeroed => False);
+      end if;
+      if Room /= null then
+         Files.Read (Kept, 0, Room.all, Local);
+      end if;
+      Files.Close (Kept);
+      if Room = null then
+         return;
+      end if;
+      if E.Is_Ok (Local)
+        and then Room (Room'First .. Room'First + 3) = Draft_Mark
+      then
+         L.Adopt
+           (Draft_Session, Draft_Model, Room (Room'First + 8 .. Room'Last),
+            Local);
+         if E.Is_Ok (Local) then
+            declare
+               function At_Byte (Place : Model_Runner.Bytes.Byte_Count)
+                 return Natural is (Natural (Room (Room'First + Place)));
+            begin
+               Model_Runner.Platform.Mark_Used (Path);
+               L.Set_Skipped
+                 (Draft_Session,
+                  At_Byte (4) + 2 ** 8 * At_Byte (5) + 2 ** 16 * At_Byte (6)
+                  + 2 ** 24 * (At_Byte (7) mod 128));
+            end;
+         end if;
+      end if;
+      Model_Runner.Bytes.Free (Room);
+   exception
+      when others =>
+         Model_Runner.Bytes.Free (Room);
+         L.Reset (Draft_Session);
+   end Load_Draft;
+
+   --  Keep the draft's session beside the cache file just written, or
+   --  delete the one an earlier run left there when this run has none.
+   procedure Save_Draft (Path : String) is
+      use type Model_Runner.Bytes.Byte_Count;
+      Room  : Model_Runner.Bytes.Byte_Array_Access;
+      Whole : Model_Runner.Bytes.Byte_Array_Access;
+      Local : E.Error_Info := E.Make (E.Lifecycle_Cache_Unreadable);
+   begin
+      if Draft_Ready and then L.Position (Draft_Session) > 0 then
+         L.Snapshot (Draft_Session, Draft_Model, Room, Local);
+         if E.Is_Ok (Local) and then Room /= null then
+            Model_Runner.Bytes.Allocate
+              (Room'Length + 8, Whole, Zeroed => False);
+            if Whole = null then
+               Local := E.Make (E.Memory_Allocation_Failed);
+            else
+               declare
+                  Skip : constant Natural := L.Skipped (Draft_Session);
+               begin
+                  Whole (Whole'First .. Whole'First + 3) := Draft_Mark;
+                  for Place in 0 .. 3 loop
+                     Whole (Whole'First + 4
+                            + Model_Runner.Bytes.Byte_Count (Place)) :=
+                       Model_Runner.Bytes.Byte
+                         ((Skip / 2 ** (8 * Place)) mod 256);
+                  end loop;
+               end;
+               Whole (Whole'First + 8 .. Whole'Last) := Room.all;
+               Write_File (Path, Whole.all, Local, Durable => False);
+               Model_Runner.Bytes.Free (Whole);
+            end if;
+         end if;
+         Model_Runner.Bytes.Free (Room);
+      end if;
+      if E.Is_Error (Local) and then Ada.Directories.Exists (Path) then
+         Ada.Directories.Delete_File (Path);
+      end if;
+   exception
+      when others =>
+         Model_Runner.Bytes.Free (Room);
+         Model_Runner.Bytes.Free (Whole);
+   end Save_Draft;
 begin
    Status := E.Exit_Success;
 
@@ -560,6 +666,10 @@ begin
             end if;
             Prefix_Reused := False;
       end;
+   end if;
+
+   if Prefix_Reused and then Draft_Ready and then Cache_Path /= "" then
+      Load_Draft (Model_Runner.CLI.Prefill_Slots.Draft_Path (Load_Path));
    end if;
 
    --  Interactive mode owns its own loop; it needs the same prepared model
@@ -1959,6 +2069,8 @@ begin
                         Model_Runner.CLI.Prefill_Slots.Forget (Load_Path);
                      end if;
                   end if;
+                  Save_Draft
+                    (Model_Runner.CLI.Prefill_Slots.Draft_Path (Save_Path));
                   Model_Runner.Platform.Trim_Directory
                     (Model_Runner.Platform.Cache_Directory, "*.kv",
                      Model_Runner.Platform.Prefill_Cache_Most,

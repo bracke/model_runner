@@ -12,6 +12,7 @@ package body Model_Runner.CLI.Prefill_Slots is
 
    Suffix : constant String := ".kv";
    Said   : constant String := ".asked";
+   Drafts : constant String := ".draft" & Suffix;
 
    --  The path without its ".kv", which every name here is made from.
    function Stem (Path : String) return String is
@@ -22,6 +23,9 @@ package body Model_Runner.CLI.Prefill_Slots is
 
    function Asked_Path (Path : String) return String is
      (Stem (Path) & Said);
+
+   function Draft_Path (Path : String) return String is
+     (Stem (Path) & Drafts);
 
    function Asking
      (System : String; Has_System : Boolean; Prompt : String) return String
@@ -161,37 +165,46 @@ package body Model_Runner.CLI.Prefill_Slots is
    begin
       Delete (Path);
       Delete (Asked_Path (Path));
+      Delete (Draft_Path (Path));
    end Forget;
 
    procedure Drop_Orphans (Folder : String) is
-      Search : Dirs.Search_Type;
-      Found  : Dirs.Directory_Entry_Type;
+
+      --  Delete each file ending in Ending whose cache file is gone.
+      procedure Drop (Ending : String) is
+         Search : Dirs.Search_Type;
+         Found  : Dirs.Directory_Entry_Type;
+      begin
+         Dirs.Start_Search
+           (Search, Folder, "*" & Ending,
+            [Dirs.Ordinary_File => True, others => False]);
+         while Dirs.More_Entries (Search) loop
+            Dirs.Get_Next_Entry (Search, Found);
+            declare
+               Path : constant String := Dirs.Full_Name (Found);
+            begin
+               if not Dirs.Exists
+                        (Path (Path'First .. Path'Last - Ending'Length)
+                         & Suffix)
+               then
+                  Dirs.Delete_File (Path);
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+         Dirs.End_Search (Search);
+      exception
+         when others =>
+            null;
+      end Drop;
    begin
       if Folder = "" or else not Dirs.Exists (Folder) then
          return;
       end if;
-      Dirs.Start_Search
-        (Search, Folder, "*" & Said,
-         [Dirs.Ordinary_File => True, others => False]);
-      while Dirs.More_Entries (Search) loop
-         Dirs.Get_Next_Entry (Search, Found);
-         declare
-            Path : constant String := Dirs.Full_Name (Found);
-         begin
-            if not Dirs.Exists
-                     (Path (Path'First .. Path'Last - Said'Length) & Suffix)
-            then
-               Dirs.Delete_File (Path);
-            end if;
-         exception
-            when others =>
-               null;
-         end;
-      end loop;
-      Dirs.End_Search (Search);
-   exception
-      when others =>
-         null;
+      Drop (Said);
+      Drop (Drafts);
    end Drop_Orphans;
 
 end Model_Runner.CLI.Prefill_Slots;

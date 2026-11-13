@@ -15677,6 +15677,152 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_Tree (Home);
    end The_Prefill_Cache_Keeps_A_File_For_Each_Prompt;
 
+   --  The prefill cache keeps the draft model's session too: a hit had the
+   --  draft read the prompt's end again. A hit with it writes what a run
+   --  without any cache writes, and a draft's file that is not one is no
+   --  failure -- the draft reads as it did before -- and is replaced.
+   procedure The_Prefill_Cache_Keeps_The_Drafts_Session
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Env renames Ada.Environment_Variables;
+      package Slots renames Model_Runner.CLI.Prefill_Slots;
+      Model  : constant String := "obj/prefill-draft-model.gguf";
+      Home   : constant String :=
+        Ada.Directories.Full_Name ("obj/prefill-draft-cache");
+      Folder : constant String := Home & "/model_runner/prefill";
+      Was    : constant String :=
+        (if Env.Exists ("XDG_CACHE_HOME") then Env.Value ("XDG_CACHE_HOME")
+         else "");
+      Had    : constant Boolean := Env.Exists ("XDG_CACHE_HOME");
+      Prompt : constant String := Ada.Strings.Fixed."*" (150, "ab");
+
+      Reused : Boolean := False;
+
+      function Ask (Cached : Boolean := True) return String is
+         use Ada.Text_IO;
+         Source : Fixed_Arguments;
+         Status : Natural;
+         Errors : File_Type;
+         Output : File_Type;
+         Path   : constant String := "obj/prefill-draft-errors.txt";
+         Said   : constant String := "obj/prefill-draft-output.txt";
+      begin
+         Add (Source, "run");
+         Add (Source, Model);
+         Add (Source, "--raw");
+         Add (Source, "--prompt");
+         Add (Source, Prompt);
+         Add (Source, "--draft-model");
+         Add (Source, Model);
+         Add (Source, "--temperature");
+         Add (Source, "0");
+         Add (Source, "--max-tokens");
+         Add (Source, "8");
+         Add (Source, "--show-stats");
+         Add (Source, "--backend");
+         Add (Source, "cpu");
+         if not Cached then
+            Add (Source, "--no-cache");
+         end if;
+         Create (Errors, Out_File, Path);
+         Create (Output, Out_File, Said);
+         Set_Error (Errors);
+         Set_Output (Output);
+         begin
+            Ran (Source, Status);
+         exception
+            when others =>
+               Set_Error (Standard_Error);
+               Set_Output (Standard_Output);
+               Close (Errors);
+               Close (Output);
+               raise;
+         end;
+         Set_Error (Standard_Error);
+         Set_Output (Standard_Output);
+         Close (Errors);
+         Close (Output);
+         Assert (Status = 0, "a drafted run with the cache on failed");
+         Reused :=
+           Ada.Strings.Fixed.Index (Text_Of (Path), "of them read before") > 0;
+         return Text_Of (Said);
+      end Ask;
+
+      --  The draft's session kept, by its name beside the one cache file.
+      function Draft_File return String is
+         Search : Ada.Directories.Search_Type;
+         Found  : Ada.Directories.Directory_Entry_Type;
+      begin
+         if not Ada.Directories.Exists (Folder) then
+            return "";
+         end if;
+         Ada.Directories.Start_Search (Search, Folder, "*.asked");
+         if not Ada.Directories.More_Entries (Search) then
+            Ada.Directories.End_Search (Search);
+            return "";
+         end if;
+         Ada.Directories.Get_Next_Entry (Search, Found);
+         Ada.Directories.End_Search (Search);
+         declare
+            Asked : constant String := Ada.Directories.Full_Name (Found);
+         begin
+            return Slots.Draft_Path
+              (Asked (Asked'First .. Asked'Last - 6) & ".kv");
+         end;
+      end Draft_File;
+
+      procedure Restore is
+      begin
+         if Had then
+            Env.Set ("XDG_CACHE_HOME", Was);
+         else
+            Env.Clear ("XDG_CACHE_HOME");
+         end if;
+      end Restore;
+   begin
+      if Ada.Directories.Exists (Home) then
+         Ada.Directories.Delete_Tree (Home);
+      end if;
+      Ada.Directories.Create_Path (Home);
+      Tiny_Model.Write (Model, Room => 1024);
+      Env.Set ("XDG_CACHE_HOME", Home);
+      begin
+         declare
+            Plain : constant String := Ask (Cached => False);
+         begin
+            Assert (Ask = Plain and then not Reused,
+                    "a drafted run that filled the cache wrote other text");
+            Assert (Draft_File /= ""
+                    and then Ada.Directories.Exists (Draft_File),
+                    "no draft's session was kept beside the cache file");
+            Assert (Ask = Plain and then Reused,
+                    "a hit with the draft's session wrote other text, or "
+                    & "read the prompt whole");
+
+            --  Not a session at all: read as none, and written anew.
+            declare
+               use Ada.Text_IO;
+               File : File_Type;
+            begin
+               Create (File, Out_File, Draft_File);
+               Put (File, "not a session");
+               Close (File);
+            end;
+            Assert (Ask = Plain and then Reused,
+                    "a hit with a broken draft's session wrote other text");
+            Assert (Ada.Directories.">" (Ada.Directories.Size (Draft_File), 100),
+                    "a broken draft's session was not written anew");
+         end;
+      exception
+         when others =>
+            Restore;
+            raise;
+      end;
+      Restore;
+      Ada.Directories.Delete_Tree (Home);
+   end The_Prefill_Cache_Keeps_The_Drafts_Session;
+
    --  How a run chooses among the prefill cache's files, without a model:
    --  the file whose asking begins most as the run's does, never one that
    --  shares only a few bytes, and none whose cache file is gone.
@@ -15699,6 +15845,10 @@ package body Tests.CLI_Cases is
       begin
          Create (File, Out_File, Slots.Slot_Path (Base, Asked));
          Put (File, "cache");
+         Close (File);
+         Create (File, Out_File,
+                 Slots.Draft_Path (Slots.Slot_Path (Base, Asked)));
+         Put (File, "draft");
          Close (File);
          Slots.Record_Asked (Slots.Slot_Path (Base, Asked), Asked);
       end Keep;
@@ -15748,9 +15898,20 @@ package body Tests.CLI_Cases is
                           & ".asked"),
               "an asking whose cache file is gone was kept, or one whose "
               & "file is there dropped");
+      Assert (not Ada.Directories.Exists
+                    (Slots.Draft_Path (Slots.Slot_Path (Base, Second)))
+              and then Ada.Directories.Exists
+                         (Slots.Draft_Path (Slots.Slot_Path (Base, First))),
+              "a draft's session whose cache file is gone was kept, or one "
+              & "whose file is there dropped");
+      Assert (Slots.Nearest (Base, Second) = Slots.Slot_Path (Base, First),
+              "a draft's session was chosen as a cache file");
       Slots.Forget (Slots.Slot_Path (Base, First));
-      Assert (Slots.Nearest (Base, First) = "",
-              "a forgotten file was still chosen");
+      Assert (Slots.Nearest (Base, First) = ""
+              and then not Ada.Directories.Exists
+                             (Slots.Draft_Path (Slots.Slot_Path (Base, First))),
+              "a forgotten file was still chosen, or its draft's session "
+              & "kept");
       Ada.Directories.Delete_Tree (Folder);
    end Prefill_Slots_Choose_By_What_Was_Asked;
 
@@ -16386,6 +16547,10 @@ package body Tests.CLI_Cases is
         (T, The_Prefill_Cache_Keeps_A_File_For_Each_Prompt'Access,
          "the prefill cache keeps a file for each prompt, and one going on "
          & "from another takes its place");
+      Register_Routine
+        (T, The_Prefill_Cache_Keeps_The_Drafts_Session'Access,
+         "the prefill cache keeps the draft's session, and a hit with it "
+         & "writes the same text");
       Register_Routine
         (T, A_Named_Draft_Shares_The_Text'Access,
          "a draft named for a model shares its text, not only its count "

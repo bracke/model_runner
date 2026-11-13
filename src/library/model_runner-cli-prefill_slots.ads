@@ -46,6 +46,14 @@ package Model_Runner.CLI.Prefill_Slots is
    function Nearest
      (Base, Asked : String; Least : Positive := 256) return String;
 
+   --  The file the draft model's session is kept in beside a cache file:
+   --  a draft read none of a kept prompt, and on every hit read the
+   --  prompt's last thousand tokens again.
+   --
+   --  @param Path The cache file.
+   --  @return The path.
+   function Draft_Path (Path : String) return String;
+
    --  Keep beside the cache file just written what its run was asked.
    --
    --  @param Path The cache file.
@@ -60,13 +68,14 @@ package Model_Runner.CLI.Prefill_Slots is
    --  @return Whether it is covered.
    function Covered (Path, Asked : String) return Boolean;
 
-   --  Delete a cache file and what its run was asked.
+   --  Delete a cache file, what its run was asked and its draft's session.
    --
    --  @param Path The cache file.
    procedure Forget (Path : String);
 
-   --  Delete every asking whose cache file is gone: the cache is kept to
-   --  its bound by deleting its files, which knows nothing of these.
+   --  Delete every asking and draft session whose cache file is gone: the
+   --  cache is kept to its bound by deleting its files, which knows
+   --  nothing of these.
    --
    --  @param Folder The cache directory.
    procedure Drop_Orphans (Folder : String);

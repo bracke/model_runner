@@ -2026,6 +2026,16 @@ package body Model_Runner.Generation is
                   end if;
                end if;
 
+               --  A kept draft whose prompt went on past what a fresh one
+               --  reads starts afresh: catching up would read more than
+               --  Draft_Reads for no better guesses.
+               if Keep > 0
+                 and then First_Token - 1 > Keep + Skip + Draft_Reads
+               then
+                  L.Reset (Draft_Session.all);
+                  Keep := 0;
+               end if;
+
                --  A draft that holds nothing reads the end of the prompt
                --  alone: what it proposes from is the last of the text,
                --  and reading the whole of a long one cost it as much as

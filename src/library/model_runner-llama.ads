@@ -1976,13 +1976,13 @@ package Model_Runner.Llama is
    --  @return Positions of the text before this session's first.
    function Skipped (Item : Session) return Natural;
 
-   --  Say how many leading positions of the text the session skips. Only
-   --  for a session that holds nothing yet.
+   --  Say how many leading positions of the text the session skips: for a
+   --  session that holds nothing yet, or one just adopted from a snapshot,
+   --  which does not keep the count, so its keeper restores it.
    --
-   --  @param Item Session, empty.
+   --  @param Item Session, empty or just adopted.
    --  @param Count Positions of the text before its first.
-   procedure Set_Skipped (Item : in out Session; Count : Natural)
-     with Pre => Position (Item) = 0;
+   procedure Set_Skipped (Item : in out Session; Count : Natural);
 
    --  Context capacity of a session.
    --
