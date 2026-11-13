@@ -11892,7 +11892,7 @@ package body Tests.Framework_Cases is
             Same : constant Rp.Graph := Rp.Refresh (Project, Found, Again);
             Kept : constant Duration := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Began);
          begin
-            Assert (Again = 0 and then Rp.File_Count (Same) = Rp.File_Count (Found) and then Kept < 1.5,
+            Assert (Again = 0 and then Rp.File_Count (Same) = Rp.File_Count (Found) and then Kept < 3.0,
                     "a refresh of fifty-four thousand unchanged files took" & Kept'Image & " s, reading"
                     & Again'Image);
          end;

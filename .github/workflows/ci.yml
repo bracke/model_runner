@@ -157,11 +157,9 @@ jobs:
         run: alr --non-interactive build
       - name: Build and run the test suite
         working-directory: model_runner/tests
-        shell: bash
         run: |
           alr --non-interactive build
           ./bin/tests.exe test
       - name: Run the repository checks
         working-directory: model_runner/tests
-        shell: bash
         run: ./bin/tests.exe check .. --repository

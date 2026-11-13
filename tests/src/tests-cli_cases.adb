@@ -16169,9 +16169,11 @@ package body Tests.CLI_Cases is
       Tiny_Model.Write_Suite_Fixture;
       Assert (Model_Runner.CLI.Execute.Unasked_Layout
                 (Path, Model_Runner.Backend.Backend_CPU)
-              = Model_Runner.Llama.To_Rows,
+              = (if Model_Runner.Platform.Byte_Products
+                 then Model_Runner.Llama.To_Rows
+                 else Model_Runner.Llama.No_Repack),
               "a processor run at the integer arithmetic did not take the "
-              & "panels unasked");
+              & "layout its kernels support");
       Assert (Model_Runner.CLI.Execute.Unasked_Layout
                 (Path, Model_Runner.Backend.Backend_CPU,
                  Arithmetic => Model_Runner.Llama.Float_Activations)
@@ -16180,8 +16182,11 @@ package body Tests.CLI_Cases is
       Assert (Model_Runner.CLI.Execute.Unasked_Layout
                 (Path, Model_Runner.Backend.Backend_CPU,
                  Arithmetic => Model_Runner.Llama.Mixed_Activations)
-              = Model_Runner.Llama.To_Rows,
-              "a processor run at --arith mixed did not take the panels");
+              = (if Model_Runner.Platform.Byte_Products
+                 then Model_Runner.Llama.To_Rows
+                 else Model_Runner.Llama.No_Repack),
+              "a processor run at --arith mixed did not take the layout "
+              & "its kernels support");
    end Binary32_Keeps_The_Files_Layout;
 
    --  The device run takes unasked is the one whose load will hold the

@@ -15457,6 +15457,7 @@ package body Tests.Backend_Cases is
       AUnit.Assertions.Assert (Qn.Decodes_Dearly (Gf.Type_Q4_K) and then not Qn.Decodes_Dearly (Gf.Type_Q8_0),
                                "a format's decoding was misjudged");
       AUnit.Assertions.Assert (Qn.Takes_Few_Together (Gf.Type_Q4_K)
+                               = Model_Runner.Platform.Byte_Products
                                and then not Qn.Takes_Few_Together (Gf.Type_Q8_0),
                                "whether a few vectors go together was misjudged");
       AUnit.Assertions.Assert (Qn.Wanted_Tile (1) = 4 and then Qn.Wanted_Tile (8) = Qn.Row_Tile,

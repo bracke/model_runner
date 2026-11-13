@@ -349,8 +349,21 @@ package body Model_Runner.Speech is
          end if;
          W.Prepare (Owner.Model, To_String (Owner.Wanted.Model_Path), Status);
          if E.Is_Ok (Status) then
-            Admit (Interfaces.Unsigned_64 (W.Weight_Bytes (Owner.Model) + W.Session_Bytes (Owner.Model)),
-                   Model_Runner.Platform.Available_Memory, Status);
+            declare
+               Available : constant Interfaces.Unsigned_64 :=
+                 Model_Runner.Platform.Available_Memory;
+            begin
+               --  Zero is the platform contract's "unknown", not a host
+               --  with no memory.  The macOS and Windows bodies cannot yet
+               --  answer this question, so preserve the former unbounded
+               --  behaviour there rather than refusing every speech model.
+               if Available /= 0 then
+                  Admit
+                    (Interfaces.Unsigned_64
+                       (W.Weight_Bytes (Owner.Model) + W.Session_Bytes (Owner.Model)),
+                     Available, Status);
+               end if;
+            end;
          end if;
          if E.Is_Ok (Status) then
             declare
