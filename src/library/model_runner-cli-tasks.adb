@@ -724,9 +724,20 @@ package body Model_Runner.CLI.Tasks is
                                           (Pair (Cut + 1 .. Pair'Last), Ada.Strings.Maps.To_Mapping ("-_", "  "))
                                    else Pair (Cut + 1 .. Pair'Last));
 
-                        --  A word alone is a state: list ready, list blocked.
+                        --  A word alone is a state: list ready, list blocked;
+                        --  to-integrate as to integrate, and a state shown in
+                        --  two words written as two -- list to integrate,
+                        --  list checks failed -- whole, not its first word.
                         elsif Name = "state" and then Cut = 0 and then Pair /= "" then
-                           return Pair;
+                           if Pair in "to" | "checks" | "serves" and then Index < Argument'Last then
+                              declare
+                                 Rest : constant String := Argument (Index + 1 .. Argument'Last);
+                                 Gap  : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
+                              begin
+                                 return Pair & " " & (if Gap = 0 then Rest else Rest (Rest'First .. Gap - 1));
+                              end;
+                           end if;
+                           return Ada.Strings.Fixed.Translate (Pair, Ada.Strings.Maps.To_Mapping ("-_", "  "));
                         end if;
                      end;
                      Start := Index + 1;
@@ -831,9 +842,13 @@ package body Model_Runner.CLI.Tasks is
                                     & " parent and requirement; /help task says how");
                         Fail (Outcome);
                         return;
+                     --  to-integrate and checks_failed as their words are.
                      elsif Name = "state" and then not States.Contains (Said)
                        and then Said not in "to" | "integrate" | "for" | "parts" | "checks" | "retired" | "on"
                                           | "an" | "ended" | "task"
+                       and then Ada.Strings.Fixed.Translate (Said, Ada.Strings.Maps.To_Mapping ("-_", "  "))
+                                  not in "to integrate" | "checks failed" | "serves retired"
+                                       | "waiting for parts"
                      then
                         declare
                            Near : constant String := Model_Runner.Framework.Nearest (Said, States);
@@ -3075,6 +3090,17 @@ package body Model_Runner.CLI.Tasks is
          if E.Is_Ok (Outcome) then
             Commit;
          end if;
+         if E.Is_Error (Outcome) then
+            Fail (Outcome);
+            return;
+         end if;
+         --  The parts made, said as soon as they are: a failure after --
+         --  accepting them -- hid parts that were there.
+         for Index in 1 .. Natural (Made.Length) loop
+            Pres.Put_Message (Screen, "cli.task.created",
+                              [Loc.Named ("name", Made (Index)),
+                               Loc.Named ("detail", Titles (Index))]);
+         end loop;
          --  Parts a person split it into are the parts they want: accepted,
          --  not candidates waiting on the same person again -- unless the
          --  task itself is still a candidate, whose parts wait with it.
@@ -3094,11 +3120,6 @@ package body Model_Runner.CLI.Tasks is
             Fail (Outcome);
             return;
          end if;
-         for Index in 1 .. Natural (Made.Length) loop
-            Pres.Put_Message (Screen, "cli.task.created",
-                              [Loc.Named ("name", Made (Index)),
-                               Loc.Named ("detail", Titles (Index))]);
-         end loop;
          Pres.Put_Message
            (Screen, "cli.task.moved",
             [Loc.Named ("name", First_Word),
@@ -4266,11 +4287,13 @@ package body Model_Runner.CLI.Tasks is
                     (Store, Item.Session_Profile, Profile_Given)
              else Model_Runner.Framework.Context.Profile (Store, Profile_Given)),
             Built, Outcome, Instructions => Model_Runner.Framework.Work.Instructions_Of (Store, Id));
-         if E.Is_Ok (Outcome) then
+         --  Kept where the project can be written; looked at while another
+         --  run holds it, it is shown and not kept.
+         if E.Is_Ok (Outcome) and then not S.Is_Read_Only (Store) then
             Model_Runner.Framework.Context.Keep (Store, Change, Built, Outcome);
-         end if;
-         if E.Is_Ok (Outcome) then
-            S.Commit (Store, Change, Outcome);
+            if E.Is_Ok (Outcome) then
+               S.Commit (Store, Change, Outcome);
+            end if;
          end if;
          if E.Is_Error (Outcome) then
             Fail (Outcome);
@@ -4647,6 +4670,61 @@ package body Model_Runner.CLI.Tasks is
             end if;
          end;
 
+         --  Waiting for another, it is not complete whatever its checks say:
+         --  said first, with what to do, and nothing is run -- nor a
+         --  candidate accepted on the way, which was left accepted.
+         declare
+            Defined : R.Item;
+            Read    : E.Error_Info;
+         begin
+            Tk.Definition (Store, Argument, Defined, Read);
+            for Other of Model_Runner.Framework.Lines_Of
+              (Ada.Strings.Fixed.Translate (R.Get (Defined, "depends_on"),
+                                            Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
+            loop
+               declare
+                  Named : constant String := Ada.Strings.Fixed.Trim (Other, Ada.Strings.Both);
+               begin
+                  if Named /= "" and then Tk.State_Of (Store, Named) /= Tk.Complete then
+                     Outcome := E.Make (E.Framework_Task_Not_Ready);
+                     E.Add_Text (Outcome, "name", Argument);
+                     E.Add_Text (Outcome, "detail", "it waits for " & Named & ", which is "
+                                 & Model_Runner.Framework.State_Said (Moved_State (Named)));
+                     Fail (Outcome);
+                     if Tk.State_Of (Store, Named) = Tk.Blocked
+                       and then (for some Child of Tk.Children (Store, Named) =>
+                                   Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected")
+                     then
+                        --  Waiting for its parts: the first of them is the way on.
+                        for Child of Tk.Children (Store, Named) loop
+                           if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
+                              Pres.Put_Note
+                                (Screen, "cli.next.waits_on_parts",
+                                 [Loc.Named ("name", Argument), Loc.Named ("value", Named),
+                                  Loc.Named ("detail", (if Tk.State_Of (Store, Child) = Tk.Candidate
+                                                        then "/task accept " else "/work ") & Child)]);
+                              exit;
+                           end if;
+                        end loop;
+                     elsif Tk.State_Of (Store, Named) in "blocked" | "failed" then
+                        Pres.Put_Note
+                          (Screen, "cli.next.waits_on_stopped",
+                           [Loc.Named ("name", Argument), Loc.Named ("value", Named),
+                            Loc.Named ("state", Model_Runner.Framework.State_Said (Tk.State_Of (Store, Named)))]);
+                     else
+                        Pres.Put_Note
+                          (Screen, "cli.next.waits_first",
+                           [Loc.Named ("name", Argument), Loc.Named ("value", Named),
+                            Loc.Named ("detail",
+                                       (if Tk.State_Of (Store, Named) = Tk.Candidate
+                                        then "/task accept " & Named else "/work " & Named))]);
+                     end if;
+                     return;
+                  end if;
+               end;
+            end loop;
+         end;
+
          --  A candidate completed by hand is accepted on the way: saying the
          --  work is done is saying it was wanted.
          if Tk.State_Of (Store, Argument) = Tk.Candidate then
@@ -4733,60 +4811,6 @@ package body Model_Runner.CLI.Tasks is
                            [Loc.Named ("name", Argument), Loc.Named ("value", "complete")]);
             return;
          end if;
-
-         --  Waiting for another, it is not complete whatever its checks say:
-         --  said first, with what to do, and nothing is run.
-         declare
-            Defined : R.Item;
-            Read    : E.Error_Info;
-         begin
-            Tk.Definition (Store, Argument, Defined, Read);
-            for Other of Model_Runner.Framework.Lines_Of
-              (Ada.Strings.Fixed.Translate (R.Get (Defined, "depends_on"),
-                                            Ada.Strings.Maps.To_Mapping (",", [1 => ASCII.LF])))
-            loop
-               declare
-                  Named : constant String := Ada.Strings.Fixed.Trim (Other, Ada.Strings.Both);
-               begin
-                  if Named /= "" and then Tk.State_Of (Store, Named) /= Tk.Complete then
-                     Outcome := E.Make (E.Framework_Task_Not_Ready);
-                     E.Add_Text (Outcome, "name", Argument);
-                     E.Add_Text (Outcome, "detail", "it waits for " & Named & ", which is "
-                                 & Model_Runner.Framework.State_Said (Moved_State (Named)));
-                     Fail (Outcome);
-                     if Tk.State_Of (Store, Named) = Tk.Blocked
-                       and then (for some Child of Tk.Children (Store, Named) =>
-                                   Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected")
-                     then
-                        --  Waiting for its parts: the first of them is the way on.
-                        for Child of Tk.Children (Store, Named) loop
-                           if Tk.State_Of (Store, Child) not in "complete" | "cancelled" | "rejected" then
-                              Pres.Put_Note
-                                (Screen, "cli.next.waits_on_parts",
-                                 [Loc.Named ("name", Argument), Loc.Named ("value", Named),
-                                  Loc.Named ("detail", (if Tk.State_Of (Store, Child) = Tk.Candidate
-                                                        then "/task accept " else "/work ") & Child)]);
-                              exit;
-                           end if;
-                        end loop;
-                     elsif Tk.State_Of (Store, Named) in "blocked" | "failed" then
-                        Pres.Put_Note
-                          (Screen, "cli.next.waits_on_stopped",
-                           [Loc.Named ("name", Argument), Loc.Named ("value", Named),
-                            Loc.Named ("state", Model_Runner.Framework.State_Said (Tk.State_Of (Store, Named)))]);
-                     else
-                        Pres.Put_Note
-                          (Screen, "cli.next.waits_first",
-                           [Loc.Named ("name", Argument), Loc.Named ("value", Named),
-                            Loc.Named ("detail",
-                                       (if Tk.State_Of (Store, Named) = Tk.Candidate
-                                        then "/task accept " & Named else "/work " & Named))]);
-                     end if;
-                     return;
-                  end if;
-               end;
-            end loop;
-         end;
 
          --  Its evidence missing or stale, it is verified now: a task done
          --  by hand is checked as the harness would check it. Stale too where
@@ -5098,6 +5122,8 @@ package body Model_Runner.CLI.Tasks is
       procedure Integrate is
          Done : Model_Runner.Framework.Work.Report;
          Anyway_Unneeded : Boolean := False;
+         --  Where resolved anyway kept the project's own copies, this time.
+         Kept_Copy : Unbounded_String;
       begin
          --  The way it is taken in, with the task left out: said which,
          --  and the tasks whose work waits named.
@@ -5348,11 +5374,13 @@ package body Model_Runner.CLI.Tasks is
                               E.Add_Text (Failed, "path", To, E.Param_Path);
                               E.Add_Text (Failed, "detail", "the project's own " & File & " could not be kept"
                                           & " aside, so nothing was taken in over it");
-                              Pres.Report (Screen, Failed);
+                              --  A failure, said as one: the command's status too.
+                              Fail (Failed);
                               return;
                            end;
                      end;
                   end loop;
+                  Kept_Copy := To_Unbounded_String (Kept_In);
                   Pres.Put_Note (Screen, "cli.task.anyway_saved",
                                  [Loc.Named ("path", Ada.Directories.Simple_Name (Kept_In))]);
                end if;
@@ -5446,6 +5474,19 @@ package body Model_Runner.CLI.Tasks is
                                  & " and taking the marks out, then /task integrate " & First_Word & " "
                                  & After_First & " again");
                      Fail (Outcome);
+                     --  Nothing was taken in over them: the copies made
+                     --  for that are not left behind.
+                     if Kept_Copy /= Null_Unbounded_String
+                       and then Ada.Directories.Exists (To_String (Kept_Copy))
+                     then
+                        declare
+                           Gone : constant Hostkit.Fs.Delete_Tree_Outcome :=
+                             Hostkit.Fs.Delete_Tree_No_Follow (To_String (Kept_Copy));
+                           pragma Unreferenced (Gone);
+                        begin
+                           null;
+                        end;
+                     end if;
                      return;
                   end if;
                end;
@@ -5453,13 +5494,10 @@ package body Model_Runner.CLI.Tasks is
             Model_Runner.Framework.Work.Take_In
               (Store, First_Word, Done, Outcome, Semantic_Accepted => After_First = "anyway",
                Text_Resolved => Found and then After_First in "resolved" | "resolved anyway",
+               --  The copies this run kept, by the name they were kept
+               --  under -- a second time, a numbered one, not the first's.
                Replaced_Kept => (if After_First = "resolved anyway" and then Found and then Space /= ""
-                                   and then Ada.Directories.Exists
-                                              (Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"),
-                                                                "replaced-" & First_Word & "-" & Space))
-                                 then Hostkit.Fs.Join (Hostkit.Fs.Join (S.Root (Store), "runtime"),
-                                                       "replaced-" & First_Word & "-" & Space)
-                                 else ""));
+                                 then To_String (Kept_Copy) else ""));
          end;
          if E.Is_Ok (Outcome) and then Anyway_Unneeded then
             Pres.Put_Note (Screen, "cli.task.anyway_unneeded");
@@ -5902,6 +5940,21 @@ package body Model_Runner.CLI.Tasks is
                     "stop." & First_Word))
             then
                Pres.Put_Note (Screen, "cli.task.stop_asked_already", [Loc.Named ("name", First_Word)]);
+            --  The words after it read, and the person asked, as for a
+            --  task no other run holds: the stop was sent unasked.
+            elsif After_First not in "" | "anyway" then
+               Outcome := E.Make (E.CLI_Unexpected_Operand);
+               E.Add_Text (Outcome, "value", After_First);
+               S.Close (Store);
+               Fail (Outcome);
+               return;
+            elsif not Item.Cancel_Confirmed
+              and then not Confirmed ("cli.project.cancel.confirm", First_Word,
+                                      R.Get (Tk_Definition (First_Word), "title") & ", "
+                                      & Listed_State (First_Word) & Waiting_On_It (Store, First_Word))
+            then
+               S.Close (Store);
+               return;
             else
                Model_Runner.Framework.Execution.Ask_To_Stop
                  (Directory, First_Word,
@@ -6049,6 +6102,9 @@ package body Model_Runner.CLI.Tasks is
             Outcome := E.Make (E.CLI_Unexpected_Operand);
             E.Add_Text (Outcome, "value", After_First);
             Fail (Outcome);
+         --  One that is not there, or all: said before anything is asked.
+         elsif not Needs_Task then
+            null;
          --  Not one it can go from: said before anything is asked.
          elsif Tk.State_Of (Store, First_Word) in "candidate" | "cancelled" | "complete" | "rejected" then
             Outcome := E.Make (E.Framework_Transition_Invalid);
@@ -6227,6 +6283,10 @@ package body Model_Runner.CLI.Tasks is
                          else "the state to move " & First_Word & " to: /task move " & First_Word
                               & " accepted, blocked or cancelled"));
             Fail (Outcome);
+         --  One that is not there, or all, is said so before anything is
+         --  asked about it.
+         elsif not Needs_Task then
+            null;
          elsif Tk.State_Of (Store, First_Word)
                  = Ada.Strings.Fixed.Head
                      (After_First & " ", Ada.Strings.Fixed.Index (After_First & " ", " ") - 1)
@@ -6274,6 +6334,44 @@ package body Model_Runner.CLI.Tasks is
                               & " then does it -- or /task complete " & First_Word & " once it is done by hand"
                          else "/work " & First_Word & " does it, or /task complete "
                               & First_Word & " once it is done by hand"));
+            Fail (Outcome);
+         --  Cancelled is a cancel: as /task cancel does it, with its
+         --  checks -- with a reason after it, it took the plain move, which
+         --  stopped no agent and asked nothing.
+         elsif Ada.Strings.Fixed.Head (After_First & " ", 10) = "cancelled " and then After_First /= "cancelled"
+         then
+            Outcome := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Outcome, "name", "the state to move " & First_Word & " to");
+            E.Add_Text (Outcome, "value", After_First);
+            E.Add_Text (Outcome, "detail", "a cancel keeps no reason; /task cancel " & First_Word
+                        & " cancels it, and /task cancel " & First_Word & " anyway gives up work waiting in"
+                        & " its workspace");
+            Fail (Outcome);
+         elsif After_First = "cancelled"
+           and then Tk.State_Of (Store, First_Word) in "candidate" | "cancelled" | "complete" | "rejected"
+         then
+            Outcome := E.Make (E.Framework_Transition_Invalid);
+            E.Add_Text (Outcome, "name", First_Word);
+            E.Add_Text (Outcome, "value", Tk.State_Of (Store, First_Word));
+            E.Add_Text (Outcome, "expected", "cancelled");
+            E.Add_Text (Outcome, "detail",
+                        (if Tk.State_Of (Store, First_Word) = Tk.Candidate
+                         then "a candidate is not cancelled but rejected: /task reject " & First_Word
+                         else "it is ended already"));
+            Fail (Outcome);
+         elsif After_First = "cancelled" and then Tk.State_Of (Store, First_Word) = Tk.Verification
+           and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
+         then
+            --  Work waiting in a workspace is given up only when said.
+            Outcome := E.Make (E.Framework_Transition_Invalid);
+            E.Add_Text (Outcome, "name", First_Word);
+            E.Add_Text (Outcome, "value", "verification");
+            E.Add_Text (Outcome, "expected", "cancelled");
+            E.Add_Text (Outcome, "detail", "its work waits in "
+                        & Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)
+                        & " to be taken in, and cancelling gives it up; /task integrate "
+                        & First_Word & " takes it in, /task cancel " & First_Word
+                        & " anyway gives it up");
             Fail (Outcome);
          elsif After_First = "cancelled"
            and then not Confirmed ("cli.project.cancel.confirm", First_Word,
@@ -6999,25 +7097,43 @@ package body Model_Runner.CLI.Tasks is
                           (if Ada.Directories.Exists (Base) then Base
                            elsif Ada.Directories.Exists (Mine) then Mine
                            else Hostkit.Fs.Null_Device);
+                        --  Compared a block at a time: read whole onto the
+                        --  stack, a large file overflowed it, and the error
+                        --  was taken for "not the same".
                         function Same (Left, Right : String) return Boolean is
-                           function Whole (Path : String) return String is
-                              use Ada.Streams.Stream_IO;
-                              File : File_Type;
-                           begin
-                              Open (File, In_File, Path, Form => "shared=no");
-                              declare
-                                 Text : String (1 .. Natural (Size (File)));
-                              begin
-                                 String'Read (Stream (File), Text);
-                                 Close (File);
-                                 return Text;
-                              end;
-                           end Whole;
+                           use Ada.Streams;
+                           use Ada.Streams.Stream_IO;
+                           One, Two   : File_Type;
+                           A, B       : Stream_Element_Array (1 .. 64 * 1024);
+                           Got_A      : Stream_Element_Offset;
+                           Got_B      : Stream_Element_Offset;
+                           Equal      : Boolean := True;
                         begin
-                           return Ada.Directories."=" (Ada.Directories.Size (Left), Ada.Directories.Size (Right))
-                             and then Whole (Left) = Whole (Right);
+                           if Ada.Directories."/=" (Ada.Directories.Size (Left), Ada.Directories.Size (Right)) then
+                              return False;
+                           end if;
+                           Open (One, In_File, Left, Form => "shared=no");
+                           Open (Two, In_File, Right, Form => "shared=no");
+                           loop
+                              Ada.Streams.Stream_IO.Read (One, A, Got_A);
+                              Ada.Streams.Stream_IO.Read (Two, B, Got_B);
+                              if Got_A /= Got_B or else A (1 .. Got_A) /= B (1 .. Got_B) then
+                                 Equal := False;
+                                 exit;
+                              end if;
+                              exit when Got_A < A'Last;
+                           end loop;
+                           Close (One);
+                           Close (Two);
+                           return Equal;
                         exception
                            when others =>
+                              if Is_Open (One) then
+                                 Close (One);
+                              end if;
+                              if Is_Open (Two) then
+                                 Close (Two);
+                              end if;
                               return False;
                         end Same;
                      begin

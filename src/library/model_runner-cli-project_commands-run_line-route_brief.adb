@@ -23,7 +23,13 @@ procedure Route_Brief is
          Last_Status := E.Exit_Status (Outcome);
          return;
       end if;
-      Cx.Build (Store, Asked, Cx.Profile (Store, ""), Made, Read);
+      --  Built as /work builds it -- the session's model, the instructions
+      --  counted in -- or what it shows is not what the model is handed.
+      Cx.Build (Store, Asked,
+                (if Command.Has_Session_Profile
+                 then Cx.Within_Configured (Store, Command.Session_Profile, "")
+                 else Cx.Profile (Store, "")),
+                Made, Read, Instructions => Model_Runner.Framework.Work.Instructions_Of (Store, Asked));
       if E.Is_Error (Read) then
          Pres.Report (Screen, Read);
          Last_Status := E.Exit_Status (Read);

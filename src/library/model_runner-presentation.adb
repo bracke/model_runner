@@ -511,7 +511,12 @@ package body Model_Runner.Presentation is
       --  A diff quotes files an agent wrote: what they hold is shown, never
       --  obeyed -- an escape in one would clear the screen or write to the
       --  clipboard of whoever reads the diff.
-      Text : constant String := T.Escape_Controls (Line, Keep_Tabs => True);
+      --  A carriage return that ends the line -- a file with CRLF line
+      --  ends -- is no part of what is read, and is left off rather than
+      --  shown on every line.
+      Bare : constant String :=
+        (if Line'Length > 0 and then Line (Line'Last) = ASCII.CR then Line (Line'First .. Line'Last - 1) else Line);
+      Text : constant String := T.Escape_Controls (Bare, Keep_Tabs => True);
       function Starts (Prefix : String) return Boolean
       is (Text'Length >= Prefix'Length and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
    begin
@@ -803,14 +808,21 @@ package body Model_Runner.Presentation is
    is
       Lead   : constant String (1 .. Indent) := [others => ' '];
       Styled : constant Boolean := Styles (Item, Answer) and then not Item.Structured;
+      --  Shown, not obeyed: a row's text is a path, a symbol, an agent's
+      --  summary -- each from a file or a model -- and taken as escaped
+      --  already, a file named with an escape cleared the screen of
+      --  whoever listed it. Escaped text has no controls left, so this
+      --  changes none that was.
+      Main_Shown  : constant String := T.Escape_Controls (Main, Keep_Tabs => True);
+      Aside_Shown : constant String := T.Escape_Controls (Aside, Keep_Tabs => True);
    begin
       Put_Line (Item, Lead
                       & (if Styled and then Main_Tone /= Plain
-                         then Terminal_Styles.Decorate (Main, Role_Of (Main_Tone)) else Main)
-                      & (if Aside = "" then ""
+                         then Terminal_Styles.Decorate (Main_Shown, Role_Of (Main_Tone)) else Main_Shown)
+                      & (if Aside_Shown = "" then ""
                          elsif Styled and then Mute_Aside
-                         then "  " & Terminal_Styles.Decorate (Aside, Terminal_Styles.Role_Muted)
-                         else "  " & Aside));
+                         then "  " & Terminal_Styles.Decorate (Aside_Shown, Terminal_Styles.Role_Muted)
+                         else "  " & Aside_Shown));
    end Put_Row;
 
    -------------------

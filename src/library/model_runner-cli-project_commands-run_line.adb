@@ -21,6 +21,10 @@ is
                or else (Word in "/req" | "/spec" | "/decision"
                         and then Ada.Characters.Handling.To_Lower (All_Words (2))
                                    in "new" | "revise" | "edit" | "reject" | "obsolete")
+               --  A finding recorded or dismissed is a note, as Request_Of
+               --  reads it: --directory or --verbose in it is its words.
+               or else (Word = "/obs"
+                        and then Ada.Characters.Handling.To_Lower (All_Words (2)) in "record" | "dismiss")
                or else Word in "/instruct" | "/decide");
    Positional : Names.Vector;
    Command    : Model_Runner.CLI.Project_Requests.Request;
@@ -164,6 +168,8 @@ is
    function Looks_Only return Boolean
    is (not Verifying and then
        (Word in "/state" | "/config" | "/git" | "/why" | "/history" | "/brief"
+        --  /instruct alone lists what stands.
+        or else (Word = "/instruct" and then Argument (1) = "")
        or else (Word = "/obs" and then Verb not in "record" | "dismiss" | "supersede" | "promote")
        or else (Word = "/result" and then Verb not in "dismiss" | "restore")
        or else (Word in "/req" | "/decision" | "/spec"
@@ -387,8 +393,12 @@ begin
       --  A value is held to so many characters: one longer is refused,
       --  not cut -- cut, a long note or title was saved shortened and the
       --  command said it was done.
+      --  Only where a value is held so: /req, /reconfigure and the rest
+      --  read the line's own words, whole.
       for One of Asked.Settings loop
-         if One'Length > T.Max_Length then
+         if One'Length > T.Max_Length
+           and then Route_Of (Word) in Tasks_Route | Work_Route | Init_Route | Knowledge_Route | Results_Route
+         then
             Refuse_Too_Long (One (One'First .. Ada.Strings.Fixed.Index (One, "=") - 1), One);
             return;
          end if;

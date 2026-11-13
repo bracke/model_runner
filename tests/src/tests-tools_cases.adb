@@ -1516,14 +1516,17 @@ package body Tests.Tools_Cases is
       declare
          Work : constant Cl.Request := Pc.Request_Of ("/work profile=fast TASK-003");
          Made : constant Cl.Request := Pc.Request_Of ("/task new kind=code Fix parser");
-         Note : constant Cl.Request := Pc.Request_Of ("/task edit notes=see the log TASK-003");
+         Note : constant Cl.Request := Pc.Request_Of ("/task edit TASK-003 notes=a spec-compliant reader");
+         Init : constant Cl.Request := Pc.Request_Of ("/init generic check_command=make test");
       begin
          Assert (Work.Settings.First_Element = "profile=fast" and then Work.Positional.Contains ("TASK-003"),
                  "a setting took the ID after it: " & Cl.Canonical (Work));
          Assert (Made.Settings.First_Element = "kind=code" and then Made.Positional.Contains ("Fix"),
                  "a setting took the title after it: " & Cl.Canonical (Made));
-         Assert (Note.Settings.First_Element = "notes=see the log" and then Note.Positional.Contains ("TASK-003"),
-                 "notes did not run on, or ran on into an ID: " & Cl.Canonical (Note));
+         Assert (Note.Settings.First_Element = "notes=a spec-compliant reader",
+                 "notes did not run on: " & Cl.Canonical (Note));
+         Assert (Init.Settings.First_Element = "check_command=make test",
+                 "a template's input to /init did not run on: " & Cl.Canonical (Init));
       end;
    end Command_Lines_Read_Back;
 

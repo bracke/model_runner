@@ -383,8 +383,18 @@ package body Model_Runner.CLI.Work is
            To_Unbounded_String ("prompt_tokens " & Count_Of ("prompt_tokens") & ASCII.LF
                                 & "output_tokens " & Count_Of ("generated_tokens") & ASCII.LF);
          --  And what its calls were set to, as it fitted the policy.
-         Settled : Boolean;
-         Settings : constant String := Model_Runner.Tools.Builtin.Text_Argument (Trace, "settings", Settled);
+         Settled : Boolean := False;
+         --  Read where the block's handler covers it, so a trace it cannot
+         --  read still frees the trace.
+         function Settings_Read return String is
+         begin
+            return Model_Runner.Tools.Builtin.Text_Argument (Trace, "settings", Settled);
+         exception
+            when others =>
+               Settled := False;
+               return "";
+         end Settings_Read;
+         Settings : constant String := Settings_Read;
          Mark  : constant String := "{" & '"' & "t_ms" & '"' & ":";
          Call  : constant String := '"' & "event" & '"' & ":" & '"' & "call" & '"';
          Given_Back : constant String := '"' & "event" & '"' & ":" & '"' & "result" & '"';
@@ -458,8 +468,13 @@ package body Model_Runner.CLI.Work is
       --  withdrawn from another terminal -- is killed as one out of time
       --  is, and comes back marked timed out; asked second, Ctrl-C set the
       --  task aside as out of time, with /reconfigure for a remedy.
+      --  A lost lease is no one's stop, and a run that ended of itself is
+      --  not taken for one stopped.
       if Model_Runner.Framework.Execution.Cancel_Requested
-        or else Model_Runner.Framework.Execution.Work_Withdrawn
+        or else (Happened.Timed_Out
+                 and then Model_Runner.Framework.Execution.Stopped_For
+                            in Model_Runner.Framework.Execution.Stop_Requested
+                             | Model_Runner.Framework.Execution.Cancel_Requested_Elsewhere)
       then
          Status := E.Make (E.Generation_Cancelled);
       elsif Happened.Timed_Out then
@@ -991,7 +1006,7 @@ package body Model_Runner.CLI.Work is
       --  The configuration's work.steps as well as steps= itself: read
       --  later as a number, a work.steps of 0 or abc ended /work with an
       --  exception rather than a word on what was wrong.
-      if Setting ("steps", "") /= "" then
+      if Setting ("steps", "") /= "" and then (Given.Contains ("steps") or else Setting ("model", "") /= "") then
          declare
             Steps : constant String := Setting ("steps", "");
          begin

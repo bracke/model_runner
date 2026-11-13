@@ -147,11 +147,16 @@ package body Model_Runner.CLI.Choosers is
                      when 'F' => return (End_Key, ' ');
                      when others => return (Nothing, ' ');
                   end case;
-               when others =>
+               when ' ' .. 'N' | 'P' .. 'Z' | '\' .. '~' =>
                   --  Alt and a key: neither Escape, which would close the
                   --  list, nor the key, which would start a filter.
                   Used := 2;
                   return (Nothing, ' ');
+               when others =>
+                  --  Escape, and then another key read with it: Escape
+                  --  twice, quickly, or Escape and a character not ASCII.
+                  --  Each is its own key, not one dropped with the other.
+                  return (Escape, ' ');
             end case;
          when ' ' .. '~' =>
             return (Printable, First);
@@ -378,11 +383,16 @@ package body Model_Runner.CLI.Choosers is
      "  " & Character'Val (16#E2#) & Character'Val (16#96#)
      & Character'Val (16#B8#) & " ";
 
+   --  A tab a space: the list counts its columns, and a tab's are the
+   --  terminal's to decide.
+   function Untabbed (Text : String) return String
+   is (Ada.Strings.Fixed.Translate (Text, Ada.Strings.Maps.To_Mapping ([1 => ASCII.HT], " ")));
+
    --  A line as the list draws it: its controls shown, not obeyed -- a
    --  label or a title can be a task's, which a model wrote -- and cut to
    --  the columns a terminal gives it, a wide character two.
    function Fit (Text : String; Columns : Positive) return String is
-      Shown : constant String := T.Escape_Controls (Text);
+      Shown : constant String := T.Escape_Controls (Untabbed (Text));
    begin
       return Shown (Shown'First .. Shown'First + Model_Runner.UTF8.Fitting (Shown, Columns) - 1);
    end Fit;
@@ -426,7 +436,7 @@ package body Model_Runner.CLI.Choosers is
       end Add;
    begin
       for Line of Framework.Lines_Of (Text) loop
-         Add (T.Escape_Controls (Line));
+         Add (T.Escape_Controls (Untabbed (Line)));
       end loop;
       return Result;
    end Wrapped;
@@ -866,12 +876,15 @@ package body Model_Runner.CLI.Choosers is
          for Count in 1 .. 32 loop
             exit when not Next (Byte) or else Byte in '@' .. '~';
          end loop;
+         return True;
       elsif Byte = 'O' then
          --  One byte more names the key; none, and the escape was a key
          --  all the same.
          return Next (Byte) or else True;
       end if;
-      return True;
+      --  Anything else after it -- a second Escape, a key typed fast --
+      --  and the escape was Escape: the question is given up.
+      return False;
    end Key_Sequence_Skipped;
 
    --  Take back the last character typed at a line on the screen: as many
@@ -1578,7 +1591,7 @@ package body Model_Runner.CLI.Choosers is
          Wrapped  : Boolean := False;
          End_Row  : Natural;
       begin
-         if Drawn_Row > 0 and then W /= Drawn_Width then
+         if W /= Drawn_Width and then Drawn_Before /= Null_Unbounded_String then
             Drawn_Row := Model_Runner.UTF8.Wrapped_Columns (To_String (Drawn_Before), W) / W;
          end if;
          if Drawn_Row > 0 then
@@ -1872,6 +1885,7 @@ package body Model_Runner.CLI.Choosers is
                   Put (ASCII.CR & ASCII.LF);
                end if;
                Drawn_Row := 0;
+               Drawn_Before := Null_Unbounded_String;
                Cursor := Saved;
                Tabbed := False;
             end;
@@ -2068,6 +2082,7 @@ package body Model_Runner.CLI.Choosers is
                when ASCII.FF =>
                   Put (ASCII.ESC & "[H" & ASCII.ESC & "[2J");
                   Drawn_Row := 0;
+                  Drawn_Before := Null_Unbounded_String;
                when ASCII.DLE =>
                   if Looking > 1 then
                      if Looking > Natural (History.Length) then

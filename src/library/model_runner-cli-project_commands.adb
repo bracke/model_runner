@@ -2566,6 +2566,20 @@ package body Model_Runner.CLI.Project_Commands is
 
    function Started_Below return String is (To_String (Below_Top));
 
+   --  The directory the session was started in, as it was before any move.
+   Started_In : Unbounded_String;
+
+   function From_Session_Start (Path : String) return String is
+   begin
+      if Path = "" or else Path (Path'First) = '/' or else Started_In = Null_Unbounded_String
+        or else To_String (Started_In) = Ada.Directories.Current_Directory
+        or else (Path (Path'First) = '~')
+      then
+         return Path;
+      end if;
+      return To_String (Started_In) & "/" & Path;
+   end From_Session_Start;
+
    -----------------
    -- Open_Issues --
    -----------------
@@ -2645,6 +2659,9 @@ package body Model_Runner.CLI.Project_Commands is
       Status : E.Error_Info;
       Said   : Names.Vector;
    begin
+      if Started_In = Null_Unbounded_String then
+         Started_In := To_Unbounded_String (Ada.Directories.Current_Directory);
+      end if;
       --  Started below a project's top, as git is: the project above is the
       --  one worked on, and the session moves there -- not a second one
       --  started inside it.
@@ -3192,13 +3209,16 @@ package body Model_Runner.CLI.Project_Commands is
             return "TASK-";
          elsif Command = "/task" and then Index >= 3
            and then Act in "show" | "audit" | "accept" | "reject" | "cancel" | "complete" | "verify"
-                         | "integrate" | "diff" | "edit" | "depend" | "split" | "reopen" | "reconsider"
-                         | "move" | "rehome" | "context" | "plan"
+                         | "integrate" | "diff" | "depend" | "reopen" | "reconsider"
+                         | "rehome" | "context" | "plan"
          then
             return "TASK-";
-         --  The task alone: a note's words and a capability are not
-         --  identifiers for being numbers.
-         elsif Command = "/task" and then Index = 3 and then Act in "note" | "grant" | "withhold" then
+         --  The task alone: a note's words, a capability, a reason, a part's
+         --  title or a field's value are not identifiers for being numbers
+         --  -- move 5 blocked waiting 2 days kept "waiting TASK-002 days".
+         elsif Command = "/task" and then Index = 3
+           and then Act in "note" | "grant" | "withhold" | "move" | "split" | "edit"
+         then
             return "TASK-";
          elsif Command = "/task" and then Act = "link" then
             return (if Index = 3 then "TASK-" elsif Index >= 4 then "REQ-" else "");
@@ -3382,11 +3402,6 @@ package body Model_Runner.CLI.Project_Commands is
              | "acceptance" | "meaning" | "ruling" | "scope" | "claim" | "evidence" | "statement"
              | "description" | "rationale" | "subject");
 
-   --  Whether a word names a register's item, as TASK-3 or REQ-001 does.
-   function Names_An_Item (Word : String) return Boolean
-   is (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-", "OBS-"]) =>
-         Ada.Strings.Fixed.Head (Ada.Characters.Handling.To_Upper (Word), Prefix'Length) = Prefix);
-
    function Request_Of (Line : String) return Model_Runner.CLI.Command_Lines.Request is
       All_Words : constant Names.Vector := Identifiers_As_Kept (Split (Line));
       Result    : Model_Runner.CLI.Command_Lines.Request;
@@ -3438,19 +3453,19 @@ package body Model_Runner.CLI.Project_Commands is
                --  gnatmake became part of a check's command.
                --
                --  Only a value of words runs on -- a title, notes, a reason,
-               --  or anything /reconfigure sets -- and never into an ID:
-               --  /work profile=fast TASK-3 asked for a profile "fast
-               --  TASK-3", and /task new kind=code Fix parser had no title.
+               --  anything /reconfigure sets, a template's input to /init, a
+               --  fact /obs promotes -- not a value that names: /work
+               --  profile=fast TASK-3 asked for a profile "fast TASK-3", and
+               --  /task new kind=code Fix parser had no title.
                declare
                   Name : constant String := Part (Part'First .. Ada.Strings.Fixed.Index (Part, "=") - 1);
                begin
                   Continues := Ada.Strings.Fixed.Index (Line, Name & "=""") = 0
                     and then Ada.Strings.Fixed.Index (Line, Name & "='") = 0
-                    and then (All_Words.First_Element = "/reconfigure" or else Is_Wordy (Name));
+                    and then (All_Words.First_Element in "/reconfigure" | "/init" | "/obs"
+                              or else Is_Wordy (Name));
                end;
-            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
-              and then not Names_An_Item (Part)
-            then
+            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
                --  A value runs on to the next NAME=, as /reconfigure takes
                --  one: notes=for users is one value, not a word dropped.
                Result.Settings.Replace_Element

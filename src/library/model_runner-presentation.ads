@@ -232,8 +232,8 @@ package Model_Runner.Presentation is
    --  language, a symbol and where it is declared.
    --
    --  @param Item Console to write through.
-   --  @param Main What the row is about, already escaped.
-   --  @param Aside What is said of it, already escaped.
+   --  @param Main What the row is about; its controls are shown escaped.
+   --  @param Aside What is said of it; its controls are shown escaped.
    --  @param Indent How many spaces it is set in by.
    --  @param Main_Tone How what it is about stands, for its colour.
    --  @param Mute_Aside Whether what is said of it is muted.

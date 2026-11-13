@@ -1,3 +1,6 @@
+with GNAT.OS_Lib;
+with Hostkit.Regular_Files;
+with Hostkit.Metadata;
 with Ada.Directories;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
@@ -48,8 +51,22 @@ package body Model_Runner.CLI.Checkpoint is
       use Ada.Streams.Stream_IO;
       File    : Stream_IO.File_Type;
       Buf     : US.Unbounded_String;
-      Partial : constant String := Model_Runner.CLI.Partials.Beside (Path);
+      --  A link is written through, to the file it names: renamed over,
+      --  the link became a plain file and what it named was never updated.
+      Target  : constant String :=
+        (if Hostkit.Fs.Is_Link (Path) and then Hostkit.Fs.Real_Path (Path) /= ""
+         then Hostkit.Fs.Real_Path (Path) else Path);
+      Partial : constant String := Model_Runner.CLI.Partials.Beside (Target);
+      --  The file's own access kept, not the creation mask's: a private
+      --  conversation saved again came back readable by all.
+      Had     : constant Hostkit.Metadata.Entry_Revision :=
+        (if Ada.Directories.Exists (Target) then Hostkit.Metadata.Entry_Revision_Of (Target)
+         else (others => <>));
       use type Hostkit.Durability.Outcome;
+      use type GNAT.OS_Lib.File_Descriptor;
+      use type Hostkit.Metadata.Identity_Field;
+      --  Its permission bits, as the host gave them.
+      Kept_Mode : constant Natural := (if Had.Available then Natural (Had.Mode mod 8#1000#) else 8#644#);
 
       procedure LP (S : String) is
       begin
@@ -94,7 +111,19 @@ package body Model_Runner.CLI.Checkpoint is
       --  save that stops part way -- a full disk, a kill -- leaves the
       --  conversation saved before, not half of this one. Written a slice
       --  at a time from where it was built, not copied whole onto a stack.
-      Create (File, Out_File, Partial, Form => "shared=no");
+      --  Made new, nothing that is there followed: a link planted at the
+      --  partial's name would have had what it names written over.
+      declare
+         Made : constant GNAT.OS_Lib.File_Descriptor :=
+           Hostkit.Regular_Files.Create_New
+             (Partial, Mode => Kept_Mode);
+      begin
+         if Made = GNAT.OS_Lib.Invalid_FD then
+            raise Ada.IO_Exceptions.Use_Error;
+         end if;
+         GNAT.OS_Lib.Close (Made);
+      end;
+      Open (File, Out_File, Partial, Form => "shared=no");
       declare
          Slice_Bytes : constant := 64 * 1024;
          Length      : constant Natural := US.Length (Buf);
@@ -115,14 +144,23 @@ package body Model_Runner.CLI.Checkpoint is
          end loop;
       end;
       Close (File);
+      if Had.Available then
+         declare
+            Kept : constant Boolean := Hostkit.Metadata.Set_Permissions (Partial, Kept_Mode);
+            pragma Unreferenced (Kept);
+         begin
+            null;
+         end;
+      end if;
       if Hostkit.Durability.Sync_File (Partial) = Hostkit.Durability.Failed
-        or else not Hostkit.Fs.Replace_File (Partial, Path)
+        or else not Hostkit.Fs.Replace_File (Partial, Target)
       then
          raise Ada.IO_Exceptions.Use_Error;
       end if;
       declare
          Listed : constant Hostkit.Durability.Outcome :=
-           Hostkit.Durability.Sync_Directory (Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Path)));
+           Hostkit.Durability.Sync_Directory
+             (Ada.Directories.Containing_Directory (Ada.Directories.Full_Name (Target)));
          pragma Unreferenced (Listed);
       begin
          null;
@@ -154,7 +192,9 @@ package body Model_Runner.CLI.Checkpoint is
       Messages : in out Model_Runner.Conversation.History;
       Loaded   : out Boolean;
       Status   : out Model_Runner.Errors.Error_Info;
-      Replace  : Boolean := False)
+      Replace  : Boolean := False;
+      Check    : access procedure
+        (Trial : Model_Runner.Conversation.History; Status : out Model_Runner.Errors.Error_Info) := null)
    is
       use Ada.Streams;
       use Ada.Streams.Stream_IO;
@@ -405,10 +445,15 @@ package body Model_Runner.CLI.Checkpoint is
                      Status := E.Make (E.IO_Read_Failed);
                      E.Add_Text (Status, "path", Path, E.Param_Path);
                   end if;
+                  if E.Is_Ok (Status) and then Loaded and then Check /= null then
+                     Check (Trial, Status);
+                  end if;
                   if E.Is_Error (Status) or else not Loaded then
+                     Conv.Close (Trial);
                      Free (Held);
                      return;
                   end if;
+                  Conv.Close (Trial);
                   Conv.Clear (Messages);
                end;
             end if;

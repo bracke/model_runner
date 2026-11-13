@@ -54,11 +54,16 @@ package Model_Runner.CLI.Checkpoint is
    --  @param Replace Whether what is read replaces what Messages holds:
    --    read once, into a history of its own first, and only then put in
    --    its place -- a file that will not load leaves Messages as it was.
+   --  @param Check With Replace, asked of what was read before it takes
+   --    Messages' place: an error refuses it, Messages left as it was --
+   --    a conversation that could take no turn after it is not loaded.
    procedure Load
      (Path     : String;
       Messages : in out Model_Runner.Conversation.History;
       Loaded   : out Boolean;
       Status   : out Model_Runner.Errors.Error_Info;
-      Replace  : Boolean := False);
+      Replace  : Boolean := False;
+      Check    : access procedure
+        (Trial : Model_Runner.Conversation.History; Status : out Model_Runner.Errors.Error_Info) := null);
 
 end Model_Runner.CLI.Checkpoint;

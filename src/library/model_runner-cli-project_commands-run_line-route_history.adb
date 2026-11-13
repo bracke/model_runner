@@ -49,7 +49,12 @@ procedure Route_History is
          end if;
       end loop;
       if Matching = 0 then
-         Pres.Put_Note (Screen, "cli.history.none", [Loc.Named ("name", Asked)]);
+         --  Nothing named and nothing there: said so, not "no event names".
+         if Asked = "" then
+            Pres.Put_Note (Screen, "cli.history.empty");
+         else
+            Pres.Put_Note (Screen, "cli.history.none", [Loc.Named ("name", Asked)]);
+         end if;
          return;
       end if;
       declare

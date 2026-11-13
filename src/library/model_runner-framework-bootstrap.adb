@@ -4,6 +4,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Hostkit.Fs;
 
+with Model_Runner.UTF8;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Facts;
 with Model_Runner.Framework.Files;
@@ -409,7 +410,8 @@ package body Model_Runner.Framework.Bootstrap is
             return Text (Text'First .. Cut - 1) & " ...";
          end if;
       end loop;
-      return Text (Text'First .. Text'First + 96) & "...";
+      return Text (Text'First .. Text'First - 1 + Model_Runner.UTF8.Safe_Prefix_Length
+                                                     (Text (Text'First .. Text'First + 96))) & "...";
    end Headline;
 
    ----------

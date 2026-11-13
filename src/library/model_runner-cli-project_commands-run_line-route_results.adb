@@ -16,6 +16,13 @@ begin
                   & " dismissed, restore ID... or all");
       Pres.Report (Screen, Outcome);
       Last_Status := E.Exit_Status (Outcome);
+   elsif Word = "/result" and then Argument (1) in "show" | "full" and then Argument (2) = "" then
+      --  show or full with nothing after it: which result is asked for,
+      --  not "not found: show".
+      Outcome := E.Make (E.Framework_Input_Missing);
+      E.Add_Text (Outcome, "name", "the result to " & Argument (1) & ": /result RES-ID [full], as /result lists them");
+      Pres.Report (Screen, Outcome);
+      Last_Status := E.Exit_Status (Outcome);
    elsif Word = "/result" and then Argument (1) in "dismiss" | "restore"
      and then Argument (2) /= "" and then Argument (2)'Length <= 3
      and then (for all C of Argument (2) => C in '0' .. '9')

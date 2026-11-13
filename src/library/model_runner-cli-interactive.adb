@@ -454,13 +454,15 @@ package body Model_Runner.CLI.Interactive is
       Next_Is_Video : Boolean := False;
 
       --  Encode what the conversation names and Pictures does not hold.
-      procedure Gather_Pictures (Outcome : out E.Error_Info) is
+      procedure Gather_Pictures_Of
+        (Source : Conv.History; Outcome : out E.Error_Info)
+      is
          Named : Boolean := False;
       begin
          Outcome := E.Success;
-         for Index in 1 .. Conv.Length (Messages) loop
+         for Index in 1 .. Conv.Length (Source) loop
             if Model_Runner.CLI.Pictures.Names_A_Picture
-                 (Conv.Parts_At (Messages, Index))
+                 (Conv.Parts_At (Source, Index))
             then
                Named := True;
                exit;
@@ -486,10 +488,72 @@ package body Model_Runner.CLI.Interactive is
                return;
             end if;
          end if;
+         --  Ctrl-C stops the encoding too, not only the reply after it:
+         --  a video's hundreds of slots ran to their end first.
          Model_Runner.CLI.Pictures.Gather
-           (Seer, Messages, Pictures, L.Workers (Session), Item.Pan_And_Scan,
-            Status => Outcome);
+           (Seer, Source, Pictures, L.Workers (Session), Item.Pan_And_Scan,
+            Cancel => Cancel, Status => Outcome);
+      end Gather_Pictures_Of;
+
+      procedure Gather_Pictures (Outcome : out E.Error_Info) is
+      begin
+         Gather_Pictures_Of (Messages, Outcome);
       end Gather_Pictures;
+
+      --  What /load reads, asked before it takes the conversation's place:
+      --  its system message first if it has one, a developer's beside it,
+      --  no turn of a person or of the model twice in a row, the last turn
+      --  not a person's still unanswered -- a template that alternates
+      --  could render no turn after any of those -- and its pictures
+      --  gathered, which every turn after does again: a picture missing,
+      --  or no projector, and every turn after was refused, while the load
+      --  had said it loaded.
+      procedure Check_Loaded (Trial : Conv.History; Status : out E.Error_Info) is
+         Count : constant Natural := Conv.Length (Trial);
+
+         procedure Refuse (Detail : String) is
+         begin
+            Status := E.Make (E.Framework_Input_Invalid);
+            E.Add_Text (Status, "name", "the conversation");
+            E.Add_Text (Status, "value", "/load");
+            E.Add_Text (Status, "detail", Detail);
+         end Refuse;
+      begin
+         Status := E.Success;
+         for Index in 1 .. Count loop
+            declare
+               Said : constant Conv.Role := Conv.Sender_At (Trial, Index);
+            begin
+               if Said = Conv.System_Role and then Index /= 1 then
+                  Refuse ("a system message stands at turn" & Natural'Image (Index) & ", not first");
+                  return;
+               elsif Said = Conv.Developer_Role
+                 and then not (Index = 1 or else (Index = 2 and then Conv.Sender_At (Trial, 1) = Conv.System_Role))
+               then
+                  Refuse ("a developer message stands at turn" & Natural'Image (Index) & ", not first");
+                  return;
+               elsif Index > 1 and then Said in Conv.User_Role | Conv.Assistant_Role
+                 and then Conv.Sender_At (Trial, Index - 1) = Said
+               then
+                  Refuse ("turns" & Natural'Image (Index - 1) & " and" & Natural'Image (Index)
+                          & " are both the " & Conv.Role_Name (Said) & "'s");
+                  return;
+               end if;
+            end;
+         end loop;
+         if Count > 0 and then Conv."=" (Conv.Sender_At (Trial, Count), Conv.User_Role) then
+            Refuse ("it ends on a turn of the person's with no answer");
+            return;
+         end if;
+         --  The pictures the loaded one names, gathered in place of the
+         --  ones held: refused, the set is empty, and the conversation
+         --  kept gathers its own again at its next turn.
+         Model_Runner.CLI.Pictures.Release (Pictures);
+         Gather_Pictures_Of (Trial, Status);
+         if E.Is_Error (Status) then
+            Model_Runner.CLI.Pictures.Release (Pictures);
+         end if;
+      end Check_Loaded;
 
       procedure Release_Pictures is
       begin
@@ -1029,7 +1093,8 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
             else
                declare
-                  Path  : constant String := Line (Asked.First .. Asked.Last);
+                  Path  : constant String :=
+                    Model_Runner.CLI.Project_Commands.From_Session_Start (Line (Asked.First .. Asked.Last));
                   Wrote : E.Error_Info;
                begin
                   Model_Runner.CLI.Checkpoint.Save (Path, Messages, Wrote);
@@ -1048,17 +1113,22 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
             else
                declare
-                  Path    : constant String := Line (Asked.First .. Asked.Last);
+                  Path    : constant String :=
+                    Model_Runner.CLI.Project_Commands.From_Session_Start (Line (Asked.First .. Asked.Last));
                   Loaded  : Boolean;
                   Outcome : E.Error_Info;
                begin
                   --  Loading replaces the conversation -- read once, and put
                   --  in its place only when it read -- so the old one goes,
                   --  and the cached positions with it.
-                  Model_Runner.CLI.Checkpoint.Load (Path, Messages, Loaded, Outcome, Replace => True);
+                  Model_Runner.CLI.Checkpoint.Load
+                    (Path, Messages, Loaded, Outcome, Replace => True, Check => Check_Loaded'Access);
                   if E.Is_Ok (Outcome) and then Loaded then
+                     --  The pictures were gathered for it by the check; a
+                     --  picture named for the conversation before is not
+                     --  this one's.
                      L.Reset (Session);
-                     Model_Runner.CLI.Pictures.Release (Pictures);
+                     Free_Text (Next_Picture);
                      Have_Stats := False;
                   end if;
                   if E.Is_Error (Outcome) then
@@ -1084,7 +1154,8 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.no_projector");
             else
                Free_Text (Next_Picture);
-               Next_Picture := new String'(Line (Asked.First .. Asked.Last));
+               Next_Picture := new String'
+                 (Model_Runner.CLI.Project_Commands.From_Session_Start (Line (Asked.First .. Asked.Last)));
                Next_Is_Video := Asked.Kind = Show_Video;
                Pres.Put_Note
                  (Screen, "cli.interactive.picture_pending",
@@ -1360,6 +1431,7 @@ package body Model_Runner.CLI.Interactive is
                         Pres.Report (Screen, Outcome);
                         Conv.Drop_Last (Messages, 1);
                         Model_Runner.CLI.Pictures.Release (Pictures);
+                        Kept_Back := Sender = Conv.User_Role;
                         return;
                      end if;
                      goto Rendering;

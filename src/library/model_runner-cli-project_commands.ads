@@ -238,6 +238,16 @@ package Model_Runner.CLI.Project_Commands is
    --  @return The path; "" where it was started at the project's top.
    function Started_Below return String;
 
+   --  A path typed in the session, as the directory the session was
+   --  started in reads it: the session moves to its project's top, and a
+   --  relative path was read from there -- /image cat.png looked above
+   --  where it was typed, and /save notes.json wrote above it.
+   --
+   --  @param Path As typed.
+   --  @return Path where it is absolute or nothing moved; otherwise the
+   --    same path from the directory the session started in.
+   function From_Session_Start (Path : String) return String;
+
    --  The issues /result lists: kept, not dismissed, not acted on.
    --
    --  @param Store The project's state, open.

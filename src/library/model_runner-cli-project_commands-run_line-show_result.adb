@@ -5,9 +5,6 @@ procedure Show_Result (Store : in out S.Store) is
    package Rs renames Model_Runner.Framework.Results;
    Held  : Rs.Result;
    Read  : E.Error_Info;
-   Size  : constant Natural := Rs.Payload_Size (Store, Argument (1));
-   --  A large payload is read only when asked for: /result ID full.
-   Whole : constant Boolean := Size <= Rs.Inline_Limit or else Argument (2) = "full";
    --  As the harness writes it: ag-000001 is AG-000001, and AG-1 is
    --  AG-000001 where its kind is numbered so.
    function Normalized (Given : String) return String is
@@ -119,6 +116,12 @@ procedure Show_Result (Store : in out S.Store) is
                       else [1 .. 3 - Argument (1)'Length => '0'] & Argument (1))
       else As_Result);
    Id    : constant String := Latest_Of_Task (Asked_Id);
+   --  A large payload is read only when asked for: /result ID full. Its
+   --  size is the result's the ID resolves to -- of the word as typed, a
+   --  prefix or a task's number read as no result, size nought, and the
+   --  whole payload was read and shown.
+   Size  : constant Natural := Rs.Payload_Size (Store, Id);
+   Whole : constant Boolean := Size <= Rs.Inline_Limit or else Argument (2) = "full";
    Asked_Several : constant Unbounded_String := Several;
    --  How the run a result came from ended, where it did not finish.
    Run_Ended : Unbounded_String;
@@ -630,7 +633,8 @@ begin
                return;
             end;
          end if;
-         if Natural (Matching.Length) > 1 and then Named /= "all" then
+         --  None named is asked for first: "" is the start of them all.
+         if Natural (Matching.Length) > 1 and then Named /= "all" and then Argument (2) /= "" then
             Outcome := E.Make (E.Framework_Input_Invalid);
             E.Add_Text (Outcome, "name", "the issue to restore");
             E.Add_Text (Outcome, "value", Argument (2));
@@ -852,8 +856,29 @@ begin
                Had   : E.Error_Info;
                File  : Ada.Text_IO.File_Type;
             begin
+               --  Asked of each as of the first: a start that names several,
+               --  and one not on the list, are said, not dismissed.
                Rs.Read (Store, Other, One, Had, With_Payload => False);
-               if E.Is_Ok (Had) and then not Rs."=" (One.Kind, Rs.Diagnostic) then
+               if Several /= Null_Unbounded_String then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "the issue to dismiss");
+                  E.Add_Text (Outcome, "value", Argument (Index));
+                  E.Add_Text (Outcome, "detail", To_String (Several));
+                  Pres.Report (Screen, Outcome);
+               elsif E.Is_Ok (Had) and then Rs."=" (One.Kind, Rs.Diagnostic)
+                 and then not Dismissed_List (Store).Contains (Other)
+                 and then not Open_Issues (Store).Contains (Other)
+               then
+                  Pres.Put_Note
+                    (Screen, "cli.result.not_listed",
+                     [Loc.Named ("name", Other),
+                      Loc.Named ("detail",
+                                 (if Task_Of (One) /= ""
+                                    and then Tk.State_Of (Store, Task_Of (One)) in "failed" | "blocked"
+                                  then "it is " & Task_Of (One) & "'s, which /result lists as the task: /task show "
+                                       & Task_Of (One) & " says where it stands"
+                                  else "it was dealt with already"))]);
+               elsif E.Is_Ok (Had) and then not Rs."=" (One.Kind, Rs.Diagnostic) then
                   Pres.Put_Note (Screen, "cli.result.not_an_issue",
                                  [Loc.Named ("name", Other),
                                   Loc.Named ("value", Ada.Strings.Fixed.Translate
@@ -1238,11 +1263,16 @@ begin
             if Same >= 3 then
                Skipped := Skipped + 1;
             else
-               --  JSON coloured as JSON where colour shows.
-               Pres.Put_Line (Screen, "      "
-                                      & (if Pres.Styles_Answers (Screen)
-                                           and then Pres.Looks_Like_JSON (To_String (Held.Payload))
-                                         then Pres.JSON_Coloured (Line) else Line));
+               --  JSON coloured as JSON where colour shows; a model wrote
+               --  it, so its controls are shown escaped first.
+               declare
+                  Shown : constant String := T.Escape_Controls (Line, Keep_Tabs => True);
+               begin
+                  Pres.Put_Line (Screen, "      "
+                                         & (if Pres.Styles_Answers (Screen)
+                                              and then Pres.Looks_Like_JSON (To_String (Held.Payload))
+                                            then Pres.JSON_Coloured (Shown) else Shown));
+               end;
             end if;
          end loop;
          if Skipped > 0 then

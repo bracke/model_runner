@@ -830,7 +830,8 @@ package body Model_Runner.CLI.Repo is
                   end if;
                   if Length (Piece.Text) > 0 then
                      Pres.Put_Line (Screen, "");
-                     Pres.Put_Line (Screen, Rv.Provenance (Piece));
+                     --  A file's path and its text are the repository's: shown, not obeyed.
+                     Pres.Put_Line (Screen, Model_Runner.Text.Escape_Controls (Rv.Provenance (Piece)));
                      declare
                         Text  : constant String := To_String (Piece.Text);
                         Row   : Natural := Piece.First;
@@ -838,7 +839,9 @@ package body Model_Runner.CLI.Repo is
                      begin
                         for At_Char in Text'Range loop
                            if Text (At_Char) = ASCII.LF then
-                              Pres.Put_Line (Screen, Image (Row) & ": " & Text (Start .. At_Char - 1));
+                              Pres.Put_Line (Screen, Image (Row) & ": "
+                                             & Model_Runner.Text.Escape_Controls
+                                                 (Text (Start .. At_Char - 1), Keep_Tabs => True));
                               Row := Row + 1;
                               Start := At_Char + 1;
                            end if;

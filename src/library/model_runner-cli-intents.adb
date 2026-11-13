@@ -7,6 +7,7 @@ with Ada.Text_IO;
 
 with Hostkit.Fs;
 
+with Model_Runner.UTF8;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.Errors;
@@ -38,9 +39,26 @@ package body Model_Runner.CLI.Intents is
 
    use type Nt.Link_Kind;
 
-   --  A title made from a text: the text, cut at a hundred characters.
+   --  A title made from a text: the text, cut at a hundred bytes, and at a
+   --  whole character -- cut inside one, the title was not UTF-8.
    function Headline (Text : String) return String
-   is (if Text'Length <= 100 then Text else Text (Text'First .. Text'First + 96) & "...");
+   is (if Text'Length <= 100 then Text
+       else Text (Text'First .. Text'First - 1 + Model_Runner.UTF8.Safe_Prefix_Length
+                                                   (Text (Text'First .. Text'First + 96))) & "...");
+
+   --  Whether Path is within Top, a separator after it: /a/proj2 is not
+   --  within /a/proj.
+   function Inside_Project (Top, Path : String) return Boolean is
+      Whole : constant String := Ada.Directories.Full_Name (Path);
+      Root  : constant String := Ada.Directories.Full_Name (Top);
+   begin
+      return Whole'Length > Root'Length + 1
+        and then Whole (Whole'First .. Whole'First + Root'Length - 1) = Root
+        and then Whole (Whole'First + Root'Length) = '/';
+   exception
+      when others =>
+         return False;
+   end Inside_Project;
 
    --  Whether an entry's title is its text's headline, as one made from a
    --  document's line is: a new text brings a new title with it.
@@ -64,6 +82,7 @@ package body Model_Runner.CLI.Intents is
       begin
          if Ada.Directories.Exists (Whole) and then Whole'Length > Top'Length + 1
            and then Whole (Whole'First .. Whole'First + Top'Length - 1) = Top
+           and then Whole (Whole'First + Top'Length) = '/'
          then
             return Whole (Whole'First + Top'Length + 1 .. Whole'Last);
          end if;
@@ -1389,12 +1408,35 @@ package body Model_Runner.CLI.Intents is
                                              & " take; " & Word_Of_Command (Kind) & " obsolete " & Word (2)
                                              & " retires it, and text=... revises it by hand"));
                         end;
+                     elsif not Inside_Project (Ada.Directories.Containing_Directory (S.Root (Store)), Path)
+                       or else Ada.Directories."/=" (Ada.Directories.Kind (Path), Ada.Directories.Ordinary_File)
+                     then
+                        --  A record's source names a file of the project's
+                        --  own: not a directory, not one outside it.
+                        Status := E.Make (E.Framework_Input_Invalid);
+                        E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
+                        E.Add_Text (Status, "value", To_String (Held.Source));
+                        E.Add_Text (Status, "detail", "it is not a file of the project's");
                      else
-                        Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
-                        while not Ada.Text_IO.End_Of_File (File) loop
-                           Ada.Strings.Unbounded.Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
-                        end loop;
-                        Ada.Text_IO.Close (File);
+                        begin
+                           Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
+                           while not Ada.Text_IO.End_Of_File (File) loop
+                              Ada.Strings.Unbounded.Append (Text, Ada.Text_IO.Get_Line (File) & ASCII.LF);
+                           end loop;
+                           Ada.Text_IO.Close (File);
+                        exception
+                           --  Unreadable: said as such, not as a fault.
+                           when others =>
+                              if Ada.Text_IO.Is_Open (File) then
+                                 Ada.Text_IO.Close (File);
+                              end if;
+                              Status := E.Make (E.Framework_Input_Invalid);
+                              E.Add_Text (Status, "name", "the document " & Word (2) & " came from");
+                              E.Add_Text (Status, "value", To_String (Held.Source));
+                              E.Add_Text (Status, "detail", "it could not be read");
+                              Pres.Report (Screen, Status);
+                              return;
+                        end;
 
                         --  Only its own part of the document: what the
                         --  document says at the place it was taken from.

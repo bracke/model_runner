@@ -2241,6 +2241,7 @@ package body Tests.CLI_Cases is
       Decoded (ESC & "OB", Ch.Down, 3, "Down in application mode");
       Decoded (ESC & "x", Ch.Nothing, 2, "Alt-x");
       Decoded ([1 => ESC], Ch.Escape, 1, "Escape alone");
+      Decoded (ESC & ESC, Ch.Escape, 1, "Escape twice, quickly");
       Decoded ([1 => ASCII.SO], Ch.Down, 1, "Ctrl-N");
       Decoded ([1 => ASCII.DLE], Ch.Up, 1, "Ctrl-P");
       Decoded ([1 => ASCII.NAK], Ch.Nothing, 1, "Ctrl-U");
