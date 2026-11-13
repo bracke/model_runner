@@ -1744,6 +1744,7 @@ package body Model_Runner.Framework.Configurations is
       if Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) /= ""
         and then (for all C of Ada.Strings.Fixed.Trim (Value, Ada.Strings.Both) => C = '0')
         and then (Name in "scalar.agents.max_steps" | "scalar.agents.max_seconds" | "scalar.agents.token_budget"
+                          | "scalar.work.steps"
                   or else Starts (Name, "scalar.task.max_steps.") or else Starts (Name, "scalar.task.max_seconds.")
                   or else Starts (Name, "scalar.task.token_budget."))
       then
@@ -2245,7 +2246,7 @@ package body Model_Runner.Framework.Configurations is
                 or else Starts (Name, "scalar.retention.")
                 or else Name in "scalar.agents.token_budget" | "scalar.execution.output_limit"
                               | "scalar.execution.process_slots" | "scalar.execution.timeout"
-                              | "scalar.work.lease" | "scalar.work.max_workspaces")
+                              | "scalar.work.lease" | "scalar.work.max_workspaces" | "scalar.work.steps")
               and then not (Name = "scalar.agents.max_seconds" and then Value = "model")
               and then (Value'Length not in 1 .. 9
                         or else (for some C of Value => C not in '0' .. '9'))
@@ -2258,6 +2259,7 @@ package body Model_Runner.Framework.Configurations is
                  --  As the check of 0 below has it: 1 or more where 0 is refused.
                  & (if Name in "scalar.agents.max_steps" | "scalar.agents.token_budget" | "scalar.work.lease"
                              | "scalar.agents.max_seconds" | "scalar.agents.max_active" | "scalar.work.max_workspaces"
+                             | "scalar.work.steps"
                     then ", 1 or more" else ", 0 or more")
                  & " in digits"
                  & (if Name = "scalar.agents.max_seconds" then ", or model for the model's pace" else "")

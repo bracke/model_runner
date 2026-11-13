@@ -38,13 +38,33 @@ package body Model_Runner.CLI.Completion is
    function Project_Commands return String
    is (Model_Runner.CLI.Project_Commands.Command_Names);
 
-   --  Words a space apart, as a list.
+   --  Whether text leaves a double quote open: what follows is one word,
+   --  spaces and all, as the commands read it.
+   function Quote_Open (Text : String) return Boolean is
+      Open : Boolean := False;
+   begin
+      for Index in Text'Range loop
+         if Text (Index) = '"' and then (Index = Text'First or else Text (Index - 1) /= '\') then
+            Open := not Open;
+         end if;
+      end loop;
+      return Open;
+   end Quote_Open;
+
+   --  Words a space apart, as a list; a quoted stretch, its quotes kept,
+   --  one word -- "my dir/x.gguf" is a path, not two words.
    function Words_Of (Text : String) return Names.Vector is
       Result : Names.Vector;
       Start  : Natural := Text'First;
+      Open   : Boolean := False;
    begin
       for Index in Text'First .. Text'Last + 1 loop
-         if Index > Text'Last or else Text (Index) = ' ' then
+         if Index <= Text'Last and then Text (Index) = '"'
+           and then (Index = Text'First or else Text (Index - 1) /= '\')
+         then
+            Open := not Open;
+         end if;
+         if Index > Text'Last or else (Text (Index) = ' ' and then not Open) then
             if Index > Start then
                Result.Append (Text (Start .. Index - 1));
             end if;
@@ -53,6 +73,21 @@ package body Model_Runner.CLI.Completion is
       end loop;
       return Result;
    end Words_Of;
+
+   --  A word without its double quotes, as the commands receive it: what
+   --  a typed word and an offered one are compared as.
+   function Unquoted (Text : String) return String is
+      Result : String (1 .. Text'Length);
+      Last   : Natural := 0;
+   begin
+      for C of Text loop
+         if C /= '"' then
+            Last := Last + 1;
+            Result (Last) := C;
+         end if;
+      end loop;
+      return Result (1 .. Last);
+   end Unquoted;
 
    --  The actions each command takes as its second word.
    function Actions_Of (Command : String) return String
@@ -72,8 +107,27 @@ package body Model_Runner.CLI.Completion is
        else "");
 
    --  Every file and directory under a path's directory that its last part
-   --  begins: a directory with its slash, to go on into.
+   --  begins: a directory with its slash, to go on into. A path with a
+   --  space, or one begun with a quote, is offered quoted -- a file's
+   --  quote closed, a directory's left open to go on into -- because the
+   --  commands split their words at a space outside quotes.
+   function Bare_Paths (Prefix : String) return Names.Vector;
+
    function Paths (Prefix : String) return Names.Vector is
+      Quoted : constant Boolean := Prefix'Length > 0 and then Prefix (Prefix'First) = '"';
+      Result : Names.Vector;
+   begin
+      for Path of Bare_Paths (if Quoted then Unquoted (Prefix) else Prefix) loop
+         if Quoted or else Ada.Strings.Fixed.Index (Path, " ") > 0 then
+            Result.Append ('"' & Path & (if Path (Path'Last) = '/' then "" else """"));
+         else
+            Result.Append (Path);
+         end if;
+      end loop;
+      return Result;
+   end Paths;
+
+   function Bare_Paths (Prefix : String) return Names.Vector is
       Result : Names.Vector;
       Slash  : constant Natural := Ada.Strings.Fixed.Index (Prefix, "/", Ada.Strings.Backward);
       Dir    : constant String := (if Slash = 0 then "" else Prefix (Prefix'First .. Slash));
@@ -118,7 +172,7 @@ package body Model_Runner.CLI.Completion is
    exception
       when others =>
          return Result;
-   end Paths;
+   end Bare_Paths;
 
    --  The values a setting takes, where they are a few words: what Tab
    --  offers after its =.
@@ -210,7 +264,8 @@ package body Model_Runner.CLI.Completion is
    function Candidates (Before : String) return Names.Vector is
       Words   : constant Names.Vector := Words_Of (Before);
       --  The word being completed: the last, or a new one after a space.
-      Fresh   : constant Boolean := Before = "" or else Before (Before'Last) = ' ';
+      Fresh   : constant Boolean :=
+        Before = "" or else (Before (Before'Last) = ' ' and then not Quote_Open (Before));
       Current : constant String := (if Fresh or else Words.Is_Empty then "" else Words.Last_Element);
       Position : constant Positive := Natural (Words.Length) + (if Fresh then 1 else 0);
       Command : constant String :=
@@ -493,7 +548,7 @@ package body Model_Runner.CLI.Completion is
                   --  A model by its path.
                   for Path of Paths (Current (Eq + 1 .. Current'Last)) loop
                      if Path (Path'Last) = '/'
-                       or else (Path'Length > 5 and then Path (Path'Last - 4 .. Path'Last) = ".gguf")
+                       or else Ada.Strings.Fixed.Tail (Unquoted (Path), 5) = ".gguf"
                      then
                         Values.Append (Path);
                      end if;
@@ -931,7 +986,7 @@ package body Model_Runner.CLI.Completion is
          --  What it reads: documents, and directories to go on into.
          for Path of Paths (Current) loop
             declare
-               Lower : constant String := Ada.Characters.Handling.To_Lower (Path);
+               Lower : constant String := Ada.Characters.Handling.To_Lower (Unquoted (Path));
             begin
                if Path (Path'Last) = '/'
                  or else (for some Ending of Names.Vector'([".md", ".rst", ".adoc", ".txt"]) =>
@@ -1008,19 +1063,31 @@ package body Model_Runner.CLI.Completion is
                Offered.Delete (Index);
             end if;
          end loop;
+         --  Compared without their quotes: my is the start of "my dir/".
          for One of Offered loop
-            if One'Length >= Current'Length and then One (One'First .. One'First + Current'Length - 1) = Current
-            then
-               Result.Append (One);
-            end if;
-         end loop;
-         if Result.Is_Empty then
-            for One of Offered loop
-               if One'Length >= Current'Length
-                 and then Lower (One (One'First .. One'First + Current'Length - 1)) = Lower_Current
+            declare
+               Bare_One  : constant String := Unquoted (One);
+               Bare_Word : constant String := Unquoted (Current);
+            begin
+               if Bare_One'Length >= Bare_Word'Length
+                 and then Bare_One (Bare_One'First .. Bare_One'First + Bare_Word'Length - 1) = Bare_Word
                then
                   Result.Append (One);
                end if;
+            end;
+         end loop;
+         if Result.Is_Empty then
+            for One of Offered loop
+               declare
+                  Bare_One  : constant String := Lower (Unquoted (One));
+                  Bare_Word : constant String := Lower (Unquoted (Current));
+               begin
+                  if Bare_One'Length >= Bare_Word'Length
+                    and then Bare_One (Bare_One'First .. Bare_One'First + Bare_Word'Length - 1) = Bare_Word
+                  then
+                     Result.Append (One);
+                  end if;
+               end;
             end loop;
          end if;
          --  A number, as the commands take one for an ID: those it numbers,

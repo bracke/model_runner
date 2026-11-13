@@ -265,7 +265,9 @@ package body Model_Runner.CLI.Interactive is
       --  and the same command without one be the same command: /system was
       --  matched as "/system " with the space, so a bare /system was an
       --  unknown command rather than one missing its text.
-      while Stop <= Line'Last and then Line (Stop) /= ' ' loop
+      --  A tab is a space here, as Offer takes it: /system and a tab was
+      --  an unknown command, and the text after it lost.
+      while Stop <= Line'Last and then Line (Stop) not in ' ' | ASCII.HT loop
          Stop := Stop + 1;
       end loop;
 
@@ -278,10 +280,10 @@ package body Model_Runner.CLI.Interactive is
          --  around it removed. An argument of nothing but spaces is no
          --  argument, which is what makes "/system   " clear the message
          --  rather than set it to blanks.
-         while First <= Last and then Line (First) = ' ' loop
+         while First <= Last and then Line (First) in ' ' | ASCII.HT loop
             First := First + 1;
          end loop;
-         while Last >= First and then Line (Last) = ' ' loop
+         while Last >= First and then Line (Last) in ' ' | ASCII.HT loop
             Last := Last - 1;
          end loop;
          if Last < First then
@@ -586,6 +588,12 @@ package body Model_Runner.CLI.Interactive is
       --  /tool -- leaves the model, not the command, to be answered.
       Turn_Taken : Boolean := False;
       Turns_Asked : Natural := 0;
+
+      --  Whether the last Take_Turn was refused before the model read any
+      --  of it -- its picture unreadable, no projector, a template that
+      --  would not render -- so that what was typed is kept to mend and
+      --  send again rather than typed again.
+      Kept_Back : Boolean := False;
 
       --  The weights read once while the first line is typed: a token run
       --  through a session that holds nothing, which uploads what the
@@ -1179,6 +1187,7 @@ package body Model_Runner.CLI.Interactive is
          Compactions : Natural := 0;
       begin
          Turn_Taken := False;
+         Kept_Back := False;
          Turns_Asked := Turns_Asked + 1;
          if Sender = Conv.User_Role and then Next_Picture /= null then
             --  The words and the picture named for them, as one turn of
@@ -1205,6 +1214,7 @@ package body Model_Runner.CLI.Interactive is
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
+            Kept_Back := Sender = Conv.User_Role;
             --  And the pictures it gave, so the next turn does not take them
             --  for its own: a picture set counts what it holds, not which.
             Model_Runner.CLI.Pictures.Release (Pictures);
@@ -1216,6 +1226,7 @@ package body Model_Runner.CLI.Interactive is
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
+            Kept_Back := Sender = Conv.User_Role;
             --  And the pictures it gave, so the next turn does not take them
             --  for its own: a picture set counts what it holds, not which.
             Model_Runner.CLI.Pictures.Release (Pictures);
@@ -1338,6 +1349,19 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Note
                        (Screen, "cli.interactive.compacted",
                         [Loc.Named ("value", T.Image (Long_Long_Integer (Gone)))]);
+                     --  The pictures gathered again: a picture set counts
+                     --  what it holds, not which, and one of a turn the
+                     --  compaction folded stayed in it while its marker
+                     --  left the render -- the turn asked again was refused
+                     --  for a count that did not match.
+                     Model_Runner.CLI.Pictures.Release (Pictures);
+                     Gather_Pictures (Outcome);
+                     if E.Is_Error (Outcome) then
+                        Pres.Report (Screen, Outcome);
+                        Conv.Drop_Last (Messages, 1);
+                        Model_Runner.CLI.Pictures.Release (Pictures);
+                        return;
+                     end if;
                      goto Rendering;
                   end if;
                end loop;
@@ -1520,6 +1544,25 @@ package body Model_Runner.CLI.Interactive is
                   if Turn_Taken then
                      Project_Seen := Seen;
                   end if;
+                  --  Refused before the model read it: the message kept,
+                  --  pending, to add to or send again -- its picture is
+                  --  named again with /image where it was the picture.
+                  if Kept_Back then
+                     declare
+                        Again : Line_Effect;
+                        From  : Positive := Prompt'First;
+                     begin
+                        for Index in Prompt'First .. Prompt'Last + 1 loop
+                           if Index > Prompt'Last or else Prompt (Index) = ASCII.LF then
+                              if Index > From then
+                                 Offer (Typing, Prompt (From .. Index - 1), Again);
+                              end if;
+                              From := Index + 1;
+                           end if;
+                        end loop;
+                     end;
+                     Pres.Put_Note (Screen, "cli.interactive.message_kept");
+                  end if;
                end;
             else
                Pres.Report (Screen, E.Make (E.IO_Invalid_UTF8));
@@ -1590,15 +1633,37 @@ package body Model_Runner.CLI.Interactive is
       --  is asked of it.
       Model_Runner.CLI.Project_Commands.Recover_Here (Screen);
 
+      --  A stop the set refuses, or a token the vocabulary has not got,
+      --  refused as run refuses it: taken in silence, the conversation ran
+      --  with no stop where one was asked for.
       Model_Runner.Stops.Open (Stop_Set, Bounds);
       for Index in 1 .. Item.Stop_Count loop
          Model_Runner.Stops.Add_String
            (Stop_Set, T.To_String (Item.Stop_Strings (Index)), Condition);
+         exit when E.Is_Error (Condition);
       end loop;
-      for Index in 1 .. Item.Stop_Token_Count loop
-         Model_Runner.Stops.Add_Token
-           (Stop_Set, Vocab.Token_Id (Item.Stop_Tokens (Index)), Condition);
-      end loop;
+      if E.Is_Ok (Condition) then
+         for Index in 1 .. Item.Stop_Token_Count loop
+            if Item.Stop_Tokens (Index) >= Long_Long_Integer (Vocab.Size (Words.all)) then
+               Condition := E.Make (E.CLI_Option_Out_Of_Range);
+               E.Add_Text (Condition, "option", "--stop-token", E.Param_Identifier);
+               E.Add_Text (Condition, "value", Long_Long_Integer'Image (Item.Stop_Tokens (Index)));
+               E.Add_Integer (Condition, "minimum", 0);
+               E.Add_Integer (Condition, "maximum", Long_Long_Integer (Vocab.Size (Words.all)) - 1);
+               exit;
+            end if;
+            Model_Runner.Stops.Add_Token
+              (Stop_Set, Vocab.Token_Id (Item.Stop_Tokens (Index)), Condition);
+            exit when E.Is_Error (Condition);
+         end loop;
+      end if;
+      if E.Is_Error (Condition) then
+         Pres.Report (Screen, Condition);
+         Status := E.Exit_Status (Condition);
+         Model_Runner.Stops.Close (Stop_Set);
+         Conv.Close (Messages);
+         return;
+      end if;
 
       if Item.Has_System and then Item.System_Text /= null then
          Conv.Set_System (Messages, Item.System_Text.all, Condition);
@@ -1675,6 +1740,9 @@ package body Model_Runner.CLI.Interactive is
 
             --  Whether the line was edited as it was typed, coloured then.
             Edited : Boolean := False;
+            --  Whether the line read was longer than a turn may be, and
+            --  the rest of it is still to be skipped.
+            Cut_Short : Boolean := False;
 
             --  The wait for the line, said to the handler and ended however
             --  this is left: an exception past it left the program said to
@@ -1747,11 +1815,22 @@ package body Model_Runner.CLI.Interactive is
                            if Ada.Text_IO.End_Of_Line
                                 (Ada.Text_IO.Current_Input)
                            then
-                              Ada.Text_IO.Skip_Line
-                                (Ada.Text_IO.Current_Input);
+                              --  At the end of input with no line feed
+                              --  after it, there is no line end to skip:
+                              --  the line is kept, and the next read ends.
+                              begin
+                                 Ada.Text_IO.Skip_Line
+                                   (Ada.Text_IO.Current_Input);
+                              exception
+                                 when Ada.Text_IO.End_Error =>
+                                    null;
+                              end;
                               exit;
                            end if;
-                           exit when Room'Length >= Max_Turn_Bytes;
+                           if Room'Length >= Max_Turn_Bytes then
+                              Cut_Short := True;
+                              exit;
+                           end if;
                            Grow (Room, 2 * Room'Length);
                         end loop;
                      elsif Ending = Model_Runner.CLI.Choosers.Ended then
@@ -1810,10 +1889,17 @@ package body Model_Runner.CLI.Interactive is
             --  would be the same turn; treating each as a line would put line
             --  feeds inside what the user typed as one. Neither is worth the
             --  code, so a line this long ends the turn it is part of.
-            if Stop = Room'Length and then Room'Length >= Max_Turn_Bytes
-              and then not Ada.Text_IO.End_Of_Line (Ada.Text_IO.Current_Input)
-            then
-               Ada.Text_IO.Skip_Line (Ada.Text_IO.Current_Input);
+            --  Asked of the read itself, not of the input after it: a line
+            --  that filled the room exactly had its end read already, and
+            --  End_Of_Line asked of the next line -- waiting for one at a
+            --  terminal, and skipping it unread where it came.
+            if Cut_Short then
+               begin
+                  Ada.Text_IO.Skip_Line (Ada.Text_IO.Current_Input);
+               exception
+                  when Ada.Text_IO.End_Error =>
+                     null;
+               end;
                Taken (Typing);
                declare
                   Refused : E.Error_Info := E.Make (E.Conversation_Too_Long);
@@ -1907,12 +1993,12 @@ package body Model_Runner.CLI.Interactive is
                         end;
 
                      when Command_Mid_Message =>
-                        declare
-                           Before : constant Natural := Turns_Asked;
-                        begin
-                           Handled := Handle_Command (T.Trim (Line));
-                           After_Command := Turns_Asked = Before;
-                        end;
+                        --  The message pending was typed before the
+                        --  command, not after it: a yes in it answers what
+                        --  the model asked, and is not refused as one said
+                        --  just after a command.
+                        Handled := Handle_Command (T.Trim (Line));
+                        After_Command := False;
                         Pres.Put_Note (Screen, "cli.interactive.message_kept");
 
                      when Submits =>

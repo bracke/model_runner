@@ -128,8 +128,9 @@ package body Model_Runner.CLI.Project_Commands is
    --  starts a model's run or remakes the project's set-up waits for the
    --  message to be sent, and until then is its text.
    --  Needs says where it applies: in a project, or where there is none
-   --  yet -- what /help lists here, and nothing else, unless asked for all.
-   type Availability is (In_Project, Without_Project);
+   --  yet, or either -- what /help lists here, and nothing else, unless
+   --  asked for all.
+   type Availability is (In_Project, Without_Project, Anywhere);
 
    type Command_Descriptor is record
       Name        : Word_Access;
@@ -146,7 +147,7 @@ package body Model_Runner.CLI.Project_Commands is
       (new String'("/state"),       new String'("cli.interactive.help.state"), State_Route, True, In_Project),
       (new String'("/config"),      new String'("cli.interactive.help.config"), Config_Route, True, In_Project),
       (new String'("/git"),         new String'("cli.interactive.help.git"), Git_Route, True, In_Project),
-      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox"), Sandbox_Route, True, In_Project),
+      (new String'("/sandbox"),     new String'("cli.interactive.help.sandbox"), Sandbox_Route, True, Anywhere),
       (new String'("/instruct"),    new String'("cli.interactive.help.instruct"), Instructions_Route, True, In_Project),
       (new String'("/reconfigure"),
        new String'("cli.interactive.help.reconfigure"), Reconfiguring_Route, False, In_Project),
@@ -2896,7 +2897,7 @@ package body Model_Runner.CLI.Project_Commands is
       Left    : Natural := 0;
    begin
       for Command of Commands loop
-         if All_Of_Them or else Command.Needs = Here_Is then
+         if All_Of_Them or else Command.Needs in Here_Is | Anywhere then
             Pres.Put_Help_Line (Screen, Command.Help_Key.all);
          else
             Left := Left + 1;
@@ -3374,6 +3375,18 @@ package body Model_Runner.CLI.Project_Commands is
    -- Request_Of --
    ----------------
 
+   --  Whether a setting's value is words, which a bare value runs on
+   --  into: what a person writes rather than names.
+   function Is_Wordy (Name : String) return Boolean
+   is (Name in "title" | "notes" | "note" | "reason" | "summary" | "text" | "detail" | "criteria"
+             | "acceptance" | "meaning" | "ruling" | "scope" | "claim" | "evidence" | "statement"
+             | "description" | "rationale" | "subject");
+
+   --  Whether a word names a register's item, as TASK-3 or REQ-001 does.
+   function Names_An_Item (Word : String) return Boolean
+   is (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-", "OBS-"]) =>
+         Ada.Strings.Fixed.Head (Ada.Characters.Handling.To_Upper (Word), Prefix'Length) = Prefix);
+
    function Request_Of (Line : String) return Model_Runner.CLI.Command_Lines.Request is
       All_Words : constant Names.Vector := Identifiers_As_Kept (Split (Line));
       Result    : Model_Runner.CLI.Command_Lines.Request;
@@ -3423,13 +3436,21 @@ package body Model_Runner.CLI.Project_Commands is
                --  written bare runs on. Run on past the quotes, the words
                --  after it were taken into it: add set.execution.allowed
                --  gnatmake became part of a check's command.
+               --
+               --  Only a value of words runs on -- a title, notes, a reason,
+               --  or anything /reconfigure sets -- and never into an ID:
+               --  /work profile=fast TASK-3 asked for a profile "fast
+               --  TASK-3", and /task new kind=code Fix parser had no title.
                declare
                   Name : constant String := Part (Part'First .. Ada.Strings.Fixed.Index (Part, "=") - 1);
                begin
                   Continues := Ada.Strings.Fixed.Index (Line, Name & "=""") = 0
-                    and then Ada.Strings.Fixed.Index (Line, Name & "='") = 0;
+                    and then Ada.Strings.Fixed.Index (Line, Name & "='") = 0
+                    and then (All_Words.First_Element = "/reconfigure" or else Is_Wordy (Name));
                end;
-            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--" then
+            elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
+              and then not Names_An_Item (Part)
+            then
                --  A value runs on to the next NAME=, as /reconfigure takes
                --  one: notes=for users is one value, not a word dropped.
                Result.Settings.Replace_Element

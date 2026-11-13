@@ -278,11 +278,12 @@ package Model_Runner.Presentation is
 
    --  Write a line of a unified diff to standard output: at a terminal
    --  that shows colour, an added line green, a removed one red, and a
-   --  file or hunk header muted.
+   --  file or hunk header muted. Control characters in the line are
+   --  shown escaped, tabs kept.
    --
    --  @param Item Console to write through.
-   --  @param Text The line.
-   procedure Put_Diff_Line (Item : in out Console; Text : String);
+   --  @param Line The line.
+   procedure Put_Diff_Line (Item : in out Console; Line : String);
 
    --  Write a localized line to standard output.
    --

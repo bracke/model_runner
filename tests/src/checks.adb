@@ -1686,6 +1686,22 @@ package body Checks is
          then
             Fail ("an interactive command nobody has was recognized");
          end if;
+
+         --  A tab after the word separates it as a space does: /system and
+         --  a tab was an unknown command, and its text was lost.
+         Result.Performed := Result.Performed + 1;
+         declare
+            Line   : constant String := "/system" & ASCII.HT & "Be terse." & ASCII.HT;
+            Parsed : constant Model_Runner.CLI.Interactive.Parsed_Command :=
+              Model_Runner.CLI.Interactive.Parse (Line);
+         begin
+            if Parsed.Kind /= Model_Runner.CLI.Interactive.Set_System
+              or else Parsed.First = 0
+              or else Line (Parsed.First .. Parsed.Last) /= "Be terse."
+            then
+               Fail ("a command word followed by a tab was not read as the command");
+            end if;
+         end;
       end;
 
       --  Every command has a help topic, and every topic is a command.

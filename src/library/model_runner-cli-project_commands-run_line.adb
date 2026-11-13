@@ -6,7 +6,9 @@ procedure Run_Line
 is
    All_Words  : constant Names.Vector := Identifiers_As_Kept (Split (Line));
    Open_Quote : constant Boolean := Left_Open;
-   Word       : constant String := All_Words.First_Element;
+   --  "" for a line of no words: First_Element of none raised before the
+   --  handler below was in force, out to whoever ran the line.
+   Word       : constant String := (if All_Words.Is_Empty then "" else All_Words.First_Element);
 
    --  A command whose words after its action are text a person wrote -- a
    --  note, a title, a requirement's words: a word there that looks like
@@ -155,14 +157,19 @@ is
 
    --  Whether the command only looks: what may be done while another run
    --  holds the project, and what changes nothing to judge again after.
+   --  Set while /req verify runs its checks: the command's words are
+   --  the requirement's then, not "verify", and it changes what it checks.
+   Verifying : Boolean := False;
+
    function Looks_Only return Boolean
-   is (Word in "/state" | "/config" | "/git" | "/why" | "/history" | "/brief"
+   is (not Verifying and then
+       (Word in "/state" | "/config" | "/git" | "/why" | "/history" | "/brief"
        or else (Word = "/obs" and then Verb not in "record" | "dismiss" | "supersede" | "promote")
        or else (Word = "/result" and then Verb not in "dismiss" | "restore")
        or else (Word in "/req" | "/decision" | "/spec"
                 and then Verb not in "new" | "accept" | "reject" | "reconsider" | "obsolete" | "block"
                                    | "unblock" | "revise" | "edit" | "link" | "unlink" | "supersede"
-                                   | "govern" | "move" | "renumber" | "verify"));
+                                   | "govern" | "move" | "renumber" | "verify")));
 
    --  Open the project, or say there is none.
    procedure With_Store (Act : not null access procedure (Store : in out S.Store)) is
@@ -261,6 +268,19 @@ is
 
    --  The branches of the tasks route, in the order the
    --  dispatch tried them.
+   --  A value longer than a command holds, refused by name.
+   procedure Refuse_Too_Long (Name, Value : String) is
+   begin
+      Outcome := E.Make (E.Framework_Input_Invalid);
+      E.Add_Text (Outcome, "name", Name);
+      E.Add_Text (Outcome, "value", Value (Value'First .. Value'First + Natural'Min (Value'Length, 40) - 1)
+                  & "...");
+      E.Add_Text (Outcome, "detail", "it is" & Natural'Image (Value'Length) & " characters, and a command's value"
+                  & " holds" & Natural'Image (T.Max_Length) & " -- say it in fewer");
+      Pres.Report (Screen, Outcome);
+      Last_Status := E.Exit_Status (Outcome);
+   end Refuse_Too_Long;
+
    procedure Route_Tasks is separate;
 
    --  The branches of the verdicts route, in the order the
@@ -364,6 +384,15 @@ begin
       Asked : constant Model_Runner.CLI.Command_Lines.Request := Request_Of (Line);
    begin
       Positional := Asked.Positional;
+      --  A value is held to so many characters: one longer is refused,
+      --  not cut -- cut, a long note or title was saved shortened and the
+      --  command said it was done.
+      for One of Asked.Settings loop
+         if One'Length > T.Max_Length then
+            Refuse_Too_Long (One (One'First .. Ada.Strings.Fixed.Index (One, "=") - 1), One);
+            return;
+         end if;
+      end loop;
       for One of Asked.Settings loop
          exit when Command.Input_Count >= Opt.Max_Guards;
          Command.Input_Count := Command.Input_Count + 1;

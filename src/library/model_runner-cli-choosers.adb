@@ -5,14 +5,19 @@ with Ada.Finalization;
 with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
+with Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
 with Ada.Text_IO;
+with Ada.Wide_Wide_Characters.Handling;
 with Interfaces.C_Streams;
 
 with Hostkit.Descriptors;
+with Hostkit.Fs;
 with Hostkit.Terminal_Control;
 
+with Model_Runner.CLI.Partials;
 with Model_Runner.Localization;
 with Model_Runner.Platform;
+with Model_Runner.Text;
 with Model_Runner.UTF8;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Platform.Signals.Waiting;
@@ -24,6 +29,7 @@ package body Model_Runner.CLI.Choosers is
    use type Hostkit.Descriptors.Transfer_Outcome;
 
    package Loc renames Model_Runner.Localization;
+   package T renames Model_Runner.Text;
    package Pres renames Model_Runner.Presentation;
    package Term renames Hostkit.Terminal_Control;
 
@@ -39,16 +45,31 @@ package body Model_Runner.CLI.Choosers is
    function Length (From : Choice_List) return Natural
    is (Natural (From.Items.Length));
 
+   --  Where a control sequence after ESC [ ends: the index of its final
+   --  byte (40 to 7E), past its parameter (30 to 3F) and intermediate
+   --  (20 to 2F) bytes, or zero when the bytes stop before one comes.
+   function CSI_Final (Bytes : String) return Natural is
+   begin
+      for Index in Bytes'First + 2 .. Bytes'Last loop
+         case Bytes (Index) is
+            when '@' .. '~' => return Index;
+            when ' ' .. '?' => null;
+            when others     => return Index - 1;
+         end case;
+      end loop;
+      return 0;
+   end CSI_Final;
+
    --  Whether bytes are the start of a key's sequence and not all of it:
-   --  an escape alone, or escape and [ or O, or escape, [ and a digit
-   --  still waiting for its ~ -- what a terminal behind SSH or tmux, or a
-   --  read that ended mid-key, hands over in two pieces.
+   --  an escape alone, escape and O, or escape, [ and what has come of
+   --  its parameters still waiting for the final byte -- what a terminal
+   --  behind SSH or tmux, or a read that ended mid-key, hands over in two
+   --  pieces.
    function Incomplete (Bytes : String) return Boolean
    is (Bytes'Length > 0 and then Bytes (Bytes'First) = ASCII.ESC
        and then (Bytes'Length = 1
-                 or else (Bytes'Length = 2 and then Bytes (Bytes'First + 1) in '[' | 'O')
-                 or else (Bytes'Length = 3 and then Bytes (Bytes'First + 1) = '['
-                          and then Bytes (Bytes'First + 2) in '0' .. '9')));
+                 or else (Bytes'Length = 2 and then Bytes (Bytes'First + 1) = 'O')
+                 or else (Bytes (Bytes'First + 1) = '[' and then CSI_Final (Bytes) = 0)));
 
    ------------
    -- Decode --
@@ -68,44 +89,111 @@ package body Model_Runner.CLI.Choosers is
          when ASCII.HT            => return (Tab, ' ');
          when ASCII.BS | ASCII.DEL => return (Backspace, ' ');
          when ASCII.ETX           => return (Interrupt, ' ');
+         --  Ctrl-P and Ctrl-N move as they do in a shell's history.
+         when ASCII.DLE           => return (Up, ' ');
+         when ASCII.SO            => return (Down, ' ');
          when ASCII.ESC =>
-            --  An escape alone is Escape; followed by [ or O it starts the
-            --  sequence a cursor key sends.
-            if Bytes'Length >= 3
-              and then Bytes (Bytes'First + 1) in '[' | 'O'
-            then
-               Used := 3;
-               case Bytes (Bytes'First + 2) is
-                  when 'A' => return (Up, ' ');
-                  when 'B' => return (Down, ' ');
-                  when 'H' => return (Home, ' ');
-                  when 'F' => return (End_Key, ' ');
-                  when '1' | '4' | '5' | '6' | '7' | '8' =>
-                     --  The keys that end in ~: page up and down, and the
-                     --  home and end tmux and the Linux console send.
-                     if Bytes'Length >= 4 and then Bytes (Bytes'First + 3) = '~'
-                     then
-                        Used := 4;
-                        return
-                          ((case Bytes (Bytes'First + 2) is
-                              when '5'       => Page_Up,
-                              when '6'       => Page_Down,
-                              when '1' | '7' => Home,
-                              when others    => End_Key), ' ');
-                     end if;
-                     return (Nothing, ' ');
-                  when others => return (Nothing, ' ');
-               end case;
+            if Bytes'Length = 1 then
+               return (Escape, ' ');
             end if;
-            return (Escape, ' ');
+            case Bytes (Bytes'First + 1) is
+               when '[' =>
+                  --  The whole sequence is taken, whatever it is: Delete
+                  --  (ESC [ 3 ~), F5 (ESC [ 1 5 ~) or Ctrl-Up (ESC [ 1 ; 5 A)
+                  --  left their tails behind, and the tails were typed.
+                  declare
+                     Final : constant Natural := CSI_Final (Bytes);
+                     Last  : constant Natural := (if Final = 0 then Bytes'Last else Final);
+                     --  The first parameter, up to a ; -- a modifier after
+                     --  it does not change which key it is.
+                     Number : Natural := 0;
+                  begin
+                     Used := Last - Bytes'First + 1;
+                     if Final = 0 then
+                        return (Nothing, ' ');
+                     end if;
+                     for Index in Bytes'First + 2 .. Final - 1 loop
+                        exit when Bytes (Index) not in '0' .. '9' or else Number > 1_000;
+                        Number := Number * 10 + Character'Pos (Bytes (Index)) - Character'Pos ('0');
+                     end loop;
+                     case Bytes (Final) is
+                        when 'A' => return (Up, ' ');
+                        when 'B' => return (Down, ' ');
+                        when 'H' => return (Home, ' ');
+                        when 'F' => return (End_Key, ' ');
+                        --  The keys that end in ~: page up and down, and the
+                        --  home and end tmux and the Linux console send.
+                        when '~' =>
+                           case Number is
+                              when 5      => return (Page_Up, ' ');
+                              when 6      => return (Page_Down, ' ');
+                              when 1 | 7  => return (Home, ' ');
+                              when 4 | 8  => return (End_Key, ' ');
+                              when others => return (Nothing, ' ');
+                           end case;
+                        when others => return (Nothing, ' ');
+                     end case;
+                  end;
+               when 'O' =>
+                  if Bytes'Length < 3 then
+                     Used := Bytes'Length;
+                     return (Nothing, ' ');
+                  end if;
+                  Used := 3;
+                  case Bytes (Bytes'First + 2) is
+                     when 'A' => return (Up, ' ');
+                     when 'B' => return (Down, ' ');
+                     when 'H' => return (Home, ' ');
+                     when 'F' => return (End_Key, ' ');
+                     when others => return (Nothing, ' ');
+                  end case;
+               when others =>
+                  --  Alt and a key: neither Escape, which would close the
+                  --  list, nor the key, which would start a filter.
+                  Used := 2;
+                  return (Nothing, ' ');
+            end case;
          when ' ' .. '~' =>
             return (Printable, First);
          when others =>
-            --  A byte of a character outside ASCII, taken whole so a filter
-            --  can hold it.
+            --  Any other control is not a character a filter can hold; a
+            --  byte of a character outside ASCII is, taken whole.
+            if First < ' ' then
+               return (Nothing, ' ');
+            end if;
             return (Printable, First);
       end case;
    end Decode;
+
+   --  Text in lower case a character at a time, not a byte at a time: a
+   --  byte of UTF-8 lowered as Latin-1 is another byte, and É matched
+   --  nothing an é was typed for. Text that is not UTF-8 is lowered in
+   --  its ASCII letters only.
+   function Lowered (Text : String) return String is
+      package Coding renames Ada.Strings.UTF_Encoding.Wide_Wide_Strings;
+   begin
+      return Coding.Encode (Ada.Wide_Wide_Characters.Handling.To_Lower (Coding.Decode (Text)));
+   exception
+      when others =>
+         return Result : String := Text do
+            for C of Result loop
+               if C in 'A' .. 'Z' then
+                  C := Ada.Characters.Handling.To_Lower (C);
+               end if;
+            end loop;
+         end return;
+   end Lowered;
+
+   --  A filter less its last character, not its last byte: after an é
+   --  a byte left a lone lead byte that matched nothing.
+   procedure Drop_Last_Character (Filter : in out Unbounded_String) is
+      Text : constant String := To_String (Filter);
+   begin
+      if Text'Length > 0 then
+         Filter := To_Unbounded_String
+           (Text (Text'First .. Model_Runner.UTF8.Last_Character_First (Text) - 1));
+      end if;
+   end Drop_Last_Character;
 
    --  Work out which choices the filter leaves, keeping the cursor on the
    --  choice it was on when that one is still there.
@@ -113,16 +201,14 @@ package body Model_Runner.CLI.Choosers is
       Before : constant Natural :=
         (if Item.Cursor in 1 .. Natural (Item.Visible.Length)
          then Item.Visible (Item.Cursor) else 0);
-      Wanted : constant String :=
-        Ada.Characters.Handling.To_Lower (To_String (Item.Filter));
+      Wanted : constant String := Lowered (To_String (Item.Filter));
    begin
       Item.Visible.Clear;
       for Index in 1 .. Natural (Item.Items.Length) loop
          declare
             Said : constant String :=
-              Ada.Characters.Handling.To_Lower
-                (To_String (Item.Items (Index).Tag) & " "
-                 & To_String (Item.Items (Index).Label));
+              Lowered (To_String (Item.Items (Index).Tag) & " "
+                       & To_String (Item.Items (Index).Label));
          begin
             --  A choice for any language is one for every language named.
             if Wanted = "" or else Ada.Strings.Fixed.Index (Said, Wanted) > 0
@@ -180,7 +266,7 @@ package body Model_Runner.CLI.Choosers is
                return;
             when Backspace =>
                if Length (Item.Filter) > 0 then
-                  Head (Item.Filter, Length (Item.Filter) - 1);
+                  Drop_Last_Character (Item.Filter);
                   Refilter (Item);
                else
                   Item.Filtering := False;
@@ -218,7 +304,7 @@ package body Model_Runner.CLI.Choosers is
             --  A filter left by Enter is taken up again where it stood.
             if Length (Item.Filter) > 0 then
                Item.Filtering := True;
-               Head (Item.Filter, Length (Item.Filter) - 1);
+               Drop_Last_Character (Item.Filter);
                Refilter (Item);
             end if;
          when Printable =>
@@ -292,53 +378,55 @@ package body Model_Runner.CLI.Choosers is
      "  " & Character'Val (16#E2#) & Character'Val (16#96#)
      & Character'Val (16#B8#) & " ";
 
-   --  A line cut to a width counted in characters, not bytes.
+   --  A line as the list draws it: its controls shown, not obeyed -- a
+   --  label or a title can be a task's, which a model wrote -- and cut to
+   --  the columns a terminal gives it, a wide character two.
    function Fit (Text : String; Columns : Positive) return String is
-      Width : Natural := 0;
+      Shown : constant String := T.Escape_Controls (Text);
    begin
-      for Index in Text'Range loop
-         if Character'Pos (Text (Index)) not in 16#80# .. 16#BF# then
-            Width := Width + 1;
-            if Width > Columns then
-               return Text (Text'First .. Index - 1);
-            end if;
-         end if;
-      end loop;
-      return Text;
+      return Shown (Shown'First .. Shown'First + Model_Runner.UTF8.Fitting (Shown, Columns) - 1);
    end Fit;
 
    --  A text's lines, each broken at a space where it is wider than the
    --  window: what does not fit is shown on the rows below, not cut off.
+   --  Widths are in columns, so the rows counted are the rows drawn.
    function Wrapped (Text : String; Columns : Positive) return Framework.Name_Lists.Vector is
       Result : Framework.Name_Lists.Vector;
 
       procedure Add (Line : String) is
-         Width : Natural := 0;
-         Cut   : Natural := 0;
+         Fits : constant Natural := Model_Runner.UTF8.Fitting (Line, Columns);
+         Cut  : Natural := 0;
       begin
-         for Index in Line'Range loop
-            if Character'Pos (Line (Index)) not in 16#80# .. 16#BF# then
-               Width := Width + 1;
-            end if;
+         if Fits >= Line'Length then
+            Result.Append (Line);
+            return;
+         end if;
+         for Index in Line'First .. Line'First + Fits loop
             if Line (Index) = ' ' then
                Cut := Index;
             end if;
-            if Width > Columns then
-               if Cut > Line'First then
-                  Result.Append (Line (Line'First .. Cut - 1));
-                  Add (Line (Cut + 1 .. Line'Last));
-               else
-                  Result.Append (Line (Line'First .. Index - 1));
-                  Add (Line (Index .. Line'Last));
-               end if;
-               return;
-            end if;
          end loop;
-         Result.Append (Line);
+         if Cut > Line'First then
+            Result.Append (Line (Line'First .. Cut - 1));
+            Add (Line (Cut + 1 .. Line'Last));
+         else
+            --  One code point at the least, so a window narrower than a
+            --  wide character still ends.
+            declare
+               Taken : constant Natural :=
+                 Natural'Max (Fits, Natural'Max (1, Model_Runner.UTF8.Sequence_Length (Line (Line'First))));
+               Last  : constant Natural := Natural'Min (Line'Last, Line'First + Taken - 1);
+            begin
+               Result.Append (Line (Line'First .. Last));
+               if Last < Line'Last then
+                  Add (Line (Last + 1 .. Line'Last));
+               end if;
+            end;
+         end if;
       end Add;
    begin
       for Line of Framework.Lines_Of (Text) loop
-         Add (Line);
+         Add (T.Escape_Controls (Line));
       end loop;
       return Result;
    end Wrapped;
@@ -389,21 +477,33 @@ package body Model_Runner.CLI.Choosers is
       if Visible_Count (Item) = 0 then
          Result.Append (Fit ("    " & To_String (Words.Nothing), Columns));
       end if;
-      for Place in Item.Top .. Natural'Min
-                                  (Natural (Item.Visible.Length),
-                                   Item.Top + Room - 1)
-      loop
-         declare
-            Shown : Choice renames Item.Items (Item.Visible (Place));
-            Tag   : constant String := To_String (Shown.Tag);
-         begin
-            Result.Append
-              (Fit ((if Place = Item.Cursor then Marker else "    ")
-                    & (if Tag = "" then "" else Tag & "  ")
-                    & To_String (Shown.Label),
-                    Columns));
-         end;
-      end loop;
+      --  The rows drawn hold the cursor: Press scrolls by the rows the
+      --  window has, and a title of several lines, the details, or a
+      --  filter that put Top back to the first leave fewer -- the marker
+      --  was below the last row drawn, and Enter took what no one saw.
+      declare
+         Top : Positive := Positive'Max (1, Item.Top);
+      begin
+         if Item.Cursor > 0 then
+            if Item.Cursor < Top then
+               Top := Item.Cursor;
+            elsif Item.Cursor >= Top + Room then
+               Top := Item.Cursor - Room + 1;
+            end if;
+         end if;
+         for Place in Top .. Natural'Min (Natural (Item.Visible.Length), Top + Room - 1) loop
+            declare
+               Shown : Choice renames Item.Items (Item.Visible (Place));
+               Tag   : constant String := To_String (Shown.Tag);
+            begin
+               Result.Append
+                 (Fit ((if Place = Item.Cursor then Marker else "    ")
+                       & (if Tag = "" then "" else Tag & "  ")
+                       & To_String (Shown.Label),
+                       Columns));
+            end;
+         end loop;
+      end;
       Result.Append ("");
       if not Details.Is_Empty then
          for Line of Details loop
@@ -732,6 +832,61 @@ package body Model_Runner.CLI.Choosers is
    function Last_Character (Text : Unbounded_String) return Positive
    is (Model_Runner.UTF8.Last_Character_First (To_String (Text)));
 
+   --  After an escape read a byte at a time: whether a key's sequence
+   --  follows it -- an arrow, Home, Delete, Alt and a letter -- read here
+   --  to its end and dropped, or the escape was Escape alone. A cursor key
+   --  pressed to mend a typo gave the question up: Left answered no, and
+   --  in a hidden prompt the rest of its sequence was left in the
+   --  terminal for the next prompt to take as typed.
+   --
+   --  @return True when the escape began a key, which means nothing here.
+   function Key_Sequence_Skipped return Boolean is
+      Buffer : Ada.Streams.Stream_Element_Array (1 .. 1);
+      Last   : Ada.Streams.Stream_Element_Offset;
+
+      function Next (Byte : out Character) return Boolean is
+      begin
+         if not Hostkit.Descriptors.Wait_Readable (Input, 30)
+           or else Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+           or else Last < Buffer'First
+         then
+            return False;
+         end if;
+         Byte := Character'Val (Buffer (Buffer'First));
+         return True;
+      end Next;
+
+      Byte : Character;
+   begin
+      if not Next (Byte) then
+         return False;
+      end if;
+      if Byte = '[' then
+         --  Parameters and intermediates, then the final byte.
+         for Count in 1 .. 32 loop
+            exit when not Next (Byte) or else Byte in '@' .. '~';
+         end loop;
+      elsif Byte = 'O' then
+         --  One byte more names the key; none, and the escape was a key
+         --  all the same.
+         return Next (Byte) or else True;
+      end if;
+      return True;
+   end Key_Sequence_Skipped;
+
+   --  Take back the last character typed at a line on the screen: as many
+   --  cells as it took, two for a wide one.
+   procedure Erase_Last (Typed : in out Unbounded_String) is
+      From  : constant Positive := Last_Character (Typed);
+      Cells : constant Natural :=
+        Model_Runner.UTF8.Columns (Slice (Typed, From, Length (Typed)));
+   begin
+      Delete (Typed, From, Length (Typed));
+      for Cell in 1 .. Cells loop
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.BS & " " & ASCII.BS);
+      end loop;
+   end Erase_Last;
+
    ---------
    -- Ask --
    ---------
@@ -782,6 +937,8 @@ package body Model_Runner.CLI.Choosers is
             begin
                if Key in ASCII.CR | ASCII.LF then
                   exit;
+               elsif Key = ASCII.ESC and then Key_Sequence_Skipped then
+                  null;
                elsif Key in ASCII.ESC | ASCII.ETX then
                   Gave_Up := True;
                   exit;
@@ -949,13 +1106,12 @@ package body Model_Runner.CLI.Choosers is
                Outcome := Entered;
                exit;
             elsif Key = ASCII.ESC then
-               --  The rest of a key's sequence -- an arrow -- is read and
-               --  left: Escape alone, or a key that means nothing here.
-               while Hostkit.Descriptors.Wait_Readable (Input, 30) loop
-                  exit when Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok;
-               end loop;
-               Outcome := Escaped;
-               exit;
+               --  A key's sequence -- an arrow -- means nothing here and
+               --  is let go; Escape alone gives the question up.
+               if not Key_Sequence_Skipped then
+                  Outcome := Escaped;
+                  exit;
+               end if;
             elsif Key = ASCII.ETX then
                Outcome := Interrupted;
                exit;
@@ -964,8 +1120,7 @@ package body Model_Runner.CLI.Choosers is
                exit;
             elsif Key in ASCII.DEL | ASCII.BS then
                if Length (Typed) > 0 then
-                  Delete (Typed, Last_Character (Typed), Length (Typed));
-                  Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.BS & " " & ASCII.BS);
+                  Erase_Last (Typed);
                end if;
             elsif Key >= ' ' then
                Append (Typed, Key);
@@ -1045,63 +1200,108 @@ package body Model_Runner.CLI.Choosers is
       return True;
    end History_Ready;
 
-   --  A line kept for the next session, the last 500 kept.
-   ----------------------
-   -- Forget_Last_Line --
-   ----------------------
+   --  The most lines kept for recall: past it, the oldest go.
+   Most_Kept : constant := 500;
 
-   procedure Forget_Last_Line is
-      File : Ada.Text_IO.File_Type;
+   --  The history file written again: read as it stands now -- another
+   --  session in the project may have added to it since this one read it,
+   --  and a rewrite from this session's lines erased those -- the line
+   --  being forgotten taken out, the oldest past the bound dropped, and
+   --  the result renamed over the file, so a crash part way leaves the
+   --  file as it was rather than half of it.
+   --
+   --  @param Forget A line to take out, its last appearance; or "" with
+   --    Forgetting False for none.
+   --  @param Forgetting Whether Forget is to be taken out.
+   procedure Rewrite_History (Forget : String; Forgetting : Boolean) is
+      Path    : constant String := History_File;
+      File    : Ada.Text_IO.File_Type;
+      Lines   : Model_Runner.Framework.Name_Lists.Vector;
    begin
-      if History.Is_Empty or else not Last_Read_Kept then
+      if Path = "" then
          return;
       end if;
-      History.Delete_Last;
-      Last_Read_Kept := False;
-      if History_File = "" then
-         return;
+      if Ada.Directories.Exists (Path) then
+         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=no");
+         while not Ada.Text_IO.End_Of_File (File) loop
+            Lines.Append (Ada.Text_IO.Get_Line (File));
+         end loop;
+         Ada.Text_IO.Close (File);
       end if;
-      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
-      for One of History loop
-         Ada.Text_IO.Put_Line (File, One);
-      end loop;
-      Ada.Text_IO.Close (File);
+      if Forgetting then
+         for Index in reverse 1 .. Natural (Lines.Length) loop
+            if Lines (Index) = Forget then
+               Lines.Delete (Index);
+               exit;
+            end if;
+         end loop;
+      end if;
+      if Natural (Lines.Length) > Most_Kept then
+         Lines.Delete_First (Ada.Containers.Count_Type (Natural (Lines.Length) - Most_Kept));
+      end if;
+      declare
+         Partial : constant String := Model_Runner.CLI.Partials.Beside (Path);
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Partial, Form => "shared=no");
+         for One of Lines loop
+            Ada.Text_IO.Put_Line (File, One);
+         end loop;
+         Ada.Text_IO.Close (File);
+         if not Hostkit.Fs.Replace_File (Partial, Path) and then Ada.Directories.Exists (Partial) then
+            Ada.Directories.Delete_File (Partial);
+         end if;
+      end;
    exception
       when others =>
          if Ada.Text_IO.Is_Open (File) then
             Ada.Text_IO.Close (File);
          end if;
+   end Rewrite_History;
+
+   ----------------------
+   -- Forget_Last_Line --
+   ----------------------
+
+   procedure Forget_Last_Line is
+   begin
+      if History.Is_Empty or else not Last_Read_Kept then
+         return;
+      end if;
+      declare
+         Forgotten : constant String := History.Last_Element;
+      begin
+         History.Delete_Last;
+         Last_Read_Kept := False;
+         Rewrite_History (Forgotten, Forgetting => True);
+      end;
    end Forget_Last_Line;
 
+   --  A line kept for the next session, the last 500 kept.
    procedure Keep_In_History (Line : String) is
       File : Ada.Text_IO.File_Type;
-      --  The most lines kept for recall: past it, the oldest go.
-      Most : constant := 500;
-      Over : constant Boolean := Natural (History.Length) > Most;
+      Over : constant Boolean := Natural (History.Length) > Most_Kept;
    begin
       --  Held to its bound whether or not there is a file to keep it in:
       --  trimmed only where there was, a session outside a project kept
       --  every line, and every keystroke searched them all.
       if Over then
-         History.Delete_First (Ada.Containers.Count_Type (Natural (History.Length) - Most));
+         History.Delete_First (Ada.Containers.Count_Type (Natural (History.Length) - Most_Kept));
       end if;
       if History_File = "" then
          return;
       end if;
-      if Over then
-         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
-         for One of History loop
-            Ada.Text_IO.Put_Line (File, One);
-         end loop;
+      --  Added at the end, as any session adds; trimmed, when the file
+      --  holds more than it keeps, by a rewrite of what it holds now.
+      if Ada.Directories.Exists (History_File) then
+         Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, History_File, Form => "shared=no");
       else
-         if Ada.Directories.Exists (History_File) then
-            Ada.Text_IO.Open (File, Ada.Text_IO.Append_File, History_File, Form => "shared=no");
-         else
-            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
-         end if;
-         Ada.Text_IO.Put_Line (File, Line);
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, History_File, Form => "shared=no");
       end if;
+      Ada.Text_IO.Put_Line (File, Line);
       Ada.Text_IO.Close (File);
+      if Over then
+         Rewrite_History ("", Forgetting => False);
+      end if;
    exception
       when others =>
          if Ada.Text_IO.Is_Open (File) then
@@ -1169,8 +1369,13 @@ package body Model_Runner.CLI.Choosers is
       Text    : Unbounded_String;
       --  The cursor: the bytes before it.
       Cursor  : Natural := 0;
-      --  The row the cursor was drawn on, counted from the prompt's.
-      Drawn_Row : Natural := 0;
+      --  The row the cursor was drawn on, counted from the prompt's; the
+      --  width it was drawn at and what came before the cursor, so that
+      --  after the window is resized -- the terminal reflowing the rows --
+      --  the way back to the prompt's row is counted at the new width.
+      Drawn_Row    : Natural := 0;
+      Drawn_Width  : Positive := 1;
+      Drawn_Before : Unbounded_String;
       --  Where Up and Down are in the history; past its end, the line
       --  being typed, kept while older ones are looked at.
       Ready   : constant Boolean := History_Ready;
@@ -1364,11 +1569,18 @@ package body Model_Runner.CLI.Choosers is
          Line     : constant String := To_String (Text);
          --  Measured from the prompt on, as one text: a tab in the line
          --  goes to a stop counted from the row's start.
-         Shown_Total : constant Natural := Width (Prompt & Line & To_String (Ghost) & Status_Shown);
-         At_Cursor : constant Natural := Width (Prompt & Line (Line'First .. Line'First + Cursor - 1));
+         --  Counted as the terminal wraps it, a wide character that met
+         --  the edge on the next row.
+         Shown_Total : constant Natural :=
+           Model_Runner.UTF8.Wrapped_Columns (Prompt & Line & To_String (Ghost) & Status_Shown, W);
+         At_Cursor : constant Natural :=
+           Model_Runner.UTF8.Wrapped_Columns (Prompt & Line (Line'First .. Line'First + Cursor - 1), W);
          Wrapped  : Boolean := False;
          End_Row  : Natural;
       begin
+         if Drawn_Row > 0 and then W /= Drawn_Width then
+            Drawn_Row := Model_Runner.UTF8.Wrapped_Columns (To_String (Drawn_Before), W) / W;
+         end if;
          if Drawn_Row > 0 then
             Put (ASCII.ESC & "[" & Image (Drawn_Row) & "A");
          end if;
@@ -1396,6 +1608,8 @@ package body Model_Runner.CLI.Choosers is
             Put (ASCII.ESC & "[" & Image (At_Cursor mod W) & "C");
          end if;
          Drawn_Row := At_Cursor / W;
+         Drawn_Width := W;
+         Drawn_Before := To_Unbounded_String (Prompt & Line (Line'First .. Line'First + Cursor - 1));
          Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       end Redraw;
 
@@ -1498,7 +1712,24 @@ package body Model_Runner.CLI.Choosers is
       procedure Complete_Word is
          Line     : constant String := To_String (Text);
          Before   : constant String := Line (Line'First .. Line'First + Cursor - 1);
-         Start    : constant Natural := Ada.Strings.Fixed.Index (Before, " ", Ada.Strings.Backward);
+
+         --  The space the word being completed follows: the last one not
+         --  inside quotes, so "my dir/x is one word as the commands read it.
+         function Word_Start return Natural is
+            Open  : Boolean := False;
+            Space : Natural := 0;
+         begin
+            for Index in Before'Range loop
+               if Before (Index) = '"' and then (Index = Before'First or else Before (Index - 1) /= '\') then
+                  Open := not Open;
+               elsif Before (Index) = ' ' and then not Open then
+                  Space := Index;
+               end if;
+            end loop;
+            return Space;
+         end Word_Start;
+
+         Start    : constant Natural := Word_Start;
          Word     : constant String := Before ((if Start = 0 then Before'First else Start + 1) .. Before'Last);
          Choices  : constant Model_Runner.Framework.Name_Lists.Vector := Complete (Before);
          Shared   : Unbounded_String;
@@ -1521,6 +1752,10 @@ package body Model_Runner.CLI.Choosers is
                Shared := Head (Shared, Same);
             end;
          end loop;
+         --  Shared to a whole character: notes-ä and notes-ö share the
+         --  first byte of their last letters, and a lone lead byte is no
+         --  text to insert.
+         Shared := Head (Shared, Model_Runner.UTF8.Safe_Prefix_Length (To_String (Shared)));
          if Natural (Choices.Length) = 1 then
             declare
                Whole : constant String := Choices.First_Element;
@@ -1567,7 +1802,7 @@ package body Model_Runner.CLI.Choosers is
                Shown  : Natural := 0;
             begin
                for One of Choices loop
-                  Widest := Natural'Max (Widest, One'Length);
+                  Widest := Natural'Max (Widest, Model_Runner.UTF8.Columns (T.Escape_Controls (One)));
                end loop;
                Across := Positive'Max (1, Columns / (Widest + 2));
                Cursor := Length (Text);
@@ -1597,9 +1832,10 @@ package body Model_Runner.CLI.Choosers is
                            Said : constant String := Describe (One);
                         begin
                            if Said = "" then
-                              Append (Words_Beside, (if Words_Beside = Null_Unbounded_String then "" else "  ") & One);
+                              Append (Words_Beside, (if Words_Beside = Null_Unbounded_String then "" else "  ")
+                                                    & T.Escape_Controls (One));
                            else
-                              Put (Cut_To_Window (Said) & ASCII.CR & ASCII.LF);
+                              Put (Cut_To_Window (T.Escape_Controls (Said)) & ASCII.CR & ASCII.LF);
                            end if;
                         end;
                      end loop;
@@ -1619,8 +1855,10 @@ package body Model_Runner.CLI.Choosers is
                           (if Cut > Word'First and then Whole'Length > Cut - Word'First + 1
                              and then Whole (Whole'First .. Whole'First + Cut - Word'First) = Word (Word'First .. Cut)
                            then Whole (Whole'First + Cut - Word'First + 1 .. Whole'Last) else Whole);
+                        --  A file's name is shown, not obeyed.
+                        Shown : constant String := T.Escape_Controls (One);
                      begin
-                        Put (One & [1 .. Natural'Max (2, Widest + 2 - One'Length) => ' ']);
+                        Put (Shown & [1 .. Natural'Max (2, Widest + 2 - Model_Runner.UTF8.Columns (Shown)) => ' ']);
                      end;
                      Column := Column + 1;
                      Shown := Shown + 1;

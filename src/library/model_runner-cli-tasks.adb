@@ -4313,7 +4313,11 @@ package body Model_Runner.CLI.Tasks is
          end loop;
          --  The whole of it, as the agent reads it, with --verbose.
          if Model_Runner.CLI.Options."=" (Item.Level, Model_Runner.CLI.Options.Verbose) then
-            Pres.Put_Line (Screen, Model_Runner.Framework.Context.Rendered (Built));
+            --  It quotes the project's files: shown, not obeyed, its
+            --  lines and tabs kept.
+            Pres.Put_Line (Screen, T.Escape_Controls (Model_Runner.Framework.Context.Rendered (Built),
+                                                      Keep_Line_Breaks => True, Indent => False,
+                                                      Keep_Tabs => True));
          else
             Pres.Put_Note (Screen, "cli.next.context_whole", [Loc.Named ("name", Id)]);
          end if;

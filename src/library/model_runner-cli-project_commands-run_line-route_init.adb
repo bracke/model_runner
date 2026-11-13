@@ -12,6 +12,14 @@ begin
             if Positional (Index) = "--directory" and then Index < Natural (Positional.Length) then
                Command.Project_Directory := T.To_Bounded (Positional (Index + 1));
                Index := Index + 2;
+            --  Last, with no directory after it: said so, not taken for the
+            --  name of a template there is none of.
+            elsif Positional (Index) in "--directory" | "--directory=" then
+               Outcome := E.Make (E.CLI_Missing_Option_Value);
+               E.Add_Text (Outcome, "option", "--directory");
+               Pres.Report (Screen, Outcome);
+               Last_Status := E.Exit_Status (Outcome);
+               return;
             elsif Ada.Strings.Fixed.Head (Positional (Index), 12) = "--directory="
               and then Positional (Index) /= "--directory="
             then

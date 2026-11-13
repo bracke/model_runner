@@ -4,8 +4,19 @@ begin
    if Word = "/search" then
       --  Every word after it is the query: names, paths, identifiers, words.
       Command.Action := T.To_Bounded ("search");
+      --  Less --verbose, which is how much is said, not what is looked for.
       declare
-         Query : constant String := Rest (1);
+         function Words_Asked return String is
+            Text : Unbounded_String;
+         begin
+            for One of Positional loop
+               if One /= "--verbose" then
+                  Append (Text, (if Text = Null_Unbounded_String then "" else " ") & One);
+               end if;
+            end loop;
+            return To_String (Text);
+         end Words_Asked;
+         Query : constant String := Words_Asked;
       begin
          Command.Action_Argument :=
            T.To_Bounded (Query (Query'First .. Query'First - 1 + Natural'Min (Query'Length, 400)));

@@ -1511,6 +1511,20 @@ package body Tests.Tools_Cases is
                  and then Asked.Positional.Contains ("extra"),
                  "a quoted value took the word after its quote: " & Cl.Canonical (Asked));
       end;
+      --  A value that names rather than says runs on into nothing, and no
+      --  value runs on into an ID: the word after it is a word.
+      declare
+         Work : constant Cl.Request := Pc.Request_Of ("/work profile=fast TASK-003");
+         Made : constant Cl.Request := Pc.Request_Of ("/task new kind=code Fix parser");
+         Note : constant Cl.Request := Pc.Request_Of ("/task edit notes=see the log TASK-003");
+      begin
+         Assert (Work.Settings.First_Element = "profile=fast" and then Work.Positional.Contains ("TASK-003"),
+                 "a setting took the ID after it: " & Cl.Canonical (Work));
+         Assert (Made.Settings.First_Element = "kind=code" and then Made.Positional.Contains ("Fix"),
+                 "a setting took the title after it: " & Cl.Canonical (Made));
+         Assert (Note.Settings.First_Element = "notes=see the log" and then Note.Positional.Contains ("TASK-003"),
+                 "notes did not run on, or ran on into an ID: " & Cl.Canonical (Note));
+      end;
    end Command_Lines_Read_Back;
 
    --  Every built-in tool answers the same way every time.

@@ -8,6 +8,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
+with Ada.Unchecked_Deallocation;
 
 with Hostkit;
 with Hostkit.Fs;
@@ -77,26 +78,47 @@ package body Model_Runner.CLI.Work is
               else " (" & Ada.Strings.Unbounded.To_String (Said) & ": its work not done)");
    end Cancelled_Parts;
 
-   function Whole (Path : String) return String is
-      File : Ada.Streams.Stream_IO.File_Type;
+   type Text_Access is access String;
+   procedure Free is new Ada.Unchecked_Deallocation (String, Text_Access);
+
+   --  A file's bytes, read onto the heap: a trace embeds every tool result
+   --  whole and runs to megabytes, and read into a String on the stack it
+   --  overflowed it -- a clean run then reported its trace unreadable, or
+   --  the process ended. The caller frees the result; null for no file.
+   function Whole_On_Heap (Path : String) return Text_Access is
+      File   : Ada.Streams.Stream_IO.File_Type;
+      Result : Text_Access := null;
    begin
       if not Ada.Directories.Exists (Path) then
-         return "";
+         return null;
       end if;
-      declare
-         Text : String (1 .. Natural (Ada.Directories.Size (Path)));
-      begin
-         Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
-         String'Read (Ada.Streams.Stream_IO.Stream (File), Text);
-         Ada.Streams.Stream_IO.Close (File);
-         return Text;
-      end;
+      Result := new String (1 .. Natural (Ada.Directories.Size (Path)));
+      Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path, Form => "shared=no");
+      String'Read (Ada.Streams.Stream_IO.Stream (File), Result.all);
+      Ada.Streams.Stream_IO.Close (File);
+      return Result;
    exception
       when others =>
          if Ada.Streams.Stream_IO.Is_Open (File) then
             Ada.Streams.Stream_IO.Close (File);
          end if;
-         return "";
+         Free (Result);
+         return null;
+   end Whole_On_Heap;
+
+   --  What was read, or an empty text for none: never null.
+   function Or_Empty (Read : Text_Access) return Text_Access
+   is (if Read = null then new String'("") else Read);
+
+   function Whole (Path : String) return Unbounded_String is
+      Read   : Text_Access := Whole_On_Heap (Path);
+      Result : Unbounded_String;
+   begin
+      if Read /= null then
+         Result := To_Unbounded_String (Read.all);
+         Free (Read);
+      end if;
+      return Result;
    end Whole;
 
    --  Why an agent's process did not end well, with the last of what it
@@ -313,7 +335,7 @@ package body Model_Runner.CLI.Work is
       --  file tools read; what it may do was written beside its prompt,
       --  and none written is nothing granted.
       Given.Append (Pm.Agent_Root_Variable & "=" & Project);
-      Given.Append (Pm.Agent_Permissions_Variable & "=" & Whole (Pm.Permissions_Beside (Prompt_Path)));
+      Given.Append (Pm.Agent_Permissions_Variable & "=" & To_String (Whole (Pm.Permissions_Beside (Prompt_Path))));
       Model_Runner.Framework.Execution.Run_Harness
         (Project   => Ada.Directories.Containing_Directory
                         (Ada.Directories.Containing_Directory
@@ -330,14 +352,15 @@ package body Model_Runner.CLI.Work is
                       & Pm.Sandbox_Variable,
          Added     => Given);
 
-      Answer := To_Unbounded_String (Whole (Output));
+      Answer := Whole (Output);
       if Ada.Directories.Exists (Output) then
          Ada.Directories.Delete_File (Output);
       end if;
 
       --  Its trace, told to the harness in the harness's own terms.
       declare
-         Trace : constant String := Whole (Prompt_Path & ".trace");
+         Held_Trace : Text_Access := Or_Empty (Whole_On_Heap (Prompt_Path & ".trace"));
+         Trace      : String renames Held_Trace.all;
 
          --  The number after "KEY": in the trace, or zero.
          function Count_Of (Key : String) return String is
@@ -421,19 +444,27 @@ package body Model_Runner.CLI.Work is
          else
             Usage_Unknown := True;
          end if;
+         Free (Held_Trace);
       exception
          --  Not told, it is not taken for none: what it spent is not known.
          when others =>
             Usage_Unknown := True;
+            Free (Held_Trace);
       end;
       --  Out of time is the work's bound, as the session's agent has it --
       --  the task set aside, not failed; anything else says why, in its
       --  own words from its error stream.
-      if Happened.Timed_Out then
+      --  Stopped is asked first: a run stopped -- Ctrl-C, or the work
+      --  withdrawn from another terminal -- is killed as one out of time
+      --  is, and comes back marked timed out; asked second, Ctrl-C set the
+      --  task aside as out of time, with /reconfigure for a remedy.
+      if Model_Runner.Framework.Execution.Cancel_Requested
+        or else Model_Runner.Framework.Execution.Work_Withdrawn
+      then
+         Status := E.Make (E.Generation_Cancelled);
+      elsif Happened.Timed_Out then
          Status := E.Make (E.Framework_Limit_Exceeded);
          E.Add_Text (Status, "name", "time");
-      elsif Model_Runner.Framework.Execution.Cancel_Requested then
-         Status := E.Make (E.Generation_Cancelled);
       elsif not Happened.Started or else Happened.Exit_Status /= 0 then
          Status := E.Make (E.Framework_Agent_Failed);
          E.Add_Text (Status, "name", "the agent");
@@ -957,15 +988,18 @@ package body Model_Runner.CLI.Work is
       end if;
       --  steps= is a count of a run apart's steps: checked before anything
       --  starts, and refused where nothing would read it.
-      if Given.Contains ("steps") then
+      --  The configuration's work.steps as well as steps= itself: read
+      --  later as a number, a work.steps of 0 or abc ended /work with an
+      --  exception rather than a word on what was wrong.
+      if Setting ("steps", "") /= "" then
          declare
-            Steps : constant String := Given ("steps");
+            Steps : constant String := Setting ("steps", "");
          begin
             if Steps'Length not in 1 .. 6 or else (for some C of Steps => C not in '0' .. '9')
               or else Natural'Value (Steps) = 0
             then
                Outcome := E.Make (E.Framework_Input_Invalid);
-               E.Add_Text (Outcome, "name", "steps");
+               E.Add_Text (Outcome, "name", (if Given.Contains ("steps") then "steps" else "work.steps"));
                E.Add_Text (Outcome, "value", Steps);
                E.Add_Text (Outcome, "detail", "it is a whole number of steps, at least 1");
                S.Close (Store);
@@ -2344,8 +2378,14 @@ package body Model_Runner.CLI.Work is
       if Prior_Ill then
          Status := E.Exit_Input_Output;
 
-      --  Cancelled, from here or from elsewhere, ends as a cancellation.
-      elsif To_String (Done.Final_State) = Tk.Cancelled then
+      --  Cancelled, from here or from elsewhere, ends as a cancellation;
+      --  so does work stopped with Ctrl-C, which sets its task aside --
+      --  blocked, "you stopped its work" -- rather than cancelling it, and
+      --  ended as an input or output failure.
+      elsif To_String (Done.Final_State) = Tk.Cancelled
+        or else (To_String (Done.Final_State) = Tk.Blocked
+                 and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0)
+      then
          Status := E.Exit_Cancelled;
 
       --  The last one that did not end well: the command did not.

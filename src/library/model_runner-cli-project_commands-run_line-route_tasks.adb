@@ -271,6 +271,10 @@ begin
               (if At_V = 0 then Said
                else Ada.Strings.Fixed.Trim (Said (Said'First .. At_V - 1) & Said (At_V + 9 .. Said'Last),
                                             Ada.Strings.Both));
+            if Command.Action_Argument.Truncated then
+               Refuse_Too_Long (Argument (1), Said);
+               return;
+            end if;
          end;
       end if;
       --  Several tasks named to look at or check -- TASK-1 TASK-2, or

@@ -2205,6 +2205,143 @@ package body Tests.CLI_Cases is
       end;
    end Held_Output_Drops_Calls_Not_Thoughts;
 
+   --  The harness's screen, as the review of 2026-11-13 found it wanting:
+   --  keys read whole, a filter backed a character at a time, the cursor
+   --  always among the rows drawn, what a model wrote shown and not
+   --  obeyed, wide characters at a row's edge, paths with spaces, and a
+   --  line of no words.
+   procedure Harness_Screen_Takes_Keys_And_Text_Whole
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Ch renames Model_Runner.CLI.Choosers;
+      use type Ch.Key_Kind;
+      use Ada.Strings.Unbounded;
+      ESC : constant Character := ASCII.ESC;
+
+      procedure Decoded (Bytes : String; Kind : Ch.Key_Kind; Used : Natural; What : String) is
+         Took : Natural;
+         Got  : constant Ch.Key := Ch.Decode (Bytes, Took);
+      begin
+         Assert (Got.Kind = Kind and then Took = Used,
+                 What & ": " & Ch.Key_Kind'Image (Got.Kind) & " taking" & Natural'Image (Took));
+      end Decoded;
+
+      function Item (Label : String) return Ch.Choice
+      is (Label => To_Unbounded_String (Label), others => <>);
+
+      function Holds (Lines : Model_Runner.Framework.Name_Lists.Vector; Part : String) return Boolean
+      is (for some Line of Lines => Ada.Strings.Fixed.Index (Line, Part) > 0);
+   begin
+      --  Every key's sequence taken whole, the tails of none left typed.
+      Decoded (ESC & "[3~", Ch.Nothing, 4, "Delete");
+      Decoded (ESC & "[15~", Ch.Nothing, 5, "F5");
+      Decoded (ESC & "[1;5A", Ch.Up, 6, "Ctrl-Up");
+      Decoded (ESC & "[6~", Ch.Page_Down, 4, "Page Down");
+      Decoded (ESC & "OB", Ch.Down, 3, "Down in application mode");
+      Decoded (ESC & "x", Ch.Nothing, 2, "Alt-x");
+      Decoded ([1 => ESC], Ch.Escape, 1, "Escape alone");
+      Decoded ([1 => ASCII.SO], Ch.Down, 1, "Ctrl-N");
+      Decoded ([1 => ASCII.DLE], Ch.Up, 1, "Ctrl-P");
+      Decoded ([1 => ASCII.NAK], Ch.Nothing, 1, "Ctrl-U");
+
+      --  A filter is backed a character at a time, and matched in any case.
+      declare
+         Items : Ch.Choice_List;
+         Pick  : Ch.Selector;
+         E_Acute : constant String := Character'Val (16#C3#) & Character'Val (16#A9#);
+         E_Upper : constant String := Character'Val (16#C3#) & Character'Val (16#89#);
+      begin
+         Ch.Append (Items, Item ("caf" & E_Upper));
+         Ch.Append (Items, Item ("tea"));
+         Pick := Ch.Start (Items);
+         Ch.Press (Pick, (Ch.Printable, '/'), 10);
+         for C of E_Acute loop
+            Ch.Press (Pick, (Ch.Printable, C), 10);
+         end loop;
+         Assert (Ch.Visible_Count (Pick) = 1, "an é did not find the É of a label:"
+                 & Natural'Image (Ch.Visible_Count (Pick)));
+         Ch.Press (Pick, (Ch.Backspace, ' '), 10);
+         Assert (Ch.Visible_Count (Pick) = 2, "a backspace took a byte of the é, not the é");
+      end;
+
+      --  The cursor is among the rows drawn, however few the window has
+      --  for the list; and a label's escape is shown, not sent.
+      declare
+         Items : Ch.Choice_List;
+         Pick  : Ch.Selector;
+         Words : constant Ch.Wording :=
+           (Title => To_Unbounded_String ("one" & ASCII.LF & "two" & ASCII.LF & "three" & ASCII.LF & "four"),
+            others => To_Unbounded_String ("keys"));
+      begin
+         for Index in 1 .. 50 loop
+            Ch.Append (Items, Item ("choice" & Natural'Image (Index) & (if Index = 30 then ESC & "[2J" else "")));
+         end loop;
+         Pick := Ch.Start (Items);
+         for Step in 1 .. 29 loop
+            Ch.Press (Pick, (Ch.Down, ' '), 20);
+         end loop;
+         declare
+            Lines : constant Model_Runner.Framework.Name_Lists.Vector := Ch.Render (Pick, Words, 20, 60);
+         begin
+            Assert (Holds (Lines, "choice 30"), "the choice the cursor is on was not drawn");
+            Assert (not Holds (Lines, [1 => ESC]), "a label's escape reached the screen");
+            Assert (Holds (Lines, "\x1B[2J"), "a label's escape was not shown");
+         end;
+      end;
+
+      --  A wide character that meets the edge goes to the next row whole.
+      Assert (Model_Runner.UTF8.Wrapped_Columns
+                ("abc" & Character'Val (16#E4#) & Character'Val (16#B8#) & Character'Val (16#AD#), 4) = 6,
+              "a wide character at a row's last column was counted where it would not fit");
+      Assert (Model_Runner.UTF8.Wrapped_Columns ("abcd", 4) = 4, "narrow text was counted wrongly");
+
+      --  Shown, not obeyed, with tabs kept where asked; and a long text
+      --  with controls escaped whole, built off the stack.
+      Assert (Model_Runner.Text.Escape_Controls ("a" & ASCII.HT & ESC & "b", Keep_Tabs => True)
+              = "a" & ASCII.HT & "\x1Bb", "a tab was not kept, or an escape not shown");
+      declare
+         Long : constant String (1 .. 100_000) := [others => ESC];
+         Shown : constant String := Model_Runner.Text.Escape_Controls (Long);
+      begin
+         Assert (Shown'Length = 400_000 and then Shown'First = 1, "a long text was not escaped whole");
+      end;
+      Assert (Model_Runner.Text.Escape_Controls ("plain")'First = 1, "a plain text did not start at 1");
+
+      --  A path with a space is offered quoted, and the quote goes on.
+      declare
+         Dir : constant String := "obj/harness ui test";
+      begin
+         if not Ada.Directories.Exists (Dir) then
+            Ada.Directories.Create_Path (Dir);
+         end if;
+         declare
+            Offered : constant Model_Runner.Framework.Name_Lists.Vector :=
+              Model_Runner.CLI.Completion.Candidates ("/load obj/harness");
+         begin
+            Assert (Offered.Contains ("""obj/harness ui test/"),
+                    "a directory with a space was not offered quoted");
+         end;
+         Ada.Directories.Delete_Directory (Dir);
+      end;
+
+      --  A line of no words is no command, and not an exception.
+      declare
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : Model_Runner.Presentation.Console;
+         Status  : Natural;
+      begin
+         Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+            (Output_Is_Terminal => False, Error_Is_Terminal => False,
+             Input_Is_Terminal  => False, Colour_Suppressed => True),
+            Opt.Quiet);
+         Model_Runner.CLI.Project_Commands.Run_Without_Model ("", Screen, Status);
+         Model_Runner.CLI.Project_Commands.Run_Without_Model ("   ", Screen, Status);
+      end;
+   end Harness_Screen_Takes_Keys_And_Text_Whole;
+
    --  A mixture is reported as one, and a dense model is not.
    --
    --  The project commands speak to a program as well as a person: --format
@@ -16531,6 +16668,9 @@ package body Tests.CLI_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Harness_Screen_Takes_Keys_And_Text_Whole'Access,
+         "the harness's screen takes keys and text whole");
       Register_Routine
         (T, Held_Output_Drops_Calls_Not_Thoughts'Access,
          "the agent's screen drops a call's markup, not the think block "

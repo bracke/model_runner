@@ -77,11 +77,13 @@ package Model_Runner.Text is
    --  @param Keep_Line_Breaks Leave a line feed a line break, as a message
    --    of several lines is read.
    --  @param Indent With Keep_Line_Breaks, indent the line after each.
+   --  @param Keep_Tabs Leave a tab a tab, as a line of source is read.
    --  @return Text with control characters rendered as \xNN escapes.
    function Escape_Controls
      (Item             : String;
       Keep_Line_Breaks : Boolean := False;
-      Indent           : Boolean := True) return String;
+      Indent           : Boolean := True;
+      Keep_Tabs        : Boolean := False) return String;
 
    --  Generated text as a terminal is to show it: the C0 controls but line
    --  feed, tab and carriage return, DEL and the C1 controls (U+0080 to

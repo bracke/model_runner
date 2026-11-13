@@ -38,7 +38,12 @@ procedure Reconfigure (Store : in out S.Store) is
                declare
                   Part : constant String := All_Words (Index);
                begin
-                  if not Words_Given.Is_Empty
+                  --  A word of nothing -- "" typed alone -- is no setting
+                  --  and no part of one: its first character was read, and
+                  --  the command ended in an internal fault.
+                  if Part = "" then
+                     null;
+                  elsif not Words_Given.Is_Empty
                     and then (Part = "=" or else Part (Part'First) = '='
                               or else Words_Given.Last_Element (Words_Given.Last_Element'Last) = '=')
                     and then Ada.Strings.Fixed.Index (Words_Given.Last_Element, "=")

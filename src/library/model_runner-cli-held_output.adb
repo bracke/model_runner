@@ -17,14 +17,21 @@ package body Model_Runner.CLI.Held_Output is
         (Held'Length >= Tag'Length
          and then Held (Held'First .. Held'First + Tag'Length - 1) = Tag);
 
+      --  Each write's word on the output added to what was said before:
+      --  a write after the one that found the output closed starts by
+      --  saying it is open, and the closing was lost -- the reply went on
+      --  being made for a pipe no one read.
       procedure Release (Tag : String) is
+         Now : Boolean;
       begin
          Self.Holding := False;
          Self.Held := Null_Unbounded_String;
-         Pres.Standard_Output_Sink (Self).Write (Tag, Closed);
+         Pres.Standard_Output_Sink (Self).Write (Tag, Now);
+         Closed := Closed or else Now;
          Self.At_Line_Start := False;
          if Held'Length > Tag'Length then
-            Write (Self, Held (Held'First + Tag'Length .. Held'Last), Closed);
+            Write (Self, Held (Held'First + Tag'Length .. Held'Last), Now);
+            Closed := Closed or else Now;
          end if;
       end Release;
    begin

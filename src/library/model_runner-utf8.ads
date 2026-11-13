@@ -116,6 +116,17 @@ package Model_Runner.UTF8 is
    --  @return Columns taken.
    function Columns (Item : String) return Natural;
 
+   --  Cells text takes on a terminal Row columns wide, counted across its
+   --  rows: Columns, and a cell more wherever a wide character would have
+   --  begun in a row's last column -- the terminal leaves that cell empty
+   --  and puts the character on the next row, so a cursor placed by
+   --  Columns alone was a cell short on every row after.
+   --
+   --  @param Item Text as drawn, from a row's start.
+   --  @param Row Columns a row has.
+   --  @return Cells from the first row's start to where the text ends.
+   function Wrapped_Columns (Item : String; Row : Positive) return Natural;
+
    --  Bytes of the longest leading run of whole code points that fits in
    --  so many columns: where to cut text that must fit a window.
    --

@@ -6,11 +6,16 @@ begin
       declare
          All_Named : constant Names.Vector := Positional;
       begin
+         --  As /check REQ is: a command that changes the project, opened
+         --  to write and judged again after -- with the requirement put in
+         --  the verb's place, it was taken for one that only looks.
+         Verifying := True;
          for Index in 2 .. Natural (All_Named.Length) loop
             Positional.Clear;
             Positional.Append (All_Named (Index));
             With_Store (Check'Access);
          end loop;
+         Verifying := False;
       end;
    elsif Word in "/req" | "/decision" | "/spec" then
       With_Store (Intent_Command'Access);

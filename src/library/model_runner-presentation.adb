@@ -507,7 +507,11 @@ package body Model_Runner.Presentation is
    -- Put_Diff_Line --
    -------------------
 
-   procedure Put_Diff_Line (Item : in out Console; Text : String) is
+   procedure Put_Diff_Line (Item : in out Console; Line : String) is
+      --  A diff quotes files an agent wrote: what they hold is shown, never
+      --  obeyed -- an escape in one would clear the screen or write to the
+      --  clipboard of whoever reads the diff.
+      Text : constant String := T.Escape_Controls (Line, Keep_Tabs => True);
       function Starts (Prefix : String) return Boolean
       is (Text'Length >= Prefix'Length and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
    begin

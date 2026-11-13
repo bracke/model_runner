@@ -302,16 +302,55 @@ begin
       end Run_One;
    begin
       if Argument (1) = "full" and then not R.Has (Config, "profile.full") then
-         for Name of Model_Runner.Framework.Lines_Of (R.Get (Config, "list.verification.full")) loop
-            if R.Has (Config, "profile." & Name) then
-               Profiles.Append (Name);
+         --  Every profile the full check names, or none run: a name with
+         --  no profile -- or no name -- ran the default in its place, and
+         --  said nothing of it.
+         declare
+            Missing : Unbounded_String;
+         begin
+            for Name of Model_Runner.Framework.Lines_Of (R.Get (Config, "list.verification.full")) loop
+               if R.Has (Config, "profile." & Name) then
+                  Profiles.Append (Name);
+               else
+                  Append (Missing, (if Missing = Null_Unbounded_String then "" else ", ") & Name);
+               end if;
+            end loop;
+            if Missing /= Null_Unbounded_String or else Profiles.Is_Empty then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "verification.full");
+               E.Add_Text (Outcome, "value", R.Get (Config, "list.verification.full"));
+               E.Add_Text (Outcome, "detail",
+                           (if Missing /= Null_Unbounded_String
+                            then "it names " & To_String (Missing) & ", which no profile is"
+                            else "it names no profile")
+                           & "; /reconfigure verification.full=PROFILE,... names those the full check runs");
+               Pres.Report (Screen, Outcome);
+               return;
+            end if;
+         end;
+      elsif Argument (1) /= ""
+        and then (for all One of Positional =>
+                    Ada.Strings.Fixed.Head (One, 2) = "--" or else R.Has (Config, "profile." & One))
+      then
+         --  Every profile named, in the order named: /check build test
+         --  ran build alone.
+         for One of Positional loop
+            if Ada.Strings.Fixed.Head (One, 2) /= "--" and then not Profiles.Contains (One) then
+               Profiles.Append (One);
             end if;
          end loop;
-      elsif Argument (1) /= "" and then R.Has (Config, "profile." & Argument (1)) then
-         Profiles.Append (Argument (1));
       elsif Argument (1) /= "" then
          --  Not one: said with those there are.
          declare
+            function First_Unknown return String is
+            begin
+               for One of Positional loop
+                  if Ada.Strings.Fixed.Head (One, 2) /= "--" and then not R.Has (Config, "profile." & One) then
+                     return One;
+                  end if;
+               end loop;
+               return Argument (1);
+            end First_Unknown;
             Named : Unbounded_String;
          begin
             for Index in 1 .. R.Field_Count (Config) loop
@@ -328,7 +367,7 @@ begin
             end loop;
             Outcome := E.Make (E.Framework_Input_Invalid);
             E.Add_Text (Outcome, "name", "what to check");
-            E.Add_Text (Outcome, "value", Argument (1));
+            E.Add_Text (Outcome, "value", First_Unknown);
             E.Add_Text (Outcome, "detail", "it is a profile (" & To_String (Named)
                         & "), full, consistency or a requirement");
             Pres.Report (Screen, Outcome);

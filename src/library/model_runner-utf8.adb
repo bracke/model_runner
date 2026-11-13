@@ -363,6 +363,30 @@ package body Model_Runner.UTF8 is
       return Total;
    end Columns;
 
+   ---------------------
+   -- Wrapped_Columns --
+   ---------------------
+
+   function Wrapped_Columns (Item : String; Row : Positive) return Natural is
+      Index : Natural := Item'First;
+      Total : Natural := 0;
+      Bytes, Width : Natural;
+   begin
+      while Index <= Item'Last loop
+         Step (Item, Index, Bytes, Width);
+         if Item (Index) = ASCII.HT then
+            Total := (Total / 8 + 1) * 8;
+         else
+            if Width = 2 and then Row > 1 and then Total mod Row = Row - 1 then
+               Total := Total + 1;
+            end if;
+            Total := Total + Width;
+         end if;
+         Index := Index + Bytes;
+      end loop;
+      return Total;
+   end Wrapped_Columns;
+
    -------------
    -- Fitting --
    -------------

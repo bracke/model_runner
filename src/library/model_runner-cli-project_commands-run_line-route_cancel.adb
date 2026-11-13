@@ -4,13 +4,23 @@ begin
    if Word = "/cancel" then
       if Argument (1) = "" then
          Pres.Put_Note (Screen, "cli.project.nothing_running");
+      --  One task, and yes or anyway after it: a second task named was
+      --  passed over in silence, the first alone asked about and ended.
+      elsif Argument (3) /= "" or else (Argument (2) /= "" and then Argument (2) not in "yes" | "anyway") then
+         Outcome := E.Make (E.CLI_Unexpected_Operand);
+         E.Add_Text (Outcome, "value", (if Argument (3) /= "" then Argument (3) else Argument (2)));
+         Pres.Report (Screen, Outcome);
+         Pres.Put_Help_Line (Screen, "cli.interactive.help.cancel");
+         Last_Status := E.Exit_Status (Outcome);
       else
          --  Asked first at a terminal: a cancelled task is ended, and its
          --  agent stopped.
          --  Work waiting in a workspace is refused or asked about by the
          --  cancel itself -- with the way to keep it -- not asked here
          --  first to be refused after.
-         if Model_Runner.CLI.Choosers.Is_Available (Screen) and then Argument (2) not in "yes" | "anyway"
+         --  yes answers the question; anyway gives up the work waiting in
+         --  a workspace, and is asked about as any cancel is.
+         if Model_Runner.CLI.Choosers.Is_Available (Screen) and then Argument (2) /= "yes"
            and then not Waiting_In_Workspace (Argument (1))
          then
             declare

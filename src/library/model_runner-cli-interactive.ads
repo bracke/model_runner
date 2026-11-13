@@ -44,9 +44,11 @@ with Model_Runner.Tools;
 --  submitted and then the session ends.
 --
 --  Cancellation. A cancelled assistant response is not committed to the
---  structured history, the session is reset, and the prior committed
---  conversation is re-evaluated on the next turn. Text that was already
---  streamed stays visible.
+--  structured history. The next turn's prompt is checked token by token
+--  against what the cache holds and the cache rewound to where they part,
+--  so the prior committed conversation is not read again; the session is
+--  reset only where it keeps recurrent state a stopped batch may have
+--  moved. Text that was already streamed stays visible.
 --
 --  Persistence. The conversation is not written to disk on its own; /save
 --  writes it to a file the user names and /load replaces it with one. The
