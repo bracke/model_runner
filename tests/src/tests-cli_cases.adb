@@ -1,3 +1,4 @@
+with Model_Runner.Config;
 with Model_Runner.CLI.Instructions;
 with Model_Runner.Agent;
 with Model_Runner.Tools.Registry;
@@ -16457,6 +16458,24 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_Tree (Outer);
    end Standing_Instructions_Are_Gathered;
 
+   --  The suite runs on its own settings and no one's standing instructions:
+   --  a user's default model or hidden models, read from their settings file,
+   --  changed what the suite saw.
+   procedure Suite_Runs_On_Its_Own_Settings
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      Assert (Ada.Strings.Fixed.Index
+                (Model_Runner.Platform.Config_File, "obj/suite-config") > 0,
+              "the suite read the settings file " & Model_Runner.Platform.Config_File);
+      Assert (Model_Runner.Config.Value ("model") = ""
+              and then Model_Runner.Config.Value ("models-hide") = "",
+              "a setting of the user's reached the suite");
+      Assert (not Model_Runner.CLI.Instructions.Enabled,
+              "standing instructions were on in the suite");
+   end Suite_Runs_On_Its_Own_Settings;
+
    --  /model alone offers the models on this machine, and only those:
    --  nothing to download. A home of its own with one model in its models
    --  folder, the selector drawn, and Esc keeping the model running.
@@ -19127,6 +19146,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
          "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Suite_Runs_On_Its_Own_Settings'Access,
+         "the suite runs on its own settings and no one's standing instructions");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Standing_Instructions_Are_Gathered'Access,
          "AGENTS.md is read from the session's folder and those above it, the outermost first, capped");

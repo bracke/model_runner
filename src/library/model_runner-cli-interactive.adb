@@ -513,7 +513,9 @@ package body Model_Runner.CLI.Interactive is
       --  and the session's folder up: before the system message, in every
       --  turn of the conversation.
       Standing : constant String :=
-        Model_Runner.CLI.Instructions.Gathered (Ada.Directories.Current_Directory);
+        (if Model_Runner.CLI.Instructions.Enabled
+         then Model_Runner.CLI.Instructions.Gathered (Ada.Directories.Current_Directory)
+         else "");
 
       --  The system message the conversation is given: the instructions and
       --  then its own -- --system's, or /system's.

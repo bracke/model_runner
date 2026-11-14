@@ -13,6 +13,12 @@ package Model_Runner.CLI.Instructions is
    --  The most of them the model is given.
    Most_Bytes : constant := 32 * 1024;
 
+   --  Whether instructions are read at all: not where MODEL_RUNNER_INSTRUCTIONS
+   --  is off -- a script that wants the model as it is, a test suite.
+   --
+   --  @return True unless turned off.
+   function Enabled return Boolean;
+
    --  The instructions for a session started in a folder, each file under
    --  the path it came from; "" where there are none.
    --

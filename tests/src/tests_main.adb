@@ -142,6 +142,21 @@ procedure Tests_Main is
       --  not among the user's: every conversation is kept as it goes.
       Ada.Environment_Variables.Set
         ("MODEL_RUNNER_CONVERSATIONS", Ada.Directories.Full_Name ("obj/conversations"));
+      --  And none of the user's settings or standing instructions: a default
+      --  model, a hidden model, an AGENTS.md of theirs changed what the suite
+      --  saw. Its own settings file, empty, and the instructions off.
+      declare
+         Settings : constant String := Ada.Directories.Full_Name ("obj/suite-config");
+         File     : Ada.Text_IO.File_Type;
+      begin
+         if not Ada.Directories.Exists (Settings) then
+            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Settings);
+            Ada.Text_IO.Put_Line (File, "# the suite's own settings: none");
+            Ada.Text_IO.Close (File);
+         end if;
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Settings);
+      end;
+      Ada.Environment_Variables.Set ("MODEL_RUNNER_INSTRUCTIONS", "off");
    end Ready_For_The_Suite;
 
    --  The token the probe's interrupt handling is bound to: here, as the

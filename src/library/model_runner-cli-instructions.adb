@@ -82,6 +82,9 @@ package body Model_Runner.CLI.Instructions is
          return "";
    end Read_Whole;
 
+   function Enabled return Boolean
+   is (Model_Runner.Platform.Environment_Value ("MODEL_RUNNER_INSTRUCTIONS") /= "off");
+
    function Gathered (Directory : String) return String is
       Paths  : Path_List;
       Count  : Natural;
