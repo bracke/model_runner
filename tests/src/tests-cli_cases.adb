@@ -15122,6 +15122,192 @@ package body Tests.CLI_Cases is
               "a window of unknown width had an edge");
    end Reply_Spinner_Waits_At_The_Edge;
 
+   --  The same edge as the terminal sees it: `run` in a pseudo-terminal
+   --  exactly as wide as the reply's first line, every byte drawn read
+   --  back, and the spinner never drawn while a row is full -- drawn
+   --  there it wrapped the row, and the line end after it left a blank
+   --  one. The reply is the tiny model's greedy one, the same each run:
+   --  read once in a wide window for its width, then again at that width.
+   procedure Reply_Spinner_Drawn_Bytes_At_The_Edge
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package Pres renames Model_Runner.Presentation;
+      package U renames Ada.Strings.Unbounded;
+
+      Model  : constant String := Ada.Directories.Full_Name ("obj/edge-model.gguf");
+      Plain  : constant String := "../bin/model_runner";
+      Binary : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+
+      --  Where the reply begins: after the prompt's progress line is
+      --  cleared, the last such clearing in what was drawn.
+      Clearing : constant String := ASCII.ESC & "[1A" & ASCII.CR & ASCII.ESC & "[K";
+
+      --  Everything the run drew in a window so wide, from the reply on.
+      function Reply_Drawn (Width : Positive) return String is
+         Pair    : Hostkit.Pty.Pair;
+         Options : Hostkit.Spawn.Options;
+         Child   : Hostkit.Spawn.Process_Handle;
+         Result  : Hostkit.Spawn.Status;
+         Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+         Last    : Ada.Streams.Stream_Element_Offset;
+         Drawn   : U.Unbounded_String;
+         Words   : Hostkit.String_Vectors.Vector;
+
+         procedure Keep_Variable (Name, Value : String) is
+         begin
+            if Name /= "TERM" then
+               Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+            end if;
+         end Keep_Variable;
+      begin
+         if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+           or else Pair.Device = Hostkit.Descriptors.Invalid
+         then
+            return "";
+         end if;
+         Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+         Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+         Options.Replace_Environment := True;
+         Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => Width))
+                 and then Hostkit.Pty.Attach (Pair, Options),
+                 "the pseudo-terminal was not made ready");
+         Words.Append (U.To_Unbounded_String ("run"));
+         Words.Append (U.To_Unbounded_String (Model));
+         Words.Append (U.To_Unbounded_String ("--backend"));
+         Words.Append (U.To_Unbounded_String ("cpu"));
+         Words.Append (U.To_Unbounded_String ("--max-tokens"));
+         Words.Append (U.To_Unbounded_String ("8"));
+         Words.Append (U.To_Unbounded_String ("--temperature"));
+         Words.Append (U.To_Unbounded_String ("0"));
+         Words.Append (U.To_Unbounded_String ("--prompt"));
+         Words.Append (U.To_Unbounded_String ("hello"));
+         Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+                 "the run did not start");
+         Hostkit.Pty.Close_Device (Pair);
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 30_000) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               U.Append (Drawn, Character'Val (B));
+            end loop;
+         end loop;
+         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the run was not waited for");
+         Hostkit.Pty.Close (Pair);
+         declare
+            Whole : constant String := U.To_String (Drawn);
+            From  : constant Natural := Ada.Strings.Fixed.Index (Whole, Clearing, Ada.Strings.Backward);
+         begin
+            Assert (From > 0, "no prompt progress line was cleared for the reply: " & Whole);
+            return Whole (From + Clearing'Length .. Whole'Last);
+         end;
+      end Reply_Drawn;
+
+      function Is_Glyph (Text : String; At_Byte : Positive) return Boolean
+      is (At_Byte + 3 <= Text'Last
+          and then Text (At_Byte) = Character'Val (16#E2#)
+          and then Text (At_Byte + 1) = Character'Val (16#A0#)
+          and then Text (At_Byte + 3) = ASCII.BS);
+
+      --  Bytes in the UTF-8 sequence a lead byte begins.
+      function Sequence_Length (Lead : Character) return Positive
+      is (case Character'Pos (Lead) is
+             when 16#C0# .. 16#DF# => 2,
+             when 16#E0# .. 16#EF# => 3,
+             when 16#F0# .. 16#F7# => 4,
+             when others           => 1);
+
+      --  The reply as shown: its first line, without the spinner and the
+      --  terminal's sequences.
+      function First_Line (Drawn : String) return String is
+         Seen  : U.Unbounded_String;
+         Index : Natural := Drawn'First;
+      begin
+         while Index <= Drawn'Last loop
+            if Drawn (Index) = ASCII.ESC then
+               Index := Index + 1;
+               while Index <= Drawn'Last and then Drawn (Index) not in 'A' .. 'Z' | 'a' .. 'z' | '~' loop
+                  Index := Index + 1;
+               end loop;
+               Index := Index + 1;
+            elsif Is_Glyph (Drawn, Index) then
+               Index := Index + 4;
+            elsif Drawn (Index) = ASCII.CR then
+               Index := Index + 1;
+            elsif Drawn (Index) = ASCII.LF then
+               exit;
+            else
+               U.Append (Seen, Drawn (Index));
+               Index := Index + 1;
+            end if;
+         end loop;
+         return U.To_String (Seen);
+      end First_Line;
+
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      declare
+         Wide_Reply : constant String := Reply_Drawn (200);
+      begin
+         if Wide_Reply = "" then
+            Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+            return;
+         end if;
+         declare
+            Line  : constant String := First_Line (Wide_Reply);
+            Width : constant Natural := Model_Runner.UTF8.Wrapped_Columns (Line, Positive'Last);
+         begin
+            Assert (Width >= 4 and then Width < 200,
+                    "the tiny model's reply was too short or long a line to test the edge with: [" & Line & "]");
+            declare
+               Drawn   : constant String := Reply_Drawn (Width);
+               Columns : Natural := 0;
+               Index   : Natural := Drawn'First;
+               Full    : Natural := 0;
+            begin
+               Assert (First_Line (Drawn) = Line,
+                       "the reply was not the same in the narrow window: [" & First_Line (Drawn) & "]");
+               while Index <= Drawn'Last loop
+                  if Drawn (Index) = ASCII.ESC then
+                     Index := Index + 1;
+                     while Index <= Drawn'Last and then Drawn (Index) not in 'A' .. 'Z' | 'a' .. 'z' | '~' loop
+                        Index := Index + 1;
+                     end loop;
+                     Index := Index + 1;
+                  elsif Is_Glyph (Drawn, Index) then
+                     Assert (not Pres.Row_Full (Columns, Width),
+                             "the spinner was drawn at the edge, column" & Columns'Image
+                             & " of a window" & Width'Image & " wide");
+                     Index := Index + 4;
+                  elsif Drawn (Index) in ASCII.CR | ASCII.LF then
+                     Columns := 0;
+                     Index := Index + 1;
+                  else
+                     declare
+                        Upto : constant Natural :=
+                          Natural'Min (Drawn'Last, Index + Sequence_Length (Drawn (Index)) - 1);
+                     begin
+                        Columns := Pres.Reply_Columns (Columns, Drawn (Index .. Upto), Width);
+                        if Pres.Row_Full (Columns, Width) then
+                           Full := Full + 1;
+                        end if;
+                        Index := Upto + 1;
+                     end;
+                  end if;
+               end loop;
+               Assert (Full > 0, "the reply never filled a row, so the edge was not reached");
+            end;
+         end;
+      end;
+   end Reply_Spinner_Drawn_Bytes_At_The_Edge;
+
    ---------------------------------------------
 
    --  A vocabulary that wants no beginning marker is not given one.
@@ -17416,6 +17602,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Reply_Spinner_Waits_At_The_Edge'Access,
          "the reply's spinner waits while a row is full to the window's edge");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Reply_Spinner_Drawn_Bytes_At_The_Edge'Access,
+         "the reply's spinner is not drawn at the window's edge, as a terminal reads it");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Harmony_Replies_Are_Shown_As_Text'Access,
          "a harmony reply is shown as its reasoning and answer, its calls "
