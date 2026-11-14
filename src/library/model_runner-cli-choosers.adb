@@ -642,7 +642,9 @@ package body Model_Runner.CLI.Choosers is
             Guard.Alternate := False;
          end if;
          if Guard.Bracketed then
-            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l");
+            --  Bracketed paste off, and the modified keys' reporting back
+            --  to the terminal's own.
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l" & ASCII.ESC & "[>4m");
             Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
             Guard.Bracketed := False;
          end if;
@@ -2607,7 +2609,10 @@ package body Model_Runner.CLI.Choosers is
       if not Term.Set_Raw (Input) then
          return "";
       end if;
-      Put (ASCII.ESC & "[?2004h");
+      --  Bracketed paste on, and modified keys reported where the
+      --  terminal can (xterm's modifyOtherKeys, which tmux's extended keys
+      --  pass on): Shift-Enter is then a key of its own.
+      Put (ASCII.ESC & "[?2004h" & ASCII.ESC & "[>4;1m");
       Guard.Bracketed := True;
       --  Keys a question's line read past its end: this line's first.
       Held_Keys := Keys_Left;
@@ -2676,9 +2681,26 @@ package body Model_Runner.CLI.Choosers is
             Undoable := False;
          else
             case Key is
-               when ASCII.CR | ASCII.LF =>
+               when ASCII.CR =>
+                  --  Enter sends the line. A terminal that ends it with
+                  --  CR LF sends one Enter, not Enter and a line break.
+                  declare
+                     After : Character;
+                  begin
+                     if (Held_Keys /= Null_Unbounded_String
+                         or else Hostkit.Descriptors.Wait_Readable (Input, 0))
+                       and then Next (0, After) and then After /= ASCII.LF
+                     then
+                        Held_Keys := After & Held_Keys;
+                     end if;
+                  end;
                   Outcome := Entered;
                   exit;
+               when ASCII.LF =>
+                  --  Ctrl-J -- raw, the terminal no longer makes Enter's CR
+                  --  a line feed -- breaks the line: the message goes on.
+                  Insert (Text, Cursor + 1, [1 => ASCII.LF]);
+                  Cursor := Cursor + 1;
                when ASCII.ETX =>
                   Outcome := Interrupted;
                   exit;
@@ -2751,11 +2773,30 @@ package body Model_Runner.CLI.Choosers is
                      if not Next (Key_Wait, Second) then
                         Outcome := Escaped;
                         exit;
+                     elsif Second in ASCII.CR | ASCII.LF then
+                        --  Alt-Enter breaks the line: the message goes on.
+                        Insert (Text, Cursor + 1, [1 => ASCII.LF]);
+                        Cursor := Cursor + 1;
                      elsif Second in '[' | 'O' then
                         declare
                            Number : Natural := 0;
                            Final  : Character := ASCII.NUL;
                            Part   : Character;
+                           --  The sequence's parameters one by one, as
+                           --  Shift-Enter's need them: 13;2u, 27;2;13~.
+                           type Parameter_List is array (1 .. 3) of Natural;
+                           Params : Parameter_List := [others => 0];
+                           Count  : Positive := 1;
+
+                           --  Enter with Shift (or more) held, reported as a
+                           --  key of its own: Konsole's SS3 M, the kitty
+                           --  keyboard protocol's 13;M u, xterm's 27;M;13 ~.
+                           function Is_Shift_Enter return Boolean is
+                             ((Second = 'O' and then Final = 'M')
+                              or else (Final = 'u' and then Params (1) = 13 and then Count >= 2
+                                       and then Params (2) > 1)
+                              or else (Final = '~' and then Params (1) = 27 and then Count >= 3
+                                       and then Params (3) = 13 and then Params (2) > 1));
                         begin
                            while Next (Key_Wait, Part) loop
                               if Part in '0' .. '9' then
@@ -2763,6 +2804,14 @@ package body Model_Runner.CLI.Choosers is
                                  --  is no key, and overflowed out of the editor.
                                  if Number <= 9_999 then
                                     Number := Number * 10 + (Character'Pos (Part) - Character'Pos ('0'));
+                                 end if;
+                                 if Params (Count) <= 9_999 then
+                                    Params (Count) :=
+                                      Params (Count) * 10 + (Character'Pos (Part) - Character'Pos ('0'));
+                                 end if;
+                              elsif Part = ';' then
+                                 if Count < Params'Last then
+                                    Count := Count + 1;
                                  end if;
                               --  The rest of a sequence's parameters and its
                               --  intermediates -- ; < = > ? and the like --
@@ -2781,6 +2830,11 @@ package body Model_Runner.CLI.Choosers is
                                  exit;
                               end if;
                            end loop;
+                           if Is_Shift_Enter then
+                              Final := ASCII.NUL;
+                              Insert (Text, Cursor + 1, [1 => ASCII.LF]);
+                              Cursor := Cursor + 1;
+                           end if;
                            case Final is
                               when 'A' =>
                                  if Looking > 1 then

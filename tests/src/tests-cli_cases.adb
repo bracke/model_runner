@@ -16694,6 +16694,7 @@ package body Tests.CLI_Cases is
       Held    : Ada.Text_IO.File_Type;
       Lines   : Natural := 0;
       Kept_Typed, Kept_Long : Boolean := False;
+      Saved   : constant String := Project & "/broken-lines.txt";
    begin
       if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
         or else Pair.Device = Hostkit.Descriptors.Invalid
@@ -16742,7 +16743,16 @@ package body Tests.CLI_Cases is
       Drain;
       Send (Long & ASCII.CR);
       Drain;
-      --  Enter sent each line as a turn; an empty one sends nothing.
+      --  Enter sends; Ctrl-J, Alt-Enter, Shift-Enter in each way a terminal
+      --  reports it, and a backslash at the end break the line instead.
+      Send ("k1" & ASCII.LF & "a1" & ASCII.ESC & ASCII.CR & "s1" & ASCII.ESC & "OM"
+            & "u1" & ASCII.ESC & "[13;2u" & "x1" & ASCII.ESC & "[27;2;13~" & "b1\" & ASCII.CR);
+      Drain (300);
+      Send ("end" & ASCII.CR);
+      Drain (5000);
+      Send ("/save " & Saved & ASCII.CR);
+      Drain (3000);
+      --  An empty line sends nothing.
       Send ([1 => ASCII.CR]);
       Drain (5000);
       Send ("/exit" & ASCII.CR);
@@ -16762,6 +16772,34 @@ package body Tests.CLI_Cases is
          end;
       end loop;
       Ada.Text_IO.Close (Held);
+
+      declare
+         Whole : Ada.Strings.Unbounded.Unbounded_String;
+         Want  : constant String := "k1|a1|s1|u1|x1|b1|end";
+         function Spelled (Mark : String) return String is
+            Result : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            for C of Want loop
+               if C = '|' then
+                  Ada.Strings.Unbounded.Append (Result, Mark);
+               else
+                  Ada.Strings.Unbounded.Append (Result, C);
+               end if;
+            end loop;
+            return Ada.Strings.Unbounded.To_String (Result);
+         end Spelled;
+      begin
+         Assert (Ada.Directories.Exists (Saved), "the conversation was not saved");
+         Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, Saved);
+         while not Ada.Text_IO.End_Of_File (Held) loop
+            Ada.Strings.Unbounded.Append (Whole, Ada.Text_IO.Get_Line (Held) & ASCII.LF);
+         end loop;
+         Ada.Text_IO.Close (Held);
+         Assert (Ada.Strings.Unbounded.Index (Whole, Spelled ([1 => ASCII.LF])) > 0
+                 or else Ada.Strings.Unbounded.Index (Whole, Spelled ("\n")) > 0,
+                 "the line breaks typed were not one message's: "
+                 & Ada.Strings.Unbounded.To_String (Whole));
+      end;
 
       Assert (Kept_Typed,
               "the typed line was not kept as typed, a character taken "
