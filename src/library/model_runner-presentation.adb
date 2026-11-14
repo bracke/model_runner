@@ -2031,6 +2031,13 @@ package body Model_Runner.Presentation is
             if Progress_Last then
                Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[1A" & ASCII.CR & ASCII.ESC & "[K");
             end if;
+            --  The model ready, the load's line is cleared, not replaced:
+            --  what comes next takes its row.
+            if P."=" (Item.Kind, P.Load_Event) and then P."=" (Item.Load, P.Model_Ready) then
+               Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+               Progress_Last := False;
+               return;
+            end if;
             --  Cut to the window, a column spare: a step that wrapped took
             --  two rows, and the next, climbing one, left the first behind.
             declare
