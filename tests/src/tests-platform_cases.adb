@@ -987,6 +987,7 @@ package body Tests.Platform_Cases is
             Store_Kept, Other_Kept, Found_Kept, Found_Bare : Unbounded_String;
             Found_Old, Found_Both, Store_Data, Other_Data  : Unbounded_String;
             Store_Named, Other_Named                       : Unbounded_String;
+            Found_Moved                                    : Unbounded_String;
          begin
             for Index in Saved'Range loop
                Had (Index) := Env.Exists (To_String (Saved (Index)));
@@ -1011,6 +1012,9 @@ package body Tests.Platform_Cases is
             Found_Bare := To_Unbounded_String (P.Resolve_Model_Path ("kept"));
             Found_Old  := To_Unbounded_String (P.Resolve_Model_Path ("old.gguf"));
             Found_Both := To_Unbounded_String (P.Resolve_Model_Path ("both.gguf"));
+            --  A settings file naming the data home's copy after it moved
+            --  into ~/models: found where it is now.
+            Found_Moved := To_Unbounded_String (P.Resolve_Model_Path (Data & "/kept.gguf"));
             Env.Set ("MODEL_RUNNER_MODELS", Named);
             Store_Named := To_Unbounded_String (P.Models_Directory);
             Other_Named := To_Unbounded_String (P.Other_Models_Directory);
@@ -1035,6 +1039,9 @@ package body Tests.Platform_Cases is
                                      and then To_String (Found_Both) = Kept & "/both.gguf",
                                      "a model was not found by its name in the store, then the other folder: "
                                      & To_String (Found_Old) & " " & To_String (Found_Both));
+            AUnit.Assertions.Assert (To_String (Found_Moved) = Kept & "/kept.gguf",
+                                     "a path into the data home's models was not followed to ~/models: "
+                                     & To_String (Found_Moved));
             AUnit.Assertions.Assert (To_String (Store_Named) = Named and then To_String (Other_Named) = Kept,
                                      "a store named elsewhere did not have ~/models after it");
             AUnit.Assertions.Assert (To_String (Store_Data) = Data and then To_String (Other_Data) = "",

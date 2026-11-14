@@ -1,3 +1,4 @@
+with Hostkit.Path_Text;
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
 with Ada.Strings.Fixed;
@@ -771,6 +772,25 @@ package body Model_Runner.Platform is
         and then Ada.Directories.Exists (Look (Expanded & ".gguf"))
       then
          return Look (Expanded & ".gguf");
+      end if;
+      --  A path into one folder of models whose file has since moved to
+      --  the other -- a settings file naming the data home's models after
+      --  they were moved into ~/models: the same name where it is now.
+      if not Ada.Directories.Exists (Found) and then Hostkit.Path_Text.Root_Length (Expanded) > 0 then
+         declare
+            Folder : constant String := Ada.Directories.Containing_Directory (Expanded);
+            Simple : constant String := Ada.Directories.Simple_Name (Expanded);
+         begin
+            if Folder in Models_Directory | Other_Models_Directory and then Folder /= "" then
+               declare
+                  Moved : constant String := Look (Simple);
+               begin
+                  if Ada.Directories.Exists (Moved) then
+                     return Moved;
+                  end if;
+               end;
+            end if;
+         end;
       end if;
       return Found;
    exception
