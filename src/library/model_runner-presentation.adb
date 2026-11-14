@@ -1,3 +1,5 @@
+with Hostkit.Descriptors;
+with Hostkit.Terminal_Control;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
@@ -2029,7 +2031,19 @@ package body Model_Runner.Presentation is
             if Progress_Last then
                Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[1A" & ASCII.CR & ASCII.ESC & "[K");
             end if;
-            Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
+            --  Cut to the window, a column spare: a step that wrapped took
+            --  two rows, and the next, climbing one, left the first behind.
+            declare
+               Size : Hostkit.Terminal_Control.Window_Size;
+               Upto : Natural := Line'Length;
+            begin
+               if Hostkit.Terminal_Control.Size (Hostkit.Descriptors.Standard_Error, Size)
+                 and then Size.Columns > 1
+               then
+                  Upto := Model_Runner.UTF8.Fitting (Line, Size.Columns - 1);
+               end if;
+               Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line (Line'First .. Line'First + Upto - 1));
+            end;
             Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
             Progress_Last := True;
          else
