@@ -1,3 +1,4 @@
+with Model_Runner.Text;
 with Model_Runner.Cancellation;
 with Model_Runner.CLI.Options;
 with Model_Runner.Generation;
@@ -75,6 +76,7 @@ package Model_Runner.CLI.Interactive is
       Load_Conversation,
       Show_Picture,
       Show_Video,
+      Switch_Model,
       Unknown);
 
    --  The word a caller types for an interactive command.
@@ -198,6 +200,38 @@ package Model_Runner.CLI.Interactive is
    --    answers.
    --  @param Cancel What an interrupt sets, or null: it stops the reply or
    --    the /work being made, and the session goes on.
+   --  What /model offers where no model is named: the models on hand to
+   --  choose from, Picked false where none was chosen. Set by whoever runs
+   --  the session -- the command line's run -- and null where none is.
+   type Model_Picker is access procedure
+     (Screen : in out Model_Runner.Presentation.Console;
+      Path   : out Model_Runner.Text.Bounded;
+      Picked : out Boolean);
+
+   --  Give /model its picker.
+   --
+   --  @param Picker The picker, or null.
+   procedure Set_Model_Picker (Picker : Model_Picker);
+
+   --  The model a /model asked for as the session ended: the session is to
+   --  start again on it, its conversation carried. Empty where none was.
+   --
+   --  @return The model, as named or chosen.
+   function Switch_Requested return String;
+
+   --  The switch taken up: Switch_Requested is empty again. The carried
+   --  conversation stays until a session takes it in.
+   procedure Clear_Switch;
+
+   --  Whether a conversation waits to be carried into the next session,
+   --  which takes it in at its start in place of the banner.
+   --
+   --  @return True while one waits.
+   function Carrying return Boolean;
+
+   --  The carried conversation given up, its file removed.
+   procedure Drop_Carried;
+
    procedure Run
      (Item     : Model_Runner.CLI.Options.Command;
       Screen   : in out Model_Runner.Presentation.Console;

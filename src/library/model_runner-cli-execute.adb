@@ -1,3 +1,5 @@
+with Ada.Strings.Fixed;
+with Model_Runner.CLI.Interactive;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 
@@ -113,7 +115,45 @@ package body Model_Runner.CLI.Execute is
      (Item    : Opt.Command;
       Screen  : in out Pres.Console;
       Catalog : Loc.Catalog;
-      Status  : out Natural) is
+      Status  : out Natural)
+   is
+      --  A run, and again on the model a conversation's /model asked for:
+      --  the old model let go first, the new one decided for as a run's
+      --  is -- its backend, its context, its drafting -- and the
+      --  conversation carried into it. A model that will not load gives
+      --  the conversation back to the one before.
+      procedure Run_Switching (First : Opt.Command) is
+         package Talk renames Model_Runner.CLI.Interactive;
+         Current  : Opt.Command := First;
+         Previous : Model_Runner.Text.Bounded;
+         Falling  : Boolean := False;
+      begin
+         loop
+            Do_Run (With_Panels (Resolved_Backend (Current, Screen)), Screen, Catalog, Status);
+            if Talk.Switch_Requested /= "" then
+               Previous := Current.Model_Path;
+               Current.Model_Path := T.To_Bounded (Talk.Switch_Requested);
+               Talk.Clear_Switch;
+               Falling := False;
+            elsif Talk.Carrying and then not Falling then
+               --  The new model did not start, and the conversation is
+               --  still aside: back to the model it came from.
+               Pres.Put_Note
+                 (Screen, "cli.interactive.model_switch_failed",
+                  [Loc.Named ("model",
+                              (declare
+                                 Path : constant String := T.To_String (Previous);
+                                 Cut  : constant Natural := Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+                               begin
+                                 (if Cut = 0 then Path else Path (Cut + 1 .. Path'Last))))]);
+               Current.Model_Path := Previous;
+               Falling := True;
+            else
+               Talk.Drop_Carried;
+               exit;
+            end if;
+         end loop;
+      end Run_Switching;
    begin
       case Item.Kind is
          when Opt.Command_Version =>
@@ -131,6 +171,9 @@ package body Model_Runner.CLI.Execute is
             Do_Models (Item, Screen, Status);
 
          when Opt.Command_Run =>
+            --  /model in a conversation offers the models on hand as a run
+            --  without one does.
+            Model_Runner.CLI.Interactive.Set_Model_Picker (Choose_Next_Model'Access);
             if T.Is_Empty (Item.Model_Path) then
                declare
                   Chosen : Opt.Command := Item;
@@ -148,16 +191,14 @@ package body Model_Runner.CLI.Execute is
                      Choose_Model (Screen, Chosen.Model_Path, Picked);
                   end if;
                   if Picked then
-                     Do_Run (With_Panels (Resolved_Backend (Chosen, Screen)), Screen,
-                             Catalog, Status);
+                     Run_Switching (Chosen);
                   else
                      Pres.Report (Screen, E.Make (E.CLI_Missing_Model_Path));
                      Status := E.Exit_Usage;
                   end if;
                end;
             else
-               Do_Run (With_Panels (Resolved_Backend (Item, Screen)), Screen, Catalog,
-                       Status);
+               Run_Switching (Item);
             end if;
 
          when Opt.Command_Embed =>

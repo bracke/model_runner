@@ -1,3 +1,4 @@
+with Ada.Directories;
 with Ada.Finalization;
 with Ada.Calendar;
 with Ada.Characters.Handling;
@@ -31,7 +32,6 @@ with Model_Runner.Templates;
 with Model_Runner.Output.Harmony;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Agent;
-with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tensors;
 with Model_Runner.Numerics;
@@ -66,7 +66,8 @@ package body Model_Runner.CLI.Interactive is
          when Save_Conversation => "/save",
          when Load_Conversation => "/load",
          when Show_Picture => "/image",
-         when Show_Video   => "/video");
+         when Show_Video   => "/video",
+         when Switch_Model => "/model");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -343,7 +344,7 @@ package body Model_Runner.CLI.Interactive is
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
-                            | Show_Picture | Show_Video | Help
+                            | Show_Picture | Show_Video | Help | Switch_Model
                then
                   return (Kind, First, Last);
                else
@@ -355,6 +356,48 @@ package body Model_Runner.CLI.Interactive is
          return (Unknown, 0, 0);
       end;
    end Parse;
+
+   --  The switch /model asks for, between one session and the next.
+   Picker_Given : Model_Picker := null;
+   Switch_To    : Ada.Strings.Unbounded.Unbounded_String;
+   Carried      : Ada.Strings.Unbounded.Unbounded_String;
+
+   --  A model as a person names it: its file's name, or a reference's
+   --  last part.
+   function Model_Name (Path : String) return String is
+      Cut : constant Natural := Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+   begin
+      return (if Cut = 0 or else Cut = Path'Last then Path else Path (Cut + 1 .. Path'Last));
+   end Model_Name;
+
+   --  Where a conversation waits while the model is changed.
+   function Carry_Path return String
+   is (Model_Runner.Platform.Cache_Directory & "/conversation-carried.txt");
+
+   procedure Set_Model_Picker (Picker : Model_Picker) is
+   begin
+      Picker_Given := Picker;
+   end Set_Model_Picker;
+
+   function Switch_Requested return String is (Ada.Strings.Unbounded.To_String (Switch_To));
+
+   procedure Clear_Switch is
+   begin
+      Switch_To := Ada.Strings.Unbounded.Null_Unbounded_String;
+   end Clear_Switch;
+
+   function Carrying return Boolean is (Ada.Strings.Unbounded.Length (Carried) > 0);
+
+   procedure Drop_Carried is
+   begin
+      if Carrying and then Ada.Directories.Exists (Ada.Strings.Unbounded.To_String (Carried)) then
+         Ada.Directories.Delete_File (Ada.Strings.Unbounded.To_String (Carried));
+      end if;
+      Carried := Ada.Strings.Unbounded.Null_Unbounded_String;
+   exception
+      when others =>
+         Carried := Ada.Strings.Unbounded.Null_Unbounded_String;
+   end Drop_Carried;
 
    ---------
    -- Run --
@@ -1009,7 +1052,7 @@ package body Model_Runner.CLI.Interactive is
                --  project's are the command table's.
                Known : constant String :=
                  " exit reset help settings stats context system tools tool save load"
-                 & " image video ";
+                 & " image video model ";
             begin
                --  A project command by the command table, which knows every one.
                if Named /= ""
@@ -1431,6 +1474,70 @@ package body Model_Runner.CLI.Interactive is
                      Pres.Put_Note
                        (Screen, "cli.interactive.loaded",
                         [Loc.Named ("detail", Path)]);
+                  end if;
+               end;
+            end if;
+
+         elsif Asked.Kind = Switch_Model then
+            --  Another model for the conversation: named, or chosen from
+            --  those on hand. The session ends with the conversation kept
+            --  aside, and the run starts again on the new model, which
+            --  takes it in.
+            if not Path_Missing and then Path_After /= "" then
+               declare
+                  Stray : E.Error_Info := E.Make (E.CLI_Unexpected_Operand);
+               begin
+                  E.Add_Text (Stray, "value", Path_After);
+                  Pres.Report (Screen, Stray);
+               end;
+            else
+               declare
+                  Chosen : Model_Runner.Text.Bounded;
+                  Picked : Boolean := False;
+                  Here   : constant String := T.To_String (Item.Model_Path);
+               begin
+                  if not Path_Missing then
+                     declare
+                        Asked_For : constant String := Path_Asked;
+                        Resolved  : constant String :=
+                          Model_Runner.CLI.Project_Commands.From_Session_Start (Asked_For);
+                     begin
+                        --  A file as named from where the session began; a
+                        --  name the run resolves -- an alias, a model in the
+                        --  store -- as it is.
+                        Chosen := T.To_Bounded
+                          (if Ada.Directories.Exists (Resolved) then Resolved else Asked_For);
+                        Picked := True;
+                     end;
+                  elsif Picker_Given /= null then
+                     Picker_Given (Screen, Chosen, Picked);
+                  else
+                     Pres.Put_Note (Screen, "cli.interactive.path_needed");
+                  end if;
+
+                  if Picked and then T.To_String (Chosen) = Here then
+                     Pres.Put_Note (Screen, "cli.interactive.model_same",
+                                    [Loc.Named ("model", Model_Name (Here))]);
+                  elsif Picked then
+                     declare
+                        Wrote : E.Error_Info;
+                     begin
+                        Model_Runner.CLI.Checkpoint.Save (Carry_Path, Messages, Wrote);
+                        if E.Is_Error (Wrote) then
+                           Pres.Report (Screen, Wrote);
+                        else
+                           Carried := Ada.Strings.Unbounded.To_Unbounded_String (Carry_Path);
+                           Switch_To := Ada.Strings.Unbounded.To_Unbounded_String (T.To_String (Chosen));
+                           Pres.Put_Note
+                             (Screen, "cli.interactive.model_switching",
+                              [Loc.Named ("model", Model_Name (T.To_String (Chosen)))]);
+                           Stop_Warming;
+                           Leaving := True;
+                        end if;
+                     end;
+                  elsif Path_Missing and then Picker_Given /= null then
+                     Pres.Put_Note (Screen, "cli.interactive.model_kept",
+                                    [Loc.Named ("model", Model_Name (Here))]);
                   end if;
                end;
             end if;
@@ -2117,8 +2224,30 @@ package body Model_Runner.CLI.Interactive is
          end if;
       end;
 
-      --  Its list ends in a blank line, before the first prompt.
-      Pres.Put_Note (Screen, "cli.interactive.banner");
+      --  Its list ends in a blank line, before the first prompt. A session
+      --  the conversation was carried into takes it in instead: the model
+      --  changed, the talk goes on.
+      if Carrying then
+         declare
+            Path    : constant String := Ada.Strings.Unbounded.To_String (Carried);
+            Loaded  : Boolean;
+            Outcome : E.Error_Info;
+         begin
+            Model_Runner.CLI.Checkpoint.Load
+              (Path, Messages, Loaded, Outcome, Replace => True, Check => Check_Loaded'Access);
+            if E.Is_Error (Outcome) then
+               Pres.Report (Screen, Outcome);
+            else
+               Pres.Put_Note
+                 (Screen, "cli.interactive.model_switched",
+                  [Loc.Named ("model", Model_Name (T.To_String (Item.Model_Path)))]);
+            end if;
+            Drop_Carried;
+            Pres.Put_Blank_Line (Screen);
+         end;
+      else
+         Pres.Put_Note (Screen, "cli.interactive.banner");
+      end if;
       --  A sandbox the shell sets that does not read confines every agent
       --  to nothing: said at once, not found out from a refusal.
       if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then

@@ -11291,6 +11291,8 @@ package body Tests.CLI_Cases is
       Reads ("/video frames/", I.Show_Video, "frames/");
       Reads ("/video", I.Show_Video);
       Reads ("/load", I.Load_Conversation);
+      Reads ("/model other.gguf", I.Switch_Model, "other.gguf");
+      Reads ("/model", I.Switch_Model);
 
       --  What the empty argument then means, at the layer that acts on it.
       --  Reading the command and carrying out the removal are two things and
@@ -15827,6 +15829,141 @@ package body Tests.CLI_Cases is
       end;
    end Typed_Message_Gets_A_Blank_Line;
 
+   --  /model goes on with another model: the session ends with the
+   --  conversation kept aside, the run starts again on the model named,
+   --  and that session takes the conversation in. One that will not load
+   --  gives it back to the model before.
+   procedure Model_Switch_Carries_The_Conversation
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package U renames Ada.Strings.Unbounded;
+
+      First_Model  : constant String := Ada.Directories.Full_Name ("obj/switch-first.gguf");
+      Second_Model : constant String := Ada.Directories.Full_Name ("obj/switch-second.gguf");
+      Project : constant String := Ada.Directories.Full_Name ("obj/switch-project");
+      Saved   : constant String := Project & "/carried.txt";
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Drawn   : U.Unbounded_String;
+      Words   : Hostkit.String_Vectors.Vector;
+      Catalog : Model_Runner.Localization.Catalog;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      procedure Take (Quiet : Integer) is
+      begin
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, Quiet) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               U.Append (Drawn, Character'Val (B));
+            end loop;
+         end loop;
+      end Take;
+
+      procedure Send (Text : String) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Text'Length));
+      begin
+         for Index in Text'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index - Text'First + 1)) := Character'Pos (Text (Index));
+         end loop;
+         Assert (Hostkit.Descriptors."="
+                   (Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last), Hostkit.Descriptors.Transfer_Ok),
+                 "a key was not sent");
+      end Send;
+
+      function Said (Key, Model : String) return String
+      is (Model_Runner.Localization.Text (Catalog, Key, [Model_Runner.Localization.Named ("model", Model)]));
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      Tiny_Model.Write (First_Model, Room => 64);
+      Tiny_Model.Write (Second_Model, Room => 64);
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Ada.Directories.Create_Path (Project);
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Options.Working_Directory := U.To_Unbounded_String (Project);
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 100))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      Words.Append (U.To_Unbounded_String (First_Model));
+      Words.Append (U.To_Unbounded_String ("--backend"));
+      Words.Append (U.To_Unbounded_String ("cpu"));
+      Words.Append (U.To_Unbounded_String ("--max-tokens"));
+      Words.Append (U.To_Unbounded_String ("1"));
+      Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+              "the session did not start");
+      Hostkit.Pty.Close_Device (Pair);
+      Take (5000);
+      Send ("hi" & ASCII.CR);
+      Take (5000);
+      Send ("/model " & Second_Model & ASCII.CR);
+      Take (8000);
+      Send ("/model " & Project & "/no-such-model.gguf" & ASCII.CR);
+      Take (8000);
+      Send ("/save " & Saved & ASCII.CR);
+      Take (3000);
+      Send ("/exit" & ASCII.CR);
+      Take (3000);
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Hostkit.Pty.Close (Pair);
+
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      declare
+         Whole : constant String := U.To_String (Drawn);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Whole, Said ("cli.interactive.model_switched", "switch-second.gguf")) > 0,
+                 "the conversation was not said to go on with the second model: " & Whole);
+         Assert (Ada.Strings.Fixed.Index
+                   (Whole, Said ("cli.interactive.model_switch_failed", "switch-second.gguf")) > 0,
+                 "a model that would not load did not give the conversation back: " & Whole);
+      end;
+      Model_Runner.Localization.Close (Catalog);
+
+      --  What was said before the switches is in the conversation after
+      --  them: carried twice, once to the second model and once back.
+      Assert (Ada.Directories.Exists (Saved), "the conversation was not saved after the switches");
+      declare
+         Held : Ada.Text_IO.File_Type;
+         Text : U.Unbounded_String;
+      begin
+         Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, Saved);
+         while not Ada.Text_IO.End_Of_File (Held) loop
+            U.Append (Text, Ada.Text_IO.Get_Line (Held) & ASCII.LF);
+         end loop;
+         Ada.Text_IO.Close (Held);
+         Assert (U.Index (Text, "hi") > 0,
+                 "the turn typed before the switches was lost: " & U.To_String (Text));
+      end;
+   end Model_Switch_Carries_The_Conversation;
+
    --  A message's markup: bold, italic and code, a line break and a list's
    --  items, escapes, and the asterisks of a glob left alone; drawn styled
    --  with bullets and wrapped under each item's text, or plain.
@@ -18302,6 +18439,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Startup_Says_Model_And_Settings'Access,
          "once loaded, a run says which model runs and with the settings it decided");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Model_Switch_Carries_The_Conversation'Access,
+         "/model goes on with another model, the conversation with it, and back where one will not load");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Typed_Message_Gets_A_Blank_Line'Access,
          "blank lines stand under the banner, between a message typed and the reply, and after it");

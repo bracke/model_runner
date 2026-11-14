@@ -1,3 +1,5 @@
+with Ada.Strings.Unbounded;
+with Model_Runner.CLI.Choosers;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Characters.Handling;
 with Ada.Directories;
@@ -57,7 +59,8 @@ package body Model_Runner.CLI.Execute.Models_Command is
    procedure Choose_Model
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;
-      Picked : out Boolean)
+      Picked : out Boolean;
+      Title  : String := "cli.choose.header")
    is
       use Ada.Directories;
 
@@ -95,10 +98,18 @@ package body Model_Runner.CLI.Execute.Models_Command is
       end Giga;
 
       procedure Add (Full_Path : String; Label : String) is
+         Simple : constant String := Ada.Directories.Simple_Name (Full_Path);
       begin
          --  Not a shard past the first: the set is one model, shown once.
          if Shards.Is_Shard_Name (Label)
            and then Label (Label'Last - 18 .. Label'Last - 14) /= "00001"
+         then
+            return;
+         end if;
+         --  Nor a vision projector, which is half of a model and runs as
+         --  none: --mmproj names it beside the model it serves.
+         if Simple'Length >= 6
+           and then Ada.Characters.Handling.To_Lower (Simple (Simple'First .. Simple'First + 5)) = "mmproj"
          then
             return;
          end if;
@@ -289,7 +300,41 @@ package body Model_Runner.CLI.Execute.Models_Command is
          return;
       end if;
 
-      Pres.Put_Note (Screen, "cli.choose.header");
+      --  At a terminal the shared selector: arrows move, a typed filter
+      --  narrows, Tab says where a model is, Esc gives up.
+      if Model_Runner.CLI.Choosers.Is_Available (Screen) then
+         declare
+            Items : Model_Runner.CLI.Choosers.Choice_List;
+            Taken : Natural;
+         begin
+            for I in 1 .. Count loop
+               declare
+                  Label : constant String := Model_Runner.Text.To_String (Shown (I));
+                  Offer : constant Boolean := Ada.Strings.Fixed.Index (Label, "download ") = Label'First;
+               begin
+                  Model_Runner.CLI.Choosers.Append
+                    (Items,
+                     (Label      => Ada.Strings.Unbounded.To_Unbounded_String
+                                      (if Sizes (I) > 0 and then not Offer
+                                       then Label & " (" & Giga (Sizes (I)) & ")" else Label),
+                      Tag        => Ada.Strings.Unbounded.To_Unbounded_String
+                                      (if Too_Big (Sizes (I))
+                                       then Pres.Message_Value (Screen, "cli.choose.too_big") else ""),
+                      Details    => Ada.Strings.Unbounded.To_Unbounded_String
+                                      (Model_Runner.Text.To_String (Full (I))),
+                      Selectable => True));
+               end;
+            end loop;
+            Taken := Model_Runner.CLI.Choosers.Choose (Screen, Title, Items);
+            if Taken in 1 .. Count then
+               Path   := Full (Taken);
+               Picked := True;
+            end if;
+            return;
+         end;
+      end if;
+
+      Pres.Put_Note (Screen, Title);
       for I in 1 .. Count loop
          declare
             Label : constant String := Model_Runner.Text.To_String (Shown (I));
@@ -341,6 +386,14 @@ package body Model_Runner.CLI.Execute.Models_Command is
          end if;
       end;
    end Choose_Model;
+
+   procedure Choose_Next_Model
+     (Screen : in out Pres.Console;
+      Path   : out Model_Runner.Text.Bounded;
+      Picked : out Boolean) is
+   begin
+      Choose_Model (Screen, Path, Picked, Title => "cli.choose.header_next");
+   end Choose_Next_Model;
 
    --  How many files a shard-named model is, from its -of-000NN suffix;
    --  one for a name that is not a shard's.

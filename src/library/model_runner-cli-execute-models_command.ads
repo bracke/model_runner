@@ -15,6 +15,18 @@ private package Model_Runner.CLI.Execute.Models_Command is
    procedure Choose_Model
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;
+      Picked : out Boolean;
+      Title  : String := "cli.choose.header");
+
+   --  The same list, for a conversation's /model: the model it goes on
+   --  with.
+   --
+   --  @param Screen Where the list goes.
+   --  @param Path The chosen model's file.
+   --  @param Picked Whether one was chosen.
+   procedure Choose_Next_Model
+     (Screen : in out Pres.Console;
+      Path   : out Model_Runner.Text.Bounded;
       Picked : out Boolean);
 
    --  The models command: list the models on hand with their sizes, or
