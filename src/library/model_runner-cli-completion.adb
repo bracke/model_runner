@@ -82,17 +82,43 @@ package body Model_Runner.CLI.Completion is
    --  A word without its double quotes, as the commands receive it: what
    --  a typed word and an offered one are compared as.
    function Unquoted (Text : String) return String is
-      Result : String (1 .. Text'Length);
-      Last   : Natural := 0;
+      Result  : String (1 .. Text'Length);
+      Last    : Natural := 0;
+      At_Char : Natural := Text'First;
    begin
-      for C of Text loop
-         if C /= '"' then
+      --  Its quotes dropped, and what a backslash escapes -- \" a quote
+      --  of the name, \\ a backslash -- taken as itself.
+      while At_Char <= Text'Last loop
+         if Text (At_Char) = '\' and then At_Char < Text'Last
+           and then Text (At_Char + 1) in '"' | '\'
+         then
+            At_Char := At_Char + 1;
             Last := Last + 1;
-            Result (Last) := C;
+            Result (Last) := Text (At_Char);
+         elsif Text (At_Char) /= '"' then
+            Last := Last + 1;
+            Result (Last) := Text (At_Char);
          end if;
+         At_Char := At_Char + 1;
       end loop;
       return Result (1 .. Last);
    end Unquoted;
+
+   --  A name as written inside quotes: its quotes and backslashes escaped.
+   function Escaped (Name : String) return String is
+      Result : String (1 .. 2 * Name'Length);
+      Last   : Natural := 0;
+   begin
+      for C of Name loop
+         if C in '"' | '\' then
+            Last := Last + 1;
+            Result (Last) := '\';
+         end if;
+         Last := Last + 1;
+         Result (Last) := C;
+      end loop;
+      return Result (1 .. Last);
+   end Escaped;
 
    --  The actions each command takes as its second word.
    function Actions_Of (Command : String) return String
@@ -123,8 +149,10 @@ package body Model_Runner.CLI.Completion is
       Result : Names.Vector;
    begin
       for Path of Bare_Paths ((if Quoted then Unquoted (Prefix) else Prefix), Project_Only) loop
-         if Quoted or else Ada.Strings.Fixed.Index (Path, " ") > 0 then
-            Result.Append ('"' & Path & (if Path (Path'Last) = '/' then "" else """"));
+         if Quoted or else Ada.Strings.Fixed.Index (Path, " ") > 0
+           or else Ada.Strings.Fixed.Index (Path, """") > 0
+         then
+            Result.Append ('"' & Escaped (Path) & (if Path (Path'Last) = '/' then "" else """"));
          else
             Result.Append (Path);
          end if;

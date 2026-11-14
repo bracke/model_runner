@@ -575,6 +575,9 @@ package body Model_Runner.CLI.Work is
       --  Whether the tasks to run were narrowed by a selector: "all" is then
       --  all of those, not every task the plan can start.
       Narrowed  : Boolean := False;
+
+      --  Whether an ending asked for left tasks of the batch unstarted.
+      Cut_Short : Boolean := False;
       --  Under all: those started, and how each ended.
       Tried     : Model_Runner.Framework.Name_Lists.Vector;
       Ended     : Model_Runner.Framework.Name_Lists.Vector;
@@ -2496,11 +2499,17 @@ package body Model_Runner.CLI.Work is
                for Id of Remaining loop
                   Append (Left, (if Left = Null_Unbounded_String then "" else " ") & Id);
                end loop;
-               Pres.Put_Note (Screen, "cli.work.all_stopped",
+               --  /work all goes on with what is ready; a batch named or
+               --  narrowed goes on with the tasks it left, by name.
+               Pres.Put_Note (Screen,
+                              (if Setting ("all", "") = "yes" and then not Narrowed
+                               then "cli.work.all_stopped" else "cli.work.batch_stopped"),
                               [Loc.Named ("name", To_String (Chosen)),
                                Loc.Named ("detail", (if Left = Null_Unbounded_String then "none"
                                                      else To_String (Left)))]);
             end;
+            --  Told to end with tasks left: the batch was cut short.
+            Cut_Short := Model_Runner.Platform.Signals.Ending_Asked;
             exit;
          end if;
          Chosen := To_Unbounded_String (Remaining.First_Element);
@@ -2527,7 +2536,8 @@ package body Model_Runner.CLI.Work is
       --  so does work stopped with Ctrl-C, which sets its task aside --
       --  blocked, "you stopped its work" -- rather than cancelling it, and
       --  ended as an input or output failure.
-      elsif To_String (Done.Final_State) = Tk.Cancelled
+      elsif Cut_Short
+        or else To_String (Done.Final_State) = Tk.Cancelled
         or else (To_String (Done.Final_State) = Tk.Blocked
                  and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0)
       then

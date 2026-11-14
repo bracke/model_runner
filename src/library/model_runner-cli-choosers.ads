@@ -190,6 +190,12 @@ package Model_Runner.CLI.Choosers is
    --  @return What was typed; empty unless it was Entered.
    function Typed_Line (Outcome : out Line_End) return String;
 
+   --  Let go of keys a line read raw took past its end, kept for the next
+   --  line read: what was typed meanwhile, dropped as a cancel drops it.
+   --
+   --  @param Dropped Whether there were any.
+   procedure Drop_Kept_Keys (Dropped : out Boolean);
+
    --  A question said, then a yes or no read as Answered_Yes reads one.
    --
    --  @param Screen Where it is asked.

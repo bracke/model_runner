@@ -40,8 +40,12 @@ begin
                Pending : constant Boolean :=
                  Hostkit.Descriptors.Wait_Readable (Hostkit.Descriptors.Standard_Input, 0);
                Ignored : Boolean := Hostkit.Terminal_Control.Discard_Input (Hostkit.Descriptors.Standard_Input);
+               --  And what a question's line read past its end, kept for
+               --  the next prompt: dropped with the rest.
+               Kept    : Boolean;
             begin
-               if Typed_Ahead and then Pending then
+               Model_Runner.CLI.Choosers.Drop_Kept_Keys (Kept);
+               if (Typed_Ahead and then Pending) or else Kept then
                   Typed_Ahead := False;
                   Pres.Put_Note (Screen, "cli.work.typed_dropped");
                end if;

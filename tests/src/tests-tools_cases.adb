@@ -1551,6 +1551,24 @@ package body Tests.Tools_Cases is
          Assert (Quoted.Positional.Contains ("TASK-1, then cleanup"),
                  "a quoted title was split at its comma: " & Cl.Canonical (Quoted));
       end;
+      --  A quoted title after a setting is the title; numbers a comma apart
+      --  are each a task to /accept; a title after a quoted value is no
+      --  stray word, a word after the entry's quoted value is.
+      declare
+         Late   : constant Cl.Request := Pc.Request_Of ("/task new kind=bugfix ""a=b is broken""");
+         Listed : constant Cl.Request := Pc.Request_Of ("/accept 1,2");
+         After  : constant Cl.Request := Pc.Request_Of ("/task new notes=""see"" Fix lexer");
+         Edited : constant Cl.Request := Pc.Request_Of ("/task edit TASK-001 notes=""see"" the file");
+      begin
+         Assert (Late.Positional.Contains ("a=b is broken"),
+                 "a quoted title after a setting became a setting: " & Cl.Canonical (Late));
+         Assert (Listed.Positional.Contains ("1") and then Listed.Positional.Contains ("2"),
+                 "/accept 1,2 was not two tasks: " & Cl.Canonical (Listed));
+         Assert (Ada.Strings.Unbounded.To_String (After.Stray) = "",
+                 "a title after a quoted value was taken as stray: " & Cl.Canonical (After));
+         Assert (Ada.Strings.Unbounded.To_String (Edited.Stray) = "the",
+                 "a word after an edit's quoted value was not said: " & Cl.Canonical (Edited));
+      end;
       --  A value that names rather than says runs on into nothing, and no
       --  value runs on into an ID: the word after it is a word.
       declare

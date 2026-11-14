@@ -3203,18 +3203,25 @@ package body Model_Runner.CLI.Project_Commands is
      (Index <= Natural (Flags.Length) and then Flags (Index));
 
    --  Whether a word at a place is text for its quotes, never NAME=VALUE:
-   --  the title new is given first -- /task new "a=b is broken" -- is its
-   --  words. A setting quoted whole anywhere else, as a shell passes one
-   --  with spaces, "component=parser core" or "model=/My Models/x.gguf",
-   --  is the setting still, and so is a title's own, "title=...".
+   --  the title new is given -- its first word not a setting, as in
+   --  /task new "a=b is broken" or /task new kind=bugfix "a=b is broken"
+   --  -- is its words. A setting quoted whole anywhere else, as a shell
+   --  passes one with spaces, "component=parser core" or "model=/My
+   --  Models/x.gguf", is the setting still, and so is "title=...".
+   --  Whether a word is NAME=VALUE or an option, --verbose.
+   function Setting_Or_Option (Word : String) return Boolean is
+     (Ada.Strings.Fixed.Index (Word, "=") > Word'First or else Ada.Strings.Fixed.Head (Word, 2) = "--");
+
    function Quoted_At
-     (Flags : Flag_Lists.Vector; Index : Positive; Word, Action : String) return Boolean
+     (Flags : Flag_Lists.Vector; Words : Names.Vector; Index : Positive) return Boolean
    is
+      Word  : constant String := Words (Index);
       Equal : constant Natural := Ada.Strings.Fixed.Index (Word, "=");
    begin
       return Began_Quoted_At (Flags, Index)
-        and then Index = 3
-        and then Ada.Characters.Handling.To_Lower (Action) = "new"
+        and then Index >= 3
+        and then Ada.Characters.Handling.To_Lower (Words (2)) = "new"
+        and then (for all Before in 3 .. Index - 1 => Setting_Or_Option (Words (Before)))
         and then not (Equal > Word'First
                       and then Is_Wordy (Ada.Characters.Handling.To_Lower (Word (Word'First .. Equal - 1))));
    end Quoted_At;
@@ -3345,6 +3352,26 @@ package body Model_Runner.CLI.Project_Commands is
         and then (for all C of Upper (Dash + 1 .. Upper'Last) => C in '0' .. '9')
         and then (for all C of Upper => C in 'A' .. 'Z' | '0' .. '9' | '-' | '_');
    end Looks_Like_Id;
+
+   --  Whether a word is numbers or identifiers a comma apart: 8,9 or 8,
+   --  or TASK-1,9.
+   function Numbers_Or_Ids (Word : String) return Boolean is
+      Start : Positive := Word'First;
+   begin
+      for At_Index in Word'First .. Word'Last + 1 loop
+         if At_Index > Word'Last or else Word (At_Index) = ',' then
+            declare
+               One : constant String := Word (Start .. At_Index - 1);
+            begin
+               if not (One = "" or else (for all C of One => C in '0' .. '9') or else Looks_Like_Id (One)) then
+                  return False;
+               end if;
+            end;
+            Start := At_Index + 1;
+         end if;
+      end loop;
+      return True;
+   end Numbers_Or_Ids;
 
    --  Whether a word gives an input or a field, as NAME=VALUE.
    function Is_Setting (Word : String) return Boolean is
@@ -3906,7 +3933,7 @@ package body Model_Runner.CLI.Project_Commands is
             if Part = "--set" then
                null;
             elsif Is_Setting (Part) and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
-              and then not Quoted_At (Quoted, Index, Part, Action)
+              and then not Quoted_At (Quoted, All_Words, Index)
             then
                Result.Settings.Append (Part);
                --  A value written in quotes ends at its closing quote; one
@@ -3936,6 +3963,9 @@ package body Model_Runner.CLI.Project_Commands is
                   --  operand, /req block reason="needs input" 1.
                   Closed_Words := In_Quotes and then Is_Wordy (Ada.Characters.Handling.To_Lower (Name))
                     and then Natural (All_Words.Length) >= 2
+                    --  Its title or entry given already: /task new
+                    --  notes="see" Fix lexer has its title after.
+                    and then Natural (Result.Positional.Length) >= 2
                     and then Ada.Characters.Handling.To_Lower (All_Words (2)) in "edit" | "revise" | "new"
                     and then All_Words.First_Element in "/task" | "/req" | "/spec" | "/decision";
                end;
@@ -3966,8 +3996,12 @@ package body Model_Runner.CLI.Project_Commands is
                  and then Ada.Characters.Handling.To_Lower (Action) not in "new" | "edit" | "revise" | "split"
                  --  Not a number a comma groups -- 1,000 -- which a list of
                  --  bare numbers is not: those were made IDs already.
-                 and then (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
-                             Ada.Strings.Fixed.Head (Part, Prefix'Length) = Prefix)
+                 and then ((for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
+                              Ada.Strings.Fixed.Head (Part, Prefix'Length) = Prefix)
+                           --  /accept 1,2 and /reject 8, -- tasks by number,
+                           --  each its own as /reject 8 6 takes them.
+                           or else (All_Words.First_Element in "/accept" | "/reject"
+                                    and then Numbers_Or_Ids (Part)))
                then
                   declare
                      From : Natural := Part'First;

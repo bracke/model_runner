@@ -595,7 +595,8 @@ package body Model_Runner.CLI.Intents is
       Kind   : Model_Runner.Framework.Intent.Intent_Kind;
       Words  : Model_Runner.Framework.Name_Lists.Vector;
       Screen : in out Model_Runner.Presentation.Console;
-      Quoted : Quoted_Flags := [1 .. 0 => False])
+      Quoted : Quoted_Flags := [1 .. 0 => False];
+      Closed : Quoted_Flags := [1 .. 0 => False])
    is
       Plain    : Names.Vector;
       Settings : Names.Vector;
@@ -713,6 +714,9 @@ package body Model_Runner.CLI.Intents is
 
       --  The setting a decision is to govern, by its whole name.
       Governed_Setting : Unbounded_String;
+
+      --  Whether the latest setting's value was closed in quotes.
+      Last_Closed : Boolean := False;
    begin
       for Place in 1 .. Natural (Words.Length) loop
          declare
@@ -731,7 +735,10 @@ package body Model_Runner.CLI.Intents is
                --  acceptance= is what criteria= says.
                Settings.Append (if Lower (Part (Part'First .. Equal - 1)) = "acceptance"
                                 then "criteria" & Part (Equal .. Part'Last) else Part);
-            elsif not Settings.Is_Empty then
+               Last_Closed := Place in Closed'Range and then Closed (Place);
+            --  Not past a value closed in quotes: reason="needs input" 1
+            --  names the entry after it.
+            elsif not Settings.Is_Empty and then not Last_Closed then
                --  A value runs on to the next NAME=: text=the parser
                --  shall stop is one text, not a word and three more.
                Settings.Replace_Element

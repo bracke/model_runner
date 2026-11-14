@@ -209,7 +209,13 @@ package body Model_Runner.CLI.Interactive is
                     (Trimmed (Trimmed'First
                               .. (if Ada.Strings.Fixed.Index (Trimmed, Word_End) = 0 then Trimmed'Last
                                   else Ada.Strings.Fixed.Index (Trimmed, Word_End) - 1)))
-                  or else Parse (Trimmed).Kind in Show_Picture | Show_Video)
+                  or else Parse (Trimmed).Kind in Show_Picture | Show_Video
+                  --  A message kept back -- the conversation full -- has
+                  --  its remedies run beside it: typed as its text, /reset
+                  --  was sent with it and refused again.
+                  or else (Item.Kept
+                           and then Parse (Trimmed).Kind
+                                      in Reset | Save_Conversation | Load_Conversation | Context))
       then
          Effect := Command_Mid_Message;
          return;
@@ -263,6 +269,7 @@ package body Model_Runner.CLI.Interactive is
    procedure Restore (Item : in out Turn; Text : String) is
    begin
       Item.Used := 0;
+      Item.Kept := False;
       if Item.Room = null or else Text'Length > Max_Turn_Bytes then
          return;
       end if;
@@ -271,6 +278,7 @@ package body Model_Runner.CLI.Interactive is
       end if;
       Item.Room.all (1 .. Text'Length) := Text;
       Item.Used := Text'Length;
+      Item.Kept := Text'Length > 0;
    end Restore;
 
    -----------
@@ -280,6 +288,7 @@ package body Model_Runner.CLI.Interactive is
    procedure Taken (Item : in out Turn) is
    begin
       Item.Used := 0;
+      Item.Kept := False;
    end Taken;
 
    -----------
@@ -496,6 +505,23 @@ package body Model_Runner.CLI.Interactive is
       --  words alone -- /image could not be typed while they waited.
       Turn_Picture  : Text_Access := null;
       Turn_Is_Video : Boolean := False;
+
+      --  Whether the picture named was itself what failed -- it would not
+      --  read, or the model takes none: not given back with its words, or
+      --  every message after would carry it and be refused for it.
+      Picture_Failed : Boolean := False;
+
+      --  Whether Next_Picture came back with a kept-back message: dropped
+      --  with it when Ctrl-C or Esc drops the message.
+      Picture_Kept : Boolean := False;
+
+      procedure Drop_Kept_Picture is
+      begin
+         if Picture_Kept then
+            Free_Text (Next_Picture);
+            Picture_Kept := False;
+         end if;
+      end Drop_Kept_Picture;
 
       --  Encode what the conversation names and Pictures does not hold.
       procedure Gather_Pictures_Of
@@ -810,27 +836,56 @@ package body Model_Runner.CLI.Interactive is
          --  quotes are not part of its name.
          --  The text after a quoted path's closing quote, which no path
          --  holds: /save "a b" x.
+         --  Within the quotes \" is a quote of the name and \\ a
+         --  backslash, as Tab writes them and the project's commands read
+         --  them: the first quote no backslash escapes closes it.
          function Closing_Quote return Natural is
             Text : constant String := Line (Asked.First .. Asked.Last);
+            At_Char : Natural;
          begin
             if Text'Length > 0 and then Text (Text'First) = '"' then
-               return Ada.Strings.Fixed.Index (Text (Text'First + 1 .. Text'Last), """");
+               At_Char := Text'First + 1;
+               while At_Char <= Text'Last loop
+                  if Text (At_Char) = '\' and then At_Char < Text'Last then
+                     At_Char := At_Char + 2;
+                  elsif Text (At_Char) = '"' then
+                     return At_Char;
+                  else
+                     At_Char := At_Char + 1;
+                  end if;
+               end loop;
             end if;
             return 0;
          end Closing_Quote;
 
          function Path_Asked return String is
             Text  : constant String := Line (Asked.First .. Asked.Last);
-            First : Positive := Text'First;
             Last  : Natural := Text'Last;
          begin
             if Text'Length > 0 and then Text (Text'First) = '"' then
-               First := First + 1;
                if Closing_Quote > 0 then
                   Last := Closing_Quote - 1;
                end if;
+               --  Its escapes undone: \" a quote, \\ a backslash.
+               declare
+                  Name    : String (1 .. Text'Length);
+                  Used    : Natural := 0;
+                  At_Char : Natural := Text'First + 1;
+               begin
+                  while At_Char <= Last loop
+                     if Text (At_Char) = '\' and then At_Char < Last
+                       and then Text (At_Char + 1) in '"' | '\'
+                     then
+                        At_Char := At_Char + 1;
+                     end if;
+                     Used := Used + 1;
+                     Name (Used) := Text (At_Char);
+                     At_Char := At_Char + 1;
+                  end loop;
+                  return Name (1 .. Used);
+               end;
             end if;
-            return Text (First .. Last);
+            return Text (Text'First .. Last);
          end Path_Asked;
 
          --  What follows a quoted path, trimmed: "" when nothing does.
@@ -1362,6 +1417,7 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.no_projector");
             else
                Free_Text (Next_Picture);
+               Picture_Kept := False;
                Next_Picture := new String'
                  (Model_Runner.CLI.Project_Commands.From_Session_Start (Path_Asked));
                Next_Is_Video := Asked.Kind = Show_Video;
@@ -1466,6 +1522,7 @@ package body Model_Runner.CLI.Interactive is
       begin
          Turn_Taken := False;
          Kept_Back := False;
+         Picture_Failed := False;
          Turns_Asked := Turns_Asked + 1;
          if Sender = Conv.User_Role and then Next_Picture /= null then
             --  The words and the picture named for them, as one turn of
@@ -1483,6 +1540,7 @@ package body Model_Runner.CLI.Interactive is
             Turn_Picture := Next_Picture;
             Turn_Is_Video := Next_Is_Video;
             Next_Picture := null;
+            Picture_Kept := False;
          else
             Conv.Append (Messages, Sender, Prompt, Outcome);
          end if;
@@ -1499,6 +1557,11 @@ package body Model_Runner.CLI.Interactive is
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
             Kept_Back := Sender = Conv.User_Role;
+            --  Not read for being stopped is the picture still; any other
+            --  failure is the picture's own.
+            Picture_Failed :=
+              not (Model_Runner.Cancellation."/=" (Cancel, null)
+                   and then Model_Runner.Cancellation.Is_Cancelled (Cancel));
             --  And the pictures it gave, so the next turn does not take them
             --  for its own: a picture set counts what it holds, not which.
             Model_Runner.CLI.Pictures.Release (Pictures);
@@ -1846,11 +1909,12 @@ package body Model_Runner.CLI.Interactive is
                   --  Refused before the model read it: the message kept,
                   --  pending, to add to or send again, with its picture --
                   --  /image names another while it waits.
-                  if Kept_Back and then Turn_Picture /= null then
+                  if Kept_Back and then Turn_Picture /= null and then not Picture_Failed then
                      Free_Text (Next_Picture);
                      Next_Picture := Turn_Picture;
                      Next_Is_Video := Turn_Is_Video;
                      Turn_Picture := null;
+                     Picture_Kept := True;
                   else
                      Free_Text (Turn_Picture);
                   end if;
@@ -2270,6 +2334,7 @@ package body Model_Runner.CLI.Interactive is
                      elsif Typed (Last_Key) = ASCII.ETX then
                         Pres.Put_Note (Screen, "cli.interactive.how_to_leave");
                      end if;
+                     Drop_Kept_Picture;
                      Taken (Typing);
                      if Line = "" then
                         goto Next_Line;
@@ -2282,6 +2347,7 @@ package body Model_Runner.CLI.Interactive is
                   if Model_Runner.Cancellation."/=" (Cancel, null)
                     and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
                   then
+                     Drop_Kept_Picture;
                      Taken (Typing);
                      --  Said when it was pressed, where it could be.
                      if not Model_Runner.Platform.Signals.Interrupt_Noted then

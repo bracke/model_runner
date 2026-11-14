@@ -27,12 +27,15 @@ package Model_Runner.CLI.Intents is
    --  @param Screen Where to write.
    --  @param Quoted Of the words, by place, each typed in quotes: a word
    --    of text, never NAME=VALUE -- "x=1 must hold".
+   --  @param Closed Of the words, by place, each NAME=VALUE whose value
+   --    was quoted: no word after it runs on into it.
    procedure Run
      (Store  : in out Model_Runner.Framework.Stores.Store;
       Kind   : Model_Runner.Framework.Intent.Intent_Kind;
       Words  : Model_Runner.Framework.Name_Lists.Vector;
       Screen : in out Model_Runner.Presentation.Console;
-      Quoted : Quoted_Flags := [1 .. 0 => False]);
+      Quoted : Quoted_Flags := [1 .. 0 => False];
+      Closed : Quoted_Flags := [1 .. 0 => False]);
 
    --  Move the project along after a change to what it says: derive what
    --  accepted requirements imply, work out readiness, and say what that

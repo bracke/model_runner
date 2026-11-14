@@ -824,6 +824,10 @@ package body Model_Runner.CLI.Tasks is
          declare
             States : Model_Runner.Framework.Name_Lists.Vector;
             Start  : Natural := Argument'First;
+            --  The words given alone, together: a state in words is whole
+            --  -- waiting for parts -- and a word of one alone, task or on,
+            --  is none.
+            Bare   : Unbounded_String;
          begin
             States.Append ("candidate");
             States.Append ("accepted");
@@ -849,6 +853,9 @@ package body Model_Runner.CLI.Tasks is
                      Name : constant String := (if Cut = 0 then "state" else Pair (Pair'First .. Cut - 1));
                      Said : constant String := (if Cut = 0 then Pair else Pair (Cut + 1 .. Pair'Last));
                   begin
+                     if Cut = 0 and then Pair /= "" then
+                        Append (Bare, (if Length (Bare) = 0 then "" else " ") & Pair);
+                     end if;
                      if Pair = "" then
                         null;
                      elsif Name not in "state" | "kind" | "component" | "origin" | "parent" | "requirement"
@@ -885,6 +892,22 @@ package body Model_Runner.CLI.Tasks is
                   Start := Index + 1;
                end if;
             end loop;
+            declare
+               Whole : constant String :=
+                 Ada.Strings.Fixed.Translate (To_String (Bare), Ada.Strings.Maps.To_Mapping ("-_", "  "));
+            begin
+               if Whole /= "" and then not States.Contains (Whole)
+                 and then Whole not in "to integrate" | "checks failed" | "serves retired"
+                                     | "waiting for parts" | "waiting on an ended task"
+               then
+                  Outcome := E.Make (E.Framework_Input_Invalid);
+                  E.Add_Text (Outcome, "name", "a state of /task list");
+                  E.Add_Text (Outcome, "value", To_String (Bare));
+                  E.Add_Text (Outcome, "detail", States_Said);
+                  Fail (Outcome);
+                  return;
+               end if;
+            end;
          end;
 
          --  What still asks for something first, what has ended -- done,
@@ -2070,6 +2093,17 @@ package body Model_Runner.CLI.Tasks is
             Defined : R.Item;
             Read    : E.Error_Info;
          begin
+            --  One other task a time: depend 1 2,3 named two, read as one
+            --  that is not there.
+            if (Space > 0 and then not Undo) or else Ada.Strings.Fixed.Index (On, ",") > 0 then
+               Outcome := E.Make (E.Framework_Input_Invalid);
+               E.Add_Text (Outcome, "name", "the task " & First_Word & " waits for");
+               E.Add_Text (Outcome, "value", After_First);
+               E.Add_Text (Outcome, "detail", "depend takes one other task: /task depend " & First_Word
+                           & " OTHER-ID, once for each");
+               Fail (Outcome);
+               return;
+            end if;
             --  Waiting for it already: said, and nothing changed.
             Tk.Definition (Store, First_Word, Defined, Read);
             if not Undo and then E.Is_Ok (Read)
@@ -6011,7 +6045,24 @@ package body Model_Runner.CLI.Tasks is
                S.Close (Store);
                Fail (Outcome);
                return;
-            elsif not Item.Cancel_Confirmed
+            --  Its workspace's changes, given up when that run cancels
+            --  it: named and asked about, as a cancel here asks.
+            elsif Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
+              and then not Model_Runner.Framework.Workspaces.Changes
+                             (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)).Is_Empty
+              and then not Confirmed
+                ("cli.task.give_up_confirm", First_Word,
+                 Joined (Model_Runner.Framework.Workspaces.Changes
+                           (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)))
+                 & "? a copy is kept as given-up-" & First_Word & "-"
+                 & Model_Runner.Framework.Workspaces.Active_For (Store, First_Word))
+            then
+               S.Close (Store);
+               return;
+            elsif (Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) = ""
+                   or else Model_Runner.Framework.Workspaces.Changes
+                             (Store, Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)).Is_Empty)
+              and then not Item.Cancel_Confirmed
               and then not Confirmed ("cli.project.cancel.confirm", First_Word,
                                       R.Get (Tk_Definition (First_Word), "title") & ", "
                                       & Listed_State (First_Word) & Waiting_On_It (Store, First_Word))
@@ -6075,14 +6126,21 @@ package body Model_Runner.CLI.Tasks is
       end if;
 
       --  Already where it is asked to go: said, and nothing done.
-      if Action in "accept" | "reject" | "cancel" and then Argument /= ""
-        and then Tk.State_Of (Store, Argument)
-                   = (if Action = "accept" then "accepted"
-                      elsif Action = "reject" then "rejected" else "cancelled")
+      --  A cancel's task is its first word: cancel X anyway is X's too.
+      if Action in "accept" | "reject" and then Argument /= ""
+        and then Tk.State_Of (Store, Argument) = (if Action = "accept" then "accepted" else "rejected")
       then
          Pres.Put_Note (Screen, "cli.intent.already",
                         [Loc.Named ("name", Argument),
                          Loc.Named ("value", Tk.State_Of (Store, Argument))]);
+         S.Close (Store);
+         return;
+      elsif Action = "cancel" and then First_Word /= "" and then After_First in "" | "anyway"
+        and then Tk.State_Of (Store, First_Word) = "cancelled"
+      then
+         Pres.Put_Note (Screen, "cli.intent.already",
+                        [Loc.Named ("name", First_Word),
+                         Loc.Named ("value", Tk.State_Of (Store, First_Word))]);
          S.Close (Store);
          return;
       elsif Action = "move" and then First_Word /= ""
@@ -6421,11 +6479,25 @@ package body Model_Runner.CLI.Tasks is
                Why   : constant String :=
                  (if Space = 0 then ""
                   else Ada.Strings.Fixed.Trim (Rest (Space + 1 .. Rest'Last), Ada.Strings.Both));
+               --  Whether the lifecycle allows the move at all: one it
+               --  refuses is refused by the move itself, its way said,
+               --  before anything about a workspace is asked or advised.
+               function Allowed return Boolean is
+                  Checked : E.Error_Info;
+               begin
+                  Model_Runner.Framework.Transitions.Check
+                    (Model_Runner.Framework.Transitions.Task_Machine, First_Word,
+                     Tk.State_Of (Store, First_Word), Next,
+                     [Model_Runner.Framework.Transitions.Ordinary => True, others => False], Checked);
+                  return E.Is_Ok (Checked);
+               end Allowed;
+               Movable : constant Boolean := Allowed;
             begin
                --  Work waiting in a workspace is not given up unsaid --
                --  in verification, or kept in one by a blocked or running
-               --  task, changes and all: an ending gives it up.
-               if Next in "failed" | "rejected" and then Why /= "anyway"
+               --  task, changes and all: an ending gives it up. A candidate
+               --  alone is rejected, and has no workspace.
+               if Next = "failed" and then Why /= "anyway" and then Movable
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
                  and then (Tk.State_Of (Store, First_Word) = Tk.Verification
                            or else not Model_Runner.Framework.Workspaces.Changes
@@ -6462,7 +6534,7 @@ package body Model_Runner.CLI.Tasks is
                      elsif Why = "anyway" then "moved to " & Next & " by hand"
                      else Why);
                begin
-                  if Why = "anyway" and then Space /= "" and then not Lost.Is_Empty then
+                  if Why = "anyway" and then Movable and then Space /= "" and then not Lost.Is_Empty then
                      if not Confirmed ("cli.task.give_up_confirm", First_Word,
                                        Joined (Lost) & "? a copy is kept as given-up-" & First_Word & "-" & Space)
                      then

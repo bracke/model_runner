@@ -4,6 +4,8 @@ procedure Intent_Command (Store : in out S.Store) is
    Flags    : Model_Runner.CLI.Intents.Quoted_Flags
      (1 .. Natural (All_Words.Length) + Ada.Strings.Fixed.Count (Line, ",") + 1) :=
      [others => False];
+   --  Of the words, each NAME=VALUE whose value was quoted: it ends there.
+   Closed   : Model_Runner.CLI.Intents.Quoted_Flags (Flags'Range) := [others => False];
    --  Whether a NAME=VALUE went before: the words after it are its text.
    Valued   : Boolean := False;
    Action   : constant String :=
@@ -52,9 +54,11 @@ begin
                end if;
             end loop;
          else
-            Valued := Valued or else (Is_Setting (One) and then not Quoted_At (Quoted, Index, One, Action));
+            Valued := Valued or else (Is_Setting (One) and then not Quoted_At (Quoted, All_Words, Index));
             After.Append (One);
-            Flags (Natural (After.Length)) := Quoted_At (Quoted, Index, One, Action);
+            Flags (Natural (After.Length)) := Quoted_At (Quoted, All_Words, Index);
+            Closed (Natural (After.Length)) :=
+              Began_Quoted_At (Value_Flags, Index) or else Began_Quoted_At (Quoted, Index);
          end if;
       end;
    end loop;
@@ -63,7 +67,7 @@ begin
       (if Word = "/req" then Nt.Requirement
        elsif Word = "/decision" then Nt.Decision
        else Nt.Specification),
-      After, Screen, Flags);
+      After, Screen, Flags, Closed);
    --  One turned down by name: what still waits, as /reject says it.
    if Natural (All_Words.Length) >= 3 and then Ada.Characters.Handling.To_Lower (All_Words (2)) = "reject" then
       Say_Still_Waiting (Store);

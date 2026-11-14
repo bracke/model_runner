@@ -217,6 +217,11 @@ private
    type Turn is tagged limited record
       Room : Text_Access := null;
       Used : Natural := 0;
+
+      --  Whether what is pending was put back by Restore: a message kept
+      --  back, which the session's remedies -- /reset, /save, /load,
+      --  /context -- run beside rather than join.
+      Kept : Boolean := False;
    end record;
 
 end Model_Runner.CLI.Interactive;

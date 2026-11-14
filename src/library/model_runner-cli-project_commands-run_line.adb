@@ -7,6 +7,7 @@ is
    All_Words  : constant Names.Vector := Identifiers_As_Kept (Split (Line));
    Open_Quote : constant Boolean := Left_Open;
    Quoted     : constant Flag_Lists.Vector := Began_Quoted;
+   Value_Flags : constant Flag_Lists.Vector := Value_Quoted;
    --  "" for a line of no words: First_Element of none raised before the
    --  handler below was in force, out to whoever ran the line.
    Word       : constant String := (if All_Words.Is_Empty then "" else All_Words.First_Element);
@@ -392,7 +393,8 @@ begin
    begin
       Positional := Asked.Positional;
       --  notes="see" the file: the file is neither the value nor a task.
-      if Asked.Stray /= Null_Unbounded_String and then not Free_Text then
+      --  Free text or not: a title's or notes' words are what was quoted.
+      if Asked.Stray /= Null_Unbounded_String then
          Outcome := E.Make (E.CLI_Unexpected_Operand);
          E.Add_Text (Outcome, "value", To_String (Asked.Stray));
          Pres.Report (Screen, Outcome);

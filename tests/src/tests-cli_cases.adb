@@ -2502,6 +2502,14 @@ package body Tests.CLI_Cases is
          Model_Runner.CLI.Project_Commands.Run_Without_Model ("", Screen, Status);
          Model_Runner.CLI.Project_Commands.Run_Without_Model ("   ", Screen, Status);
       end;
+      --  Keys kept from a line read raw are let go when asked, and once.
+      declare
+         Ignored, Dropped : Boolean;
+      begin
+         Model_Runner.CLI.Choosers.Drop_Kept_Keys (Ignored);
+         Model_Runner.CLI.Choosers.Drop_Kept_Keys (Dropped);
+         Assert (not Dropped, "keys kept were still there after they were let go");
+      end;
    end Harness_Screen_Takes_Keys_And_Text_Whole;
 
    --  A mixture is reported as one, and a dense model is not.
@@ -2636,6 +2644,14 @@ package body Tests.CLI_Cases is
       begin
          Assert (Moved = 0 and then Again = 0, "task move cancelled did not cancel as task cancel does");
          Assert (Listed = 0, "task list waiting-on-an-ended-task was not taken as the state");
+      end;
+      --  A word of a state alone is none; depend takes one other task.
+      declare
+         Part_Of : constant Natural := Command ("task|list|task");
+         Several : constant Natural := Command ("task|depend|TASK-001|TASK-002|TASK-003");
+      begin
+         Assert (Part_Of /= 0, "task list task was taken as a state");
+         Assert (Several /= 0, "task depend took two tasks as one");
       end;
 
       --  What the condition names is a field of its own, not only words in
@@ -10625,6 +10641,14 @@ package body Tests.CLI_Cases is
       Offer ("/image shot.png", I.Command_Mid_Message);
       Assert (I.Pending (Typing) = "/var/log/syslog says:" & ASCII.LF & ASCII.LF & "error X" & ASCII.LF & "more",
               "/image while a message waited was taken into it: " & I.Pending (Typing));
+      --  Its remedies -- the conversation full -- run beside it, not as
+      --  its text: /reset typed into it was sent with it and refused again.
+      Offer ("/reset", I.Command_Mid_Message);
+      Offer ("/save notes.json", I.Command_Mid_Message);
+      I.Taken (Typing);
+      --  A message typed, not kept back: /reset is its text, as before.
+      Offer ("first", I.Held);
+      Offer ("/reset", I.Held);
       I.Taken (Typing);
 
       --  A line of nothing but spaces is blank. An empty submission is the
