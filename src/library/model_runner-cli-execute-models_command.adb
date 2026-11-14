@@ -1,3 +1,5 @@
+with Ada.Streams;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Unbounded;
 with Model_Runner.CLI.Choosers;
 with Ada.Containers.Indefinite_Vectors;
@@ -63,6 +65,9 @@ package body Model_Runner.CLI.Execute.Models_Command is
       Title  : String := "cli.choose.header";
       Offer_Downloads : Boolean := True)
    is
+      --  The list a conversation's /model shows: only what is on the
+      --  machine, and only what can hold the conversation.
+      Conversing : constant Boolean := not Offer_Downloads;
       use Ada.Directories;
 
       Dir : constant String := Model_Runner.Platform.Models_Directory;
@@ -98,9 +103,169 @@ package body Model_Runner.CLI.Execute.Models_Command is
            & " GB";
       end Giga;
 
+      --  The architecture a model file says it is, from the first keys of
+      --  its header: general.architecture comes first in every file the
+      --  converters write. Empty where it cannot be read there.
+      function Architecture_Of (Full_Path : String) return String is
+         use Ada.Streams;
+         File  : Ada.Streams.Stream_IO.File_Type;
+         Bytes : Stream_Element_Array (1 .. 4096);
+         Last  : Stream_Element_Offset;
+         At_Byte : Stream_Element_Offset := 1;
+
+         function Read_U64 return Interfaces.Unsigned_64 is
+            Value : Interfaces.Unsigned_64 := 0;
+         begin
+            if At_Byte + 7 > Last then
+               raise Constraint_Error;
+            end if;
+            for Shift in reverse 0 .. 7 loop
+               Value := Value * 256 + Interfaces.Unsigned_64 (Bytes (At_Byte + Stream_Element_Offset (Shift)));
+            end loop;
+            At_Byte := At_Byte + 8;
+            return Value;
+         end Read_U64;
+
+         function Read_U32 return Natural is
+            Value : Natural := 0;
+         begin
+            if At_Byte + 3 > Last then
+               raise Constraint_Error;
+            end if;
+            for Shift in reverse 0 .. 3 loop
+               Value := Value * 256 + Natural (Bytes (At_Byte + Stream_Element_Offset (Shift)));
+            end loop;
+            At_Byte := At_Byte + 4;
+            return Value;
+         end Read_U32;
+
+         function Read_Text return String is
+            Length : constant Interfaces.Unsigned_64 := Read_U64;
+         begin
+            if Length > Interfaces.Unsigned_64 (Last - At_Byte + 1) then
+               raise Constraint_Error;
+            end if;
+            declare
+               Text : String (1 .. Natural (Length));
+            begin
+               for Index in Text'Range loop
+                  Text (Index) := Character'Val (Bytes (At_Byte + Stream_Element_Offset (Index - 1)));
+               end loop;
+               At_Byte := At_Byte + Stream_Element_Offset (Length);
+               return Text;
+            end;
+         end Read_Text;
+      begin
+         Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Full_Path, Form => "shared=yes");
+         Ada.Streams.Stream_IO.Read (File, Bytes, Last);
+         Ada.Streams.Stream_IO.Close (File);
+         if Last < 24 or else Bytes (1 .. 4) /= [71, 71, 85, 70] then   --  "GGUF"
+            return "";
+         end if;
+         --  No keys at all: no tokenizer, no architecture -- tensors alone,
+         --  as a picture model's weights may come.
+         At_Byte := 17;
+         if Read_U64 = 0 then
+            return "(none)";
+         end if;
+         At_Byte := 25;   --  past the magic, the version and the two counts
+         --  The first keys, each skipped as its type says, until the one.
+         for Key_Index in 1 .. 16 loop
+            declare
+               Key  : constant String := Read_Text;
+               Kind : constant Natural := Read_U32;
+            begin
+               case Kind is
+                  when 8 =>
+                     declare
+                        Value : constant String := Read_Text;
+                     begin
+                        if Key = "general.architecture" then
+                           return Value;
+                        end if;
+                     end;
+                  when 0 | 1 | 7 => At_Byte := At_Byte + 1;
+                  when 2 | 3 => At_Byte := At_Byte + 2;
+                  when 4 | 5 | 6 => At_Byte := At_Byte + 4;
+                  when 10 | 11 | 12 => At_Byte := At_Byte + 8;
+                  when others => return "";
+               end case;
+            end;
+         end loop;
+         return "";
+      exception
+         when others =>
+            if Ada.Streams.Stream_IO.Is_Open (File) then
+               Ada.Streams.Stream_IO.Close (File);
+            end if;
+            return "";
+      end Architecture_Of;
+
+      --  Whether a model can hold a conversation: not speech, a vision
+      --  projector, an embedding or reranking encoder, or a picture model,
+      --  each of which has a command of its own. One whose header does not
+      --  say is offered rather than guessed away.
+      function Converses (Full_Path : String) return Boolean is
+         Said : constant String := Architecture_Of (Full_Path);
+      begin
+         return Said not in "whisper" | "clip" | "bert" | "nomic-bert" | "nomic-bert-moe"
+                           | "jina-bert-v2" | "qwen_image" | "(none)";
+      end Converses;
+
+      --  Whether the settings file hides a model from the lists: its
+      --  models-hide names patterns, a space between them, * standing for
+      --  any run of characters, matched to the file's name in any case.
+      function Hidden (Simple : String) return Boolean is
+         use Ada.Characters.Handling;
+         Patterns : constant String := To_Lower (Model_Runner.Config.Value ("models-hide"));
+         Name     : constant String := To_Lower (Simple);
+
+         --  Whether Name from At_Name matches Pattern from At_Pattern.
+         function Matches (Pattern : String; At_Pattern, At_Name : Positive) return Boolean is
+         begin
+            if At_Pattern > Pattern'Last then
+               return At_Name > Name'Last;
+            elsif Pattern (At_Pattern) = '*' then
+               for Rest in At_Name .. Name'Last + 1 loop
+                  if Matches (Pattern, At_Pattern + 1, Rest) then
+                     return True;
+                  end if;
+               end loop;
+               return False;
+            else
+               return At_Name <= Name'Last
+                 and then Name (At_Name) = Pattern (At_Pattern)
+                 and then Matches (Pattern, At_Pattern + 1, At_Name + 1);
+            end if;
+         end Matches;
+
+         From : Positive := Patterns'First;
+      begin
+         while From <= Patterns'Last loop
+            declare
+               Stop : Natural := From;
+            begin
+               while Stop <= Patterns'Last and then Patterns (Stop) not in ' ' | ',' | ASCII.HT loop
+                  Stop := Stop + 1;
+               end loop;
+               if Stop > From and then Name'Length > 0
+                 and then Matches (Patterns (From .. Stop - 1), From, Name'First)
+               then
+                  return True;
+               end if;
+               From := Stop + 1;
+            end;
+         end loop;
+         return False;
+      end Hidden;
+
       procedure Add (Full_Path : String; Label : String) is
          Simple : constant String := Ada.Directories.Simple_Name (Full_Path);
       begin
+         --  Not one the settings file hides.
+         if Hidden (Simple) then
+            return;
+         end if;
          --  Not a shard past the first: the set is one model, shown once.
          if Shards.Is_Shard_Name (Label)
            and then Label (Label'Last - 18 .. Label'Last - 14) /= "00001"
@@ -112,6 +277,10 @@ package body Model_Runner.CLI.Execute.Models_Command is
          if Simple'Length >= 6
            and then Ada.Characters.Handling.To_Lower (Simple (Simple'First .. Simple'First + 5)) = "mmproj"
          then
+            return;
+         end if;
+         --  For a conversation, only a model that holds one.
+         if Conversing and then not Converses (Full_Path) then
             return;
          end if;
          if Count < Max then
@@ -306,35 +475,203 @@ package body Model_Runner.CLI.Execute.Models_Command is
       end if;
 
       --  At a terminal the shared selector: arrows move, a typed filter
-      --  narrows, Tab says where a model is, Esc gives up.
+      --  narrows, Tab says where a model is, Esc gives up. The files of
+      --  one model in several quantizations are one entry; chosen, its
+      --  files are offered in a list of their own, Esc there back to the
+      --  models.
       if Model_Runner.CLI.Choosers.Is_Available (Screen) then
          declare
-            Items : Model_Runner.CLI.Choosers.Choice_List;
-            Taken : Natural;
+            use Ada.Characters.Handling;
+
+            --  The model a file is, its quantization taken off: the name
+            --  without .gguf, cut before its first part that names a
+            --  format -- Q4_K_M, IQ3_XXS, q8_0, f16, bf16, MXFP4 -- in any
+            --  case, the parts that only mark a variant (UD, MTP) left out
+            --  of what groups. A download offered is a group of its own.
+            function Base_Of (Label : String) return String is
+               Name  : constant String :=
+                 (if Label'Length > 5 and then To_Lower (Label (Label'Last - 4 .. Label'Last)) = ".gguf"
+                  then Label (Label'First .. Label'Last - 5) else Label);
+               Start : Positive := Name'First;
+               Kept  : Ada.Strings.Unbounded.Unbounded_String;
+
+               function Is_Format (Part : String) return Boolean is
+                  Low : constant String := To_Lower (Part);
+               begin
+                  return Low'Length >= 2
+                    and then ((Low (Low'First) = 'q' and then Is_Digit (Low (Low'First + 1)))
+                              or else (Low'Length >= 3 and then Low (Low'First .. Low'First + 1) = "iq"
+                                       and then Is_Digit (Low (Low'First + 2)))
+                              or else (Low'Length >= 3 and then Low (Low'First .. Low'First + 1) = "tq"
+                                       and then Is_Digit (Low (Low'First + 2)))
+                              or else Low in "f16" | "f32" | "bf16" | "fp16" | "fp32" | "mxfp4" | "nvfp4");
+               end Is_Format;
+            begin
+               if Ada.Strings.Fixed.Index (Label, "download ") = Label'First then
+                  return Label;
+               end if;
+               for At_Char in Name'First .. Name'Last + 1 loop
+                  if At_Char > Name'Last or else Name (At_Char) = '-' then
+                     declare
+                        Part : constant String := Name (Start .. At_Char - 1);
+                     begin
+                        exit when Start > Name'First and then Is_Format (Part);
+                        if To_Lower (Part) not in "ud" | "mtp" then
+                           if Ada.Strings.Unbounded.Length (Kept) > 0 then
+                              Ada.Strings.Unbounded.Append (Kept, "-");
+                           end if;
+                           Ada.Strings.Unbounded.Append (Kept, Part);
+                        end if;
+                     end;
+                     Start := At_Char + 1;
+                  end if;
+               end loop;
+               return Ada.Strings.Unbounded.To_String (Kept);
+            end Base_Of;
+
+            Group_Of : array (1 .. Count) of Natural := [others => 0];
+            First_Of : array (1 .. Count) of Natural := [others => 0];
+            Members  : array (1 .. Count) of Natural := [others => 0];
+            Groups   : Natural := 0;
+
+            --  A file as a list shows it: its name and its size.
+            function Labelled (I : Positive) return String is
+               Label : constant String := Model_Runner.Text.To_String (Shown (I));
+               Offer : constant Boolean := Ada.Strings.Fixed.Index (Label, "download ") = Label'First;
+            begin
+               return (if Sizes (I) > 0 and then not Offer then Label & " (" & Giga (Sizes (I)) & ")" else Label);
+            end Labelled;
+
+            function Too_Big_Tag (I : Positive) return Ada.Strings.Unbounded.Unbounded_String
+            is (Ada.Strings.Unbounded.To_Unbounded_String
+                  (if Too_Big (Sizes (I)) then Pres.Message_Value (Screen, "cli.choose.too_big") else ""));
          begin
+            --  The groups, in the order their first file came.
             for I in 1 .. Count loop
                declare
-                  Label : constant String := Model_Runner.Text.To_String (Shown (I));
-                  Offer : constant Boolean := Ada.Strings.Fixed.Index (Label, "download ") = Label'First;
+                  Key : constant String := To_Lower (Base_Of (Model_Runner.Text.To_String (Shown (I))));
                begin
-                  Model_Runner.CLI.Choosers.Append
-                    (Items,
-                     (Label      => Ada.Strings.Unbounded.To_Unbounded_String
-                                      (if Sizes (I) > 0 and then not Offer
-                                       then Label & " (" & Giga (Sizes (I)) & ")" else Label),
-                      Tag        => Ada.Strings.Unbounded.To_Unbounded_String
-                                      (if Too_Big (Sizes (I))
-                                       then Pres.Message_Value (Screen, "cli.choose.too_big") else ""),
-                      Details    => Ada.Strings.Unbounded.To_Unbounded_String
-                                      (Model_Runner.Text.To_String (Full (I))),
-                      Selectable => True));
+                  for G in 1 .. Groups loop
+                     if To_Lower (Base_Of (Model_Runner.Text.To_String (Shown (First_Of (G))))) = Key then
+                        Group_Of (I) := G;
+                        exit;
+                     end if;
+                  end loop;
+                  if Group_Of (I) = 0 then
+                     Groups := Groups + 1;
+                     First_Of (Groups) := I;
+                     Group_Of (I) := Groups;
+                  end if;
+                  Members (Group_Of (I)) := Members (Group_Of (I)) + 1;
                end;
             end loop;
-            Taken := Model_Runner.CLI.Choosers.Choose (Screen, Title, Items);
-            if Taken in 1 .. Count then
-               Path   := Full (Taken);
-               Picked := True;
-            end if;
+
+            --  The groups by name, in any case, as a person looks one up.
+            declare
+               Order : array (1 .. Groups) of Positive;
+               function Name_Of (G : Positive) return String
+               is (To_Lower (Base_Of (Model_Runner.Text.To_String (Shown (First_Of (G))))));
+            begin
+               for G in 1 .. Groups loop
+                  Order (G) := G;
+               end loop;
+               for Next in 2 .. Groups loop
+                  declare
+                     Held : constant Positive := Order (Next);
+                     At_Slot : Natural := Next - 1;
+                  begin
+                     while At_Slot >= 1 and then Name_Of (Order (At_Slot)) > Name_Of (Held) loop
+                        Order (At_Slot + 1) := Order (At_Slot);
+                        At_Slot := At_Slot - 1;
+                     end loop;
+                     Order (At_Slot + 1) := Held;
+                  end;
+               end loop;
+               loop
+                  declare
+                     Items : Model_Runner.CLI.Choosers.Choice_List;
+                     Taken : Natural;
+                  begin
+                     for Slot in 1 .. Groups loop
+                        declare
+                           G : constant Positive := Order (Slot);
+                        begin
+                           if Members (G) = 1 then
+                              Model_Runner.CLI.Choosers.Append
+                                (Items,
+                                 (Label      => Ada.Strings.Unbounded.To_Unbounded_String (Labelled (First_Of (G))),
+                                  Tag        => Too_Big_Tag (First_Of (G)),
+                                  Details    => Ada.Strings.Unbounded.To_Unbounded_String
+                                                  (Model_Runner.Text.To_String (Full (First_Of (G)))),
+                                  Selectable => True));
+                           else
+                              --  The model, how many files it has, and each named
+                              --  where Tab shows more.
+                              declare
+                                 Files : Ada.Strings.Unbounded.Unbounded_String;
+                              begin
+                                 for I in 1 .. Count loop
+                                    if Group_Of (I) = G then
+                                       Ada.Strings.Unbounded.Append (Files, Labelled (I) & ASCII.LF);
+                                    end if;
+                                 end loop;
+                                 Model_Runner.CLI.Choosers.Append
+                                   (Items,
+                                    (Label      => Ada.Strings.Unbounded.To_Unbounded_String
+                                                     (Base_Of (Model_Runner.Text.To_String (Shown (First_Of (G))))
+                                                      & " (" & T.Image (Long_Long_Integer (Members (G))) & " "
+                                                      & Pres.Message_Value (Screen, "cli.choose.files") & ")"),
+                                     Tag        => Ada.Strings.Unbounded.Null_Unbounded_String,
+                                     Details    => Files,
+                                     Selectable => True));
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                     Taken := Model_Runner.CLI.Choosers.Choose (Screen, Title, Items);
+                     exit when Taken not in 1 .. Groups;
+                     --  The slot chosen, as the group it shows.
+                     Taken := Order (Taken);
+                     if Members (Taken) = 1 then
+                        Path   := Full (First_Of (Taken));
+                        Picked := True;
+                        exit;
+                     end if;
+
+                     --  A group: which of its files.
+                     declare
+                        Files : Model_Runner.CLI.Choosers.Choice_List;
+                        Index : array (1 .. Count) of Natural := [others => 0];
+                        Used  : Natural := 0;
+                        Which : Natural;
+                     begin
+                        for I in 1 .. Count loop
+                           if Group_Of (I) = Taken then
+                              Used := Used + 1;
+                              Index (Used) := I;
+                              Model_Runner.CLI.Choosers.Append
+                                (Files,
+                                 (Label      => Ada.Strings.Unbounded.To_Unbounded_String (Labelled (I)),
+                                  Tag        => Too_Big_Tag (I),
+                                  Details    => Ada.Strings.Unbounded.To_Unbounded_String
+                                                  (Model_Runner.Text.To_String (Full (I))),
+                                  Selectable => True));
+                           end if;
+                        end loop;
+                        Which := Model_Runner.CLI.Choosers.Choose
+                          (Screen, "cli.choose.variant", Files,
+                           Heading => Base_Of (Model_Runner.Text.To_String (Shown (First_Of (Taken))))
+                                      & ": " & Pres.Message_Value (Screen, "cli.choose.variant"));
+                        if Which in 1 .. Used then
+                           Path   := Full (Index (Which));
+                           Picked := True;
+                           exit;
+                        end if;
+                        --  Esc: back to the models.
+                     end;
+                  end;
+               end loop;
+            end;
             return;
          end;
       end if;

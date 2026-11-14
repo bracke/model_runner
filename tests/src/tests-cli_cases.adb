@@ -15992,12 +15992,15 @@ package body Tests.CLI_Cases is
       Last    : Ada.Streams.Stream_Element_Offset;
       Drawn   : U.Unbounded_String;
       Words   : Hostkit.String_Vectors.Vector;
+      Group_Files : U.Unbounded_String;
 
       --  The environment but for the home and where data and settings
       --  live: those are this test's own.
       procedure Keep_Variable (Name, Value : String) is
       begin
-         if Name not in "TERM" | "HOME" | "XDG_DATA_HOME" | "XDG_CONFIG_HOME" | "XDG_CACHE_HOME" then
+         if Name not in "TERM" | "HOME" | "XDG_DATA_HOME" | "XDG_CONFIG_HOME" | "XDG_CACHE_HOME"
+                      | "MODEL_RUNNER_CONFIG"
+         then
             Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
          end if;
       end Keep_Variable;
@@ -16037,9 +16040,67 @@ package body Tests.CLI_Cases is
       end if;
       Ada.Directories.Create_Path (Home & "/models");
       Tiny_Model.Write (Model, Room => 64);
+      --  One model in two quantizations, offered as one; and one the
+      --  settings file hides.
+      Tiny_Model.Write (Home & "/models/family-Q4_K_M.gguf", Room => 64);
+      Tiny_Model.Write (Home & "/models/family-Q8_0.gguf", Room => 64);
+      Tiny_Model.Write (Home & "/models/hidden-model.gguf", Room => 64);
+      declare
+         Settings : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Settings, Ada.Text_IO.Out_File, Home & "/settings");
+         Ada.Text_IO.Put_Line (Settings, "models-hide = HIDDEN*");
+         Ada.Text_IO.Close (Settings);
+      end;
+      --  Beside it a speech model's header and a file of tensors alone, no
+      --  metadata: neither holds a conversation, and neither is offered.
+      declare
+         procedure Header (Path, Architecture : String) is
+            use Ada.Streams;
+            Architecture_Key : constant String := "general.architecture";
+            File  : Ada.Streams.Stream_IO.File_Type;
+            Bytes : Stream_Element_Array (1 .. 512) := [others => 0];
+            Used  : Stream_Element_Offset := 0;
+            procedure Put (Value : Interfaces.Unsigned_64; Width : Positive) is
+               Rest : Interfaces.Unsigned_64 := Value;
+            begin
+               for Count in 1 .. Width loop
+                  Used := Used + 1;
+                  Bytes (Used) := Stream_Element (Rest mod 256);
+                  Rest := Rest / 256;
+               end loop;
+            end Put;
+            procedure Put (Text : String) is
+            begin
+               for C of Text loop
+                  Used := Used + 1;
+                  Bytes (Used) := Character'Pos (C);
+               end loop;
+            end Put;
+         begin
+            Put ("GGUF");
+            Put (3, 4);
+            Put (0, 8);
+            Put ((if Architecture = "" then 0 else 1), 8);
+            if Architecture /= "" then
+               Put (Interfaces.Unsigned_64 (Architecture_Key'Length), 8);
+               Put (Architecture_Key);
+               Put (8, 4);
+               Put (Interfaces.Unsigned_64 (Architecture'Length), 8);
+               Put (Architecture);
+            end if;
+            Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Path);
+            Ada.Streams.Stream_IO.Write (File, Bytes (1 .. Used));
+            Ada.Streams.Stream_IO.Close (File);
+         end Header;
+      begin
+         Header (Home & "/models/speech-model.gguf", "whisper");
+         Header (Home & "/models/tensors-alone.gguf", "");
+      end;
       Ada.Environment_Variables.Iterate (Keep_Variable'Access);
       Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
       Options.Environment.Append (U.To_Unbounded_String ("HOME=" & Home));
+      Options.Environment.Append (U.To_Unbounded_String ("MODEL_RUNNER_CONFIG=" & Home & "/settings"));
       Options.Replace_Environment := True;
       Options.Working_Directory := U.To_Unbounded_String (Home);
       Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 100))
@@ -16057,6 +16118,17 @@ package body Tests.CLI_Cases is
       begin
          Send ("/model" & ASCII.CR);
          Take (3000);
+         declare
+            Listed : constant Natural := U.Length (Drawn);
+         begin
+            --  The group chosen: its files offered, Esc back to the models,
+            --  Esc again keeping the model running.
+            Send ("/family" & ASCII.CR);
+            Take (2000);
+            Group_Files := U.To_Unbounded_String (U.Slice (Drawn, Listed + 1, U.Length (Drawn)));
+         end;
+         Send ([1 => ASCII.ESC]);
+         Take (2000);
          Send ([1 => ASCII.ESC]);
          Take (2000);
          Send ("/exit" & ASCII.CR);
@@ -16070,6 +16142,16 @@ package body Tests.CLI_Cases is
                     "the model on hand was not offered: " & Offered);
             Assert (Ada.Strings.Fixed.Index (Offered, "download") = 0,
                     "a model to download was offered: " & Offered);
+            Assert (Ada.Strings.Fixed.Index (Offered, "family (2 files)") > 0,
+                    "two quantizations of one model were not one entry: " & Offered);
+            Assert (U.Index (Group_Files, "family-Q4_K_M.gguf") > 0
+                    and then U.Index (Group_Files, "family-Q8_0.gguf") > 0,
+                    "a group chosen did not offer its files: " & U.To_String (Group_Files));
+            Assert (Ada.Strings.Fixed.Index (Offered, "hidden-model") = 0,
+                    "a model the settings file hides was offered: " & Offered);
+            Assert (Ada.Strings.Fixed.Index (Offered, "speech-model") = 0
+                    and then Ada.Strings.Fixed.Index (Offered, "tensors-alone") = 0,
+                    "a model that holds no conversation was offered: " & Offered);
          end;
       end;
    end Model_Selector_Offers_Only_Models_On_Hand;
@@ -18551,7 +18633,7 @@ package body Tests.CLI_Cases is
          "once loaded, a run says which model runs and with the settings it decided");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
-         "/model alone offers the models on this machine and nothing to download");
+         "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Switch_Carries_The_Conversation'Access,
          "/model goes on with another model, the conversation with it, and back where one will not load");
