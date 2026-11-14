@@ -15531,6 +15531,148 @@ package body Tests.CLI_Cases is
       end;
    end Load_Spinner_Leaves_Nothing_Behind;
 
+   --  In the conversation a blank line stands between the message typed
+   --  and the reply: the session in a pseudo-terminal, "hi" typed, and
+   --  what was drawn after its line read back -- its line ended, then a
+   --  blank one, before anything of the reply.
+   procedure Typed_Message_Gets_A_Blank_Line
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package U renames Ada.Strings.Unbounded;
+
+      Model   : constant String := Ada.Directories.Full_Name ("obj/blank-line-model.gguf");
+      Project : constant String := Ada.Directories.Full_Name ("obj/blank-line-project");
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Drawn   : U.Unbounded_String;
+      Words   : Hostkit.String_Vectors.Vector;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      --  What the session draws, kept, until it is quiet.
+      procedure Take (Quiet : Integer) is
+      begin
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, Quiet) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               U.Append (Drawn, Character'Val (B));
+            end loop;
+         end loop;
+      end Take;
+
+      procedure Send (Text : String) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Text'Length));
+      begin
+         for Index in Text'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index - Text'First + 1)) := Character'Pos (Text (Index));
+         end loop;
+         Assert (Hostkit.Descriptors."="
+                   (Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last), Hostkit.Descriptors.Transfer_Ok),
+                 "a key was not sent");
+      end Send;
+
+      --  The text after a point as it shows: the terminal's sequences and
+      --  carriage returns left out, line feeds kept.
+      function Shown (Text : String) return String is
+         Seen  : U.Unbounded_String;
+         Index : Natural := Text'First;
+      begin
+         while Index <= Text'Last loop
+            if Text (Index) = ASCII.ESC then
+               Index := Index + 1;
+               if Index <= Text'Last and then Text (Index) = '[' then
+                  Index := Index + 1;
+                  while Index <= Text'Last and then Text (Index) not in '@' .. '~' loop
+                     Index := Index + 1;
+                  end loop;
+               end if;
+               Index := Index + 1;
+            elsif Text (Index) = ASCII.CR then
+               Index := Index + 1;
+            else
+               U.Append (Seen, Text (Index));
+               Index := Index + 1;
+            end if;
+         end loop;
+         return U.To_String (Seen);
+      end Shown;
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      Tiny_Model.Write (Model, Room => 64);
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Ada.Directories.Create_Path (Project);
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Options.Working_Directory := U.To_Unbounded_String (Project);
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 80))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      Words.Append (U.To_Unbounded_String (Model));
+      Words.Append (U.To_Unbounded_String ("--backend"));
+      Words.Append (U.To_Unbounded_String ("cpu"));
+      Words.Append (U.To_Unbounded_String ("--max-tokens"));
+      Words.Append (U.To_Unbounded_String ("1"));
+      Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+              "the session did not start");
+      Hostkit.Pty.Close_Device (Pair);
+      Take (5000);
+      Send ("hi" & ASCII.CR);
+      Take (5000);
+      Send ("/exit" & ASCII.CR);
+      Take (3000);
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Hostkit.Pty.Close (Pair);
+
+      declare
+         Whole : constant String := U.To_String (Drawn);
+         Typed : constant Natural := Ada.Strings.Fixed.Index (Whole, "> hi", Ada.Strings.Backward);
+      begin
+         Assert (Typed > 0, "the typed message was not drawn: " & Whole);
+         declare
+            After : constant String := Shown (Whole (Typed + 4 .. Whole'Last));
+            Feeds : Natural := 0;
+         begin
+            --  The typed line's end and a blank line, before the reply's
+            --  first character -- the prompt's progress line.
+            for C of After loop
+               exit when C /= ASCII.LF;
+               Feeds := Feeds + 1;
+            end loop;
+            Assert (Feeds = 2,
+                    "after the typed message came" & Feeds'Image & " line ends, not its own and a blank one: ["
+                    & After (After'First .. Natural'Min (After'Last, After'First + 60)) & "]");
+         end;
+      end;
+   end Typed_Message_Gets_A_Blank_Line;
+
    ---------------------------------------------
 
    --  A vocabulary that wants no beginning marker is not given one.
@@ -17831,6 +17973,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Load_Spinner_Leaves_Nothing_Behind'Access,
          "the load's steps are drawn with the spinner, fit the window and leave nothing behind");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Typed_Message_Gets_A_Blank_Line'Access,
+         "a blank line stands between a message typed and the reply");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Harmony_Replies_Are_Shown_As_Text'Access,
          "a harmony reply is shown as its reasoning and answer, its calls "
