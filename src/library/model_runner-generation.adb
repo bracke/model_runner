@@ -1818,10 +1818,11 @@ package body Model_Runner.Generation is
            L.Capacity (Session) - L.Position (Session);
          Remaining : constant Natural := Prompt_Count - First_Token + 1;
          --  The context that holds what was asked: the hint names it.
+         --  A reply that may fill the context asked for no room of its own.
          Holds_All : constant Long_Long_Integer :=
            Long_Long_Integer (L.Position (Session))
            + Long_Long_Integer (Remaining)
-           + Long_Long_Integer (Item.Max_Tokens);
+           + (if Item.Fill_Context then 0 else Long_Long_Integer (Item.Max_Tokens));
       begin
          if Remaining > Available then
             Status := E.Make (E.Generation_Prompt_Too_Long);
@@ -1843,6 +1844,7 @@ package body Model_Runner.Generation is
          --  it. The prompt still has to fit -- there is nothing to drop
          --  before it has been read -- which is the check above.
          if Item.Context_Shift = 0
+           and then not Item.Fill_Context
            and then Remaining + Item.Max_Tokens > Available
          then
             Status := E.Make (E.Generation_Context_Exhausted);

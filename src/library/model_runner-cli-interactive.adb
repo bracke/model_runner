@@ -735,7 +735,9 @@ package body Model_Runner.CLI.Interactive is
          Pres.Put_Heading (Screen, "cli.interactive.settings.length", Pres.Diagnostic, Gap => True);
          Pres.Put_Field
            (Screen, "cli.interactive.setting.max_tokens",
-            T.Image (Long_Long_Integer (Item.Max_Tokens)), Pres.Diagnostic);
+            (if Item.Max_Tokens_Set then T.Image (Long_Long_Integer (Item.Max_Tokens))
+             else Pres.Message_Value (Screen, "cli.run.starting.reply_open")),
+            Pres.Diagnostic);
       end Show_Settings;
 
       --  Declared here because a command runs one: an answer handed back
@@ -1602,9 +1604,13 @@ package body Model_Runner.CLI.Interactive is
             return;
          end if;
 
-         --  The room a turn of a conversation is given; see Reply_Tokens.
-         --  The plain run's 256 cut a reasoning model off mid-thought.
-         Request.Max_Tokens := Opt.Reply_Tokens (Item, L.Capacity (Session));
+         --  A turn of the conversation has no limit but --max-tokens: it
+         --  runs until the model ends it, Ctrl-C stops it, or the context
+         --  is full. Someone is watching, and a limit nobody chose cut
+         --  answers -- a reasoning model's above all -- off mid-thought.
+         Request.Max_Tokens :=
+           (if Item.Max_Tokens_Set then Item.Max_Tokens else L.Capacity (Session));
+         Request.Fill_Context := not Item.Max_Tokens_Set;
          Request.Sampling := Opt.Sampling_For (Item, Prepared);
          Request.Seed := Item.Seed;
          Request.Has_Seed := Item.Has_Seed;
@@ -1801,6 +1807,8 @@ package body Model_Runner.CLI.Interactive is
                 then "cli.run.reasoning_cut"
                 else "cli.interactive.reply_cut"),
                [Loc.Named ("value", T.Image (Long_Long_Integer (Request.Max_Tokens)))]);
+         elsif Last_Result.Reason = Gen.Context_Full then
+            Pres.Put_Note (Screen, "cli.interactive.reply_context_full");
          end if;
 
          if Tools /= null and then Model_Runner.Tools.Count (Tools.all) > 0

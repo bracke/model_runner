@@ -130,6 +130,11 @@ option always wins.
   `~/.cache/model_runner/panels` so the next load maps them. `--repack none`
   keeps the file's layout.
 - **How the context is stored.** Half precision (`--kv-cache f16`).
+- **How long a reply may be.** In a conversation, no limit: a reply runs
+  until the model ends it, Ctrl-C stops it, or the context is full, which is
+  said. With a prompt, at most 4,096 tokens, or less where the context fills
+  first, as nobody may be watching to stop one that never ends. An agent's
+  reply has 1,024, or more with a reasoning model. `--max-tokens` names one.
 - **Whether and how it drafts.** In this order: from the model's own
   next-token block where it carries one and that block is cheap beside the
   model; from a draft named beside the model in a `.draft` file; from the

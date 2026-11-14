@@ -839,6 +839,19 @@ package Model_Runner.CLI.Options is
                    then 1024
                    else Natural'Max (1024, Natural'Min (4096, Capacity / 4))))));
 
+   --  The longest reply `run` writes for a prompt where --max-tokens names
+   --  none: long enough for an answer and the reasoning before it, and a
+   --  bound where nobody may be watching to stop a reply that never ends.
+   Run_Reply_Default : constant := 4096;
+
+   --  The reply's limit for `run` with a prompt: --max-tokens, or the
+   --  default, which the context's end may cut shorter (Fill_Context).
+   --
+   --  @param Item The parsed command.
+   --  @return The reply's token limit.
+   function Run_Reply_Tokens (Item : Command) return Natural
+   is (if Item.Max_Tokens_Set then Item.Max_Tokens else Run_Reply_Default);
+
    --  Release the heap text a command owns. Idempotent.
    --
    --  @param Item Command to release.

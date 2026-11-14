@@ -468,6 +468,14 @@ package body Tests.CLI_Cases is
       Assert (Item.Prompt_Text /= null and then Item.Prompt_Text.all = "hello",
               "prompt text not captured");
       Assert (Item.Max_Tokens = 64, "--max-tokens=N form not accepted");
+      Assert (Model_Runner.CLI.Options.Run_Reply_Tokens (Item) = 64,
+              "a run's reply limit was not --max-tokens where it was named");
+      declare
+         Unnamed : Opt.Command;
+      begin
+         Assert (Model_Runner.CLI.Options.Run_Reply_Tokens (Unnamed) = 4096,
+                 "a run's reply limit where --max-tokens names none was not 4096");
+      end;
       Assert (Item.Sampling.Temperature = 0.0, "temperature not captured");
       Assert (Item.Has_Seed and then Item.Seed = 42, "seed not captured");
       Assert (Item.Stop_Count = 1
@@ -10090,6 +10098,20 @@ package body Tests.CLI_Cases is
                  & E.Error_Code'Image (Outcome.Error.Code));
          Assert (L.Position (Session) = 0,
                  "a rejected request evaluated tokens anyway");
+         Gen.Release (Outcome);
+
+         --  The same request for a reply nobody chose a length for: not
+         --  refused, it runs until the context is full and ends there.
+         Request.Fill_Context := True;
+         Gen.Generate
+           (Under.Ready, Session, "abc", Request, Stop, null,
+            Sink'Unchecked_Access, null, null, null, null, Outcome => Outcome);
+         Assert (Outcome.Reason = Gen.Context_Full,
+                 "a reply that may fill the context ended "
+                 & Gen.Completion_Reason'Image (Outcome.Reason));
+         Assert (L.Position (Session) = L.Capacity (Session),
+                 "a reply that filled the context stopped at" & L.Position (Session)'Image
+                 & " of" & L.Capacity (Session)'Image);
 
          Model_Runner.Stops.Close (Stop);
          L.Close (Session);
@@ -15604,7 +15626,7 @@ package body Tests.CLI_Cases is
                     [Model_Runner.Localization.Named ("model", "startup-model.gguf"),
                      Model_Runner.Localization.Named ("backend", "cpu"),
                      Model_Runner.Localization.Named ("size", Between (Context_At + 9 .. Context_To - 1)),
-                     Model_Runner.Localization.Named ("count", "8"),
+                     Model_Runner.Localization.Named ("count", Said ("cli.run.starting.reply_limit", "8")),
                      Model_Runner.Localization.Named
                        ("detail",
                         Said ("cli.run.starting.temperature", "0")

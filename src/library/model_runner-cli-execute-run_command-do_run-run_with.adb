@@ -167,7 +167,14 @@ procedure Run_With (Team : Workers_CPU.Pool_Reference) is
          [Loc.Named ("model", Path (Cut + 1 .. Path'Last)),
           Loc.Named ("backend", Model_Runner.Backend.Backend_Name (Item.Backend)),
           Loc.Named ("size", T.Image (Long_Long_Integer (L.Capacity (Session)))),
-          Loc.Named ("count", T.Image (Long_Long_Integer (Item.Max_Tokens))),
+          Loc.Named
+            ("count",
+             --  A conversation's turn has no limit unless one was named;
+             --  a run's reply has --max-tokens or the default.
+             (if Opt."=" (Item.Prompt_Kind, Opt.Prompt_Interactive) and then not Item.Max_Tokens_Set
+              then Loc.Text (Catalog, "cli.run.starting.reply_open")
+              else Loc.Text (Catalog, "cli.run.starting.reply_limit",
+                             [Loc.Named ("value", T.Image (Long_Long_Integer (Opt.Run_Reply_Tokens (Item))))]))),
           Loc.Named
             ("detail",
              Part ("cli.run.starting.temperature", Number (Used.Temperature))
@@ -1848,7 +1855,12 @@ begin
          declare
             Request : Gen.Request;
          begin
-            Request.Max_Tokens := Item.Max_Tokens;
+            --  --max-tokens, or the default, which the context's end may
+            --  cut shorter: a reply no length was named for runs on until
+            --  the context is full rather than being refused before it
+            --  starts.
+            Request.Max_Tokens := Opt.Run_Reply_Tokens (Item);
+            Request.Fill_Context := not Item.Max_Tokens_Set;
             for Index in 1 .. Item.Bias_Count loop
                Request.Bias_Tokens (Index) :=
                  Model_Runner.Tokenizer.Token_Id
@@ -2041,7 +2053,13 @@ begin
       then
          Pres.Put_Note
            (Screen, "cli.run.reasoning_cut",
-            [Loc.Named ("value", T.Image (Long_Long_Integer (Item.Max_Tokens)))]);
+            [Loc.Named ("value", T.Image (Long_Long_Integer (Opt.Run_Reply_Tokens (Item))))]);
+      end if;
+
+      --  A reply that ran to the context's end: said, as a reply cut at
+      --  its limit is, with what gives it more room.
+      if Outcome.Reason = Gen.Context_Full then
+         Pres.Put_Note (Screen, "cli.run.reply_context_full");
       end if;
 
       --  What the reply asked for, read out of it and shown. The

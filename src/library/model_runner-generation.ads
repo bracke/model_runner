@@ -80,6 +80,12 @@ package Model_Runner.Generation is
       --  asks for.
       Max_Tokens : Natural := 256;
 
+      --  Whether the reply may run until the context is full: Max_Tokens is
+      --  then only an upper bound, the room left after the prompt not
+      --  checked against it first, and a reply that reaches the context's
+      --  end ends Context_Full. For a reply nobody chose a length for.
+      Fill_Context : Boolean := False;
+
       --  When it must be done by, or Time_Last for no time limit: checked
       --  beside the cancellation between steps of the prompt and between
       --  tokens, so a long reply stops at its caller's deadline with what
