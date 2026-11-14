@@ -1,11 +1,23 @@
 package body Model_Runner.Output.Reasoning is
 
-   procedure Show (Self : in out Filter; Text : String) is
+   --  What is held to show, written now.
+   procedure Release (Self : in out Filter) is
+      use Ada.Strings.Unbounded;
       Closed : Boolean;
    begin
+      if Length (Self.Pending) > 0 then
+         if not Self.Shut then
+            Emit (Self.Target, To_String (Self.Pending), Closed);
+            Self.Shut := Self.Shut or else Closed;
+         end if;
+         Self.Pending := Null_Unbounded_String;
+      end if;
+   end Release;
+
+   procedure Show (Self : in out Filter; Text : String) is
+   begin
       if Text'Length > 0 and then not Self.Shut then
-         Emit (Self.Target, Text, Closed);
-         Self.Shut := Self.Shut or else Closed;
+         Ada.Strings.Unbounded.Append (Self.Pending, Text);
          Self.Shown := True;
          Self.Last := Text (Text'Last);
       end if;
@@ -15,6 +27,7 @@ package body Model_Runner.Output.Reasoning is
    procedure Unstyle (Self : in out Filter) is
    begin
       if Self.Styled then
+         Release (Self);
          Style (Self.Target, Plain);
          Self.Styled := False;
       end if;
@@ -36,6 +49,7 @@ package body Model_Runner.Output.Reasoning is
             Self.Block_Leading := False;
          end if;
          if not Self.Styled then
+            Release (Self);
             Style (Self.Target, Output.Thought);
             Self.Styled := True;
          end if;
@@ -118,6 +132,7 @@ package body Model_Runner.Output.Reasoning is
       for C of Item loop
          Take (Self, C);
       end loop;
+      Release (Self);
       Closed := Self.Shut;
    end Write;
 
@@ -132,6 +147,7 @@ package body Model_Runner.Output.Reasoning is
       --  Nothing after this is left in the reasoning's style: a reply
       --  stopped inside the block, or a pause in it, takes it up again
       --  with its next text.
+      Release (Self);
       Unstyle (Self);
       Flush_Sink (Self.Target, Closed);
       Self.Shut := Self.Shut or else Closed;

@@ -15014,6 +15014,14 @@ package body Tests.CLI_Cases is
          Assert (Shown = "No reasoning here, <thin> stays.",
                  "a reply with no block lost text: [" & Shown & "]");
 
+         --  A piece read is passed on whole, not a character at a time.
+         Screen.Used := 0;
+         Screen.Fragments := 0;
+         Unthought.Start_Reply (Inside => False);
+         Unthought.Write ("No block, one piece.", Closed);
+         Assert (Shown = "No block, one piece." and then Screen.Fragments = 1,
+                 "a piece was passed on in" & Screen.Fragments'Image & " writes");
+
          --  Shown rather than left out: the block without its markers, in
          --  the reasoning's style, a blank line before the answer.
          Screen.Marks := True;

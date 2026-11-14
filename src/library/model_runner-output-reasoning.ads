@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 --  A reply shown without its think block, or with it set apart.
 --
 --  A model that reasons before it answers writes the reasoning between
@@ -75,6 +76,9 @@ private
       Thought       : Boolean := False;
       Last          : Character := ASCII.LF;
       Styled        : Boolean := False;
+      --  What is shown of the piece being read, written as one when the
+      --  piece is done -- a character at a time, each was a write of its own.
+      Pending : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Output.Reasoning;

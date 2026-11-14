@@ -1,3 +1,4 @@
+with Ada.Strings.Unbounded;
 --  gpt-oss's harmony form, shown as text.
 --
 --  A harmony reply is messages, each a header and a body between special
@@ -75,6 +76,9 @@ private
       --  shown in the target's reasoning style -- and whether it is now.
       Thinking : Boolean := False;
       Styled   : Boolean := False;
+      --  What is shown of the piece being read, written as one when the
+      --  piece is done -- a character at a time, each was a write of its own.
+      Pending : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
 end Model_Runner.Output.Harmony;

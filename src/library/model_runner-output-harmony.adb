@@ -4,25 +4,39 @@ package body Model_Runner.Output.Harmony is
 
    Message : constant String := "<|message|>";
 
+   --  What is held to show, written now.
+   procedure Release (Self : in out Filter) is
+      use Ada.Strings.Unbounded;
+      Closed : Boolean;
+   begin
+      if Length (Self.Pending) > 0 then
+         if not Self.Shut then
+            Emit (Self.Target, To_String (Self.Pending), Closed);
+            Self.Shut := Self.Shut or else Closed;
+         end if;
+         Self.Pending := Null_Unbounded_String;
+      end if;
+   end Release;
+
    --  The reasoning's style ended, where it was begun.
    procedure Unstyle (Self : in out Filter) is
    begin
       if Self.Styled then
+         Release (Self);
          Style (Self.Target, Plain);
          Self.Styled := False;
       end if;
    end Unstyle;
 
    procedure Show (Self : in out Filter; Text : String) is
-      Closed : Boolean;
    begin
       if Text'Length > 0 and then not Self.Shut then
          if Self.Thinking and then not Self.Styled then
+            Release (Self);
             Style (Self.Target, Output.Thought);
             Self.Styled := True;
          end if;
-         Emit (Self.Target, Text, Closed);
-         Self.Shut := Self.Shut or else Closed;
+         Ada.Strings.Unbounded.Append (Self.Pending, Text);
          Self.Shown := True;
       end if;
    end Show;
@@ -140,6 +154,7 @@ package body Model_Runner.Output.Harmony is
       for C of Item loop
          Take (Self, C);
       end loop;
+      Release (Self);
       Closed := Self.Shut;
    end Write;
 
@@ -158,6 +173,7 @@ package body Model_Runner.Output.Harmony is
          Show (Self, Self.Held (1 .. Self.Used));
          Self.Used := 0;
       end if;
+      Release (Self);
       Unstyle (Self);
       Flush_Sink (Self.Target, Closed);
       Self.Shut := Self.Shut or else Closed;
