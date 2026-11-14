@@ -694,8 +694,69 @@ package body Model_Runner.Presentation is
       end if;
    end Clear_Trail;
 
+   --  Under Progress_Lock: columns the reply's row has taken, counted as
+   --  the terminal wraps them, from where the reply or its last line
+   --  began.
+   Answer_Columns : Natural := 0;
+
+   --  The window's width, where it is known.
+   function Window_Columns return Natural is
+      Size : Hostkit.Terminal_Control.Window_Size;
+   begin
+      if Hostkit.Terminal_Control.Size (Hostkit.Descriptors.Standard_Error, Size) then
+         return Size.Columns;
+      end if;
+      return 0;
+   exception
+      when others =>
+         return 0;
+   end Window_Columns;
+
+   --  Whether the reply's last row is full to its edge: the terminal has
+   --  not wrapped yet, and a spinner drawn there would make it wrap -- the
+   --  line feed after it then left a blank row.
+   function At_The_Edge return Boolean is
+      W : constant Natural := Window_Columns;
+   begin
+      return W > 0 and then Answer_Columns > 0 and then Answer_Columns mod W = 0;
+   end At_The_Edge;
+
+   --  The columns a piece of the reply takes, counted on from where the
+   --  last one ended: from its last line end where it has one. A style's
+   --  sequence takes none.
+   procedure Count_Columns (Item : String) is
+      W    : constant Natural := Window_Columns;
+      From : Natural := Item'First;
+   begin
+      if Item'Length = 0 or else Item (Item'First) = ASCII.ESC then
+         return;
+      end if;
+      for Index in reverse Item'Range loop
+         if Item (Index) in ASCII.LF | ASCII.CR then
+            Answer_Columns := 0;
+            From := Index + 1;
+            exit;
+         end if;
+      end loop;
+      if W = 0 then
+         Answer_Columns := Answer_Columns + Model_Runner.UTF8.Wrapped_Columns (Item (From .. Item'Last), Positive'Last);
+      else
+         --  Measured from the column it starts in: a tab's stop and a
+         --  wide character at the edge depend on that, not on the rows.
+         declare
+            Column : constant Natural := Answer_Columns mod W;
+         begin
+            Answer_Columns := Answer_Columns - Column
+              + Model_Runner.UTF8.Wrapped_Columns ((1 .. Column => ' ') & Item (From .. Item'Last), W);
+         end;
+      end if;
+   end Count_Columns;
+
    procedure Draw_Trail is
    begin
+      if At_The_Edge then
+         return;
+      end if;
       String'Write (Answer_Stream, Spinner_Frames (Spinner_Turn) & ASCII.BS);
       Trail_Drawn := True;
    end Draw_Trail;
@@ -787,6 +848,7 @@ package body Model_Runner.Presentation is
          Progress_Last := False;
          Clear_Trail;
          String'Write (Answer_Stream, Item);
+         Count_Columns (Item);
          if Trail_Active then
             Draw_Trail;
          end if;
@@ -807,6 +869,7 @@ package body Model_Runner.Presentation is
       begin
          if On then
             Trail_Active := True;
+            Answer_Columns := 0;
             Draw_Trail;
             Start_Spinner := not Spinner_Runs;
             Spinner_Runs := True;
