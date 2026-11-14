@@ -4,10 +4,23 @@ package body Model_Runner.Output.Harmony is
 
    Message : constant String := "<|message|>";
 
+   --  The reasoning's style ended, where it was begun.
+   procedure Unstyle (Self : in out Filter) is
+   begin
+      if Self.Styled then
+         Style (Self.Target, Plain);
+         Self.Styled := False;
+      end if;
+   end Unstyle;
+
    procedure Show (Self : in out Filter; Text : String) is
       Closed : Boolean;
    begin
       if Text'Length > 0 and then not Self.Shut then
+         if Self.Thinking and then not Self.Styled then
+            Style (Self.Target, Output.Thought);
+            Self.Styled := True;
+         end if;
          Emit (Self.Target, Text, Closed);
          Self.Shut := Self.Shut or else Closed;
          Self.Shown := True;
@@ -18,12 +31,16 @@ package body Model_Runner.Output.Harmony is
    procedure Marker (Self : in out Filter; Text : String) is
    begin
       if Text in "<|end|>" | "<|call|>" | "<|return|>" then
+         Unstyle (Self);
+         Self.Thinking := False;
          if Self.Where = Showing then
             Show (Self, [1 => ASCII.LF]);
          end if;
          Self.Where := In_Header;
       elsif Text in "<|start|>" | "<|channel|>" then
          --  A header opened without the end of the message before it.
+         Unstyle (Self);
+         Self.Thinking := False;
          Self.Where := In_Header;
          Self.Held (1 .. Text'Length) := Text;
          Self.Used := Text'Length;
@@ -53,6 +70,9 @@ package body Model_Runner.Output.Harmony is
                                (Self.Held (1 .. Self.Used), "final") = 0
                   then Hiding
                   else Showing);
+               Self.Thinking :=
+                 Self.Where = Showing
+                 and then Ada.Strings.Fixed.Index (Self.Held (1 .. Self.Used), "analysis") > 0;
                Self.Used := 0;
             elsif Self.Used = Self.Held'Length then
                Self.Where := Showing;
@@ -99,6 +119,8 @@ package body Model_Runner.Output.Harmony is
 
    procedure Answer_Only (Self : in out Filter; On : Boolean) is
    begin
+      Unstyle (Self);
+      Self.Thinking := False;
       Self.Only_Final := On;
       Self.Shown := False;
       --  A turn starts at its header: what a turn cut short held -- a stray
@@ -136,6 +158,7 @@ package body Model_Runner.Output.Harmony is
          Show (Self, Self.Held (1 .. Self.Used));
          Self.Used := 0;
       end if;
+      Unstyle (Self);
       Flush_Sink (Self.Target, Closed);
       Self.Shut := Self.Shut or else Closed;
       Closed := Self.Shut;

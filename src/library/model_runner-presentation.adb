@@ -1815,6 +1815,47 @@ package body Model_Runner.Presentation is
       return (if Self.Terminal then T.Show_Controls (Item, Self.Lead, Self.Held_CR) else Item);
    end Shown;
 
+   ----------------
+   -- Use_Styles --
+   ----------------
+
+   procedure Use_Styles (Self : in out Standard_Output_Sink; On : Boolean) is
+   begin
+      Self.Styled := On;
+   end Use_Styles;
+
+   ---------------
+   -- Set_Style --
+   ---------------
+
+   overriding procedure Set_Style
+     (Self : in out Standard_Output_Sink; Style : Model_Runner.Output.Text_Style)
+   is
+      use type Model_Runner.Output.Text_Style;
+      Wanted : constant Boolean := Style = Model_Runner.Output.Thought;
+   begin
+      if not Self.Styled or else Wanted = Self.Italic then
+         return;
+      end if;
+      if not Self.Asked then
+         Self.Terminal := Model_Runner.Platform.Is_Terminal (1);
+         Self.Asked := True;
+      end if;
+      --  Written as Write_Shown writes, but no text: the line is as open
+      --  as it was.
+      if Self.Terminal and then not Self.Closed then
+         begin
+            String'Write
+              (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output),
+               ASCII.ESC & (if Wanted then "[3m" else "[23m"));
+            Self.Italic := Wanted;
+         exception
+            when others =>
+               Self.Closed := True;
+         end;
+      end if;
+   end Set_Style;
+
    -----------------
    -- Write_Shown --
    -----------------

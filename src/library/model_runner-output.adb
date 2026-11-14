@@ -20,6 +20,17 @@ package body Model_Runner.Output is
    -- Flush_Sink --
    ----------------
 
+   procedure Style (Item : Sink_Reference; Style : Text_Style) is
+   begin
+      if Item /= null then
+         Item.all.Set_Style (Style);
+      end if;
+   end Style;
+
+   ----------------
+   -- Flush_Sink --
+   ----------------
+
    procedure Flush_Sink (Item : Sink_Reference; Closed : out Boolean) is
    begin
       if Item = null then

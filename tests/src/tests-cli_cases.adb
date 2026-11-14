@@ -172,12 +172,18 @@ package body Tests.CLI_Cases is
       Limit     : Natural := Max_Captured;
       Closed    : Boolean := False;
       Fragments : Natural := 0;
+      --  Whether a change of style is written into the capture, as {i}
+      --  for reasoning and {/i} for plain text.
+      Marks     : Boolean := False;
    end record;
 
    overriding procedure Write
      (Self   : in out Capture_Sink;
       Item   : String;
       Closed : out Boolean);
+
+   overriding procedure Set_Style
+     (Self : in out Capture_Sink; Style : Model_Runner.Output.Text_Style);
 
    overriding procedure Flush
      (Self : in out Capture_Sink; Closed : out Boolean);
@@ -209,6 +215,18 @@ package body Tests.CLI_Cases is
 
    overriding function Is_Closed (Self : Capture_Sink) return Boolean
    is (Self.Closed);
+
+   overriding procedure Set_Style
+     (Self : in out Capture_Sink; Style : Model_Runner.Output.Text_Style)
+   is
+      use type Model_Runner.Output.Text_Style;
+      Mark : constant String := (if Style = Model_Runner.Output.Thought then "{i}" else "{/i}");
+   begin
+      if Self.Marks and then Self.Used + Mark'Length <= Self.Limit then
+         Self.Data (Self.Used + 1 .. Self.Used + Mark'Length) := Mark;
+         Self.Used := Self.Used + Mark'Length;
+      end if;
+   end Set_Style;
 
    function Captured (Self : Capture_Sink) return String
    is (Self.Data (1 .. Self.Used));
@@ -14995,7 +15013,50 @@ package body Tests.CLI_Cases is
          Feed (Unthought, "No reasoning here, <thin> stays.");
          Assert (Shown = "No reasoning here, <thin> stays.",
                  "a reply with no block lost text: [" & Shown & "]");
+
+         --  Shown rather than left out: the block without its markers, in
+         --  the reasoning's style, a blank line before the answer.
+         Screen.Marks := True;
+         Unthought.Show_Reasoning (True);
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => False);
+         Feed (Unthought, "<think>" & ASCII.LF & "is a < b?" & ASCII.LF & "</think>"
+                          & ASCII.LF & ASCII.LF & "Yes.");
+         Assert (Shown = "{i}is a < b?" & ASCII.LF & "{/i}" & ASCII.LF & "Yes.",
+                 "a think block shown was not set apart: [" & Shown & "]");
+
+         --  One the prompt opened, and one with no line end before the
+         --  close; an empty one shows nothing and no blank line.
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => True);
+         Feed (Unthought, "opened</think>Done.");
+         Assert (Shown = "{i}opened{/i}" & ASCII.LF & ASCII.LF & "Done.",
+                 "a block the prompt opened was shown as [" & Shown & "]");
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => False);
+         Feed (Unthought, "<think>" & ASCII.LF & ASCII.LF & "</think>" & ASCII.LF & ASCII.LF & "Done.");
+         Assert (Shown = "Done.", "an empty think block showed: [" & Shown & "]");
+
+         --  A reply the limit stopped in its reasoning leaves no style on.
+         Screen.Used := 0;
+         Unthought.Start_Reply (Inside => True);
+         Feed (Unthought, "still");
+         Assert (Shown = "{i}still{/i}", "a reply cut in its reasoning left its style on: [" & Shown & "]");
+         Unthought.Show_Reasoning (False);
       end;
+
+      --  gpt-oss's analysis channel, shown, is set apart too.
+      Screen.Used := 0;
+      declare
+         Tidy : Model_Runner.Output.Harmony.Filter (Screen'Unchecked_Access);
+      begin
+         Tidy.Answer_Only (False);
+         Feed (Tidy, "<|channel|>analysis<|message|>Think.<|end|>"
+                     & "<|start|>assistant<|channel|>final<|message|>Yes.<|return|>");
+         Assert (Shown = "{i}Think.{/i}" & ASCII.LF & "Yes." & ASCII.LF,
+                 "a harmony reply's reasoning was not set apart: [" & Shown & "]");
+      end;
+      Screen.Marks := False;
    end Reasoning_Is_Hidden_When_Asked;
 
    ---------------------------------------------

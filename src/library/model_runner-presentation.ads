@@ -776,6 +776,22 @@ package Model_Runner.Presentation is
    --  @return True once closure was observed.
    overriding function Is_Closed (Self : Standard_Output_Sink) return Boolean;
 
+   --  Whether reasoning is set apart -- in italics -- where standard output
+   --  is a terminal. Off unless asked: a console told to style nothing
+   --  leaves it as it is.
+   --
+   --  @param Self Sink instance.
+   --  @param On Whether to set reasoning apart.
+   procedure Use_Styles (Self : in out Standard_Output_Sink; On : Boolean);
+
+   --  Reasoning in italics, the rest plain, where styles are used and
+   --  standard output is a terminal.
+   --
+   --  @param Self Sink instance.
+   --  @param Style How what follows is to look.
+   overriding procedure Set_Style
+     (Self : in out Standard_Output_Sink; Style : Model_Runner.Output.Text_Style);
+
    --  End the line the model's text left open, where it left one and
    --  standard output is a terminal: what is said beside the text -- a
    --  call it made, what the call answered -- starts a line of its own on
@@ -830,6 +846,9 @@ private
       Open     : Boolean := False;
       --  A carriage return that ended the last piece, held for the next.
       Held_CR  : Boolean := False;
+      --  Whether reasoning is set apart, and whether it is now.
+      Styled   : Boolean := False;
+      Italic   : Boolean := False;
    end record;
 
    type Progress_Reporter (Owner : access Console)

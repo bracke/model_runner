@@ -1,10 +1,12 @@
---  A reply shown without its think block.
+--  A reply shown without its think block, or with it set apart.
 --
 --  A model that reasons before it answers writes the reasoning between
 --  <think> and </think> -- or, where its prompt opened the block, from the
 --  reply's first token to the close. `run --hide-reasoning` shows what
 --  follows the close alone; this sink stands between the generation and
 --  the screen and leaves the block, and the space after its close, out.
+--  Told to show the reasoning, it shows the block without its markers, in
+--  the target's reasoning style, a blank line between it and the answer.
 package Model_Runner.Output.Reasoning is
 
    --  The filter, writing what it shows to Target.
@@ -24,6 +26,13 @@ package Model_Runner.Output.Reasoning is
    --  @param Self Filter.
    --  @return True when nothing has reached Target.
    function Showed_Nothing (Self : Filter) return Boolean;
+
+   --  Show the think block -- without its markers, styled as reasoning --
+   --  rather than leave it out.
+   --
+   --  @param Self Filter.
+   --  @param On Whether the block is shown.
+   procedure Show_Reasoning (Self : in out Filter; On : Boolean);
 
    --  Take a fragment of the reply, showing what is not reasoning.
    --
@@ -58,6 +67,14 @@ private
       Used    : Natural := 0;
       Shut    : Boolean := False;
       Shown   : Boolean := False;
+      --  Whether the block is shown, set apart; whether its first text,
+      --  space aside, is still to come; whether any of it was shown, and
+      --  the last character shown, for the line between it and the answer.
+      Showing_Block : Boolean := False;
+      Block_Leading : Boolean := False;
+      Thought       : Boolean := False;
+      Last          : Character := ASCII.LF;
+      Styled        : Boolean := False;
    end record;
 
 end Model_Runner.Output.Reasoning;

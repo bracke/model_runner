@@ -41,7 +41,24 @@ package Model_Runner.Output is
    --  @return True once closure has been observed.
    function Is_Closed (Self : Sink) return Boolean is abstract;
 
+   --  How the text written next is to look: the model's own words, or its
+   --  reasoning, set apart where the destination can set it apart.
+   type Text_Style is (Plain, Thought);
+
+   --  Look of the text written next. A destination that sets nothing apart
+   --  -- a file, a pipe, a test's capture -- ignores it.
+   --
+   --  @param Self Sink instance.
+   --  @param Style How what follows is to look.
+   procedure Set_Style (Self : in out Sink; Style : Text_Style) is null;
+
    type Sink_Reference is access all Sink'Class;
+
+   --  Set_Style on a sink, where there is one.
+   --
+   --  @param Item Sink, or null.
+   --  @param Style How what follows is to look.
+   procedure Style (Item : Sink_Reference; Style : Text_Style);
 
    --  Write to a possibly absent sink.
    --

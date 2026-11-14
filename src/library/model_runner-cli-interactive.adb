@@ -1642,6 +1642,11 @@ package body Model_Runner.CLI.Interactive is
          Tidied.Answer_Only (Item.Hide_Reasoning);
          Unthought.Start_Reply
            (Inside => Model_Runner.Agent.Thought_Open ("", Rendered.all));
+         --  At a terminal the think block is shown without its markers,
+         --  in italics where answers are styled; written elsewhere, the
+         --  text is the model's as it wrote it.
+         Unthought.Show_Reasoning (not Item.Hide_Reasoning);
+         Sink.Use_Styles (Pres.Styles_Answers (Screen));
          Gen.Generate
            (Source   => Prepared,
             Session  => Session,
@@ -1651,7 +1656,8 @@ package body Model_Runner.CLI.Interactive is
             Rules    => Rules,
             Sink     =>
               (if Harmony then Tidied'Unchecked_Access
-               elsif Item.Hide_Reasoning then Unthought'Unchecked_Access
+               elsif Item.Hide_Reasoning or else Model_Runner.Platform.Is_Terminal (1)
+               then Unthought'Unchecked_Access
                else Sink'Unchecked_Access),
             Observer => null,
             Time     => Clock'Unchecked_Access,

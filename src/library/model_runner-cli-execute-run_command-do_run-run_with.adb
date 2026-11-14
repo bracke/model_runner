@@ -1912,6 +1912,11 @@ begin
             --  opened, for --hide-reasoning to leave out from its start.
             Unthought.Start_Reply
               (Inside => Model_Runner.Agent.Thought_Open ("", Rendered.all));
+            --  At a terminal the think block is shown without its markers,
+            --  in italics where answers are styled; written elsewhere, the
+            --  text is the model's as it wrote it.
+            Unthought.Show_Reasoning (not Item.Hide_Reasoning);
+            Sink.Use_Styles (Pres.Styles_Answers (Screen));
             Tidied.Answer_Only (Item.Hide_Reasoning);
             Gen.Generate
               (Source   => Prepared,
@@ -1927,7 +1932,8 @@ begin
                           (L.Template_Format (Prepared)),
                         Model_Runner.Tools.Harmony_Call)
                   then Tidied'Unchecked_Access
-                  elsif Item.Hide_Reasoning then Unthought'Unchecked_Access
+                  elsif Item.Hide_Reasoning or else Model_Runner.Platform.Is_Terminal (1)
+                  then Unthought'Unchecked_Access
                   else Sink'Unchecked_Access),
                Observer => Reporter'Unchecked_Access,
                Time     => Clock'Unchecked_Access,

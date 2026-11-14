@@ -71,6 +71,10 @@ private
       Shut  : Boolean := False;
       Only_Final : Boolean := False;
       Shown : Boolean := False;
+      --  Whether the message shown is the analysis channel's -- reasoning,
+      --  shown in the target's reasoning style -- and whether it is now.
+      Thinking : Boolean := False;
+      Styled   : Boolean := False;
    end record;
 
 end Model_Runner.Output.Harmony;
