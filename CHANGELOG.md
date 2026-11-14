@@ -15,6 +15,7 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Enter sends the message at the terminal.** A typed line went on to a second prompt, `. (empty line sends)`, and only an empty line after it reached the model. Now Enter sends; a line ending in `\` goes on to the next, and a paste brings its own line ends as before. Input read from a file or pipe still gathers lines until an empty one.
 - **Software rasterizers are no longer mistaken for compute devices.** Device inventories still report processor-backed Vulkan implementations such as llvmpipe, and low-level diagnostics may opt into one, but ordinary device opens refuse them. The mandatory suite therefore skips device work when no hardware device is available instead of spending hours on software Vulkan and risking its teardown deadlock. Cache-regression verdicts are now separately tested at their exact bounds, for every regression, for malformed values, and for missing or incomplete turn campaigns.
 
 - **Cache regressions are executable, and the remaining production measurements are complete.** `tests speed` now reports cumulative/reused prompt tokens for a turns campaign and can fail on a rewind, minimum cache-hit rate, evaluated-token or prompt-time ceiling, and output digest. The committed five-turn workload carries the Qwen3 0.6B thresholds. A filled 11,142-token Qwen3 8B run peaked at 9.68 GiB without swap, and its delegate trial completed in 184 s with 72 s in one helper, supporting the 8,192-token, one-helper operating point.

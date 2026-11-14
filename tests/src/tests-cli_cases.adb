@@ -16742,8 +16742,7 @@ package body Tests.CLI_Cases is
       Drain;
       Send (Long & ASCII.CR);
       Drain;
-      --  An empty line sends the turn; only then is /exit a command and
-      --  not more of the message.
+      --  Enter sent each line as a turn; an empty one sends nothing.
       Send ([1 => ASCII.CR]);
       Drain (5000);
       Send ("/exit" & ASCII.CR);

@@ -2377,7 +2377,21 @@ package body Model_Runner.CLI.Interactive is
                   if Model_Runner.Cancellation."/=" (Cancel, null) then
                      Cancel.Reset;
                   end if;
-                  Offer (Typing, Line, Effect);
+                  --  At a terminal Enter sends the message, as a chat's
+                  --  line does; a line ending in a backslash goes on to the
+                  --  next, and a paste brings its own line ends. Read from
+                  --  elsewhere, lines gather until an empty one.
+                  declare
+                     Goes_On : constant Boolean :=
+                       Edited and then Line'Length > 0 and then Line (Line'Last) = '\';
+                  begin
+                     Offer (Typing,
+                            (if Goes_On then Line (Line'First .. Line'Last - 1) else Line),
+                            Effect);
+                     if Edited and then not Goes_On and then Effect = Held then
+                        Effect := Submits;
+                     end if;
+                  end;
                   case Effect is
                      when Is_Command =>
                         --  Offer says so only for a line Parse reads as one,
