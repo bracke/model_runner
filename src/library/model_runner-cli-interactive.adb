@@ -454,6 +454,9 @@ package body Model_Runner.CLI.Interactive is
          Stop_Set'Unchecked_Access, Screen'Unchecked_Access,
          Asked_For'Unchecked_Access, Cancel, Worker_Notes'Unchecked_Access);
       Sink     : aliased Pres.Standard_Output_Sink;
+      --  The prompt's progress, said where the reply waits for it: a
+      --  long prompt is read for seconds before its first word.
+      Reporter : aliased Pres.Progress_Reporter (Screen'Unchecked_Access);
       --  Speech into the line being typed, where a speech model is named:
       --  its own model, read on first use, beside this one and apart from
       --  it; stopped however the session ends.
@@ -1659,7 +1662,7 @@ package body Model_Runner.CLI.Interactive is
                elsif Item.Hide_Reasoning or else Model_Runner.Platform.Is_Terminal (1)
                then Unthought'Unchecked_Access
                else Sink'Unchecked_Access),
-            Observer => null,
+            Observer => Reporter'Unchecked_Access,
             Time     => Clock'Unchecked_Access,
             Seeds    => Seeds'Unchecked_Access,
             Cancel   => Cancel,

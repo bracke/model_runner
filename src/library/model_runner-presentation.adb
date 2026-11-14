@@ -1,3 +1,4 @@
+with Ada.Task_Identification;
 with Ada.Calendar;
 with Hostkit.Descriptors;
 with Hostkit.Terminal_Control;
@@ -697,7 +698,12 @@ package body Model_Runner.Presentation is
             declare
                use type Ada.Calendar.Time;
             begin
-               Turning := Progress_Last and then Ada.Calendar.Clock - Progress_Since < Spinner_Patience;
+               --  Nor once the program's main part has returned: a line
+               --  left last then would hold its end until the patience
+               --  ran out.
+               Turning := Progress_Last
+                 and then Ada.Calendar.Clock - Progress_Since < Spinner_Patience
+                 and then Ada.Task_Identification.Is_Callable (Ada.Task_Identification.Environment_Task);
                if Turning then
                   Spinner_Turn := (Spinner_Turn + 1) mod Spinner_Frames'Length;
                   Ada.Text_IO.Put
@@ -2115,6 +2121,15 @@ package body Model_Runner.Presentation is
          --  where nothing else was written between: the load reads as one
          --  line that changes, not a column of finished steps. The line is
          --  ended, so what is written next starts on a line of its own.
+         --  At a terminal a reply's progress is its prompt's: from its
+         --  first token the answer is what moves, and a line a token beside
+         --  it broke the answer's text apart.
+         if Owner.Capabilities.Error_Is_Terminal
+           and then P."=" (Item.Kind, P.Generation_Event)
+           and then Item.Generation in P.Token_Produced | P.Generation_Completed
+         then
+            return;
+         end if;
          if Owner.Capabilities.Error_Is_Terminal then
             declare
                Start_Spinner : Boolean := False;
@@ -2126,7 +2141,11 @@ package body Model_Runner.Presentation is
                   end if;
                   --  The model ready, the load's line is cleared, not
                   --  replaced: what comes next takes its row.
-                  if P."=" (Item.Kind, P.Load_Event) and then P."=" (Item.Load, P.Model_Ready) then
+                  --  So is a prompt's, once the reply begins.
+                  if (P."=" (Item.Kind, P.Load_Event) and then P."=" (Item.Load, P.Model_Ready))
+                    or else (P."=" (Item.Kind, P.Generation_Event)
+                             and then P."=" (Item.Generation, P.Generation_Started))
+                  then
                      Progress_Last := False;
                   else
                      --  Cut to the window, the spinner and a column spare
