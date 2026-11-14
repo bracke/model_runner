@@ -1930,6 +1930,8 @@ package body Model_Runner.CLI.Interactive is
                   Seen : Natural := Project_Seen;
                   Told : constant String := Model_Runner.CLI.Project_Commands.Changes_Since (Seen);
                begin
+                  --  A blank line between the message typed and the reply.
+                  Pres.Put_Blank_Line (Screen);
                   Take_Turn (Told & Prompt);
                   if Turn_Taken then
                      Project_Seen := Seen;

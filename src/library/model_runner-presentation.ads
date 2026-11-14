@@ -511,6 +511,14 @@ package Model_Runner.Presentation is
    --  a download's meter -- calls this first.
    procedure End_Progress_Line;
 
+   --  A blank line on a terminal, for distance: between the command line
+   --  that started the program and what it says, and between a message
+   --  typed and the reply. Nothing where standard error is no terminal or
+   --  the console is quiet.
+   --
+   --  @param Item Console to write to.
+   procedure Put_Blank_Line (Item : in out Console);
+
    --  The columns a reply's row has taken after a piece of it, counted as
    --  the terminal wraps them: from the last line end in the piece where it
    --  has one, else on from Before; a style's sequence takes none.

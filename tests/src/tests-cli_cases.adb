@@ -15490,6 +15490,10 @@ package body Tests.CLI_Cases is
             return;
          end if;
 
+         --  A blank line first, apart from the command line.
+         Assert (Drawn'Length >= 2 and then Drawn (Drawn'First .. Drawn'First + 1) = ASCII.CR & ASCII.LF,
+                 "the run did not begin with a blank line");
+
          --  Each step a line of its own, the glyph first, cut to the
          --  window with a column spare.
          At_It := Ada.Strings.Fixed.Index (Drawn, Glyph_Lead);

@@ -338,6 +338,9 @@ package body Model_Runner.CLI.Driver is
          end;
       end if;
 
+      --  A blank line first, at a terminal: what the program says stands
+      --  apart from the command line that started it.
+      Pres.Put_Blank_Line (Screen);
       Model_Runner.CLI.Execute.Dispatch (Item, Screen, Catalog, Status);
 
       Opt.Release (Item);

@@ -1456,6 +1456,18 @@ package body Model_Runner.Presentation is
    function Coloured_Commands (Item : Console; Text : String) return String
    is (if Styles_Diagnostics (Item) then Commands_Coloured (Text) else Text);
 
+   procedure Put_Blank_Line (Item : in out Console) is
+   begin
+      if Item.Capabilities.Error_Is_Terminal and then Item.Level /= Opt.Quiet then
+         End_Progress_Line;
+         Ada.Text_IO.New_Line (Ada.Text_IO.Current_Error);
+         Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+      end if;
+   exception
+      when others =>
+         null;
+   end Put_Blank_Line;
+
    procedure Clear_Screen (Item : in out Console) is
    begin
       if Item.Capabilities.Error_Is_Terminal then
