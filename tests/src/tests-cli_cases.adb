@@ -15067,6 +15067,61 @@ package body Tests.CLI_Cases is
       Screen.Marks := False;
    end Reasoning_Is_Hidden_When_Asked;
 
+   --  The reply's spinner and the window's edge: a row the reply fills
+   --  exactly is not wrapped yet, and the spinner drawn there wrapped it,
+   --  so the line end after it left a blank row. The columns are counted
+   --  as the terminal wraps them, and a full row is one the spinner waits
+   --  on.
+   procedure Reply_Spinner_Waits_At_The_Edge
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Pres renames Model_Runner.Presentation;
+      Wide : constant String :=
+        Character'Val (16#E4#) & Character'Val (16#B8#) & Character'Val (16#AD#);
+      Columns : Natural;
+   begin
+      --  Ten columns wide: eight, then two more fill the row; the line
+      --  end starts the next row afresh.
+      Columns := Pres.Reply_Columns (0, "abcdefgh", 10);
+      Assert (Columns = 8 and then not Pres.Row_Full (Columns, 10),
+              "eight of ten columns were counted as" & Columns'Image);
+      Columns := Pres.Reply_Columns (Columns, "ij", 10);
+      Assert (Columns = 10 and then Pres.Row_Full (Columns, 10),
+              "a row filled exactly was not full:" & Columns'Image);
+      Columns := Pres.Reply_Columns (Columns, "" & ASCII.LF, 10);
+      Assert (Columns = 0 and then not Pres.Row_Full (Columns, 10),
+              "a line end did not start the row afresh:" & Columns'Image);
+
+      --  Past the edge the rows go on, and a second row filled is full.
+      Columns := Pres.Reply_Columns (0, "abcdefghijklmnopqrst", 10);
+      Assert (Columns = 20 and then Pres.Row_Full (Columns, 10),
+              "two rows filled were counted as" & Columns'Image);
+      Columns := Pres.Reply_Columns (Columns, "u", 10);
+      Assert (Columns = 21 and then not Pres.Row_Full (Columns, 10),
+              "a character after a full row did not wrap:" & Columns'Image);
+
+      --  A wide character in the last column goes to the next row whole:
+      --  the column it skipped is counted, and the row is not full.
+      Columns := Pres.Reply_Columns (0, "abcdefghi", 10);
+      Columns := Pres.Reply_Columns (Columns, Wide, 10);
+      Assert (Columns = 12 and then not Pres.Row_Full (Columns, 10),
+              "a wide character at the edge was counted as" & Columns'Image);
+
+      --  A tab goes to its stop, counted from the row's start; a style's
+      --  sequence takes no column.
+      Columns := Pres.Reply_Columns (0, "abcd", 10);
+      Columns := Pres.Reply_Columns (Columns, "" & ASCII.HT, 10);
+      Assert (Columns = 8, "a tab from column four went to" & Columns'Image);
+      Columns := Pres.Reply_Columns (Columns, ASCII.ESC & "[3m", 10);
+      Assert (Columns = 8, "a style's sequence took columns:" & Columns'Image);
+
+      --  A window of unknown width has no edge.
+      Columns := Pres.Reply_Columns (0, "abcdefghij", 0);
+      Assert (Columns = 10 and then not Pres.Row_Full (Columns, 0),
+              "a window of unknown width had an edge");
+   end Reply_Spinner_Waits_At_The_Edge;
+
    ---------------------------------------------
 
    --  A vocabulary that wants no beginning marker is not given one.
@@ -17358,6 +17413,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Reasoning_Is_Hidden_When_Asked'Access,
          "--hide-reasoning shows a reply's answer without its reasoning");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Reply_Spinner_Waits_At_The_Edge'Access,
+         "the reply's spinner waits while a row is full to the window's edge");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Harmony_Replies_Are_Shown_As_Text'Access,
          "a harmony reply is shown as its reasoning and answer, its calls "

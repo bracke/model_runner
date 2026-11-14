@@ -694,6 +694,36 @@ package body Model_Runner.Presentation is
       end if;
    end Clear_Trail;
 
+   function Reply_Columns (Before : Natural; Item : String; Width : Natural) return Natural is
+      From    : Natural := Item'First;
+      Columns : Natural := Before;
+   begin
+      if Item'Length = 0 or else Item (Item'First) = ASCII.ESC then
+         return Before;
+      end if;
+      for Index in reverse Item'Range loop
+         if Item (Index) in ASCII.LF | ASCII.CR then
+            Columns := 0;
+            From := Index + 1;
+            exit;
+         end if;
+      end loop;
+      if Width = 0 then
+         return Columns + Model_Runner.UTF8.Wrapped_Columns (Item (From .. Item'Last), Positive'Last);
+      end if;
+      --  Measured from the column it starts in: a tab's stop and a wide
+      --  character at the edge depend on that, not on the rows above.
+      declare
+         Column : constant Natural := Columns mod Width;
+      begin
+         return Columns - Column
+           + Model_Runner.UTF8.Wrapped_Columns ([1 .. Column => ' '] & Item (From .. Item'Last), Width);
+      end;
+   end Reply_Columns;
+
+   function Row_Full (Columns, Width : Natural) return Boolean
+   is (Width > 0 and then Columns > 0 and then Columns mod Width = 0);
+
    --  Under Progress_Lock: columns the reply's row has taken, counted as
    --  the terminal wraps them, from where the reply or its last line
    --  began.
@@ -715,41 +745,11 @@ package body Model_Runner.Presentation is
    --  Whether the reply's last row is full to its edge: the terminal has
    --  not wrapped yet, and a spinner drawn there would make it wrap -- the
    --  line feed after it then left a blank row.
-   function At_The_Edge return Boolean is
-      W : constant Natural := Window_Columns;
-   begin
-      return W > 0 and then Answer_Columns > 0 and then Answer_Columns mod W = 0;
-   end At_The_Edge;
+   function At_The_Edge return Boolean is (Row_Full (Answer_Columns, Window_Columns));
 
-   --  The columns a piece of the reply takes, counted on from where the
-   --  last one ended: from its last line end where it has one. A style's
-   --  sequence takes none.
    procedure Count_Columns (Item : String) is
-      W    : constant Natural := Window_Columns;
-      From : Natural := Item'First;
    begin
-      if Item'Length = 0 or else Item (Item'First) = ASCII.ESC then
-         return;
-      end if;
-      for Index in reverse Item'Range loop
-         if Item (Index) in ASCII.LF | ASCII.CR then
-            Answer_Columns := 0;
-            From := Index + 1;
-            exit;
-         end if;
-      end loop;
-      if W = 0 then
-         Answer_Columns := Answer_Columns + Model_Runner.UTF8.Wrapped_Columns (Item (From .. Item'Last), Positive'Last);
-      else
-         --  Measured from the column it starts in: a tab's stop and a
-         --  wide character at the edge depend on that, not on the rows.
-         declare
-            Column : constant Natural := Answer_Columns mod W;
-         begin
-            Answer_Columns := Answer_Columns - Column
-              + Model_Runner.UTF8.Wrapped_Columns ((1 .. Column => ' ') & Item (From .. Item'Last), W);
-         end;
-      end if;
+      Answer_Columns := Reply_Columns (Answer_Columns, Item, Window_Columns);
    end Count_Columns;
 
    procedure Draw_Trail is

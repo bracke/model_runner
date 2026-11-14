@@ -511,6 +511,25 @@ package Model_Runner.Presentation is
    --  a download's meter -- calls this first.
    procedure End_Progress_Line;
 
+   --  The columns a reply's row has taken after a piece of it, counted as
+   --  the terminal wraps them: from the last line end in the piece where it
+   --  has one, else on from Before; a style's sequence takes none.
+   --
+   --  @param Before Columns taken before the piece.
+   --  @param Item The piece, as written.
+   --  @param Width The window's width; 0 where it is not known.
+   --  @return Columns taken after it.
+   function Reply_Columns (Before : Natural; Item : String; Width : Natural) return Natural;
+
+   --  Whether a row is full to its edge, the terminal not yet wrapped:
+   --  where the reply's spinner is not drawn, as drawing it would wrap the
+   --  row and a line end after it would leave a blank one.
+   --
+   --  @param Columns Columns the reply's row has taken.
+   --  @param Width The window's width; 0 where it is not known.
+   --  @return Whether the last row is exactly full.
+   function Row_Full (Columns, Width : Natural) return Boolean;
+
    --  Clear a terminal's screen, its cursor at the top: nothing where
    --  standard error is no terminal.
    --
