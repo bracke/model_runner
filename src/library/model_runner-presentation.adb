@@ -1,3 +1,4 @@
+with Ada.Calendar;
 with Hostkit.Descriptors;
 with Hostkit.Terminal_Control;
 with Ada.Characters.Handling;
@@ -629,20 +630,106 @@ package body Model_Runner.Presentation is
    --  nothing. The parameter stays because every writer here takes one and a
    --  writer that does not is a writer somebody will call from the wrong
    --  place.
+   --  The progress line and its spinner.
+   --
    --  Whether the last line written to the terminal was a progress line,
-   --  which the next one takes the place of.
-   Progress_Last : Boolean := False;
-   pragma Atomic (Progress_Last);
+   --  which the next one takes the place of, and the spinner before it
+   --  turns: a step -- the weights read from disk -- can take many
+   --  seconds with nothing new to say, and a line that does not move
+   --  looks like a program that has stopped. The spinner is a task that
+   --  turns the line's first column; it writes only while the line is the
+   --  last thing written, and every other writer ends that first, under
+   --  the same lock, so the two never write at once.
+   protected Progress_Lock is
+      entry Seize;
+      procedure Release;
+   private
+      Held : Boolean := False;
+   end Progress_Lock;
+
+   protected body Progress_Lock is
+      entry Seize when not Held is
+      begin
+         Held := True;
+      end Seize;
+
+      procedure Release is
+      begin
+         Held := False;
+      end Release;
+   end Progress_Lock;
+
+   --  Under Progress_Lock: the line's state, its text, the spinner's turn,
+   --  whether the spinner runs, and when the line last changed.
+   Progress_Last  : Boolean := False;
+   Spinner_Turn   : Natural := 0;
+   Spinner_Runs   : Boolean := False;
+   Progress_Since : Ada.Calendar.Time := Ada.Calendar.Clock;
+
+   --  The braille spinner's frames, U+280B on, as UTF-8.
+   type Frame_List is array (0 .. 9) of String (1 .. 3);
+   function Braille (Low : Natural) return String is
+     [Character'Val (16#E2#), Character'Val (16#A0#), Character'Val (Low)];
+   Spinner_Frames : constant Frame_List :=
+     [Braille (16#8B#), Braille (16#99#), Braille (16#B9#), Braille (16#B8#), Braille (16#BC#),
+      Braille (16#B4#), Braille (16#A6#), Braille (16#A7#), Braille (16#87#), Braille (16#8F#)];
+
+   --  A spinner left turning while the program ends would hold its end:
+   --  it stops by itself once the line has said nothing new for so long.
+   Spinner_Patience : constant Duration := 600.0;
+
+   task Spinner is
+      entry Start;
+   end Spinner;
+
+   task body Spinner is
+      Turning : Boolean;
+   begin
+      loop
+         select
+            accept Start;
+         or
+            terminate;
+         end select;
+         loop
+            delay 0.1;
+            Progress_Lock.Seize;
+            declare
+               use type Ada.Calendar.Time;
+            begin
+               Turning := Progress_Last and then Ada.Calendar.Clock - Progress_Since < Spinner_Patience;
+               if Turning then
+                  Spinner_Turn := (Spinner_Turn + 1) mod Spinner_Frames'Length;
+                  Ada.Text_IO.Put
+                    (Ada.Text_IO.Current_Error,
+                     ASCII.ESC & "[1A" & ASCII.CR & Spinner_Frames (Spinner_Turn)
+                     & ASCII.ESC & "[1B" & ASCII.CR);
+                  Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+               else
+                  Spinner_Runs := False;
+               end if;
+            exception
+               when others =>
+                  Spinner_Runs := False;
+                  Turning := False;
+            end;
+            Progress_Lock.Release;
+            exit when not Turning;
+         end loop;
+      end loop;
+   end Spinner;
 
    procedure End_Progress_Line is
    begin
+      Progress_Lock.Seize;
       Progress_Last := False;
+      Progress_Lock.Release;
    end End_Progress_Line;
 
    procedure Error_Line (Item : in out Console; Text : String) is
       pragma Unreferenced (Item);
    begin
-      Progress_Last := False;
+      End_Progress_Line;
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Text);
    exception
       when Ada.IO_Exceptions.Device_Error | Ada.IO_Exceptions.Use_Error =>
@@ -1196,7 +1283,7 @@ package body Model_Runner.Presentation is
 
    procedure Put_Prompt (Item : in out Console; Key : String) is
    begin
-      Progress_Last := False;
+      End_Progress_Line;
       Ada.Text_IO.Put (Ada.Text_IO.Current_Error, Message (Item, Key) & ' ');
       Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
    exception
@@ -1210,7 +1297,7 @@ package body Model_Runner.Presentation is
    procedure Clear_Screen (Item : in out Console) is
    begin
       if Item.Capabilities.Error_Is_Terminal then
-         Progress_Last := False;
+         End_Progress_Line;
          Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[H" & ASCII.ESC & "[2J");
          Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
       end if;
@@ -1224,7 +1311,7 @@ package body Model_Runner.Presentation is
       Key       : String;
       Arguments : Loc.Argument_List) is
    begin
-      Progress_Last := False;
+      End_Progress_Line;
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Message (Item, Key, Arguments));
       Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
    exception
@@ -1860,6 +1947,7 @@ package body Model_Runner.Presentation is
       --  Written as Write_Shown writes, but no text: the line is as open
       --  as it was.
       if Self.Terminal and then not Self.Closed then
+         End_Progress_Line;
          begin
             String'Write
               (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output),
@@ -1897,7 +1985,7 @@ package body Model_Runner.Presentation is
       --  and sending it through Current_Output puts it in the middle of
       --  whatever else a test was capturing there, which is how a layout
       --  check came to read " a Statistics" as a line.
-      Progress_Last := False;
+      End_Progress_Line;
       String'Write
         (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
       if Item'Length > 0 then
@@ -2028,31 +2116,51 @@ package body Model_Runner.Presentation is
          --  line that changes, not a column of finished steps. The line is
          --  ended, so what is written next starts on a line of its own.
          if Owner.Capabilities.Error_Is_Terminal then
-            if Progress_Last then
-               Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[1A" & ASCII.CR & ASCII.ESC & "[K");
-            end if;
-            --  The model ready, the load's line is cleared, not replaced:
-            --  what comes next takes its row.
-            if P."=" (Item.Kind, P.Load_Event) and then P."=" (Item.Load, P.Model_Ready) then
-               Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
-               Progress_Last := False;
-               return;
-            end if;
-            --  Cut to the window, a column spare: a step that wrapped took
-            --  two rows, and the next, climbing one, left the first behind.
             declare
-               Size : Hostkit.Terminal_Control.Window_Size;
-               Upto : Natural := Line'Length;
+               Start_Spinner : Boolean := False;
             begin
-               if Hostkit.Terminal_Control.Size (Hostkit.Descriptors.Standard_Error, Size)
-                 and then Size.Columns > 1
-               then
-                  Upto := Model_Runner.UTF8.Fitting (Line, Size.Columns - 1);
+               Progress_Lock.Seize;
+               begin
+                  if Progress_Last then
+                     Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[1A" & ASCII.CR & ASCII.ESC & "[K");
+                  end if;
+                  --  The model ready, the load's line is cleared, not
+                  --  replaced: what comes next takes its row.
+                  if P."=" (Item.Kind, P.Load_Event) and then P."=" (Item.Load, P.Model_Ready) then
+                     Progress_Last := False;
+                  else
+                     --  Cut to the window, the spinner and a column spare
+                     --  beside it: a step that wrapped took two rows, and
+                     --  the next, climbing one, left the first behind.
+                     declare
+                        Size : Hostkit.Terminal_Control.Window_Size;
+                        Upto : Natural := Line'Length;
+                     begin
+                        if Hostkit.Terminal_Control.Size (Hostkit.Descriptors.Standard_Error, Size)
+                          and then Size.Columns > 3
+                        then
+                           Upto := Model_Runner.UTF8.Fitting (Line, Size.Columns - 3);
+                        end if;
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Current_Error,
+                           Spinner_Frames (Spinner_Turn) & " " & Line (Line'First .. Line'First + Upto - 1));
+                     end;
+                     Progress_Last := True;
+                     Progress_Since := Ada.Calendar.Clock;
+                     Start_Spinner := not Spinner_Runs;
+                     Spinner_Runs := True;
+                  end if;
+                  Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+               exception
+                  when others =>
+                     Progress_Lock.Release;
+                     raise;
+               end;
+               Progress_Lock.Release;
+               if Start_Spinner then
+                  Spinner.Start;
                end if;
-               Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line (Line'First .. Line'First + Upto - 1));
             end;
-            Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
-            Progress_Last := True;
          else
             Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
          end if;
