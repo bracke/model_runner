@@ -174,7 +174,8 @@ package body Model_Runner.Platform.Signals is
                declare
                   Back : constant String :=
                     (if Alternate then ASCII.ESC & "[?1049l" else "")
-                    & ASCII.ESC & "[?2004l" & ASCII.ESC & "[?25h";
+                    & ASCII.ESC & "[?2004l" & ASCII.ESC & "[>4m" & ASCII.ESC & "[<u"
+                    & ASCII.ESC & "[?25h";
                   Ignored : constant Integer := Write_Error (2, Back, Back'Length);
                   pragma Unreferenced (Ignored);
                begin

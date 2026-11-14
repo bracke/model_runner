@@ -644,7 +644,7 @@ package body Model_Runner.CLI.Choosers is
          if Guard.Bracketed then
             --  Bracketed paste off, and the modified keys' reporting back
             --  to the terminal's own.
-            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l" & ASCII.ESC & "[>4m");
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l" & ASCII.ESC & "[>4m" & ASCII.ESC & "[<u");
             Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
             Guard.Bracketed := False;
          end if;
@@ -2276,9 +2276,18 @@ package body Model_Runner.CLI.Choosers is
       Cursor_Before_Spoken        : Natural := 0;
       Undoable                    : Boolean := False;
 
-      --  Read one byte from the terminal, where one comes within a wait in
-      --  milliseconds.
-      function Read_Terminal (Wait : Integer; Into : out Character) return Boolean is
+      --  How long the rest of a key's sequence is waited for, in
+      --  milliseconds: over a slow link 30 took an arrow for Escape, and
+      --  Escape drops the line.
+      Key_Wait : constant := 100;
+
+      --  Bytes a key reported in the kitty keyboard protocol was put back
+      --  into, as the key's legacy bytes, still to be read.
+      Decoded : Unbounded_String;
+
+      --  Read one byte from the terminal, as it comes, where one comes
+      --  within a wait in milliseconds.
+      function Read_Raw (Wait : Integer; Into : out Character) return Boolean is
       begin
          if Wait >= 0 and then not Hostkit.Descriptors.Wait_Readable (Input, Wait) then
             return False;
@@ -2297,6 +2306,137 @@ package body Model_Runner.CLI.Choosers is
          end;
          Into := Character'Val (Buffer (Buffer'First));
          return True;
+      end Read_Raw;
+
+      --  Read one byte from the terminal, where one comes within a wait in
+      --  milliseconds. A key the kitty keyboard protocol reports -- CSI
+      --  code;modifiers u, asked for while the line is edited -- is read
+      --  as the bytes the key sends without it, so that the editor and
+      --  speech read one kind of key; Shift-Enter, which has none, as
+      --  Alt-Enter's, which breaks the line.
+      function Read_Terminal (Wait : Integer; Into : out Character) return Boolean is
+         Byte : Character;
+      begin
+         if Decoded /= Null_Unbounded_String then
+            Into := Element (Decoded, 1);
+            Delete (Decoded, 1, 1);
+            return True;
+         end if;
+         if not Read_Raw (Wait, Into) then
+            return False;
+         elsif Into /= ASCII.ESC then
+            return True;
+         elsif not Read_Raw (Key_Wait, Byte) then
+            return True;
+         elsif Byte /= '[' then
+            Append (Decoded, Byte);
+            return True;
+         end if;
+         declare
+            Seen    : Unbounded_String := To_Unbounded_String ("[");
+            Params  : array (1 .. 3) of Natural := [others => 0];
+            Count   : Positive := 1;
+            In_Sub  : Boolean := False;
+            Final   : Character := ASCII.NUL;
+         begin
+            while Read_Raw (Key_Wait, Byte) loop
+               Append (Seen, Byte);
+               if Byte in '0' .. '9' then
+                  if not In_Sub and then Params (Count) <= 99_999 then
+                     Params (Count) := Params (Count) * 10 + (Character'Pos (Byte) - Character'Pos ('0'));
+                  end if;
+               elsif Byte = ':' then
+                  In_Sub := True;
+               elsif Byte = ';' then
+                  In_Sub := False;
+                  exit when Count = Params'Last;
+                  Count := Count + 1;
+               elsif Byte in ' ' .. '/' | '<' .. '?' then
+                  null;
+               else
+                  Final := Byte;
+                  exit;
+               end if;
+            end loop;
+            if Final /= 'u' or else Element (Seen, 2) not in '0' .. '9' then
+               --  Another key's sequence, or the protocol's own answers:
+               --  the bytes as they came.
+               Append (Decoded, Seen);
+               return True;
+            end if;
+            declare
+               Mods  : constant Natural := (if Count >= 2 and then Params (2) > 0 then Params (2) - 1 else 0);
+               Shift : constant Boolean := Mods mod 2 = 1;
+               Alt   : constant Boolean := (Mods / 2) mod 2 = 1;
+               Ctrl  : constant Boolean := (Mods / 4) mod 2 = 1;
+               Code  : Natural := Params (1);
+               Keys  : Unbounded_String;
+            begin
+               --  The keypad's keys, which the protocol reports apart.
+               case Code is
+                  when 57_399 .. 57_408 => Code := Character'Pos ('0') + (Code - 57_399);
+                  when 57_409 => Code := Character'Pos ('.');
+                  when 57_410 => Code := Character'Pos ('/');
+                  when 57_411 => Code := Character'Pos ('*');
+                  when 57_412 => Code := Character'Pos ('-');
+                  when 57_413 => Code := Character'Pos ('+');
+                  when 57_414 => Code := 13;
+                  when 57_415 => Code := Character'Pos ('=');
+                  when others => null;
+               end case;
+               if Code = 13 then
+                  Keys := To_Unbounded_String (if Shift or Alt or Ctrl then ASCII.ESC & ASCII.CR else [1 => ASCII.CR]);
+               elsif Code = 27 then
+                  Keys := To_Unbounded_String ([1 => ASCII.ESC]);
+               elsif Code = 9 then
+                  Keys := To_Unbounded_String (if Shift then ASCII.ESC & "[Z" else [1 => ASCII.HT]);
+               elsif Code in 8 | 127 then
+                  Keys := To_Unbounded_String ((if Alt then [1 => ASCII.ESC] else "") & ASCII.DEL);
+               elsif Ctrl and then Code in Character'Pos ('@') .. Character'Pos ('_')
+                                         | Character'Pos ('a') .. Character'Pos ('z')
+               then
+                  Keys := To_Unbounded_String
+                    ((if Alt then [1 => ASCII.ESC] else "") & Character'Val (Code mod 32));
+               elsif Ctrl and then Code in Character'Pos (' ') | Character'Pos ('2') then
+                  Keys := To_Unbounded_String ((if Alt then [1 => ASCII.ESC] else "") & ASCII.NUL);
+               elsif Ctrl and then Code in Character'Pos ('/') | Character'Pos ('-') | Character'Pos ('7') then
+                  Keys := To_Unbounded_String ((if Alt then [1 => ASCII.ESC] else "") & Character'Val (16#1F#));
+               elsif Code >= 32 and then Code <= 16#10_FFFF# and then Code not in 16#D800# .. 16#DFFF#
+                 and then Code not in 57_344 .. 63_743
+               then
+                  --  A key with text: as typed, Alt as Escape before it.
+                  if Shift and then Code in Character'Pos ('a') .. Character'Pos ('z') then
+                     Code := Code - 32;
+                  end if;
+                  if Alt then
+                     Append (Keys, ASCII.ESC);
+                  end if;
+                  if Code < 16#80# then
+                     Append (Keys, Character'Val (Code));
+                  elsif Code < 16#800# then
+                     Append (Keys, Character'Val (16#C0# + Code / 64));
+                     Append (Keys, Character'Val (16#80# + Code mod 64));
+                  elsif Code < 16#1_0000# then
+                     Append (Keys, Character'Val (16#E0# + Code / 4096));
+                     Append (Keys, Character'Val (16#80# + (Code / 64) mod 64));
+                     Append (Keys, Character'Val (16#80# + Code mod 64));
+                  else
+                     Append (Keys, Character'Val (16#F0# + Code / 262_144));
+                     Append (Keys, Character'Val (16#80# + (Code / 4096) mod 64));
+                     Append (Keys, Character'Val (16#80# + (Code / 64) mod 64));
+                     Append (Keys, Character'Val (16#80# + Code mod 64));
+                  end if;
+               end if;
+               --  A key with no legacy bytes -- a media key, F13 -- is
+               --  nothing; the next is read.
+               if Keys = Null_Unbounded_String then
+                  return Read_Terminal (Wait, Into);
+               end if;
+               Into := Element (Keys, 1);
+               Decoded := Unbounded_Slice (Keys, 2, Length (Keys)) & Decoded;
+               return True;
+            end;
+         end;
       end Read_Terminal;
 
       --  Read one byte, the held keys first, where one comes within a wait
@@ -2311,10 +2451,10 @@ package body Model_Runner.CLI.Choosers is
          return Read_Terminal (Wait, Into);
       end Next;
 
-      --  How long the rest of a key's sequence is waited for, in
-      --  milliseconds: over a slow link 30 took an arrow for Escape, and
-      --  Escape drops the line.
-      Key_Wait : constant := 100;
+      --  Whether a byte is to be read now: held, put back, or waiting.
+      function Waiting return Boolean is
+        (Held_Keys /= Null_Unbounded_String or else Decoded /= Null_Unbounded_String
+         or else Hostkit.Descriptors.Wait_Readable (Input, 0));
 
       --  Whether the key before was a Tab that completed nothing more:
       --  a second lists what the word may be.
@@ -2610,9 +2750,11 @@ package body Model_Runner.CLI.Choosers is
          return "";
       end if;
       --  Bracketed paste on, and modified keys reported where the
-      --  terminal can (xterm's modifyOtherKeys, which tmux's extended keys
-      --  pass on): Shift-Enter is then a key of its own.
-      Put (ASCII.ESC & "[?2004h" & ASCII.ESC & "[>4;1m");
+      --  terminal can -- xterm's modifyOtherKeys, which tmux's extended
+      --  keys pass on, and the kitty keyboard protocol's first level, its
+      --  keys read back as legacy ones: Shift-Enter is then a key of its
+      --  own.
+      Put (ASCII.ESC & "[?2004h" & ASCII.ESC & "[>4;1m" & ASCII.ESC & "[>1u");
       Guard.Bracketed := True;
       --  Keys a question's line read past its end: this line's first.
       Held_Keys := Keys_Left;
@@ -2687,9 +2829,7 @@ package body Model_Runner.CLI.Choosers is
                   declare
                      After : Character;
                   begin
-                     if (Held_Keys /= Null_Unbounded_String
-                         or else Hostkit.Descriptors.Wait_Readable (Input, 0))
-                       and then Next (0, After) and then After /= ASCII.LF
+                     if Waiting and then Next (0, After) and then After /= ASCII.LF
                      then
                         Held_Keys := After & Held_Keys;
                      end if;
@@ -2944,7 +3084,7 @@ package body Model_Runner.CLI.Choosers is
          end if;
          --  Bytes still coming -- a paste, the rest of a character, keys
          --  held while speech worked -- are taken before it is drawn again.
-         if Held_Keys = Null_Unbounded_String and then not Hostkit.Descriptors.Wait_Readable (Input, 0) then
+         if not Waiting then
             Find_Ghost;
             Redraw;
          end if;
@@ -2967,7 +3107,7 @@ package body Model_Runner.CLI.Choosers is
       --  Keys read past this line's end -- two lines typed ahead while a
       --  question was asked -- are the next line's, not dropped; after
       --  Ctrl-C what was typed goes with the line.
-      Keys_Left := (if Outcome = Interrupted then Null_Unbounded_String else Held_Keys);
+      Keys_Left := (if Outcome = Interrupted then Null_Unbounded_String else Held_Keys & Decoded);
       --  A line not entered -- dropped, interrupted, ended -- ends any paste
       --  too: a closing mark that never came does not hold every later tab.
       if Outcome /= Entered then

@@ -16743,10 +16743,17 @@ package body Tests.CLI_Cases is
       Drain;
       Send (Long & ASCII.CR);
       Drain;
+      --  The tiny model's room is spent: the conversation cleared first.
+      Send ("/reset" & ASCII.CR);
+      Drain (1000);
       --  Enter sends; Ctrl-J, Alt-Enter, Shift-Enter in each way a terminal
-      --  reports it, and a backslash at the end break the line instead.
+      --  reports it -- the kitty protocol's among them -- and a backslash at
+      --  the end break the line instead.
       Send ("k1" & ASCII.LF & "a1" & ASCII.ESC & ASCII.CR & "s1" & ASCII.ESC & "OM"
-            & "u1" & ASCII.ESC & "[13;2u" & "x1" & ASCII.ESC & "[27;2;13~" & "b1\" & ASCII.CR);
+            & "u1" & ASCII.ESC & "[13;2u" & "x1" & ASCII.ESC & "[27;2;13~"
+            --  The kitty protocol's keys read as their legacy ones: Ctrl-J,
+            --  a keypad digit.
+            & "z" & ASCII.ESC & "[57400u" & ASCII.ESC & "[106;5u" & "b1\" & ASCII.CR);
       Drain (300);
       Send ("end" & ASCII.CR);
       Drain (5000);
@@ -16775,7 +16782,7 @@ package body Tests.CLI_Cases is
 
       declare
          Whole : Ada.Strings.Unbounded.Unbounded_String;
-         Want  : constant String := "k1|a1|s1|u1|x1|b1|end";
+         Want  : constant String := "k1|a1|s1|u1|x1|z1|b1|end";
          function Spelled (Mark : String) return String is
             Result : Ada.Strings.Unbounded.Unbounded_String;
          begin
