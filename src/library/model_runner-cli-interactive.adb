@@ -848,6 +848,17 @@ package body Model_Runner.CLI.Interactive is
          First : constant String :=
            (if Space = 0 then Line else Line (Line'First .. Space - 1));
 
+         --  The project's commands under their heading, one line each, and
+         --  how to learn more of one.
+         --  Those that apply where the session is, as /help project says
+         --  them, with how many more apply elsewhere.
+         procedure Put_Project_Help (Gap : Boolean) is
+         begin
+            Pres.Put_Heading (Screen, "cli.interactive.help.heading.projects", Pres.Diagnostic, Gap => Gap);
+            Model_Runner.CLI.Project_Commands.Help (Screen);
+            Pres.Put_Aside (Screen, "cli.interactive.help.projects");
+         end Put_Project_Help;
+
          --  A path as Tab completes it, quoted when it holds a space: the
          --  quotes are not part of its name.
          --  The text after a quoted path's closing quote, which no path
@@ -975,7 +986,7 @@ package body Model_Runner.CLI.Interactive is
 
          elsif Asked.Kind = Help
            and then Asked.First in Line'Range
-           and then Line (Asked.First .. Asked.Last) in "project" | "project all"
+           and then Line (Asked.First .. Asked.Last) in "project" | "projects" | "project all"
          then
             --  The project's commands that apply here, each with what it
             --  does; all of them where asked.
@@ -997,7 +1008,7 @@ package body Model_Runner.CLI.Interactive is
                --  The session's own commands a line of help is kept for; the
                --  project's are the command table's.
                Known : constant String :=
-                 " projects exit reset help settings stats context system tools tool save load"
+                 " exit reset help settings stats context system tools tool save load"
                  & " image video ";
             begin
                --  A project command by the command table, which knows every one.
@@ -1074,8 +1085,9 @@ package body Model_Runner.CLI.Interactive is
          elsif Asked.Kind = Help then
             --  One line per command the enumeration carries, so a command
             --  added without a line fails the checklist rather than going
-            --  unmentioned in the only place that lists them; the project's
-            --  commands named on one more, so that it all fits a screen.
+            --  unmentioned in the only place that lists them; then the
+            --  project's, one line each from the table they run from.
+            Pres.Put_Heading (Screen, "cli.interactive.help.heading.session", Pres.Diagnostic);
             for Kind in Command_Kind loop
                if Command_Word (Kind) /= "" then
                   declare
@@ -1088,7 +1100,7 @@ package body Model_Runner.CLI.Interactive is
                   end;
                end if;
             end loop;
-            Pres.Put_Aside (Screen, "cli.interactive.help.projects");
+            Put_Project_Help (Gap => True);
 
          elsif Asked.Kind = Settings then
             Show_Settings;

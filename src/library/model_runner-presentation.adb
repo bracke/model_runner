@@ -1183,12 +1183,85 @@ package body Model_Runner.Presentation is
    end Command_Bold;
 
    procedure Put_Help_Line (Item : in out Console; Key : String) is
+      Text : constant String := Message (Item, Key);
+      --  The command and its words end where two spaces begin what it
+      --  does; its description starts in one column for every command,
+      --  and a command too long for that column has it on the line below.
+      Gap    : constant Natural := Ada.Strings.Fixed.Index (Text, "  ");
+      Column : constant := 20;
    begin
       if Item.Structured then
-         Put_Record (Item, "note", Key, Loc.Empty_Arguments, Message (Item, Key));
+         Put_Record (Item, "note", Key, Loc.Empty_Arguments, Text);
          return;
       end if;
-      Error_Line (Item, Command_Bold (Item, Message (Item, Key)));
+      if Gap = 0 then
+         Error_Line (Item, Command_Bold (Item, Text));
+         return;
+      end if;
+      declare
+         Command : constant String := Text (Text'First .. Gap - 1);
+         Says    : constant String := Ada.Strings.Fixed.Trim (Text (Gap .. Text'Last), Ada.Strings.Both);
+         Width   : constant Natural :=
+           (if Item.Capabilities.Error_Is_Terminal then Error_Columns else 0);
+         --  Room for the description's words a line: the window less its
+         --  column and one spare, or the whole of it where there is no
+         --  window or no room.
+         Room    : constant Natural :=
+           (if Width > Column + 20 then Width - Column - 1 else Natural'Last);
+         Indent  : constant String (1 .. Column) := [others => ' '];
+         Row     : Ada.Strings.Unbounded.Unbounded_String;
+         Used    : Natural := 0;
+         First   : Boolean := True;
+         From    : Positive := Says'First;
+
+         procedure Flush is
+            Lead : constant String :=
+              (if not First then Indent
+               elsif Command'Length + 2 <= Column then Command & Indent (1 .. Column - Command'Length)
+               else "");
+         begin
+            if First and then Command'Length + 2 > Column then
+               Error_Line (Item, Command_Bold (Item, Command));
+               First := False;
+               Error_Line (Item, Indent & Ada.Strings.Unbounded.To_String (Row));
+            else
+               Error_Line (Item, Command_Bold (Item, Lead & Ada.Strings.Unbounded.To_String (Row)));
+               First := False;
+            end if;
+            Row := Ada.Strings.Unbounded.Null_Unbounded_String;
+            Used := 0;
+         end Flush;
+      begin
+         --  Word by word, a row of the description at a time.
+         while From <= Says'Last loop
+            declare
+               Stop : Natural := From;
+            begin
+               while Stop <= Says'Last and then Says (Stop) /= ' ' loop
+                  Stop := Stop + 1;
+               end loop;
+               declare
+                  Word : constant String := Says (From .. Stop - 1);
+                  Wide : constant Natural := Model_Runner.UTF8.Wrapped_Columns (Word, Positive'Last);
+               begin
+                  if Used > 0 and then Used + 1 + Wide > Room then
+                     Flush;
+                  end if;
+                  if Used > 0 then
+                     Ada.Strings.Unbounded.Append (Row, " ");
+                     Used := Used + 1;
+                  end if;
+                  Ada.Strings.Unbounded.Append (Row, Word);
+                  Used := Used + Wide;
+               end;
+               From := Stop + 1;
+               while From <= Says'Last and then Says (From) = ' ' loop
+                  From := From + 1;
+               end loop;
+            end;
+         end loop;
+         Flush;
+      end;
    end Put_Help_Line;
 
    ---------------

@@ -17465,7 +17465,7 @@ package body Tests.Framework_Cases is
          Set_Error (Standard_Error);
          Close (Said);
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
-                                          ASCII.LF & "project commands:") > 0,
+                                          ASCII.LF & "/help COMMAND says") > 0,
                  "a line put aside was written with the program's name before it");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "TASK-HELD") = 0
                  and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/state    (typed") > 0
