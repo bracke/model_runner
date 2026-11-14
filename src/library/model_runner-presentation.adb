@@ -667,6 +667,15 @@ package body Model_Runner.Presentation is
    Spinner_Runs   : Boolean := False;
    Progress_Since : Ada.Calendar.Time := Ada.Calendar.Clock;
 
+   --  Under Progress_Lock: while a reply is written to a terminal, the
+   --  spinner stands after its last character -- drawn there, the cursor
+   --  put back on it, cleared before the next piece and drawn after it.
+   Trail_Active : Boolean := False;
+   Trail_Drawn  : Boolean := False;
+
+   function Answer_Stream return Ada.Text_IO.Text_Streams.Stream_Access
+   is (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output));
+
    --  The braille spinner's frames, U+280B on, as UTF-8.
    type Frame_List is array (0 .. 9) of String (1 .. 3);
    function Braille (Low : Natural) return String is
@@ -674,6 +683,22 @@ package body Model_Runner.Presentation is
    Spinner_Frames : constant Frame_List :=
      [Braille (16#8B#), Braille (16#99#), Braille (16#B9#), Braille (16#B8#), Braille (16#BC#),
       Braille (16#B4#), Braille (16#A6#), Braille (16#A7#), Braille (16#87#), Braille (16#8F#)];
+
+   --  Under Progress_Lock: the spinner after the reply cleared, and drawn
+   --  again where it stands.
+   procedure Clear_Trail is
+   begin
+      if Trail_Drawn then
+         String'Write (Answer_Stream, ASCII.ESC & "[K");
+         Trail_Drawn := False;
+      end if;
+   end Clear_Trail;
+
+   procedure Draw_Trail is
+   begin
+      String'Write (Answer_Stream, Spinner_Frames (Spinner_Turn) & ASCII.BS);
+      Trail_Drawn := True;
+   end Draw_Trail;
 
    --  A spinner left turning while the program ends would hold its end:
    --  it stops by itself once the line has said nothing new for so long.
@@ -711,6 +736,18 @@ package body Model_Runner.Presentation is
                      ASCII.ESC & "[1A" & ASCII.CR & Spinner_Frames (Spinner_Turn)
                      & ASCII.ESC & "[1B" & ASCII.CR);
                   Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+               elsif Trail_Active
+                 and then Ada.Task_Identification.Is_Callable (Ada.Task_Identification.Environment_Task)
+               then
+                  --  The spinner after the reply, where it is drawn; not
+                  --  drawn -- cleared for something said beside it -- it
+                  --  waits for the reply's next piece.
+                  Turning := True;
+                  if Trail_Drawn then
+                     Spinner_Turn := (Spinner_Turn + 1) mod Spinner_Frames'Length;
+                     Draw_Trail;
+                     Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+                  end if;
                else
                   Spinner_Runs := False;
                end if;
@@ -729,8 +766,64 @@ package body Model_Runner.Presentation is
    begin
       Progress_Lock.Seize;
       Progress_Last := False;
+      --  Something else said beside the reply: the spinner after it is
+      --  cleared, and comes back with the reply's next piece.
+      begin
+         Clear_Trail;
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+      exception
+         when others =>
+            Trail_Drawn := False;
+      end;
       Progress_Lock.Release;
    end End_Progress_Line;
+
+   --  Write a piece of the reply to standard output: under the lock, the
+   --  spinner after the reply cleared before it and drawn after it.
+   procedure Answer_Write (Item : String) is
+   begin
+      Progress_Lock.Seize;
+      begin
+         Progress_Last := False;
+         Clear_Trail;
+         String'Write (Answer_Stream, Item);
+         if Trail_Active then
+            Draw_Trail;
+         end if;
+      exception
+         when others =>
+            Trail_Drawn := False;
+            Progress_Lock.Release;
+            raise;
+      end;
+      Progress_Lock.Release;
+   end Answer_Write;
+
+   --  The reply's spinner begun, where the reply begins, or ended.
+   procedure Trail (On : Boolean) is
+      Start_Spinner : Boolean := False;
+   begin
+      Progress_Lock.Seize;
+      begin
+         if On then
+            Trail_Active := True;
+            Draw_Trail;
+            Start_Spinner := not Spinner_Runs;
+            Spinner_Runs := True;
+         else
+            Trail_Active := False;
+            Clear_Trail;
+         end if;
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+      exception
+         when others =>
+            Trail_Drawn := False;
+      end;
+      Progress_Lock.Release;
+      if Start_Spinner then
+         Spinner.Start;
+      end if;
+   end Trail;
 
    procedure Error_Line (Item : in out Console; Text : String) is
       pragma Unreferenced (Item);
@@ -1953,11 +2046,8 @@ package body Model_Runner.Presentation is
       --  Written as Write_Shown writes, but no text: the line is as open
       --  as it was.
       if Self.Terminal and then not Self.Closed then
-         End_Progress_Line;
          begin
-            String'Write
-              (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output),
-               ASCII.ESC & (if Wanted then "[3m" else "[23m"));
+            Answer_Write (ASCII.ESC & (if Wanted then "[3m" else "[23m"));
             Self.Italic := Wanted;
          exception
             when others =>
@@ -1991,9 +2081,7 @@ package body Model_Runner.Presentation is
       --  and sending it through Current_Output puts it in the middle of
       --  whatever else a test was capturing there, which is how a layout
       --  check came to read " a Statistics" as a line.
-      End_Progress_Line;
-      String'Write
-        (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
+      Answer_Write (Item);
       if Item'Length > 0 then
          Self.Open := Item (Item'Last) /= ASCII.LF;
       end if;
@@ -2053,16 +2141,14 @@ package body Model_Runner.Presentation is
       --  own: shown, and not carried into the next answer's first piece.
       if Self.Lead then
          Self.Lead := False;
-         String'Write
-           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), "\xC2");
+         Answer_Write ("\xC2");
          --  A line open again: what follows starts on a line of its own.
          Self.Open := True;
       end if;
       --  A carriage return held for a line feed that never came: one alone.
       if Self.Held_CR then
          Self.Held_CR := False;
-         String'Write
-           (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), "\x0D");
+         Answer_Write ("\x0D");
          Self.Open := True;
       end if;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
@@ -2128,6 +2214,10 @@ package body Model_Runner.Presentation is
            and then P."=" (Item.Kind, P.Generation_Event)
            and then Item.Generation in P.Token_Produced | P.Generation_Completed
          then
+            --  The reply done, the spinner after it goes.
+            if P."=" (Item.Generation, P.Generation_Completed) then
+               Trail (False);
+            end if;
             return;
          end if;
          if Owner.Capabilities.Error_Is_Terminal then
@@ -2178,6 +2268,15 @@ package body Model_Runner.Presentation is
                Progress_Lock.Release;
                if Start_Spinner then
                   Spinner.Start;
+               end if;
+               --  The reply begins where the prompt's line was: the spinner
+               --  goes after it while it is written, where it is written to
+               --  the terminal too.
+               if P."=" (Item.Kind, P.Generation_Event)
+                 and then P."=" (Item.Generation, P.Generation_Started)
+                 and then Owner.Capabilities.Output_Is_Terminal
+               then
+                  Trail (True);
                end if;
             end;
          else
