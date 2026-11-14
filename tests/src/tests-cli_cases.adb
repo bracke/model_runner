@@ -15122,6 +15122,72 @@ package body Tests.CLI_Cases is
               "a window of unknown width had an edge");
    end Reply_Spinner_Waits_At_The_Edge;
 
+   --  Everything `run` drew, standard output and error both, answering
+   --  "hello" greedily in eight tokens with a model in a pseudo-terminal
+   --  so wide: "" where there is no pseudo-terminal.
+   function Run_Drawn (Model : String; Width : Positive) return String is
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package U renames Ada.Strings.Unbounded;
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Drawn   : U.Unbounded_String;
+      Words   : Hostkit.String_Vectors.Vector;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         return "";
+      end if;
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => Width))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      Words.Append (U.To_Unbounded_String ("run"));
+      Words.Append (U.To_Unbounded_String (Model));
+      Words.Append (U.To_Unbounded_String ("--backend"));
+      Words.Append (U.To_Unbounded_String ("cpu"));
+      Words.Append (U.To_Unbounded_String ("--max-tokens"));
+      Words.Append (U.To_Unbounded_String ("8"));
+      Words.Append (U.To_Unbounded_String ("--temperature"));
+      Words.Append (U.To_Unbounded_String ("0"));
+      Words.Append (U.To_Unbounded_String ("--prompt"));
+      Words.Append (U.To_Unbounded_String ("hello"));
+      Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+              "the run did not start");
+      Hostkit.Pty.Close_Device (Pair);
+      while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 30_000) loop
+         exit when Hostkit.Descriptors."/="
+                     (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                      Hostkit.Descriptors.Transfer_Ok)
+           or else Last < Buffer'First;
+         for B of Buffer (Buffer'First .. Last) loop
+            U.Append (Drawn, Character'Val (B));
+         end loop;
+      end loop;
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the run was not waited for");
+      Hostkit.Pty.Close (Pair);
+      return U.To_String (Drawn);
+   end Run_Drawn;
+
    --  The same edge as the terminal sees it: `run` in a pseudo-terminal
    --  exactly as wide as the reply's first line, every byte drawn read
    --  back, and the spinner never drawn while a row is full -- drawn
@@ -15132,17 +15198,10 @@ package body Tests.CLI_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
-      use type Hostkit.Descriptors.Descriptor;
-      use type Hostkit.Spawn.Spawn_Outcome;
-      use type Ada.Streams.Stream_Element_Offset;
       package Pres renames Model_Runner.Presentation;
       package U renames Ada.Strings.Unbounded;
 
       Model  : constant String := Ada.Directories.Full_Name ("obj/edge-model.gguf");
-      Plain  : constant String := "../bin/model_runner";
-      Binary : constant String :=
-        Ada.Directories.Full_Name
-          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
 
       --  Where the reply begins: after the prompt's progress line is
       --  cleared, the last such clearing in what was drawn.
@@ -15150,64 +15209,14 @@ package body Tests.CLI_Cases is
 
       --  Everything the run drew in a window so wide, from the reply on.
       function Reply_Drawn (Width : Positive) return String is
-         Pair    : Hostkit.Pty.Pair;
-         Options : Hostkit.Spawn.Options;
-         Child   : Hostkit.Spawn.Process_Handle;
-         Result  : Hostkit.Spawn.Status;
-         Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
-         Last    : Ada.Streams.Stream_Element_Offset;
-         Drawn   : U.Unbounded_String;
-         Words   : Hostkit.String_Vectors.Vector;
-
-         procedure Keep_Variable (Name, Value : String) is
-         begin
-            if Name /= "TERM" then
-               Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
-            end if;
-         end Keep_Variable;
+         Whole : constant String := Run_Drawn (Model, Width);
+         From  : constant Natural := Ada.Strings.Fixed.Index (Whole, Clearing, Ada.Strings.Backward);
       begin
-         if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
-           or else Pair.Device = Hostkit.Descriptors.Invalid
-         then
+         if Whole = "" then
             return "";
          end if;
-         Ada.Environment_Variables.Iterate (Keep_Variable'Access);
-         Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
-         Options.Replace_Environment := True;
-         Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => Width))
-                 and then Hostkit.Pty.Attach (Pair, Options),
-                 "the pseudo-terminal was not made ready");
-         Words.Append (U.To_Unbounded_String ("run"));
-         Words.Append (U.To_Unbounded_String (Model));
-         Words.Append (U.To_Unbounded_String ("--backend"));
-         Words.Append (U.To_Unbounded_String ("cpu"));
-         Words.Append (U.To_Unbounded_String ("--max-tokens"));
-         Words.Append (U.To_Unbounded_String ("8"));
-         Words.Append (U.To_Unbounded_String ("--temperature"));
-         Words.Append (U.To_Unbounded_String ("0"));
-         Words.Append (U.To_Unbounded_String ("--prompt"));
-         Words.Append (U.To_Unbounded_String ("hello"));
-         Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
-                 "the run did not start");
-         Hostkit.Pty.Close_Device (Pair);
-         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 30_000) loop
-            exit when Hostkit.Descriptors."/="
-                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
-                         Hostkit.Descriptors.Transfer_Ok)
-              or else Last < Buffer'First;
-            for B of Buffer (Buffer'First .. Last) loop
-               U.Append (Drawn, Character'Val (B));
-            end loop;
-         end loop;
-         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the run was not waited for");
-         Hostkit.Pty.Close (Pair);
-         declare
-            Whole : constant String := U.To_String (Drawn);
-            From  : constant Natural := Ada.Strings.Fixed.Index (Whole, Clearing, Ada.Strings.Backward);
-         begin
-            Assert (From > 0, "no prompt progress line was cleared for the reply: " & Whole);
-            return Whole (From + Clearing'Length .. Whole'Last);
-         end;
+         Assert (From > 0, "no prompt progress line was cleared for the reply: " & Whole);
+         return Whole (From + Clearing'Length .. Whole'Last);
       end Reply_Drawn;
 
       function Is_Glyph (Text : String; At_Byte : Positive) return Boolean
@@ -15307,6 +15316,216 @@ package body Tests.CLI_Cases is
          end;
       end;
    end Reply_Spinner_Drawn_Bytes_At_The_Edge;
+
+   --  The load's progress as a terminal shows it: `run` in a narrow
+   --  pseudo-terminal, every byte it drew played on a small screen. Each
+   --  step was drawn as one line, the spinner's glyph first, cut to the
+   --  window so it did not wrap; and once the reply is drawn nothing of
+   --  the load is left -- no step's line, no glyph a turn of the spinner
+   --  left behind, no fragment of a step that wrapped.
+   procedure Load_Spinner_Leaves_Nothing_Behind
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package U renames Ada.Strings.Unbounded;
+
+      Model  : constant String := Ada.Directories.Full_Name ("obj/load-spinner-model.gguf");
+      Width  : constant := 14;
+      Height : constant := 24;
+
+      --  The screen: a cell a code point, blank where nothing is.
+      type Row_Cells is array (0 .. Width - 1) of U.Unbounded_String;
+      type Screen_Rows is array (0 .. Height - 1) of Row_Cells;
+      Screen  : Screen_Rows;
+      Row     : Natural := 0;
+      Column  : Natural := 0;
+      --  Written in the last column, the wrap not yet made.
+      Pending : Boolean := False;
+
+      Glyph_Lead : constant String := Character'Val (16#E2#) & Character'Val (16#A0#);
+
+      --  The start of each step's words, as a cut line still shows them.
+      type Word_List is array (Positive range <>) of U.Unbounded_String;
+      Step_Words : constant Word_List :=
+        [U.To_Unbounded_String ("opening"), U.To_Unbounded_String ("reading"),
+         U.To_Unbounded_String ("validati"), U.To_Unbounded_String ("selecti"),
+         U.To_Unbounded_String ("finalizi"), U.To_Unbounded_String ("evaluati"),
+         U.To_Unbounded_String ("model rea")];
+
+      procedure Down is
+      begin
+         if Row = Height - 1 then
+            Screen (0 .. Height - 2) := Screen (1 .. Height - 1);
+            Screen (Height - 1) := [others => U.Null_Unbounded_String];
+         else
+            Row := Row + 1;
+         end if;
+      end Down;
+
+      procedure Put_Cell (Cell : String; Cells : Positive) is
+      begin
+         if Pending then
+            Column := 0;
+            Down;
+            Pending := False;
+         end if;
+         if Cells = 2 and then Column = Width - 1 then
+            Column := 0;
+            Down;
+         end if;
+         Screen (Row) (Column) := U.To_Unbounded_String (Cell);
+         if Cells = 2 then
+            Screen (Row) (Column + 1) := U.To_Unbounded_String (" ");
+         end if;
+         if Column + Cells >= Width then
+            Column := Width - 1;
+            Pending := True;
+         else
+            Column := Column + Cells;
+         end if;
+      end Put_Cell;
+
+      function Row_Text (Index : Natural) return String is
+         Text : U.Unbounded_String;
+      begin
+         for Cell of Screen (Index) loop
+            U.Append (Text, (if U.Length (Cell) = 0 then " " else U.To_String (Cell)));
+         end loop;
+         return Ada.Strings.Fixed.Trim (U.To_String (Text), Ada.Strings.Right);
+      end Row_Text;
+
+      --  Play bytes on the screen, as xterm would.
+      procedure Play (Bytes : String) is
+         Index : Natural := Bytes'First;
+      begin
+         while Index <= Bytes'Last loop
+            declare
+               C : constant Character := Bytes (Index);
+            begin
+               if C = ASCII.ESC and then Index < Bytes'Last and then Bytes (Index + 1) = '[' then
+                  declare
+                     Count  : Natural := 0;
+                     Final  : Character := ASCII.NUL;
+                  begin
+                     Index := Index + 2;
+                     while Index <= Bytes'Last loop
+                        if Bytes (Index) in '0' .. '9' then
+                           Count := Count * 10 + Character'Pos (Bytes (Index)) - Character'Pos ('0');
+                        elsif Bytes (Index) in '@' .. '~' then
+                           Final := Bytes (Index);
+                           exit;
+                        end if;
+                        Index := Index + 1;
+                     end loop;
+                     Index := Index + 1;
+                     case Final is
+                        when 'A' =>
+                           Row := Row - Natural'Min (Row, Natural'Max (Count, 1));
+                           Pending := False;
+                        when 'B' =>
+                           Row := Natural'Min (Height - 1, Row + Natural'Max (Count, 1));
+                           Pending := False;
+                        when 'K' =>
+                           for Cell in Column .. Width - 1 loop
+                              Screen (Row) (Cell) := U.Null_Unbounded_String;
+                           end loop;
+                           Pending := False;
+                        when 'J' =>
+                           for Cell in Column .. Width - 1 loop
+                              Screen (Row) (Cell) := U.Null_Unbounded_String;
+                           end loop;
+                           for Below in Row + 1 .. Height - 1 loop
+                              Screen (Below) := [others => U.Null_Unbounded_String];
+                           end loop;
+                        when others =>
+                           null;
+                     end case;
+                  end;
+               elsif C = ASCII.ESC then
+                  Index := Index + 2;
+               elsif C = ASCII.CR then
+                  Column := 0;
+                  Pending := False;
+                  Index := Index + 1;
+               elsif C = ASCII.LF then
+                  Down;
+                  Pending := False;
+                  Index := Index + 1;
+               elsif C = ASCII.BS then
+                  if Pending then
+                     Pending := False;
+                  elsif Column > 0 then
+                     Column := Column - 1;
+                  end if;
+                  Index := Index + 1;
+               elsif C < ' ' or else C = ASCII.DEL then
+                  Index := Index + 1;
+               else
+                  declare
+                     Length : constant Positive :=
+                       (case Character'Pos (C) is
+                           when 16#C0# .. 16#DF# => 2,
+                           when 16#E0# .. 16#EF# => 3,
+                           when 16#F0# .. 16#F7# => 4,
+                           when others => 1);
+                     Upto : constant Natural := Natural'Min (Bytes'Last, Index + Length - 1);
+                     Cell : constant String := Bytes (Index .. Upto);
+                  begin
+                     Put_Cell (Cell, Natural'Max (1, Model_Runner.UTF8.Wrapped_Columns (Cell, Positive'Last)));
+                     Index := Upto + 1;
+                  end;
+               end if;
+            end;
+         end loop;
+      end Play;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      declare
+         Drawn : constant String := Run_Drawn (Model, Width);
+         Steps : Natural := 0;
+         At_It : Natural;
+      begin
+         if Drawn = "" then
+            Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+            return;
+         end if;
+
+         --  Each step a line of its own, the glyph first, cut to the
+         --  window with a column spare.
+         At_It := Ada.Strings.Fixed.Index (Drawn, Glyph_Lead);
+         while At_It > 0 and then At_It + 3 <= Drawn'Last loop
+            if Drawn (At_It + 3) = ' ' then
+               declare
+                  Line_End : constant Natural :=
+                    Ada.Strings.Fixed.Index (Drawn (At_It .. Drawn'Last), ASCII.CR & ASCII.LF);
+               begin
+                  Assert (Line_End > 0, "a step's line was not ended");
+                  Assert (Model_Runner.UTF8.Wrapped_Columns (Drawn (At_It .. Line_End - 1), Positive'Last)
+                            <= Width - 1,
+                          "a step's line was not cut to the window: [" & Drawn (At_It .. Line_End - 1) & "]");
+                  Steps := Steps + 1;
+               end;
+            end if;
+            At_It := Ada.Strings.Fixed.Index (Drawn (At_It + 1 .. Drawn'Last), Glyph_Lead);
+         end loop;
+         Assert (Steps >= 5, "only" & Steps'Image & " steps were drawn with the spinner");
+
+         --  Played whole: no glyph is left, and no step's words.
+         Play (Drawn);
+         for Index in Screen'Range loop
+            declare
+               Text : constant String := Row_Text (Index);
+            begin
+               Assert (Ada.Strings.Fixed.Index (Text, Glyph_Lead) = 0,
+                       "a spinner's glyph was left on row" & Index'Image & ": [" & Text & "]");
+               for Step of Step_Words loop
+                  Assert (Ada.Strings.Fixed.Index (Text, U.To_String (Step)) = 0,
+                          "a step's line was left on row" & Index'Image & ": [" & Text & "]");
+               end loop;
+            end;
+         end loop;
+      end;
+   end Load_Spinner_Leaves_Nothing_Behind;
 
    ---------------------------------------------
 
@@ -17605,6 +17824,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Reply_Spinner_Drawn_Bytes_At_The_Edge'Access,
          "the reply's spinner is not drawn at the window's edge, as a terminal reads it");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Load_Spinner_Leaves_Nothing_Behind'Access,
+         "the load's steps are drawn with the spinner, fit the window and leave nothing behind");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Harmony_Replies_Are_Shown_As_Text'Access,
          "a harmony reply is shown as its reasoning and answer, its calls "
