@@ -62,12 +62,13 @@ package body Model_Runner.Platform.Device is
    end Is_Software;
 
    procedure Open
-     (Item  : in out Context;
-      From  : Inventory;
-      Index : Positive;
-      Ready : out Boolean)
+     (Item           : in out Context;
+      From           : Inventory;
+      Index          : Positive;
+      Ready          : out Boolean;
+      Allow_Software : Boolean := False)
    is
-      pragma Unreferenced (From, Index);
+      pragma Unreferenced (From, Index, Allow_Software);
    begin
       Close (Item);
       Ready := False;

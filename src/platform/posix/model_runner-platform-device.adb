@@ -860,10 +860,11 @@ package body Model_Runner.Platform.Device is
    ---------------------------------------------------------------------------
 
    procedure Open
-     (Item  : in out Context;
-      From  : Inventory;
-      Index : Positive;
-      Ready : out Boolean)
+     (Item           : in out Context;
+      From           : Inventory;
+      Index          : Positive;
+      Ready          : out Boolean;
+      Allow_Software : Boolean := False)
    is
       function To_Families is
         new Ada.Unchecked_Conversion (System.Address, Family_Query_Call);
@@ -884,6 +885,7 @@ package body Model_Runner.Platform.Device is
       if Find = null
         or else From.Handle = System.Null_Address
         or else Index > From.Used
+        or else (not Allow_Software and then From.Software (Index))
       then
          return;
       end if;

@@ -90,6 +90,7 @@ with State_Dump;
 with Tokenizer_Cross;
 with Quantize_Run;
 with Speed_Run;
+with Cache_Regression;
 with Crossing;
 with Image_Crossing;
 with Tool_Commands;
@@ -3361,14 +3362,6 @@ begin
                return 0;
          end Whole;
 
-         function Bound (Name : String) return Long_Float is
-         begin
-            return Long_Float'Value (Option (Name, ""));
-         exception
-            when others =>
-               return -1.0;
-         end Bound;
-
          --  A turns campaign can be a gate rather than a figure inspected
          --  by hand.  Every bound is explicit so the command remains useful
          --  for another model and machine, while the baseline document owns
@@ -3378,70 +3371,79 @@ begin
               Given ("--cache-hit-min") or else Given ("--evaluated-max")
               or else Given ("--prompt-seconds-max")
               or else Given ("--expect-digest");
-            Good  : Boolean := True;
-            Hit   : constant Long_Float :=
-              (if Item.Prompt_Total = 0 then 0.0
-               else 100.0 * Long_Float (Item.Prompt_Reused)
-                    / Long_Float (Item.Prompt_Total));
+
+            Failures : Cache_Regression.Failure_Set;
+
+            function Asked_Value (Name : String) return String is
+              (if Given (Name) then Option (Name, "") else "");
 
             procedure Refuse (Why : String) is
             begin
-               Good := False;
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error, "cache regression: " & Why);
             end Refuse;
          begin
             if not Asked then
                return;
-            elsif Option ("--turns", "") = "" then
-               Refuse ("thresholds require --turns DIR");
-            elsif not Item.Ran then
-               Refuse ("the campaign did not complete");
-            else
-               if Item.Rewind_Failed then
-                  Refuse ("a session rewind failed");
-               end if;
-               if Given ("--cache-hit-min")
-                 and then Bound ("--cache-hit-min") < 0.0
-               then
-                  Refuse ("--cache-hit-min must be a nonnegative number");
-               elsif Bound ("--cache-hit-min") >= 0.0
-                 and then Hit < Bound ("--cache-hit-min")
-               then
-                  Refuse
-                    ("hit rate" & Long_Float'Image (Hit) & "% is below"
-                     & Long_Float'Image (Bound ("--cache-hit-min")) & "%");
-               end if;
-               if Given ("--evaluated-max")
-                 and then Item.Prompt > Whole ("--evaluated-max")
-               then
-                  Refuse
-                    (Natural'Image (Item.Prompt) & " evaluated tokens exceed"
-                     & Natural'Image (Whole ("--evaluated-max")));
-               end if;
-               if Given ("--prompt-seconds-max")
-                 and then Bound ("--prompt-seconds-max") < 0.0
-               then
-                  Refuse
-                    ("--prompt-seconds-max must be a nonnegative number");
-               elsif Bound ("--prompt-seconds-max") >= 0.0
-                 and then Long_Float (Item.Evaluate)
-                              > Bound ("--prompt-seconds-max")
-               then
-                  Refuse
-                    (Duration'Image (Item.Evaluate) & " prompt seconds exceed"
-                     & Long_Float'Image (Bound ("--prompt-seconds-max")));
-               end if;
-               if Given ("--expect-digest")
-                 and then Item.Digest /= Option ("--expect-digest", "")
-               then
-                  Refuse
-                    ("output digest " & Item.Digest & " differs from "
-                     & Option ("--expect-digest", ""));
-               end if;
             end if;
 
-            if Good then
+            Cache_Regression.Check
+              (Item,
+               Has_Turns         => Option ("--turns", "") /= "",
+               Hit_Minimum       => Asked_Value ("--cache-hit-min"),
+               Evaluated_Maximum => Asked_Value ("--evaluated-max"),
+               Prompt_Maximum    => Asked_Value ("--prompt-seconds-max"),
+               Expected_Digest   => Asked_Value ("--expect-digest"),
+               Failures          => Failures);
+
+            if Failures (Cache_Regression.Turns_Required) then
+               Refuse ("thresholds require --turns DIR");
+            end if;
+            if Failures (Cache_Regression.Campaign_Incomplete) then
+               Refuse ("the campaign did not complete");
+            end if;
+            if Failures (Cache_Regression.Rewind_Failed) then
+               Refuse ("a session rewind failed");
+            end if;
+            if Failures (Cache_Regression.Invalid_Hit_Minimum) then
+               Refuse ("--cache-hit-min must be a nonnegative number");
+            end if;
+            if Failures (Cache_Regression.Hit_Rate_Too_Low) then
+               Refuse
+                 ("hit rate"
+                  & Long_Float'Image (Cache_Regression.Hit_Rate (Item))
+                  & "% is below"
+                  & Long_Float'Image
+                      (Long_Float'Value
+                         (Asked_Value ("--cache-hit-min"))) & "%");
+            end if;
+            if Failures (Cache_Regression.Invalid_Evaluated_Maximum) then
+               Refuse ("--evaluated-max must be a nonnegative integer");
+            end if;
+            if Failures (Cache_Regression.Too_Many_Evaluated) then
+               Refuse
+                 (Natural'Image (Item.Prompt) & " evaluated tokens exceed"
+                  & Natural'Image
+                      (Natural'Value (Asked_Value ("--evaluated-max"))));
+            end if;
+            if Failures (Cache_Regression.Invalid_Prompt_Maximum) then
+               Refuse
+                 ("--prompt-seconds-max must be a nonnegative number");
+            end if;
+            if Failures (Cache_Regression.Prompt_Too_Slow) then
+               Refuse
+                 (Duration'Image (Item.Evaluate) & " prompt seconds exceed"
+                  & Long_Float'Image
+                      (Long_Float'Value
+                         (Asked_Value ("--prompt-seconds-max"))));
+            end if;
+            if Failures (Cache_Regression.Digest_Differs) then
+               Refuse
+                 ("output digest " & Item.Digest & " differs from "
+                  & Asked_Value ("--expect-digest"));
+            end if;
+
+            if Cache_Regression.Passed (Failures) then
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error,
                   "cache regression: passed --"

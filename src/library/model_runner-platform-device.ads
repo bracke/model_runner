@@ -109,11 +109,15 @@ package Model_Runner.Platform.Device is
    --  @param From Inventory the device was named in.
    --  @param Index Device number, from one.
    --  @param Ready True when the device opened and offers a compute queue.
+   --  @param Allow_Software Whether a processor-backed rasterizer may be
+   --    opened. False by default: work asked of a device must not silently
+   --    become a much slower second processor backend.
    procedure Open
-     (Item  : in out Context;
-      From  : Inventory;
-      Index : Positive;
-      Ready : out Boolean);
+     (Item           : in out Context;
+      From           : Inventory;
+      Index          : Positive;
+      Ready          : out Boolean;
+      Allow_Software : Boolean := False);
 
    --  Release a device. Idempotent.
    --

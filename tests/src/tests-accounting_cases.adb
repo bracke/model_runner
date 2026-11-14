@@ -26,6 +26,8 @@ with System;
 with System.Storage_Elements;
 with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Pages;
+with Cache_Regression;
+with Speed_Run;
 
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
@@ -41,6 +43,95 @@ package body Tests.Accounting_Cases is
    package M renames Model_Runner.Memory;
 
    subtype U64 is Interfaces.Unsigned_64;
+
+   procedure Cache_Bounds_Pass_At_Their_Edges
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Item     : Speed_Run.Report;
+      Failures : Cache_Regression.Failure_Set;
+   begin
+      Item.Ran := True;
+      Item.Prompt_Total := 200;
+      Item.Prompt_Reused := 120;
+      Item.Prompt := 80;
+      Item.Evaluate := 0.25;
+      Item.Digest := "0123456789abcdef";
+
+      Cache_Regression.Check
+        (Item,
+         Has_Turns         => True,
+         Hit_Minimum       => "60.0",
+         Evaluated_Maximum => "80",
+         Prompt_Maximum    => "0.25",
+         Expected_Digest   => "0123456789abcdef",
+         Failures          => Failures);
+
+      Assert
+        (Cache_Regression.Passed (Failures),
+         "a cache campaign equal to every bound was refused");
+   end Cache_Bounds_Pass_At_Their_Edges;
+
+   procedure Cache_Bounds_Refuse_Regressions_And_Bad_Text
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Item     : Speed_Run.Report;
+      Failures : Cache_Regression.Failure_Set;
+   begin
+      Item.Ran := True;
+      Item.Prompt_Total := 200;
+      Item.Prompt_Reused := 119;
+      Item.Prompt := 81;
+      Item.Evaluate := 0.251;
+      Item.Digest := "fedcba9876543210";
+      Item.Rewind_Failed := True;
+
+      Cache_Regression.Check
+        (Item,
+         Has_Turns         => True,
+         Hit_Minimum       => "60.0",
+         Evaluated_Maximum => "80",
+         Prompt_Maximum    => "0.25",
+         Expected_Digest   => "0123456789abcdef",
+         Failures          => Failures);
+
+      Assert
+        (Failures (Cache_Regression.Rewind_Failed)
+         and then Failures (Cache_Regression.Hit_Rate_Too_Low)
+         and then Failures (Cache_Regression.Too_Many_Evaluated)
+         and then Failures (Cache_Regression.Prompt_Too_Slow)
+         and then Failures (Cache_Regression.Digest_Differs),
+         "one or more cache regressions were accepted");
+
+      Item.Rewind_Failed := False;
+      Cache_Regression.Check
+        (Item,
+         Has_Turns         => True,
+         Hit_Minimum       => "minus one",
+         Evaluated_Maximum => "many",
+         Prompt_Maximum    => "later",
+         Expected_Digest   => "fedcba9876543210",
+         Failures          => Failures);
+      Assert
+        (Failures (Cache_Regression.Invalid_Hit_Minimum)
+         and then Failures (Cache_Regression.Invalid_Evaluated_Maximum)
+         and then Failures (Cache_Regression.Invalid_Prompt_Maximum),
+         "malformed cache bounds were accepted");
+
+      Cache_Regression.Check
+        (Item, False, "1", "", "", "", Failures);
+      Assert
+        (Failures (Cache_Regression.Turns_Required),
+         "cache bounds without a turns campaign were accepted");
+
+      Item.Ran := False;
+      Cache_Regression.Check
+        (Item, True, "1", "", "", "", Failures);
+      Assert
+        (Failures (Cache_Regression.Campaign_Incomplete),
+         "an incomplete cache campaign was accepted");
+   end Cache_Bounds_Refuse_Regressions_And_Bad_Text;
 
    --  An allocation beyond the budget is refused before any allocator runs.
    procedure Over_Budget_Is_Refused
@@ -1327,6 +1418,12 @@ package body Tests.Accounting_Cases is
       Register_Routine
         (T, Over_Budget_Is_Refused'Access,
          "an allocation past the budget is refused before it is attempted");
+      Register_Routine
+        (T, Cache_Bounds_Pass_At_Their_Edges'Access,
+         "cache regression bounds include their exact boundary");
+      Register_Routine
+        (T, Cache_Bounds_Refuse_Regressions_And_Bad_Text'Access,
+         "cache regression bounds refuse every regression and malformed input");
       Register_Routine
         (T, Storage_Is_Counted_Once_And_Soon'Access,
          "of views sharing storage the first is counted, and a long list "

@@ -2792,6 +2792,36 @@ package body Tests.Backend_Cases is
    -- Recorded_Attention_Says_What_A_Call_Says --
    -----------------------------------------------
 
+   --  A software rasterizer is still listed for inspection, but it is not a
+   --  compute device unless a caller explicitly opts in. Running the device
+   --  suite on llvmpipe took hours and could strand its teardown on a futex;
+   --  the processor backend is the honest path on such a host.
+   procedure Software_Device_Is_Refused_By_Default
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      Held   : Devices.Inventory;
+      Opened : Devices.Context;
+      Found  : Boolean;
+      Ready  : Boolean;
+   begin
+      Devices.Open (Held, Found);
+      for Which in 1 .. Devices.Count (Held) loop
+         if Devices.Is_Software (Held, Which) then
+            Devices.Open (Opened, Held, Which, Ready);
+            Assert
+              (not Ready and then not Devices.Is_Open (Opened),
+               "a software rasterizer opened as a compute device by default");
+
+            --  The low-level escape hatch remains for an explicit diagnostic.
+            Devices.Open
+              (Opened, Held, Which, Ready, Allow_Software => True);
+            Devices.Close (Opened);
+         end if;
+      end loop;
+      Devices.Close (Held);
+   end Software_Device_Is_Refused_By_Default;
+
    --  A device closed out of order -- its inventory first, then the
    --  context and the engine made from it -- does not stop the program:
    --  the loader, asked through an instance that is gone, aborts rather
@@ -15561,6 +15591,9 @@ package body Tests.Backend_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Software_Device_Is_Refused_By_Default'Access,
+         "a software rasterizer is listed but not opened unless asked");
       Register_Routine
         (T, Device_Closed_Out_Of_Order_Does_Not_Abort'Access,
          "a device closed out of order does not stop the program, and one opened after works");

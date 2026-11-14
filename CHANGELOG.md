@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Software rasterizers are no longer mistaken for compute devices.** Device inventories still report processor-backed Vulkan implementations such as llvmpipe, and low-level diagnostics may opt into one, but ordinary device opens refuse them. The mandatory suite therefore skips device work when no hardware device is available instead of spending hours on software Vulkan and risking its teardown deadlock. Cache-regression verdicts are now separately tested at their exact bounds, for every regression, for malformed values, and for missing or incomplete turn campaigns.
+
 - **Cache regressions are executable, and the remaining production measurements are complete.** `tests speed` now reports cumulative/reused prompt tokens for a turns campaign and can fail on a rewind, minimum cache-hit rate, evaluated-token or prompt-time ceiling, and output digest. The committed five-turn workload carries the Qwen3 0.6B thresholds. A filled 11,142-token Qwen3 8B run peaked at 9.68 GiB without swap, and its delegate trial completed in 184 s with 72 s in one helper, supporting the 8,192-token, one-helper operating point.
 
 - **Native macOS and Windows runs respect host capabilities.** Speech no longer reads the platform's documented zero/unknown available-memory answer as zero bytes and refuses every model. CPU layout tests now follow whether byte-product kernels exist, the large-tree refresh bound allows hosted-runner variance while still catching the former quadratic scan, and Windows drive-rooted PATH entries survive the check runner's absolute-directory filter.
