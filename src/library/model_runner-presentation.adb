@@ -152,7 +152,9 @@ package body Model_Runner.Presentation is
          Styled => Styles_Diagnostics (Item),
          Width  =>
            (if Item.Capabilities.Error_Is_Terminal and then not Item.Structured
-            then Error_Columns else 0)));
+            then Error_Columns else 0),
+         --  At a terminal a list stands apart from what follows it.
+         Spaced => Item.Capabilities.Error_Is_Terminal and then not Item.Structured));
 
    function Message
      (Item      : Console;

@@ -15879,6 +15879,20 @@ package body Tests.CLI_Cases is
                 = "    " & Bullet & " " & ESC & "[1mone" & ESC & "[22m two" & ASCII.LF & "      three",
               "an indented item was wrapped as ["
               & M.Render ("    " & M.Marked ("- **one** two three"), Styled => True, Width => 14) & "]");
+
+      --  Spaced, a list stands apart: a blank line between it and the text
+      --  after it, and a line end after one the text ends with; unspaced,
+      --  and with no list, nothing is added.
+      Assert (M.Render (M.Marked ("Title\n- one\n- two\nAfter"), Styled => False, Spaced => True)
+                = "Title" & ASCII.LF & "- one" & ASCII.LF & "- two" & ASCII.LF & ASCII.LF & "After",
+              "a list was not set apart from the text after it");
+      Assert (M.Render (M.Marked ("Title\n- one"), Styled => False, Spaced => True)
+                = "Title" & ASCII.LF & "- one" & ASCII.LF,
+              "a list the text ends with was not followed by a line end");
+      Assert (M.Render (M.Marked ("Title\n- one"), Styled => False) = "Title" & ASCII.LF & "- one",
+              "an unspaced list gained a line");
+      Assert (M.Render (M.Marked ("**Just** a line"), Styled => False, Spaced => True) = "Just a line",
+              "text without a list gained a line");
    end Message_Markup_Is_Read_And_Drawn;
 
    --  An argument is never markup, whatever it holds: a path, a model's

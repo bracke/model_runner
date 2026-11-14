@@ -39,7 +39,7 @@ A marker opens only where text follows it and closes only where text comes
 before it, on the same line, so a glob's asterisks (`a * stands for`,
 `specs/*/requirements.md`) stay as they are. At a terminal that shows colour
 the markup is drawn as styles and items get a bullet, wrapped under their own
-text; elsewhere it is plain text and items keep their hyphen. Arguments are
+text, with a blank line after each list; elsewhere it is plain text and items keep their hyphen. Arguments are
 never markup: they go in after the markup is read. A message whose lines or
 items differ in number between locales fails the suite.
 

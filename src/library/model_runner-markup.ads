@@ -45,8 +45,12 @@ package Model_Runner.Markup is
    --    hyphen.
    --  @param Width The window's width: an item's lines wrapped to it, the
    --    lines after its first under its text. 0 leaves lines as they are.
+   --  @param Spaced Whether a blank line follows each list: a list's last
+   --    item is followed by a line end of its own, the text after it --
+   --    or what is said next -- a line further down.
    --  @return The text to show.
-   function Render (Item : String; Styled : Boolean; Width : Natural := 0) return String;
+   function Render
+     (Item : String; Styled : Boolean; Width : Natural := 0; Spaced : Boolean := False) return String;
 
    --  Text with marks as plain text: Render unstyled and unwrapped.
    --

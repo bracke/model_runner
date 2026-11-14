@@ -195,7 +195,9 @@ package body Model_Runner.Markup is
    -- Render --
    ------------
 
-   function Render (Item : String; Styled : Boolean; Width : Natural := 0) return String is
+   function Render
+     (Item : String; Styled : Boolean; Width : Natural := 0; Spaced : Boolean := False) return String
+   is
       ESC    : constant Character := ASCII.ESC;
       Bullet : constant String :=
         Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#A2#);
@@ -313,17 +315,46 @@ package body Model_Runner.Markup is
          end;
       end Line;
 
-      Start : Positive := Item'First;
+      --  Whether a line is a list's item, indented or not.
+      function Is_Item (Text : String) return Boolean is
+      begin
+         for C of Text loop
+            if C = Item_Mark then
+               return True;
+            elsif C /= ' ' then
+               return False;
+            end if;
+         end loop;
+         return False;
+      end Is_Item;
+
+      Start     : Positive := Item'First;
+      Last_Item : Boolean := False;
    begin
       for Index in Item'First .. Item'Last + 1 loop
          if Index > Item'Last or else Item (Index) = ASCII.LF then
-            Line (Item (Start .. Index - 1));
+            declare
+               Text : constant String := Item (Start .. Index - 1);
+            begin
+               --  A list ended by a line that is no item: a blank line
+               --  between them.
+               if Spaced and then Last_Item and then not Is_Item (Text) then
+                  Append (Result, ASCII.LF);
+               end if;
+               Line (Text);
+               Last_Item := Is_Item (Text);
+            end;
             if Index <= Item'Last then
                Append (Result, ASCII.LF);
             end if;
             Start := Index + 1;
          end if;
       end loop;
+      --  A list the text ends with: the line end that makes a blank line
+      --  of what follows.
+      if Spaced and then Last_Item then
+         Append (Result, ASCII.LF);
+      end if;
       return To_String (Result);
    end Render;
 

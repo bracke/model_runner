@@ -2105,9 +2105,8 @@ package body Model_Runner.CLI.Interactive is
          end if;
       end;
 
+      --  Its list ends in a blank line, before the first prompt.
       Pres.Put_Note (Screen, "cli.interactive.banner");
-      --  And a blank line under it, before the first prompt.
-      Pres.Put_Blank_Line (Screen);
       --  A sandbox the shell sets that does not read confines every agent
       --  to nothing: said at once, not found out from a refusal.
       if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
