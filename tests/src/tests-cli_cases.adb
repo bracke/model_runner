@@ -15538,6 +15538,84 @@ package body Tests.CLI_Cases is
       end;
    end Load_Spinner_Leaves_Nothing_Behind;
 
+   --  Before it loads, a run at a terminal says which model starts and with
+   --  what: the file's name, then each setting -- the ones named on the
+   --  command line as named, the rest as what decides them.
+   procedure Startup_Says_Model_And_Settings
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package U renames Ada.Strings.Unbounded;
+      Model   : constant String := Ada.Directories.Full_Name ("obj/startup-model.gguf");
+      Catalog : Model_Runner.Localization.Catalog;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      declare
+         Drawn : constant String := Run_Drawn (Model, 120);
+         Seen  : U.Unbounded_String;
+         Index : Natural := Drawn'First;
+      begin
+         if Drawn = "" then
+            Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+            return;
+         end if;
+         --  What shows, the terminal's sequences and carriage returns out.
+         while Index <= Drawn'Last loop
+            if Drawn (Index) = ASCII.ESC then
+               Index := Index + 2;
+               while Index <= Drawn'Last and then Drawn (Index) not in '@' .. '~' loop
+                  Index := Index + 1;
+               end loop;
+               Index := Index + 1;
+            elsif Drawn (Index) = ASCII.CR then
+               Index := Index + 1;
+            else
+               U.Append (Seen, Drawn (Index));
+               Index := Index + 1;
+            end if;
+         end loop;
+         Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         declare
+            Text     : constant String := U.To_String (Seen);
+            Loading  : constant Natural := Ada.Strings.Fixed.Index (Text, "opening model");
+            Before   : constant String := Text (Text'First .. (if Loading = 0 then Text'Last else Loading - 1));
+            Expected : constant String :=
+              Model_Runner.Localization.Text
+                (Catalog, "cli.run.starting",
+                 [Model_Runner.Localization.Named ("model", "startup-model.gguf"),
+                  Model_Runner.Localization.Named ("backend", "cpu"),
+                  Model_Runner.Localization.Named
+                    ("size", Model_Runner.Localization.Text (Catalog, "cli.run.starting.chosen")),
+                  Model_Runner.Localization.Named ("count", "8"),
+                  Model_Runner.Localization.Named
+                    ("detail",
+                     Model_Runner.Localization.Text
+                       (Catalog, "cli.run.starting.temperature", [Model_Runner.Localization.Named ("value", "0")])
+                     & ", " & Model_Runner.Localization.Text (Catalog, "cli.run.starting.rest"))]);
+            Line_Start : Natural := Expected'First;
+         begin
+            Assert (Loading > 0, "the run did not load: " & Text);
+            --  Each of its lines, as the plain text has it, but for an
+            --  item's bullet, drawn for a terminal.
+            for At_Char in Expected'First .. Expected'Last + 1 loop
+               if At_Char > Expected'Last or else Expected (At_Char) = ASCII.LF then
+                  declare
+                     Line : constant String := Expected (Line_Start .. At_Char - 1);
+                     Bare : constant String :=
+                       (if Line'Length > 2 and then Line (Line'First .. Line'First + 1) = "- "
+                        then Line (Line'First + 2 .. Line'Last) else Line);
+                  begin
+                     Assert (Ada.Strings.Fixed.Index (Before, Bare) > 0,
+                             "before the load, [" & Bare & "] was not said: " & Before);
+                  end;
+                  Line_Start := At_Char + 1;
+               end if;
+            end loop;
+         end;
+         Model_Runner.Localization.Close (Catalog);
+      end;
+   end Startup_Says_Model_And_Settings;
+
    --  In the conversation a blank line stands between the message typed
    --  and the reply: the session in a pseudo-terminal, "hi" typed, and
    --  what was drawn after its line read back -- its line ended, then a
@@ -18159,6 +18237,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Load_Spinner_Leaves_Nothing_Behind'Access,
          "the load's steps are drawn with the spinner, fit the window and leave nothing behind");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Startup_Says_Model_And_Settings'Access,
+         "before it loads, a run says which model starts and with which settings");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Typed_Message_Gets_A_Blank_Line'Access,
          "blank lines stand under the banner, between a message typed and the reply, and after it");

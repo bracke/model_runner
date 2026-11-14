@@ -520,6 +520,13 @@ package Model_Runner.Presentation is
    --  @param Item Console to write to.
    procedure Put_Blank_Line (Item : in out Console);
 
+   --  Whether standard error is a terminal: where what is said is for a
+   --  person watching, not a log.
+   --
+   --  @param Item Console.
+   --  @return True at a terminal.
+   function Error_Is_Terminal (Item : Console) return Boolean;
+
    --  The columns a reply's row has taken after a piece of it, counted as
    --  the terminal wraps them: from the last line end in the piece where it
    --  has one, else on from Before; a style's sequence takes none.

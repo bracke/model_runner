@@ -1488,6 +1488,9 @@ package body Model_Runner.Presentation is
    function Coloured_Commands (Item : Console; Text : String) return String
    is (if Styles_Diagnostics (Item) then Commands_Coloured (Text) else Text);
 
+   function Error_Is_Terminal (Item : Console) return Boolean
+   is (Item.Capabilities.Error_Is_Terminal);
+
    procedure Put_Blank_Line (Item : in out Console) is
    begin
       if Item.Capabilities.Error_Is_Terminal and then Item.Level /= Opt.Quiet then
