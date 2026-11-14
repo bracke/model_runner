@@ -1492,6 +1492,9 @@ package body Model_Runner.Presentation is
    begin
       if Item.Capabilities.Error_Is_Terminal and then Item.Level /= Opt.Quiet then
          End_Progress_Line;
+         --  After what standard output holds -- a reply's last line end --
+         --  not before it.
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
          Ada.Text_IO.New_Line (Ada.Text_IO.Current_Error);
          Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
       end if;

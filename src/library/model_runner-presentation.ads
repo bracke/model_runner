@@ -512,8 +512,9 @@ package Model_Runner.Presentation is
    procedure End_Progress_Line;
 
    --  A blank line on a terminal, for distance: between the command line
-   --  that started the program and what it says, and between a message
-   --  typed and the reply. Nothing where standard error is no terminal or
+   --  that started the program and what it says, after the conversation's
+   --  banner, between a message typed and the reply, and after the
+   --  reply. Nothing where standard error is no terminal or
    --  the console is quiet.
    --
    --  @param Item Console to write to.

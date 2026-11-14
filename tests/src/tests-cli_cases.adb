@@ -15677,6 +15677,27 @@ package body Tests.CLI_Cases is
                     "after the typed message came" & Feeds'Image & " line ends, not its own and a blank one: ["
                     & After (After'First .. Natural'Min (After'Last, After'First + 60)) & "]");
          end;
+
+         --  A blank line under the banner, before the first prompt, and one
+         --  after the reply, before the next.
+         declare
+            Seen    : constant String := Shown (Whole);
+            First   : constant Natural := Ada.Strings.Fixed.Index (Seen, "> ");
+            Message : constant Natural := Ada.Strings.Fixed.Index (Seen, "> hi");
+            Next    : constant Natural :=
+              (if Message = 0 then 0 else Ada.Strings.Fixed.Index (Seen (Message + 4 .. Seen'Last), "> "));
+
+            function Blank_Before (At_Char : Natural) return Boolean
+            is (At_Char > Seen'First + 1
+                and then Seen (At_Char - 2 .. At_Char - 1) = ASCII.LF & ASCII.LF);
+         begin
+            Assert (First > 0 and then Blank_Before (First),
+                    "no blank line stood between the banner and the first prompt: ["
+                    & Seen (Seen'First .. Natural'Min (Seen'Last, First + 2)) & "]");
+            Assert (Next > 0 and then Blank_Before (Next),
+                    "no blank line stood between the reply and the next prompt: ["
+                    & Seen (Message .. Natural'Min (Seen'Last, Next + 2)) & "]");
+         end;
       end;
    end Typed_Message_Gets_A_Blank_Line;
 
@@ -18140,7 +18161,7 @@ package body Tests.CLI_Cases is
          "the load's steps are drawn with the spinner, fit the window and leave nothing behind");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Typed_Message_Gets_A_Blank_Line'Access,
-         "a blank line stands between a message typed and the reply");
+         "blank lines stand under the banner, between a message typed and the reply, and after it");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Message_Markup_Is_Read_And_Drawn'Access,
          "a message's markup -- bold, italic, code, lines, items -- is read and drawn");

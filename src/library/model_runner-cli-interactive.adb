@@ -1935,6 +1935,9 @@ package body Model_Runner.CLI.Interactive is
                   Take_Turn (Told & Prompt);
                   if Turn_Taken then
                      Project_Seen := Seen;
+                     --  A blank line after the reply and what was said of
+                     --  it, before the next prompt.
+                     Pres.Put_Blank_Line (Screen);
                   end if;
                   --  Refused before the model read it: the message kept,
                   --  pending, to add to or send again, with its picture --
@@ -2095,6 +2098,8 @@ package body Model_Runner.CLI.Interactive is
       end;
 
       Pres.Put_Note (Screen, "cli.interactive.banner");
+      --  And a blank line under it, before the first prompt.
+      Pres.Put_Blank_Line (Screen);
       --  A sandbox the shell sets that does not read confines every agent
       --  to nothing: said at once, not found out from a refusal.
       if Model_Runner.Framework.Permissions.Sandbox_Problem /= "" then
