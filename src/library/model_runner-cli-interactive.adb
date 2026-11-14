@@ -200,12 +200,16 @@ package body Model_Runner.CLI.Interactive is
       --  message is: run, and the message kept to go on with -- not taken
       --  into it as its text. The session's own commands, a project command
       --  that waits for the message, and a path are the text they are.
+      --  /image and /video too: a picture is named for the message
+      --  pending, and one kept back with a picture that would not read
+      --  has its picture named again.
       if Item.Used > 0
         and then Ada.Strings.Fixed.Index (Line, [1 => ASCII.LF]) = 0
-        and then Model_Runner.CLI.Project_Commands.Runs_Mid_Message
-                   (Trimmed (Trimmed'First
-                             .. (if Ada.Strings.Fixed.Index (Trimmed, Word_End) = 0 then Trimmed'Last
-                                 else Ada.Strings.Fixed.Index (Trimmed, Word_End) - 1)))
+        and then (Model_Runner.CLI.Project_Commands.Runs_Mid_Message
+                    (Trimmed (Trimmed'First
+                              .. (if Ada.Strings.Fixed.Index (Trimmed, Word_End) = 0 then Trimmed'Last
+                                  else Ada.Strings.Fixed.Index (Trimmed, Word_End) - 1)))
+                  or else Parse (Trimmed).Kind in Show_Picture | Show_Video)
       then
          Effect := Command_Mid_Message;
          return;
@@ -487,6 +491,12 @@ package body Model_Runner.CLI.Interactive is
       --  rather than a picture.
       Next_Is_Video : Boolean := False;
 
+      --  The picture the latest turn took, held until the turn is in: a
+      --  turn kept back gets it back with its words, rather than the
+      --  words alone -- /image could not be typed while they waited.
+      Turn_Picture  : Text_Access := null;
+      Turn_Is_Video : Boolean := False;
+
       --  Encode what the conversation names and Pictures does not hold.
       procedure Gather_Pictures_Of
         (Source : Conv.History; Outcome : out E.Error_Info)
@@ -606,6 +616,7 @@ package body Model_Runner.CLI.Interactive is
          Model_Runner.CLI.Pictures.Release (Pictures);
          Model_Runner.CLI.Pictures.Close (Seer);
          Free_Text (Next_Picture);
+         Free_Text (Turn_Picture);
       end Release_Pictures;
 
       --  Render the committed conversation plus the pending user turn.
@@ -797,6 +808,17 @@ package body Model_Runner.CLI.Interactive is
 
          --  A path as Tab completes it, quoted when it holds a space: the
          --  quotes are not part of its name.
+         --  The text after a quoted path's closing quote, which no path
+         --  holds: /save "a b" x.
+         function Closing_Quote return Natural is
+            Text : constant String := Line (Asked.First .. Asked.Last);
+         begin
+            if Text'Length > 0 and then Text (Text'First) = '"' then
+               return Ada.Strings.Fixed.Index (Text (Text'First + 1 .. Text'Last), """");
+            end if;
+            return 0;
+         end Closing_Quote;
+
          function Path_Asked return String is
             Text  : constant String := Line (Asked.First .. Asked.Last);
             First : Positive := Text'First;
@@ -804,12 +826,26 @@ package body Model_Runner.CLI.Interactive is
          begin
             if Text'Length > 0 and then Text (Text'First) = '"' then
                First := First + 1;
-               if Last >= First and then Text (Last) = '"' then
-                  Last := Last - 1;
+               if Closing_Quote > 0 then
+                  Last := Closing_Quote - 1;
                end if;
             end if;
             return Text (First .. Last);
          end Path_Asked;
+
+         --  What follows a quoted path, trimmed: "" when nothing does.
+         function Path_After return String is
+         begin
+            if Asked.First = 0 or else Closing_Quote = 0 then
+               return "";
+            end if;
+            return Ada.Strings.Fixed.Trim (Line (Closing_Quote + 1 .. Asked.Last), Ada.Strings.Both);
+         end Path_After;
+
+         --  No path to read or write: none typed, or only its quotes --
+         --  /save "" named the session's directory.
+         function Path_Missing return Boolean
+         is (Asked.First = 0 or else Ada.Strings.Fixed.Trim (Path_Asked, Ada.Strings.Both) = "");
       begin
          if Asked.Kind = Not_A_Command then
             return False;
@@ -1240,8 +1276,15 @@ package body Model_Runner.CLI.Interactive is
             end if;
 
          elsif Asked.Kind = Save_Conversation then
-            if Asked.First = 0 then
+            if Path_Missing then
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
+            elsif Path_After /= "" then
+               declare
+                  Stray : E.Error_Info := E.Make (E.CLI_Unexpected_Operand);
+               begin
+                  E.Add_Text (Stray, "value", Path_After);
+                  Pres.Report (Screen, Stray);
+               end;
             else
                declare
                   Path  : constant String :=
@@ -1260,8 +1303,15 @@ package body Model_Runner.CLI.Interactive is
             end if;
 
          elsif Asked.Kind = Load_Conversation then
-            if Asked.First = 0 then
+            if Path_Missing then
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
+            elsif Path_After /= "" then
+               declare
+                  Stray : E.Error_Info := E.Make (E.CLI_Unexpected_Operand);
+               begin
+                  E.Add_Text (Stray, "value", Path_After);
+                  Pres.Report (Screen, Stray);
+               end;
             else
                declare
                   Path    : constant String :=
@@ -1299,8 +1349,15 @@ package body Model_Runner.CLI.Interactive is
          elsif Asked.Kind in Show_Picture | Show_Video then
             --  A picture, or a video's frames, for the next turn: named
             --  now, shown when the words that go with it are typed.
-            if Asked.First = 0 then
+            if Path_Missing then
                Pres.Put_Note (Screen, "cli.interactive.path_needed");
+            elsif Path_After /= "" then
+               declare
+                  Stray : E.Error_Info := E.Make (E.CLI_Unexpected_Operand);
+               begin
+                  E.Add_Text (Stray, "value", Path_After);
+                  Pres.Report (Screen, Stray);
+               end;
             elsif T.Is_Empty (Item.Projector_Path) then
                Pres.Put_Note (Screen, "cli.interactive.no_projector");
             else
@@ -1321,9 +1378,8 @@ package body Model_Runner.CLI.Interactive is
             begin
                --  The nearest command there is, where one is near.
                declare
-                  Typed : constant String :=
-                    (if Ada.Strings.Fixed.Index (Line & " ", " ") > Line'First
-                     then Line (Line'First .. Ada.Strings.Fixed.Index (Line & " ", " ") - 1) else Line);
+                  --  Its word, ended at a space or a tab as Parse ends it.
+                  Typed : String renames First;
                   Near  : constant Model_Runner.Framework.Name_Lists.Vector :=
                     --  Every command: a typo may be in its first letters too.
                     Model_Runner.CLI.Completion.Candidates (Typed (Typed'First .. Typed'First));
@@ -1423,12 +1479,18 @@ package body Model_Runner.CLI.Interactive is
                & "}, {""type"": ""text"", ""text"": "
                & Model_Runner.Text.JSON_Quoted (Prompt) & "}]",
                Outcome);
-            Free_Text (Next_Picture);
+            Free_Text (Turn_Picture);
+            Turn_Picture := Next_Picture;
+            Turn_Is_Video := Next_Is_Video;
+            Next_Picture := null;
          else
             Conv.Append (Messages, Sender, Prompt, Outcome);
          end if;
+         --  Not taken in -- the conversation full -- is kept back too: the
+         --  message typed, and its picture, are not lost for it.
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
+            Kept_Back := Sender = Conv.User_Role;
             return;
          end if;
 
@@ -1782,8 +1844,16 @@ package body Model_Runner.CLI.Interactive is
                      Project_Seen := Seen;
                   end if;
                   --  Refused before the model read it: the message kept,
-                  --  pending, to add to or send again -- its picture is
-                  --  named again with /image where it was the picture.
+                  --  pending, to add to or send again, with its picture --
+                  --  /image names another while it waits.
+                  if Kept_Back and then Turn_Picture /= null then
+                     Free_Text (Next_Picture);
+                     Next_Picture := Turn_Picture;
+                     Next_Is_Video := Turn_Is_Video;
+                     Turn_Picture := null;
+                  else
+                     Free_Text (Turn_Picture);
+                  end if;
                   if Kept_Back then
                      --  Whole, as it was: offered again line by line, a
                      --  first line that looked like a command was dropped,

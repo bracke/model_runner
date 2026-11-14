@@ -2320,6 +2320,28 @@ package body Tests.CLI_Cases is
             Assert (Holds (Lines, "ESC-LEAVES"), "filtering, the keys line that says how to leave was cut");
             Assert (Natural (Lines.Length) <= 23, "the selector drew more rows than the window has");
          end;
+         --  A title taller than the window, and a filter nothing matches:
+         --  the "nothing" line has its row, and the keys theirs.
+         declare
+            Tall_Words : Ch.Wording := Words;
+            Tall_Pick  : Ch.Selector := Ch.Start (Items);
+            Tall       : Unbounded_String;
+         begin
+            for Index in 1 .. 30 loop
+               Append (Tall, "line" & Natural'Image (Index) & ASCII.LF);
+            end loop;
+            Tall_Words.Title := Tall;
+            Ch.Press (Tall_Pick, (Ch.Printable, '/'), 10);
+            Ch.Press (Tall_Pick, (Ch.Printable, 'q'), 10);
+            Ch.Press (Tall_Pick, (Ch.Printable, 'q'), 10);
+            declare
+               Lines : constant Model_Runner.Framework.Name_Lists.Vector :=
+                 Ch.Render (Tall_Pick, Tall_Words, 23, 79);
+            begin
+               Assert (Holds (Lines, "ESC-LEAVES"), "a filter matching nothing under a tall title cut the keys");
+               Assert (Natural (Lines.Length) <= 23, "a tall title and no match drew past the window");
+            end;
+         end;
          Ch.Press (Pick, (Ch.Escape, ' '), 10);
          Ch.Press (Pick, (Ch.Tab, ' '), 10);
          declare
@@ -2379,6 +2401,13 @@ package body Tests.CLI_Cases is
       Assert (Model_Runner.UTF8.Row_Start ("abcdefghij", 2, 4) = 9, "the third row of four did not begin at i");
       Assert (Model_Runner.UTF8.Row_Start ("abc", 0, 4) = 1, "the first row did not begin at the start");
       Assert (Model_Runner.UTF8.Row_Start ("abc", 1, 4) = 4, "a row past the text did not end it");
+      --  A tab after a row filled exactly moves nothing: the row after it
+      --  begins with what follows it. A mark of no width keeps to its
+      --  letter.
+      Assert (Model_Runner.UTF8.Row_Start ("abcd" & ASCII.HT & "ef", 1, 4) = 6,
+              "a row began with a tab that moved nothing");
+      Assert (Model_Runner.UTF8.Row_Start ("abcd" & Character'Val (16#CC#) & Character'Val (16#81#) & "ef", 1, 4) = 7,
+              "a row began with a combining mark");
 
       --  A wide character that meets the edge goes to the next row whole.
       Assert (Model_Runner.UTF8.Wrapped_Columns
@@ -2427,6 +2456,14 @@ package body Tests.CLI_Cases is
          begin
             Assert (Offered.Contains ("""obj/harness ui test/"),
                     "a directory with a space was not offered quoted");
+         end;
+         --  A tab after the command word parts words as a space does.
+         declare
+            Tabbed : constant Model_Runner.Framework.Name_Lists.Vector :=
+              Model_Runner.CLI.Completion.Candidates ("/load" & ASCII.HT & "obj/harness");
+         begin
+            Assert (Tabbed.Contains ("""obj/harness ui test/"),
+                    "a path after a tab was not completed as a path");
          end;
          Ada.Directories.Delete_Directory (Dir);
       end;
@@ -2590,6 +2627,16 @@ package body Tests.CLI_Cases is
               and then Command ("task|reopen|TASK-002") = 0
               and then Shows ("(accepted)"),
               "a cancelled task was not reopened: " & Last_Output);
+      --  move ... cancelled is a cancel, and goes as one; a state of words
+      --  joined by hyphens is the state.
+      declare
+         Moved  : constant Natural := Command ("task|move|TASK-002|cancelled");
+         Listed : constant Natural := Command ("task|list|waiting-on-an-ended-task");
+         Again  : constant Natural := Command ("task|reopen|TASK-002");
+      begin
+         Assert (Moved = 0 and then Again = 0, "task move cancelled did not cancel as task cancel does");
+         Assert (Listed = 0, "task list waiting-on-an-ended-task was not taken as the state");
+      end;
 
       --  What the condition names is a field of its own, not only words in
       --  its text.
@@ -10574,6 +10621,10 @@ package body Tests.CLI_Cases is
       Offer ("more", I.Held);
       Assert (I.Pending (Typing) = "/var/log/syslog says:" & ASCII.LF & ASCII.LF & "error X" & ASCII.LF & "more",
               "a line after a kept message was not added to it: " & I.Pending (Typing));
+      --  A picture named for it while it waits: run, the message kept.
+      Offer ("/image shot.png", I.Command_Mid_Message);
+      Assert (I.Pending (Typing) = "/var/log/syslog says:" & ASCII.LF & ASCII.LF & "error X" & ASCII.LF & "more",
+              "/image while a message waited was taken into it: " & I.Pending (Typing));
       I.Taken (Typing);
 
       --  A line of nothing but spaces is blank. An empty submission is the

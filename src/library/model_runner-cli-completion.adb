@@ -55,8 +55,9 @@ package body Model_Runner.CLI.Completion is
       return Open;
    end Quote_Open;
 
-   --  Words a space apart, as a list; a quoted stretch, its quotes kept,
-   --  one word -- "my dir/x.gguf" is a path, not two words.
+   --  Words a space or a tab apart, as Parse has them, as a list; a
+   --  quoted stretch, its quotes kept, one word -- "my dir/x.gguf" is a
+   --  path, not two words.
    function Words_Of (Text : String) return Names.Vector is
       Result : Names.Vector;
       Start  : Natural := Text'First;
@@ -68,7 +69,7 @@ package body Model_Runner.CLI.Completion is
          then
             Open := not Open;
          end if;
-         if Index > Text'Last or else (Text (Index) = ' ' and then not Open) then
+         if Index > Text'Last or else (Text (Index) in ' ' | ASCII.HT and then not Open) then
             if Index > Start then
                Result.Append (Text (Start .. Index - 1));
             end if;
@@ -265,7 +266,7 @@ package body Model_Runner.CLI.Completion is
       Words   : constant Names.Vector := Words_Of (Before);
       --  The word being completed: the last, or a new one after a space.
       Fresh   : constant Boolean :=
-        Before = "" or else (Before (Before'Last) = ' ' and then not Quote_Open (Before));
+        Before = "" or else (Before (Before'Last) in ' ' | ASCII.HT and then not Quote_Open (Before));
       Current : constant String := (if Fresh or else Words.Is_Empty then "" else Words.Last_Element);
       Position : constant Positive := Natural (Words.Length) + (if Fresh then 1 else 0);
       Command : constant String :=

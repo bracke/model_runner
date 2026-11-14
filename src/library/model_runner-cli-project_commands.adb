@@ -3203,21 +3203,26 @@ package body Model_Runner.CLI.Project_Commands is
      (Index <= Natural (Flags.Length) and then Flags (Index));
 
    --  Whether a word at a place is text for its quotes, never NAME=VALUE:
-   --  "a=b is broken" is a title. One quoted whole as a shell passes it --
-   --  "text=It SHALL shout.", "profile.checks=check: true" -- a value of
-   --  words or a setting's, is still the setting.
+   --  the title new is given first -- /task new "a=b is broken" -- is its
+   --  words. A setting quoted whole anywhere else, as a shell passes one
+   --  with spaces, "component=parser core" or "model=/My Models/x.gguf",
+   --  is the setting still, and so is a title's own, "title=...".
    function Quoted_At
-     (Flags : Flag_Lists.Vector; Index : Positive; Word, Command : String) return Boolean
+     (Flags : Flag_Lists.Vector; Index : Positive; Word, Action : String) return Boolean
    is
       Equal : constant Natural := Ada.Strings.Fixed.Index (Word, "=");
    begin
       return Began_Quoted_At (Flags, Index)
+        and then Index = 3
+        and then Ada.Characters.Handling.To_Lower (Action) = "new"
         and then not (Equal > Word'First
-                      and then (Command in "/reconfigure" | "/init" | "/obs"
-                                or else Ada.Strings.Fixed.Index (Word (Word'First .. Equal - 1), ".") > 0
-                                or else Is_Wordy (Ada.Characters.Handling.To_Lower
-                                                    (Word (Word'First .. Equal - 1)))));
+                      and then Is_Wordy (Ada.Characters.Handling.To_Lower (Word (Word'First .. Equal - 1))));
    end Quoted_At;
+
+   --  Of the words the latest Split gave, each whose value after NAME=
+   --  was quoted: reason="needs input" ends at its quote, and a word after
+   --  it is an operand -- /req block reason="needs input" 1.
+   Value_Quoted : Flag_Lists.Vector;
 
    --  The words of a line, with a quoted stretch kept whole.
    function Split (Line : String) return Names.Vector is
@@ -3239,8 +3244,15 @@ package body Model_Runner.CLI.Project_Commands is
 
       --  Whether the word being read began with a quote.
       Opened : Boolean := False;
+
+      --  Whether the word being read has a value quoted after its =.
+      Value_Opened : Boolean := False;
+
+      function After_Equal return Boolean is
+        (Length (Current) > 0 and then Element (Current, Length (Current)) = '=');
    begin
       Began_Quoted.Clear;
+      Value_Quoted.Clear;
       for Index in Line'Range loop
          declare
             Char : constant Character := Line (Index);
@@ -3270,6 +3282,7 @@ package body Model_Runner.CLI.Project_Commands is
                --  kind=code, 'Fix parser' is a title, its quotes not kept.
                Kept_Quote := not Started and then Latest_Setting_Is_Wordy (Result);
                Opened := Opened or else not Started;
+               Value_Opened := Value_Opened or else After_Equal;
                if Kept_Quote then
                   Append (Current, Char);
                end if;
@@ -3288,15 +3301,18 @@ package body Model_Runner.CLI.Project_Commands is
                Escape := True;
             elsif Char = '"' then
                Opened := Opened or else not Started;
+               Value_Opened := Value_Opened or else (not Quoted and then After_Equal);
                Quoted := not Quoted;
                Started := True;
             elsif Char in ' ' | ASCII.HT and then not Quoted then
                if Started then
                   Result.Append (To_String (Current));
                   Began_Quoted.Append (Opened);
+                  Value_Quoted.Append (Value_Opened);
                   Current := Null_Unbounded_String;
                   Started := False;
                   Opened := False;
+                  Value_Opened := False;
                end if;
             else
                Append (Current, Char);
@@ -3311,6 +3327,7 @@ package body Model_Runner.CLI.Project_Commands is
       if Started then
          Result.Append (To_String (Current));
          Began_Quoted.Append (Opened);
+         Value_Quoted.Append (Value_Opened);
       end if;
       Left_Open := Quoted or else Single;
       return Result;
@@ -3651,10 +3668,13 @@ package body Model_Runner.CLI.Project_Commands is
                   --  after reason=waiting, a number of the reason's.
                   if Ada.Strings.Fixed.Index (Before, "=") > Before'First and then Before (Before'First) /= '-'
                   then
+                     --  Not past a value closed in quotes: reason="needs
+                     --  input" 1 -- the 1 is the entry.
                      After_Setting :=
-                       Command in "/reconfigure" | "/init" | "/obs"
-                       or else Is_Wordy (Ada.Characters.Handling.To_Lower
-                                           (Before (Before'First .. Ada.Strings.Fixed.Index (Before, "=") - 1)));
+                       not Began_Quoted_At (Value_Quoted, Index - 1)
+                       and then (Command in "/reconfigure" | "/init" | "/obs"
+                                 or else Is_Wordy (Ada.Characters.Handling.To_Lower
+                                           (Before (Before'First .. Ada.Strings.Fixed.Index (Before, "=") - 1))));
                   end if;
                end;
             end if;
@@ -3669,7 +3689,9 @@ package body Model_Runner.CLI.Project_Commands is
             --  3,4 or task-3,task-4 where identifiers are named -- or 3, 4,
             --  its first word 3, -- each a task's, or the register's: the
             --  list is split later, each made as the project keeps it.
-            elsif Index > 1 and then not After_Setting
+            elsif (Number_Kind (Index) /= "" or else (Command in "/accept" | "/reject" and then Index >= 2))
+              and then not After_Setting
+              and then not Began_Quoted_At (Began_Quoted, Index)
               and then Ada.Strings.Fixed.Index (Word, ",") > 0
               and then Ada.Strings.Fixed.Index (Word, "=") = 0
               and then Word (Word'First) /= ','
@@ -3836,6 +3858,9 @@ package body Model_Runner.CLI.Project_Commands is
    function Request_Of (Line : String) return Model_Runner.CLI.Command_Lines.Request is
       All_Words : constant Names.Vector := Identifiers_As_Kept (Split (Line));
       Quoted    : constant Flag_Lists.Vector := Began_Quoted;
+      Valued    : constant Flag_Lists.Vector := Value_Quoted;
+      --  The command's action, the word after it: new, edit, show.
+      Action    : constant String := (if Natural (All_Words.Length) >= 2 then All_Words (2) else "");
       Result    : Model_Runner.CLI.Command_Lines.Request;
       Continues : Boolean := False;
       Is_Note   : Boolean;
@@ -3881,7 +3906,7 @@ package body Model_Runner.CLI.Project_Commands is
             if Part = "--set" then
                null;
             elsif Is_Setting (Part) and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
-              and then not Quoted_At (Quoted, Index, Part, All_Words.First_Element)
+              and then not Quoted_At (Quoted, Index, Part, Action)
             then
                Result.Settings.Append (Part);
                --  A value written in quotes ends at its closing quote; one
@@ -3899,15 +3924,20 @@ package body Model_Runner.CLI.Project_Commands is
                   Wordy     : constant Boolean :=
                     All_Words.First_Element in "/reconfigure" | "/init" | "/obs" or else Is_Wordy (Name);
                   In_Quotes : constant Boolean :=
-                    Ada.Strings.Fixed.Index (Line, Name & "=""") > 0
-                    or else Ada.Strings.Fixed.Index (Line, Name & "='") > 0;
+                    Began_Quoted_At (Valued, Index) or else Began_Quoted_At (Quoted, Index);
                begin
                   Continues := Wordy and then not In_Quotes;
                   --  /reconfigure's words after a quoted value are what it
                   --  does next -- add set.execution.allowed echo -- and
                   --  /init's its template: a field's alone ended there.
+                  --  Only where what is named comes before its fields --
+                  --  /task edit ID, revise ID, new TITLE -- is a word after
+                  --  them nothing the command takes: elsewhere it is an
+                  --  operand, /req block reason="needs input" 1.
                   Closed_Words := In_Quotes and then Is_Wordy (Ada.Characters.Handling.To_Lower (Name))
-                    and then All_Words.First_Element not in "/reconfigure" | "/init" | "/obs";
+                    and then Natural (All_Words.Length) >= 2
+                    and then Ada.Characters.Handling.To_Lower (All_Words (2)) in "edit" | "revise" | "new"
+                    and then All_Words.First_Element in "/task" | "/req" | "/spec" | "/decision";
                end;
             elsif Continues and then Ada.Strings.Fixed.Head (Part, 2) /= "--"
               --  /init's template typed after an input is the template.
@@ -3930,6 +3960,10 @@ package body Model_Runner.CLI.Project_Commands is
                --  IDs a comma apart, as a list is written: TASK-008, TASK-009,
                --  or TASK-008,TASK-009 -- each its own.
                if Ada.Strings.Fixed.Index (Part, ",") > 0
+                 --  Not a title in quotes: "TASK-1, then cleanup".
+                 and then not Began_Quoted_At (Quoted, Index)
+                 --  Nor a title's words: /task new Fix TASK-1,TASK-2 overlap.
+                 and then Ada.Characters.Handling.To_Lower (Action) not in "new" | "edit" | "revise" | "split"
                  --  Not a number a comma groups -- 1,000 -- which a list of
                  --  bare numbers is not: those were made IDs already.
                  and then (for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>

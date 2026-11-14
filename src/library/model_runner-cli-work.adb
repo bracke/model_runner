@@ -1698,11 +1698,9 @@ package body Model_Runner.CLI.Work is
             Pres.Put_Note (Screen, "cli.work.session_ending");
             Pres.Use_Session (Screen, False);
          end if;
-         --  Told to end, no task more is started: the next was taken, set
-         --  running and stopped at once.
-         if Model_Runner.Platform.Signals.Ending_Asked then
-            Remaining.Clear;
-         end if;
+         --  Told to end, no task more is started -- the next was taken, set
+         --  running and stopped at once: what is left is said, and the
+         --  batch ends, after this task (at After_Task below).
 
          if E.Is_Error (Outcome) then
             Fail (Outcome);
@@ -2475,7 +2473,9 @@ package body Model_Runner.CLI.Work is
          --  The plan asked again for what it can start now -- not where
          --  "all" was all of those a selector matched, which are run; and
          --  none a document ticks done, as the first plan left them out.
-         if Remaining.Is_Empty and then Setting ("all", "") = "yes" and then not Narrowed then
+         if Remaining.Is_Empty and then Setting ("all", "") = "yes" and then not Narrowed
+           and then not Model_Runner.Platform.Signals.Ending_Asked
+         then
             for Id of Model_Runner.Framework.Orchestration.Plan (Store).Start loop
                if not Tried.Contains (Id) and then Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) = "" then
                   Remaining.Append (Id);
@@ -2485,8 +2485,10 @@ package body Model_Runner.CLI.Work is
          exit when Remaining.Is_Empty;
          --  Stopped by the person: the whole of it, not only this task --
          --  what was left said, still ready.
-         if To_String (Done.Final_State) = Tk.Blocked
-           and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0
+         --  Or told to end: none more started, those left named.
+         if (To_String (Done.Final_State) = Tk.Blocked
+             and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0)
+           or else Model_Runner.Platform.Signals.Ending_Asked
          then
             declare
                Left : Unbounded_String;

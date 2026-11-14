@@ -510,7 +510,9 @@ package body Model_Runner.CLI.Choosers is
          --  question, and room for a few choices.
          Result.Shown :=
            Natural (Integer'Max (1, Integer'Min (Integer (Result.Title.Length),
-                                                 Rows - Below - Integer'Min (Visible_Count (Item), 4))));
+                                                 Rows - Below
+                                                 --  The "nothing" line, when none match.
+                                                 - Integer'Max (1, Integer'Min (Visible_Count (Item), 4)))));
          Result.Room := Positive (Integer'Max (1, Rows - Below - Result.Shown));
       end;
       return Result;
@@ -910,13 +912,21 @@ package body Model_Runner.CLI.Choosers is
    --  in a hidden prompt the rest of its sequence was left in the
    --  terminal for the next prompt to take as typed.
    --
+   --  @param Ahead Keys read before and not yet taken: the sequence's rest
+   --    is taken from them first -- an arrow typed while the cursor's
+   --    place was asked is there whole.
    --  @return True when the escape began a key, which means nothing here.
-   function Key_Sequence_Skipped return Boolean is
+   function Key_Sequence_Skipped (Ahead : in out Unbounded_String) return Boolean is
       Buffer : Ada.Streams.Stream_Element_Array (1 .. 1);
       Last   : Ada.Streams.Stream_Element_Offset;
 
       function Next (Byte : out Character) return Boolean is
       begin
+         if Length (Ahead) > 0 then
+            Byte := Element (Ahead, 1);
+            Delete (Ahead, 1, 1);
+            return True;
+         end if;
          --  As long as the editor waits for a key's rest, a read a signal
          --  broke read again.
          if not Hostkit.Descriptors.Wait_Readable (Input, 100) then
@@ -957,6 +967,12 @@ package body Model_Runner.CLI.Choosers is
       --  are let go as an arrow is; a second Escape, or anything else, and
       --  the escape was Escape: the question is given up.
       return Byte in ' ' .. '~' | ASCII.DEL;
+   end Key_Sequence_Skipped;
+
+   function Key_Sequence_Skipped return Boolean is
+      None : Unbounded_String;
+   begin
+      return Key_Sequence_Skipped (None);
    end Key_Sequence_Skipped;
 
    --  Take back the last character typed at a line on the screen: as many
@@ -1157,6 +1173,15 @@ package body Model_Runner.CLI.Choosers is
       end loop;
    end Ask;
 
+   --  Whether the terminal answers when asked where its cursor is: not
+   --  known until asked, and one that never did is not asked again.
+   type Answering is (Unknown, Always, Never);
+   Answers : Answering := Unknown;
+
+   --  Keys a line read ahead past its end -- typed before the terminal's
+   --  answer came -- kept for the next line read raw, not dropped.
+   Keys_Left : Unbounded_String;
+
    ----------------
    -- Typed_Line --
    ----------------
@@ -1188,6 +1213,19 @@ package body Model_Runner.CLI.Choosers is
       function Image (N : Natural) return String
       is (Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Both));
 
+      --  Whether bytes read end in the terminal's answer, ESC [ row ; col R.
+      function Is_Reply (Text : String) return Boolean is
+         From : constant Natural := Ada.Strings.Fixed.Index (Text, ASCII.ESC & "[", Ada.Strings.Backward);
+      begin
+         return From > 0 and then Text'Last > From + 2 and then Text (Text'Last) = 'R'
+           and then Ada.Strings.Fixed.Count (Text (From + 2 .. Text'Last - 1), ";") = 1
+           and then (for all C of Text (From + 2 .. Text'Last - 1) => C in '0' .. '9' | ';');
+      end Is_Reply;
+
+      --  Whether the answer was read: one not read soon is read before the
+      --  line ends, or it is typed into whatever reads next.
+      Answered : Boolean := False;
+
       --  The terminal asked where its cursor is (ESC [ 6 n), its answer
       --  ESC [ row ; column R read back; no answer soon, and nothing known.
       procedure Find_Start is
@@ -1195,7 +1233,10 @@ package body Model_Runner.CLI.Choosers is
          Got   : Unbounded_String;
          Byte  : Character;
       begin
-         if not Term.Size (Output, Size) or else Size.Columns < 2 then
+         --  A terminal that never answered is not asked again: each
+         --  question would wait for nothing.
+         if Answers = Never or else not Term.Size (Output, Size) or else Size.Columns < 2 then
+            Answered := True;
             return;
          end if;
          Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[6n");
@@ -1206,7 +1247,8 @@ package body Model_Runner.CLI.Choosers is
               or else Last < Buffer'First;
             Byte := Character'Val (Buffer (Buffer'First));
             Append (Got, Byte);
-            exit when Byte = 'R';
+            --  The answer's end, not an R typed ahead.
+            exit when Byte = 'R' and then Is_Reply (To_String (Got));
          end loop;
          declare
             Text  : constant String := To_String (Got);
@@ -1221,14 +1263,16 @@ package body Model_Runner.CLI.Choosers is
               and then (for all C of Text (Semi + 1 .. Text'Last - 1) => C in '0' .. '9')
               and then Text'Last - Semi <= 6
             then
+               Answered := True;
+               Answers := Always;
                Start := Natural'Value (Text (Semi + 1 .. Text'Last - 1));
                Start := (if Start > 0 then Start - 1 else 0);
                if Start < Size.Columns then
                   Width := Size.Columns;
                end if;
-               Ahead := To_Unbounded_String (Text (Text'First .. From - 1));
+               Append (Ahead, Text (Text'First .. From - 1));
             else
-               Ahead := Got;
+               Append (Ahead, Got);
             end if;
          end;
       end Find_Start;
@@ -1245,8 +1289,10 @@ package body Model_Runner.CLI.Choosers is
       function Row_After (Count : Natural) return Natural
       is (if Count > 0 and then Count mod Width = 0 then Count / Width - 1 else Count / Width);
 
-      --  The last character taken back, and the screen from where it
-      --  began wiped.
+      --  The last character taken back: the cursor back to where the line
+      --  began, the screen from there wiped, and what is left drawn again
+      --  -- a mark of no width, or a character at a row's end, taken back
+      --  in place left the cursor a row out, and the question wiped.
       procedure Erase is
       begin
          if Width = 0 then
@@ -1254,20 +1300,15 @@ package body Model_Runner.CLI.Choosers is
             return;
          end if;
          Delete (Typed, Last_Character (Typed), Length (Typed));
-         declare
-            Now : constant Natural := Cells;
-         begin
-            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
-            if Cursor_Row > Now / Width then
-               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error,
-                                ASCII.ESC & "[" & Image (Cursor_Row - Now / Width) & "A");
-            end if;
-            if Now mod Width > 0 then
-               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[" & Image (Now mod Width) & "C");
-            end if;
-            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[J");
-            Cursor_Row := Now / Width;
-         end;
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
+         if Cursor_Row > 0 then
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[" & Image (Cursor_Row) & "A");
+         end if;
+         if Start > 0 then
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[" & Image (Start) & "C");
+         end if;
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[J" & To_String (Typed));
+         Cursor_Row := Row_After (Cells);
       end Erase;
 
       procedure Echo (Bytes : String) is
@@ -1282,6 +1323,19 @@ package body Model_Runner.CLI.Choosers is
       function Next_Key (Key : out Character) return Boolean is
       begin
          if Length (Ahead) > 0 then
+            --  An answer come late, among the keys: taken whole, not typed.
+            if Element (Ahead, 1) = ASCII.ESC and then not Answered then
+               declare
+                  Text : constant String := To_String (Ahead);
+                  Stop : constant Natural := Ada.Strings.Fixed.Index (Text, "R");
+               begin
+                  if Stop > 0 and then Is_Reply (Text (Text'First .. Stop)) then
+                     Answered := True;
+                     Delete (Ahead, 1, Stop - Text'First + 1);
+                     return Next_Key (Key);
+                  end if;
+               end;
+            end if;
             Key := Element (Ahead, 1);
             Delete (Ahead, 1, 1);
             return True;
@@ -1307,6 +1361,8 @@ package body Model_Runner.CLI.Choosers is
          return "";
       end if;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      Ahead := Keys_Left;
+      Keys_Left := Null_Unbounded_String;
       Find_Start;
       loop
          if not Next_Key (Key) then
@@ -1326,7 +1382,7 @@ package body Model_Runner.CLI.Choosers is
          elsif Key = ASCII.ESC then
             --  A key's sequence -- an arrow -- means nothing here and
             --  is let go; Escape alone gives the question up.
-            if not Key_Sequence_Skipped then
+            if not Key_Sequence_Skipped (Ahead) then
                Outcome := Escaped;
                exit;
             end if;
@@ -1350,6 +1406,42 @@ package body Model_Runner.CLI.Choosers is
       end loop;
       Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
       Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
+      --  Asked and not answered: the answer waited for a little, as a slow
+      --  link brings it, and read here -- not typed into what reads next.
+      --  None at all, from a terminal never heard to answer, and it is not
+      --  asked again.
+      if not Answered then
+         declare
+            Got  : Unbounded_String;
+            Byte : Character;
+         begin
+            for Count in 1 .. 32 loop
+               exit when not Hostkit.Descriptors.Wait_Readable (Input, (if Count = 1 then 300 else 50));
+               exit when Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+                 or else Last < Buffer'First;
+               Byte := Character'Val (Buffer (Buffer'First));
+               Append (Got, Byte);
+               if Byte = 'R' and then Is_Reply (To_String (Got)) then
+                  Answered := True;
+                  Answers := Always;
+                  declare
+                     Text : constant String := To_String (Got);
+                  begin
+                     Got := To_Unbounded_String
+                       (Text (Text'First .. Ada.Strings.Fixed.Index (Text, ASCII.ESC & "[", Ada.Strings.Backward)
+                                            - 1));
+                  end;
+                  exit;
+               end if;
+            end loop;
+            Append (Ahead, Got);
+            if not Answered and then Answers = Unknown then
+               Answers := Never;
+            end if;
+         end;
+      end if;
+      --  What was typed past the line's end is the next line's.
+      Keys_Left := Ahead;
       Finalize (Guard);
       return (if Outcome = Entered then To_String (Typed) else "");
    end Typed_Line;
@@ -2325,6 +2417,9 @@ package body Model_Runner.CLI.Choosers is
       end if;
       Put (ASCII.ESC & "[?2004h");
       Guard.Bracketed := True;
+      --  Keys a question's line read past its end: this line's first.
+      Held_Keys := Keys_Left;
+      Keys_Left := Null_Unbounded_String;
       --  A paste goes on into this line only while its bytes are still
       --  coming: with none waiting, its closing mark was lost -- thrown
       --  away with the input a cancel discarded -- and the paste is over.

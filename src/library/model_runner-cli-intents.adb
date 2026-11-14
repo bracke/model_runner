@@ -2664,10 +2664,21 @@ package body Model_Runner.CLI.Intents is
            and then Natural (Plain.Length) > (if Action = "show" then 2 else 1)
          then
             Status := E.Make (E.CLI_Unexpected_Operand);
-            E.Add_Text (Status, "value", Word ((if Action = "show" then 3 else 2))
-                        & "; the command comes first, as " & Word_Of_Command (Kind) & " "
-                        & Word ((if Action = "show" then 3 else 2)) & " "
-                        & Word ((if Action = "show" then 2 else 1)) & " ...");
+            declare
+               Extra : constant String := Word ((if Action = "show" then 3 else 2));
+            begin
+               --  A command after the entry: said where it goes. Anything
+               --  else -- a second entry -- is that one is shown at a time.
+               E.Add_Text (Status, "value", Extra
+                           & (if Lower (Extra) in "list" | "new" | "accept" | "reject" | "reconsider"
+                                                 | "obsolete" | "revise" | "move" | "link" | "unlink"
+                                                 | "supersede" | "renumber" | "verify" | "block"
+                                                 | "unblock" | "govern" | "show" | "trace"
+                              then "; the command comes first, as " & Word_Of_Command (Kind) & " "
+                                   & Extra & " " & Word ((if Action = "show" then 2 else 1)) & " ..."
+                              else "; one entry is shown at a time: " & Word_Of_Command (Kind) & " show "
+                                   & Word ((if Action = "show" then 2 else 1))));
+            end;
          end if;
          declare
             Held  : Nt.Entity;

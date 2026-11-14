@@ -180,13 +180,15 @@ package body Model_Runner.Presentation is
    function Is_Structured (Item : Console) return Boolean
    is (Item.Structured);
 
-   --  A text as a JSON string.
+   --  A text as a JSON string. Bytes that are not UTF-8 -- a Latin-1
+   --  file's, a binary one's -- are taken for U+FFFD: a JSON line its
+   --  reader cannot decode is no line.
    function Quoted (Text : String) return String is
       Result : Ada.Strings.Unbounded.Unbounded_String;
       Hex    : constant String := "0123456789abcdef";
    begin
       Ada.Strings.Unbounded.Append (Result, '"');
-      for C of Text loop
+      for C of Model_Runner.UTF8.Repaired (Text) loop
          case C is
             when '"'      => Ada.Strings.Unbounded.Append (Result, "\""");
             when '\'     => Ada.Strings.Unbounded.Append (Result, "\\");
@@ -857,7 +859,13 @@ package body Model_Runner.Presentation is
       --  For a program, a record as every other line on standard output
       --  is: a row written as text broke the JSON lines.
       if Item.Structured then
-         Put_Record (Item, "row", "", [Loc.Named ("detail", Aside)], Main);
+         --  Its tone and depth too: a failed row is told from a good one,
+         --  and one under a heading from the heading's own.
+         Put_Record (Item, "row", "",
+                     [Loc.Named ("detail", Aside),
+                      Loc.Named ("tone", Ada.Characters.Handling.To_Lower (Main_Tone'Image)),
+                      Loc.Named ("indent", Ada.Strings.Fixed.Trim (Indent'Image, Ada.Strings.Left))],
+                     Main);
          return;
       end if;
       Put_Line (Item, Lead

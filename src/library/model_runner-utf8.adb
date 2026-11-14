@@ -416,14 +416,17 @@ package body Model_Runner.UTF8 is
       while Index <= Item'Last loop
          Step (Item, Index, Bytes, Width);
          if Item (Index) = ASCII.HT then
-            if Total >= Target then
-               return Index;
-            end if;
             declare
                Column : constant Natural := Total mod Row;
                Stop   : constant Natural := Natural'Min ((Column / 8 + 1) * 8, Row - 1);
             begin
+               --  A tab right after a row filled exactly moves nothing: it
+               --  is the row before's, and what follows it begins the row.
+               --  Drawn first from column 0 it would move eight cells.
                if not (Column = 0 and then Total > 0) then
+                  if Total >= Target then
+                     return Index;
+                  end if;
                   Total := Total - Column + Natural'Max (Column, Stop);
                end if;
             end;
@@ -433,7 +436,9 @@ package body Model_Runner.UTF8 is
             if Width = 2 and then Row > 1 and then Total mod Row = Row - 1 then
                Total := Total + 1;
             end if;
-            if Total >= Target then
+            --  A mark of no width -- a combining accent -- stays with the
+            --  character before it, not a row begun with it alone.
+            if Total >= Target and then not (Width = 0 and then Index > Item'First) then
                return Index;
             end if;
             Total := Total + Width;

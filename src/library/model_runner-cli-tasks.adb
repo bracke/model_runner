@@ -866,7 +866,7 @@ package body Model_Runner.CLI.Tasks is
                                           | "an" | "ended" | "task"
                        and then Ada.Strings.Fixed.Translate (Said, Ada.Strings.Maps.To_Mapping ("-_", "  "))
                                   not in "to integrate" | "checks failed" | "serves retired"
-                                       | "waiting for parts"
+                                       | "waiting for parts" | "waiting on an ended task"
                      then
                         declare
                            Near : constant String := Model_Runner.Framework.Nearest (Said, States);
@@ -4306,7 +4306,8 @@ package body Model_Runner.CLI.Tasks is
             Config := Model_Runner.Framework.Configurations.Required (Store);
             if Profile_Given not in "" | "default" and then not R.Has (Config, "map.model." & Profile_Given) then
                Outcome := E.Make (E.Framework_Input_Invalid);
-               E.Add_Text (Outcome, "name", "profile");
+               --  Named as it was given: typed, or work.profile's, as /work says.
+               E.Add_Text (Outcome, "name", (if Profile_Typed = "" then "work.profile" else "profile"));
                E.Add_Text (Outcome, "value", Profile_Given);
                E.Add_Text (Outcome, "detail", "there is no map.model." & Profile_Given
                            & "; /config map.model lists those there are");
@@ -5854,6 +5855,32 @@ package body Model_Runner.CLI.Tasks is
    begin
       Status := E.Exit_Success;
 
+      --  move TASK cancelled is a cancel, and goes as one: the stop asked of
+      --  a run holding it, the work in its workspace named and asked about,
+      --  and the copy kept said -- move cancelled anyway as cancel anyway.
+      if Action = "move" then
+         declare
+            Words : constant String := Ada.Strings.Fixed.Trim (Argument, Ada.Strings.Both);
+            Space : constant Natural := Ada.Strings.Fixed.Index (Words, " ");
+            Task_Word : constant String := (if Space = 0 then Words else Words (Words'First .. Space - 1));
+            Rest  : constant String :=
+              (if Space = 0 then ""
+               else Ada.Strings.Fixed.Trim (Words (Space + 1 .. Words'Last), Ada.Strings.Both));
+         begin
+            if Task_Word /= "" and then Rest in "cancelled" | "cancelled anyway" then
+               declare
+                  One : Model_Runner.CLI.Project_Requests.Request := Item;
+               begin
+                  One.Action := T.To_Bounded ("cancel");
+                  One.Action_Argument := T.To_Bounded
+                    (Task_Word & (if Rest = "cancelled anyway" then " anyway" else ""));
+                  Run (One, Screen, Status);
+                  return;
+               end;
+            end if;
+         end;
+      end if;
+
       --  accept or reject of several tasks at once: each in turn, as if
       --  named alone, the worst of how they went the command's.
       --  all, for verify and integrate: each complete task verified again,
@@ -6383,57 +6410,6 @@ package body Model_Runner.CLI.Tasks is
                         & " cancels it, and /task cancel " & First_Word & " anyway gives up work waiting in"
                         & " its workspace");
             Fail (Outcome);
-         elsif After_First = "cancelled"
-           and then Tk.State_Of (Store, First_Word) in "candidate" | "cancelled" | "complete" | "rejected"
-         then
-            Outcome := E.Make (E.Framework_Transition_Invalid);
-            E.Add_Text (Outcome, "name", First_Word);
-            E.Add_Text (Outcome, "value", Tk.State_Of (Store, First_Word));
-            E.Add_Text (Outcome, "expected", "cancelled");
-            E.Add_Text (Outcome, "detail",
-                        (if Tk.State_Of (Store, First_Word) = Tk.Candidate
-                         then "a candidate is not cancelled but rejected: /task reject " & First_Word
-                         else "it is ended already"));
-            Fail (Outcome);
-         elsif After_First = "cancelled" and then Tk.State_Of (Store, First_Word) = Tk.Verification
-           and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
-         then
-            --  Work waiting in a workspace is given up only when said.
-            Outcome := E.Make (E.Framework_Transition_Invalid);
-            E.Add_Text (Outcome, "name", First_Word);
-            E.Add_Text (Outcome, "value", "verification");
-            E.Add_Text (Outcome, "expected", "cancelled");
-            E.Add_Text (Outcome, "detail", "its work waits in "
-                        & Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)
-                        & " to be taken in, and cancelling gives it up; /task integrate "
-                        & First_Word & " takes it in, /task cancel " & First_Word
-                        & " anyway gives it up");
-            Fail (Outcome);
-         elsif After_First = "cancelled"
-           and then not Confirmed ("cli.project.cancel.confirm", First_Word,
-                                   R.Get (Tk_Definition (First_Word), "title") & ", "
-                                   & Listed_State (First_Word) & Waiting_On_It (Store, First_Word))
-         then
-            --  Asked as /task cancel asks, and kept on a no.
-            null;
-         elsif After_First = "cancelled" then
-            --  Cancelled the way cancel does it: what it holds goes with it.
-            Model_Runner.Framework.Work.Cancel
-              (Store, First_Word, Outcome, Actor => Model_Runner.Framework.Transitions.User);
-            if E.Is_Error (Outcome) then
-               Fail (Outcome);
-            else
-               Pres.Put_Message
-                 (Screen, "cli.task.moved",
-                  [Loc.Named ("name", First_Word),
-                   Loc.Named ("value", Model_Runner.Framework.State_Said (After_First))]);
-               --  What became ready said, as /task cancel says it.
-               Change := S.No_Changes;
-               Commit;
-               Say_Became_Ready;
-               Say_Parts_Left (First_Word);
-               Say_Left_Waiting (First_Word);
-            end if;
          else
             --  move TASK STATE WHY: the state, and why, which the move's
             --  event keeps.
@@ -6446,19 +6422,26 @@ package body Model_Runner.CLI.Tasks is
                  (if Space = 0 then ""
                   else Ada.Strings.Fixed.Trim (Rest (Space + 1 .. Rest'Last), Ada.Strings.Both));
             begin
-               --  Work waiting in a workspace is not given up unsaid.
-               if Next = Tk.Failed and then Why /= "anyway"
-                 and then Tk.State_Of (Store, First_Word) = Tk.Verification
+               --  Work waiting in a workspace is not given up unsaid --
+               --  in verification, or kept in one by a blocked or running
+               --  task, changes and all: an ending gives it up.
+               if Next in "failed" | "rejected" and then Why /= "anyway"
                  and then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) /= ""
+                 and then (Tk.State_Of (Store, First_Word) = Tk.Verification
+                           or else not Model_Runner.Framework.Workspaces.Changes
+                                         (Store, Model_Runner.Framework.Workspaces.Active_For
+                                                   (Store, First_Word)).Is_Empty)
                then
                   Outcome := E.Make (E.Framework_Transition_Invalid);
                   E.Add_Text (Outcome, "name", First_Word);
-                  E.Add_Text (Outcome, "value", "verification");
-                  E.Add_Text (Outcome, "expected", "failed");
+                  E.Add_Text (Outcome, "value", Tk.State_Of (Store, First_Word));
+                  E.Add_Text (Outcome, "expected", Next);
                   E.Add_Text (Outcome, "detail", "its work waits in "
                               & Model_Runner.Framework.Workspaces.Active_For (Store, First_Word)
-                              & " to be taken in; /task integrate " & First_Word
-                              & " takes it in, /task move " & First_Word & " failed anyway gives it up");
+                              & (if Tk.State_Of (Store, First_Word) = Tk.Verification
+                                 then " to be taken in; /task integrate " & First_Word & " takes it in, "
+                                 else "; ")
+                              & "/task move " & First_Word & " " & Next & " anyway gives it up, a copy kept");
                   Fail (Outcome);
                   S.Close (Store);
                   return;

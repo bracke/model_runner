@@ -17437,6 +17437,10 @@ package body Tests.Framework_Cases is
          Model_Runner.Presentation.Use_Structured (Screen, True);
          Model_Runner.Presentation.Put_Diff_Line (Screen, "+structured line");
          Model_Runner.Presentation.Put_Row (Screen, "rowed.py", "Python, source");
+         --  A Latin-1 byte in a changed file, and a failed row under a heading.
+         Model_Runner.Presentation.Put_Diff_Line (Screen, "+caf" & Character'Val (16#E9#));
+         Model_Runner.Presentation.Put_Row (Screen, "broken.py", "would not read", Indent => 2,
+                                            Main_Tone => Model_Runner.Presentation.Bad);
          Model_Runner.Presentation.Use_Structured (Screen, False);
          Set_Output (Standard_Output);
          declare
@@ -17475,7 +17479,14 @@ package body Tests.Framework_Cases is
                  > 0
                  and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
                                                    "{""kind"": ""row"", ""key"": """", ""detail"": ""Python, source"","
-                                                   & " ""text"": ""rowed.py""}") > 0,
+                                                   & " ""tone"": ""plain"", ""indent"": ""0"","
+                                                   & " ""text"": ""rowed.py""}") > 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
+                                                   """text"": ""+caf" & Character'Val (16#EF#)
+                                                   & Character'Val (16#BF#) & Character'Val (16#BD#) & """}") > 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
+                                                   """tone"": ""bad"", ""indent"": ""2"", ""text"": ""broken.py""")
+                          > 0,
                  "a diff line or a row was written as text in structured output: "
                  & Read_Whole ("obj/session-next.txt"));
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/help task") > 0,

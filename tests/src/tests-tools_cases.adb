@@ -1532,6 +1532,25 @@ package body Tests.Tools_Cases is
          Assert (Worded.Positional.Contains ("42"),
                  "a number among words to match became a task: " & Cl.Canonical (Worded));
       end;
+      --  A setting quoted whole past the title is the setting; a word after
+      --  a value closed in quotes is an operand where one is taken; a
+      --  title's commas, and a quoted one's, are its own.
+      declare
+         Kind    : constant Cl.Request := Pc.Request_Of ("/task new Fix it ""component=parser core"" kind=bugfix");
+         Blocked : constant Cl.Request := Pc.Request_Of ("/req block reason=""needs input"" 1");
+         Titled  : constant Cl.Request := Pc.Request_Of ("/task new Fix TASK-1,TASK-2 overlap kind=bugfix");
+         Quoted  : constant Cl.Request := Pc.Request_Of ("/task new ""TASK-1, then cleanup"" kind=bugfix");
+      begin
+         Assert (Kind.Settings.Contains ("component=parser core"),
+                 "a setting quoted whole was taken as text: " & Cl.Canonical (Kind));
+         Assert (Ada.Strings.Unbounded.To_String (Blocked.Stray) = ""
+                 and then Blocked.Positional.Contains ("REQ-001"),
+                 "an entry after a quoted reason was refused or not made an ID: " & Cl.Canonical (Blocked));
+         Assert (Titled.Positional.Contains ("TASK-1,TASK-2"),
+                 "a title's comma list was split into IDs: " & Cl.Canonical (Titled));
+         Assert (Quoted.Positional.Contains ("TASK-1, then cleanup"),
+                 "a quoted title was split at its comma: " & Cl.Canonical (Quoted));
+      end;
       --  A value that names rather than says runs on into nothing, and no
       --  value runs on into an ID: the word after it is a word.
       declare

@@ -41,7 +41,8 @@ procedure Reconfigure (Store : in out S.Store) is
                   --  A word of nothing -- "" typed alone -- is no setting
                   --  and no part of one: its first character was read, and
                   --  the command ended in an internal fault.
-                  if Part = "" then
+                  --  --verbose is how much is said, not a setting's word.
+                  if Part = "" or else (Part = "--verbose" and then Opt."=" (Command.Level, Opt.Verbose)) then
                      null;
                   elsif not Words_Given.Is_Empty
                     and then (Part = "=" or else Part (Part'First) = '='
@@ -162,7 +163,9 @@ begin
          --  The items, up to the first NAME=: from there, settings
          --  changed in the same step.
          for Index in 4 .. Natural (All_Words.Length) loop
-            if All_Words (Index) = "confirm=yes" then
+            if All_Words (Index) = "confirm=yes"
+              or else (All_Words (Index) = "--verbose" and then Opt."=" (Command.Level, Opt.Verbose))
+            then
                null;
             elsif Rest = 0 and then Ada.Strings.Fixed.Index (All_Words (Index), "=") > 1 then
                Rest := Index;
