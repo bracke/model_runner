@@ -19,10 +19,12 @@ is
      Natural (All_Words.Length) >= 2
      and then ((Word = "/task"
                 and then Ada.Characters.Handling.To_Lower (All_Words (2))
-                           in "new" | "note" | "edit" | "split" | "reject" | "cancel")
+                           in "new" | "note" | "split" | "reject" | "cancel")
+               --  Not edit or revise: an entry and its fields, no words of
+               --  its own -- /task edit 3 notes=see --verbose is verbose.
                or else (Word in "/req" | "/spec" | "/decision"
                         and then Ada.Characters.Handling.To_Lower (All_Words (2))
-                                   in "new" | "revise" | "edit" | "reject" | "obsolete")
+                                   in "new" | "reject" | "obsolete")
                --  A finding recorded or dismissed is a note, as Request_Of
                --  reads it: --directory or --verbose in it is its words.
                or else (Word = "/obs"
@@ -404,7 +406,7 @@ begin
       --  --verbose is how much is said, read above: not an operand -- /init
       --  --verbose asked for no template of that name. The code queries
       --  read it among their words themselves.
-      if Opt."=" (Command.Level, Opt.Verbose)
+      if (Opt."=" (Command.Level, Opt.Verbose) or else not Free_Text)
         and then Word not in "/search" | "/scan" | "/tree" | "/sym" | "/refs" | "/deps" | "/users"
                            | "/impact" | "/trace"
       then

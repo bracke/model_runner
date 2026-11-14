@@ -193,8 +193,31 @@ package Model_Runner.CLI.Choosers is
    --  Let go of keys a line read raw took past its end, kept for the next
    --  line read: what was typed meanwhile, dropped as a cancel drops it.
    --
-   --  @param Dropped Whether there were any.
+   --  @param Dropped Whether any of them was typed text, as Typed_Keys
+   --    tells it.
    procedure Drop_Kept_Keys (Dropped : out Boolean);
+
+   --  Whether bytes hold something typed: a printable byte or a line end
+   --  outside a key's escape sequence -- not an arrow, not an Escape
+   --  alone, not what is left of a terminal's answer.
+   --
+   --  @param Bytes The bytes.
+   --  @return Whether they do.
+   function Typed_Keys (Bytes : String) return Boolean;
+
+   --  The terminal's answer to where its cursor is, ESC [ row ; column R,
+   --  found in bytes read while waiting for it: the last whole one,
+   --  wherever it is, so keys typed before and after it are kept.
+   --
+   --  @param Bytes What was read.
+   --  @param Found Whether an answer was there.
+   --  @param Column Its column, from 1.
+   --  @param Rest The bytes without it, those before and after in order.
+   procedure Take_Reply
+     (Bytes  : String;
+      Found  : out Boolean;
+      Column : out Natural;
+      Rest   : out Ada.Strings.Unbounded.Unbounded_String);
 
    --  A question said, then a yes or no read as Answered_Yes reads one.
    --

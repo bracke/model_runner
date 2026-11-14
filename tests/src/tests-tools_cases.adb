@@ -1569,6 +1569,18 @@ package body Tests.Tools_Cases is
          Assert (Ada.Strings.Unbounded.To_String (Edited.Stray) = "the",
                  "a word after an edit's quoted value was not said: " & Cl.Canonical (Edited));
       end;
+      --  A setting quoted whole ends where its quotes do: the number after
+      --  it is the entry. A reason's list of tasks is its words.
+      declare
+         Whole  : constant Cl.Request := Pc.Request_Of ("/req block ""reason=needs input"" 1");
+         Reason : constant Cl.Request :=
+           Pc.Request_Of ("/task move TASK-005 blocked waiting for TASK-3,TASK-4");
+      begin
+         Assert (Whole.Positional.Contains ("REQ-001"),
+                 "a number after a setting quoted whole stayed a number: " & Cl.Canonical (Whole));
+         Assert (Reason.Positional.Contains ("TASK-3,TASK-4"),
+                 "a reason's comma list was split: " & Cl.Canonical (Reason));
+      end;
       --  A value that names rather than says runs on into nothing, and no
       --  value runs on into an ID: the word after it is a word.
       declare

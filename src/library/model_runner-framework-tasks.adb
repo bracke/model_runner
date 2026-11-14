@@ -800,6 +800,42 @@ package body Model_Runner.Framework.Tasks is
    -- Move --
    ----------
 
+   --  Whether a move, by what its states count as, is one a person does
+   --  not make: work starts a task, and its checks take it to
+   --  verification and completion; a task at work is stopped by
+   --  cancelling it; one waiting in verification is failed, blocked or
+   --  cancelled. From complete to another complete is a person's.
+   function Harness_Moves (Now_As, Next_As : String) return Boolean is
+     ((Next_As in "running" | "verification" | "complete"
+       and then not (Next_As = "complete" and then Now_As = "complete"))
+      or else (Now_As = "running" and then Next_As /= Tasks.Cancelled)
+      or else (Now_As = "verification" and then Next_As not in "cancelled" | "failed" | "blocked"));
+
+   function Can_Move
+     (Item    : Stores.Store;
+      Id      : String;
+      Next    : String;
+      Actor   : String := "";
+      Granted : Transitions.Permissions := Transitions.Ordinary_Only) return Boolean
+   is
+      Now     : constant String := State_Of (Item, Id);
+      Checked : Model_Runner.Errors.Error_Info;
+   begin
+      if Now = "" then
+         return False;
+      end if;
+      Transitions.Check
+        (Lifecycle_Of (Item, Forbids => Transitions.By_Person (Actor)), Id, Now, Next, Granted, Checked);
+      if Model_Runner.Errors.Is_Error (Checked) then
+         return False;
+      end if;
+      return not (Transitions.By_Person (Actor)
+                  and then Harness_Moves (Counts_As (Item, Now), Counts_As (Item, Next)));
+   exception
+      when others =>
+         return False;
+   end Can_Move;
+
    procedure Move
      (Item         : Stores.Store;
       Change       : in out Stores.Transaction;
@@ -854,14 +890,7 @@ package body Model_Runner.Framework.Tasks is
          --  From complete to another state that counts as complete -- one
          --  the project adds, as released -- is a person's to make: what
          --  completes it was passed already.
-         if Transitions.By_Person (Actor)
-           and then ((Next_As in "running" | "verification" | "complete"
-                      and then not (Next_As = "complete" and then Now_As = "complete"))
-                     or else (Now_As = "running"
-                              and then Next_As /= Tasks.Cancelled)
-                     or else (Now_As = "verification"
-                              and then Next_As not in "cancelled" | "failed" | "blocked"))
-         then
+         if Transitions.By_Person (Actor) and then Harness_Moves (Now_As, Next_As) then
             Status := E.Make (E.Framework_Transition_Invalid);
             E.Add_Text (Status, "name", Id);
             E.Add_Text (Status, "value", Records.Get (Value, "state"));

@@ -54,7 +54,11 @@ begin
                end if;
             end loop;
          else
-            Valued := Valued or else (Is_Setting (One) and then not Quoted_At (Quoted, All_Words, Index));
+            --  A value closed in quotes takes no more words: a list after
+            --  it is entries, /req block reason="needs input" 1,2.
+            Valued := Valued
+              or else (Is_Setting (One) and then not Quoted_At (Quoted, All_Words, Index)
+                       and then not (Began_Quoted_At (Value_Flags, Index) or else Began_Quoted_At (Quoted, Index)));
             After.Append (One);
             Flags (Natural (After.Length)) := Quoted_At (Quoted, All_Words, Index);
             Closed (Natural (After.Length)) :=
@@ -62,12 +66,27 @@ begin
          end if;
       end;
    end loop;
-   Model_Runner.CLI.Intents.Run
-     (Store,
-      (if Word = "/req" then Nt.Requirement
-       elsif Word = "/decision" then Nt.Decision
-       else Nt.Specification),
-      After, Screen, Flags, Closed);
+   --  show with several entries -- 1,2 or 1 2 -- each shown in turn, as
+   --  /task show takes several.
+   if Action = "show" and then Natural (After.Length) > 2
+     and then (for all Index in 2 .. Natural (After.Length) => Looks_Like_Id (After (Index)))
+   then
+      for Index in 2 .. Natural (After.Length) loop
+         Model_Runner.CLI.Intents.Run
+           (Store,
+            (if Word = "/req" then Nt.Requirement
+             elsif Word = "/decision" then Nt.Decision
+             else Nt.Specification),
+            Names.Vector'([After (1), After (Index)]), Screen);
+      end loop;
+   else
+      Model_Runner.CLI.Intents.Run
+        (Store,
+         (if Word = "/req" then Nt.Requirement
+          elsif Word = "/decision" then Nt.Decision
+          else Nt.Specification),
+         After, Screen, Flags, Closed);
+   end if;
    --  One turned down by name: what still waits, as /reject says it.
    if Natural (All_Words.Length) >= 3 and then Ada.Characters.Handling.To_Lower (All_Words (2)) = "reject" then
       Say_Still_Waiting (Store);

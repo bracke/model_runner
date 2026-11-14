@@ -689,8 +689,46 @@ package body Model_Runner.CLI.Tasks is
             return To_String (Said);
          end Filters_Said;
 
+         --  A state in words whose first word came as state=: state=waiting
+         --  for parts, unquoted, is waiting for parts whole.
+         Joined_State : Unbounded_String;
+
+         --  The state given as state=, from the inputs or the words after
+         --  list, as its words are; "" when none is.
+         function State_Setting return String is
+            Start : Natural := Argument'First;
+         begin
+            for Index in 1 .. Item.Input_Count loop
+               declare
+                  Pair : constant String := T.To_String (Item.Inputs (Index));
+               begin
+                  if Ada.Strings.Fixed.Head (Pair, 6) = "state=" then
+                     return Ada.Strings.Fixed.Translate
+                              (Pair (Pair'First + 6 .. Pair'Last), Ada.Strings.Maps.To_Mapping ("-_", "  "));
+                  end if;
+               end;
+            end loop;
+            for Index in Argument'First .. Argument'Last + 1 loop
+               if Index > Argument'Last or else Argument (Index) = ' ' then
+                  declare
+                     Pair : constant String := Argument (Start .. Index - 1);
+                  begin
+                     if Ada.Strings.Fixed.Head (Pair, 6) = "state=" then
+                        return Ada.Strings.Fixed.Translate
+                                 (Pair (Pair'First + 6 .. Pair'Last), Ada.Strings.Maps.To_Mapping ("-_", "  "));
+                     end if;
+                  end;
+                  Start := Index + 1;
+               end if;
+            end loop;
+            return "";
+         end State_Setting;
+
          function Wanted (Name : String) return String is
          begin
+            if Name = "state" and then Joined_State /= Null_Unbounded_String then
+               return To_String (Joined_State);
+            end if;
             for Index in 1 .. Item.Input_Count loop
                declare
                   Pair : constant String := T.To_String (Item.Inputs (Index));
@@ -895,8 +933,25 @@ package body Model_Runner.CLI.Tasks is
             declare
                Whole : constant String :=
                  Ada.Strings.Fixed.Translate (To_String (Bare), Ada.Strings.Maps.To_Mapping ("-_", "  "));
+               Set   : constant String := State_Setting;
             begin
-               if Whole /= "" and then not States.Contains (Whole)
+               --  state=waiting for parts, unquoted: one state, whole.
+               if Whole /= "" and then Set /= "" then
+                  if Set & " " & Whole in "to integrate" | "checks failed" | "serves retired"
+                                        | "waiting for parts" | "waiting on an ended task"
+                  then
+                     Joined_State := To_Unbounded_String (Set & " " & Whole);
+                  --  blocked state=ready: two states, which one task is not
+                  --  in at once -- said, not one of them dropped.
+                  else
+                     Outcome := E.Make (E.Framework_Input_Invalid);
+                     E.Add_Text (Outcome, "name", "a state of /task list");
+                     E.Add_Text (Outcome, "value", To_String (Bare) & " and state=" & Set);
+                     E.Add_Text (Outcome, "detail", "one state is listed at a time; " & States_Said);
+                     Fail (Outcome);
+                     return;
+                  end if;
+               elsif Whole /= "" and then not States.Contains (Whole)
                  and then Whole not in "to integrate" | "checks failed" | "serves retired"
                                      | "waiting for parts" | "waiting on an ended task"
                then
@@ -1484,12 +1539,29 @@ package body Model_Runner.CLI.Tasks is
          end loop;
       end Say_Left_Waiting;
 
+      --  A NAME=VALUE given to the command, its value; "" when none is.
+      function Input_Value (Name : String) return String is
+      begin
+         for Index in 1 .. Item.Input_Count loop
+            declare
+               Pair : constant String := T.To_String (Item.Inputs (Index));
+            begin
+               if Ada.Strings.Fixed.Head (Pair, Name'Length + 1) = Name & "=" then
+                  return Pair (Pair'First + Name'Length + 1 .. Pair'Last);
+               end if;
+            end;
+         end loop;
+         return "";
+      end Input_Value;
+
       procedure Move (Next : String) is
       begin
          if not Needs_Task then
             return;
          end if;
-         Tk.Move (Store, Change, Argument, Next, "", Status => Outcome,
+         --  reject ID reason=...: why, kept with the move as its event.
+         Tk.Move (Store, Change, Argument, Next,
+                  (if Next = Tk.Rejected then Input_Value ("reason") else ""), Status => Outcome,
                   Actor => Model_Runner.Framework.Transitions.User);
          if E.Is_Ok (Outcome) then
             Commit;
@@ -5953,6 +6025,23 @@ package body Model_Runner.CLI.Tasks is
          return;
       end if;
 
+      --  A setting these take not is refused, not dropped unsaid: reject
+      --  takes why as reason=, the rest none.
+      if Action in "accept" | "reject" | "cancel" | "reopen" | "reconsider" then
+         for Index in 1 .. Item.Input_Count loop
+            declare
+               Pair : constant String := T.To_String (Item.Inputs (Index));
+            begin
+               if not (Action = "reject" and then Ada.Strings.Fixed.Head (Pair, 7) = "reason=") then
+                  Outcome := E.Make (E.CLI_Unexpected_Operand);
+                  E.Add_Text (Outcome, "value", Pair);
+                  Fail (Outcome);
+                  return;
+               end if;
+            end;
+         end loop;
+      end if;
+
       if Action in "accept" | "reject" and then Ada.Strings.Fixed.Index (Argument, " ") > 0
         and then (for all Word of Model_Runner.Framework.Lines_Of
                                     (Ada.Strings.Fixed.Translate
@@ -6029,6 +6118,17 @@ package body Model_Runner.CLI.Tasks is
       if E."=" (Outcome.Code, E.Framework_Locked) and then Action = "cancel" and then Argument /= ""
       then
          S.Open_To_Read (Store, Directory, Outcome);
+         --  Cancelled already: said as when nothing holds it, not refused
+         --  for the lock another run holds.
+         if E.Is_Ok (Outcome) and then After_First in "" | "anyway"
+           and then Tk.State_Of (Store, First_Word) = Tk.Cancelled
+         then
+            Pres.Put_Note (Screen, "cli.intent.already",
+                           [Loc.Named ("name", First_Word),
+                            Loc.Named ("value", Tk.State_Of (Store, First_Word))]);
+            S.Close (Store);
+            return;
+         end if;
          if E.Is_Ok (Outcome) and then Tk.State_Of (Store, First_Word) = Tk.Running then
             --  Asked once is asked: a second time says so.
             if Ada.Directories.Exists
@@ -6479,19 +6579,13 @@ package body Model_Runner.CLI.Tasks is
                Why   : constant String :=
                  (if Space = 0 then ""
                   else Ada.Strings.Fixed.Trim (Rest (Space + 1 .. Rest'Last), Ada.Strings.Both));
-               --  Whether the lifecycle allows the move at all: one it
-               --  refuses is refused by the move itself, its way said,
-               --  before anything about a workspace is asked or advised.
-               function Allowed return Boolean is
-                  Checked : E.Error_Info;
-               begin
-                  Model_Runner.Framework.Transitions.Check
-                    (Model_Runner.Framework.Transitions.Task_Machine, First_Word,
-                     Tk.State_Of (Store, First_Word), Next,
-                     [Model_Runner.Framework.Transitions.Ordinary => True, others => False], Checked);
-                  return E.Is_Ok (Checked);
-               end Allowed;
-               Movable : constant Boolean := Allowed;
+               --  Whether the move would be made at all -- by the project's
+               --  own lifecycle, its added and forbidden moves, and the
+               --  moves the harness keeps for itself: one it refuses is
+               --  refused by the move itself, its way said, before anything
+               --  about a workspace is asked or advised.
+               Movable : constant Boolean :=
+                 Tk.Can_Move (Store, First_Word, Next, Actor => Model_Runner.Framework.Transitions.User);
             begin
                --  Work waiting in a workspace is not given up unsaid --
                --  in verification, or kept in one by a blocked or running

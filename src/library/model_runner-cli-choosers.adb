@@ -675,9 +675,92 @@ package body Model_Runner.CLI.Choosers is
 
    procedure Drop_Kept_Keys (Dropped : out Boolean) is
    begin
-      Dropped := Keys_Left /= Null_Unbounded_String;
+      Dropped := Typed_Keys (To_String (Keys_Left));
       Keys_Left := Null_Unbounded_String;
    end Drop_Kept_Keys;
+
+   ----------------
+   -- Typed_Keys --
+   ----------------
+
+   function Typed_Keys (Bytes : String) return Boolean is
+      Index : Natural := Bytes'First;
+   begin
+      while Index <= Bytes'Last loop
+         if Bytes (Index) = ASCII.ESC then
+            --  A key's sequence, or an answer's: ESC [ ... final, ESC O x,
+            --  or Alt and a key -- none of it typed text.
+            Index := Index + 1;
+            if Index <= Bytes'Last and then Bytes (Index) = '[' then
+               Index := Index + 1;
+               while Index <= Bytes'Last and then Bytes (Index) not in '@' .. '~' loop
+                  Index := Index + 1;
+               end loop;
+               Index := Index + 1;
+            elsif Index <= Bytes'Last and then Bytes (Index) = 'O' then
+               Index := Index + 2;
+            --  Escape twice: the second begins its own.
+            elsif Index <= Bytes'Last and then Bytes (Index) /= ASCII.ESC then
+               Index := Index + 1;
+            end if;
+         elsif Bytes (Index) >= ' ' or else Bytes (Index) in ASCII.CR | ASCII.LF then
+            if Bytes (Index) /= ASCII.DEL then
+               return True;
+            end if;
+            Index := Index + 1;
+         else
+            Index := Index + 1;
+         end if;
+      end loop;
+      return False;
+   end Typed_Keys;
+
+   ----------------
+   -- Take_Reply --
+   ----------------
+
+   procedure Take_Reply
+     (Bytes  : String;
+      Found  : out Boolean;
+      Column : out Natural;
+      Rest   : out Unbounded_String)
+   is
+   begin
+      Found := False;
+      Column := 0;
+      Rest := To_Unbounded_String (Bytes);
+      --  From the end back: the last answer is the one, a key that reads
+      --  as one -- Shift+F3, ESC [ 1 ; 2 R -- typed before it.
+      for From in reverse Bytes'First .. Bytes'Last - 1 loop
+         if Bytes (From) = ASCII.ESC and then Bytes (From + 1) = '[' then
+            declare
+               Index : Natural := From + 2;
+               Row_D : Natural := 0;
+               Col_D : Natural := 0;
+               Col   : Natural := 0;
+            begin
+               while Index <= Bytes'Last and then Bytes (Index) in '0' .. '9' loop
+                  Row_D := Row_D + 1;
+                  Index := Index + 1;
+               end loop;
+               if Row_D in 1 .. 6 and then Index <= Bytes'Last and then Bytes (Index) = ';' then
+                  Index := Index + 1;
+                  while Index <= Bytes'Last and then Bytes (Index) in '0' .. '9' and then Col_D < 6 loop
+                     Col := Col * 10 + (Character'Pos (Bytes (Index)) - Character'Pos ('0'));
+                     Col_D := Col_D + 1;
+                     Index := Index + 1;
+                  end loop;
+                  if Col_D >= 1 and then Index <= Bytes'Last and then Bytes (Index) = 'R' then
+                     Found := True;
+                     Column := Col;
+                     Rest := To_Unbounded_String (Bytes (Bytes'First .. From - 1) & Bytes (Index + 1 .. Bytes'Last));
+                     return;
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
+   end Take_Reply;
 
    ------------
    -- Choose --
@@ -938,7 +1021,9 @@ package body Model_Runner.CLI.Choosers is
    --    is taken from them first -- an arrow typed while the cursor's
    --    place was asked is there whole.
    --  @return True when the escape began a key, which means nothing here.
-   function Key_Sequence_Skipped (Ahead : in out Unbounded_String) return Boolean is
+   function Key_Sequence_Skipped
+     (Ahead : in out Unbounded_String; Keep_Escape : Boolean := True) return Boolean
+   is
       Buffer : Ada.Streams.Stream_Element_Array (1 .. 1);
       Last   : Ada.Streams.Stream_Element_Offset;
 
@@ -988,8 +1073,12 @@ package body Model_Runner.CLI.Choosers is
       --  A second escape begins what follows -- the terminal's answer to
       --  where the cursor is, come late -- and is kept for it: the first
       --  was Escape.
+      --  Not once the answer came: a second Escape is Escape pressed
+      --  twice, and kept it ended the next question before it was asked.
       if Byte = ASCII.ESC then
-         Insert (Ahead, 1, [1 => ASCII.ESC]);
+         if Keep_Escape then
+            Insert (Ahead, 1, [1 => ASCII.ESC]);
+         end if;
          return False;
       end if;
       --  Alt and a key -- Alt+b, Alt+Backspace -- mean nothing here, and
@@ -1278,30 +1367,23 @@ package body Model_Runner.CLI.Choosers is
             exit when Byte = 'R' and then Is_Reply (To_String (Got))
               and then not Hostkit.Descriptors.Wait_Readable (Input, 0);
          end loop;
+         --  The answer wherever it came among the keys typed -- before
+         --  it, after it -- taken out, and those keys kept in order.
          declare
-            Text  : constant String := To_String (Got);
-            From  : constant Natural := Ada.Strings.Fixed.Index (Text, ASCII.ESC & "[", Ada.Strings.Backward);
-            Semi  : Natural := 0;
+            Found  : Boolean;
+            Column : Natural;
+            Rest   : Unbounded_String;
          begin
-            if From > 0 and then Text (Text'Last) = 'R' then
-               Semi := Ada.Strings.Fixed.Index (Text (From .. Text'Last), ";");
-            end if;
-            if Semi > From + 2 and then Semi < Text'Last - 1
-              and then (for all C of Text (From + 2 .. Semi - 1) => C in '0' .. '9')
-              and then (for all C of Text (Semi + 1 .. Text'Last - 1) => C in '0' .. '9')
-              and then Text'Last - Semi <= 6
-            then
+            Take_Reply (To_String (Got), Found, Column, Rest);
+            if Found then
                Answered := True;
                Answers := Always;
-               Start := Natural'Value (Text (Semi + 1 .. Text'Last - 1));
-               Start := (if Start > 0 then Start - 1 else 0);
+               Start := (if Column > 0 then Column - 1 else 0);
                if Start < Size.Columns then
                   Width := Size.Columns;
                end if;
-               Append (Ahead, Text (Text'First .. From - 1));
-            else
-               Append (Ahead, Got);
             end if;
+            Append (Ahead, Rest);
          end;
       end Find_Start;
 
@@ -1452,11 +1534,28 @@ package body Model_Runner.CLI.Choosers is
          end if;
          if Key in ASCII.CR | ASCII.LF then
             Outcome := Entered;
+            --  CR LF, as a paste brings a line end, is one: its LF kept
+            --  ended the next question at once, as an empty answer.
+            if Key = ASCII.CR then
+               declare
+                  Byte : Character;
+               begin
+                  if Length (Ahead) > 0 then
+                     if Element (Ahead, 1) = ASCII.LF then
+                        Delete (Ahead, 1, 1);
+                     end if;
+                  elsif Hostkit.Descriptors.Wait_Readable (Input, 0) and then Read_Byte (Byte)
+                    and then Byte /= ASCII.LF
+                  then
+                     Append (Ahead, Byte);
+                  end if;
+               end;
+            end if;
             exit;
          elsif Key = ASCII.ESC then
             --  A key's sequence -- an arrow -- means nothing here and
             --  is let go; Escape alone gives the question up.
-            if not Key_Sequence_Skipped (Ahead) then
+            if not Key_Sequence_Skipped (Ahead, Keep_Escape => not Answered) then
                Outcome := Escaped;
                exit;
             end if;
@@ -1532,8 +1631,9 @@ package body Model_Runner.CLI.Choosers is
             end if;
          end;
       end if;
-      --  What was typed past the line's end is the next line's.
-      Keys_Left := Ahead;
+      --  What was typed past the line's end is the next line's -- not
+      --  after Ctrl-C, which drops what was typed, as Edited_Line does.
+      Keys_Left := (if Outcome = Interrupted then Null_Unbounded_String else Ahead);
       Finalize (Guard);
       return (if Outcome = Entered then To_String (Typed) else "");
    end Typed_Line;

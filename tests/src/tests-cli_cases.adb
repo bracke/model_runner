@@ -2465,6 +2465,15 @@ package body Tests.CLI_Cases is
             Assert (Tabbed.Contains ("""obj/harness ui test/"),
                     "a path after a tab was not completed as a path");
          end;
+         --  "x\\" is a quoted name ending in a backslash, closed: the word
+         --  after it is a word of its own, as the session reads the line.
+         declare
+            After_Backslash : constant Model_Runner.Framework.Name_Lists.Vector :=
+              Model_Runner.CLI.Completion.Candidates ("/load ""x\\"" obj/harness");
+         begin
+            Assert (After_Backslash.Contains ("""obj/harness ui test/"),
+                    "a quote after an escaped backslash was taken as escaped");
+         end;
          Ada.Directories.Delete_Directory (Dir);
       end;
 
@@ -2505,7 +2514,31 @@ package body Tests.CLI_Cases is
       --  Keys kept from a line read raw are let go when asked, and once.
       declare
          Ignored, Dropped : Boolean;
+         Found            : Boolean;
+         Column           : Natural;
+         Rest             : Ada.Strings.Unbounded.Unbounded_String;
       begin
+         --  The cursor's answer found among keys typed before and after it,
+         --  and taken out with them kept in order; the last one is it.
+         Model_Runner.CLI.Choosers.Take_Reply ("ab" & ASCII.ESC & "[5;3Rcd", Found, Column, Rest);
+         Assert (Found and then Column = 3 and then Ada.Strings.Unbounded.To_String (Rest) = "abcd",
+                 "an answer among typed keys was missed or the keys lost: "
+                 & Ada.Strings.Unbounded.To_String (Rest));
+         Model_Runner.CLI.Choosers.Take_Reply
+           (ASCII.ESC & "[1;2R" & ASCII.ESC & "[7;9Rx", Found, Column, Rest);
+         Assert (Found and then Column = 9
+                 and then Ada.Strings.Unbounded.To_String (Rest) = ASCII.ESC & "[1;2Rx",
+                 "Shift+F3 typed before the answer was taken for it");
+         Model_Runner.CLI.Choosers.Take_Reply ("abc", Found, Column, Rest);
+         Assert (not Found and then Ada.Strings.Unbounded.To_String (Rest) = "abc", "no answer was found in keys");
+         --  Typed text is printable or a line end; an arrow, an Escape, an
+         --  Alt key or an answer's rest is not.
+         Assert (not Model_Runner.CLI.Choosers.Typed_Keys
+                   (ASCII.ESC & ASCII.ESC & "[A" & ASCII.ESC & "OP" & ASCII.ESC & "b"),
+                 "keys of no text were taken as typed");
+         Assert (Model_Runner.CLI.Choosers.Typed_Keys (ASCII.ESC & "[Bx")
+                 and then Model_Runner.CLI.Choosers.Typed_Keys ([1 => ASCII.CR]),
+                 "typed text after an arrow, or a line end, was not taken as typed");
          Model_Runner.CLI.Choosers.Drop_Kept_Keys (Ignored);
          Model_Runner.CLI.Choosers.Drop_Kept_Keys (Dropped);
          Assert (not Dropped, "keys kept were still there after they were let go");
@@ -2652,6 +2685,18 @@ package body Tests.CLI_Cases is
       begin
          Assert (Part_Of /= 0, "task list task was taken as a state");
          Assert (Several /= 0, "task depend took two tasks as one");
+      end;
+      --  A state as words and as state= is two, refused; state= whose words
+      --  run on unquoted is one state, whole; a setting accept takes not is
+      --  refused, not dropped.
+      declare
+         Two     : constant Natural := Command ("task|list|blocked|state=ready");
+         Whole   : constant Natural := Command ("task|list|state=waiting|for|parts");
+         Setting : constant Natural := Command ("task|accept|TASK-001|foo=bar");
+      begin
+         Assert (Two /= 0, "task list took a bare state and state= as one");
+         Assert (Whole = 0, "task list state=waiting for parts was not one state");
+         Assert (Setting /= 0, "task accept took a setting it has no use for");
       end;
 
       --  What the condition names is a field of its own, not only words in
@@ -10678,6 +10723,14 @@ package body Tests.CLI_Cases is
          Offer (Half.all, I.Too_Long);
          Assert (I.Pending (Typing) = "",
                  "a refused turn kept the part that fit");
+         --  A kept message refused for its length is no longer kept: the
+         --  /reset in the next message is that message's text.
+         I.Restore (Typing, "kept");
+         Offer (Half.all, I.Held);
+         Offer (Half.all, I.Too_Long);
+         Offer ("first", I.Held);
+         Offer ("/reset", I.Held);
+         I.Taken (Typing);
          Release_Texts (Half);
       end;
 

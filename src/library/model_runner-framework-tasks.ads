@@ -204,6 +204,24 @@ package Model_Runner.Framework.Tasks is
    --  @return Its state, or the empty string when there is no such task.
    function State_Of (Item : Stores.Store; Id : String) return String;
 
+   --  Whether a move would be allowed now by the task's lifecycle -- the
+   --  project's own transitions and forbidden moves -- and, for a person,
+   --  by the moves the harness keeps for itself: what Move checks before
+   --  it changes anything, asked without moving.
+   --
+   --  @param Item The project's state.
+   --  @param Id The task.
+   --  @param Next The state asked for.
+   --  @param Actor Who would move it.
+   --  @param Granted What the mover may do beyond the ordinary.
+   --  @return Whether Move would take it on to its other checks.
+   function Can_Move
+     (Item    : Stores.Store;
+      Id      : String;
+      Next    : String;
+      Actor   : String := "";
+      Granted : Transitions.Permissions := Transitions.Ordinary_Only) return Boolean;
+
    --  Move a task through its lifecycle.
    --
    --  Starting needs the task to be ready, and begins a new execution

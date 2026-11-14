@@ -2527,17 +2527,23 @@ package body Model_Runner.CLI.Work is
          end;
       end if;
 
+      --  A batch a signal cut short ends as a cancellation, an earlier
+      --  failure notwithstanding: what a wrapper must tell first is that
+      --  the batch did not run its course -- the tasks left are said in
+      --  batch_stopped, the failed one in the summary above.
+      if Cut_Short then
+         Status := E.Exit_Cancelled;
+
       --  Any earlier one that did not end well: the command did not, a
       --  cancelled last one notwithstanding.
-      if Prior_Ill then
+      elsif Prior_Ill then
          Status := E.Exit_Input_Output;
 
       --  Cancelled, from here or from elsewhere, ends as a cancellation;
       --  so does work stopped with Ctrl-C, which sets its task aside --
       --  blocked, "you stopped its work" -- rather than cancelling it, and
       --  ended as an input or output failure.
-      elsif Cut_Short
-        or else To_String (Done.Final_State) = Tk.Cancelled
+      elsif To_String (Done.Final_State) = Tk.Cancelled
         or else (To_String (Done.Final_State) = Tk.Blocked
                  and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "you stopped") > 0)
       then

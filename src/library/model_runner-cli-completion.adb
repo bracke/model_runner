@@ -43,37 +43,47 @@ package body Model_Runner.CLI.Completion is
    is (Model_Runner.CLI.Project_Commands.Command_Names);
 
    --  Whether text leaves a double quote open: what follows is one word,
-   --  spaces and all, as the commands read it.
+   --  spaces and all, as the commands read it. A backslash takes the
+   --  character after it as itself, as the session reads a quoted path:
+   --  "x\\" is the name x\ quoted, closed.
    function Quote_Open (Text : String) return Boolean is
-      Open : Boolean := False;
+      Open    : Boolean := False;
+      At_Char : Natural := Text'First;
    begin
-      for Index in Text'Range loop
-         if Text (Index) = '"' and then (Index = Text'First or else Text (Index - 1) /= '\') then
+      while At_Char <= Text'Last loop
+         if Text (At_Char) = '\' and then At_Char < Text'Last then
+            At_Char := At_Char + 1;
+         elsif Text (At_Char) = '"' then
             Open := not Open;
          end if;
+         At_Char := At_Char + 1;
       end loop;
       return Open;
    end Quote_Open;
 
    --  Words a space or a tab apart, as Parse has them, as a list; a
    --  quoted stretch, its quotes kept, one word -- "my dir/x.gguf" is a
-   --  path, not two words.
+   --  path, not two words. A backslash pair is read as Quote_Open reads it.
    function Words_Of (Text : String) return Names.Vector is
-      Result : Names.Vector;
-      Start  : Natural := Text'First;
-      Open   : Boolean := False;
+      Result  : Names.Vector;
+      Start   : Natural := Text'First;
+      Open    : Boolean := False;
+      At_Char : Natural := Text'First;
    begin
-      for Index in Text'First .. Text'Last + 1 loop
-         if Index <= Text'Last and then Text (Index) = '"'
-           and then (Index = Text'First or else Text (Index - 1) /= '\')
-         then
-            Open := not Open;
-         end if;
-         if Index > Text'Last or else (Text (Index) in ' ' | ASCII.HT and then not Open) then
-            if Index > Start then
-               Result.Append (Text (Start .. Index - 1));
+      while At_Char <= Text'Last + 1 loop
+         if At_Char <= Text'Last and then Text (At_Char) = '\' and then At_Char < Text'Last then
+            At_Char := At_Char + 2;
+         else
+            if At_Char <= Text'Last and then Text (At_Char) = '"' then
+               Open := not Open;
             end if;
-            Start := Index + 1;
+            if At_Char > Text'Last or else (Text (At_Char) in ' ' | ASCII.HT and then not Open) then
+               if At_Char > Start then
+                  Result.Append (Text (Start .. At_Char - 1));
+               end if;
+               Start := At_Char + 1;
+            end if;
+            At_Char := At_Char + 1;
          end if;
       end loop;
       return Result;

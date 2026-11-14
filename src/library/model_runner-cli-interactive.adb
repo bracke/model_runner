@@ -233,7 +233,10 @@ package body Model_Runner.CLI.Interactive is
            Item.Used + Line'Length + (if Item.Used > 0 then 1 else 0);
       begin
          if Needed > Max_Turn_Bytes then
+            --  Dropped whole: no longer a kept message, whose /reset and
+            --  /save would run beside the next one typed.
             Item.Used := 0;
+            Item.Kept := False;
             Effect := Too_Long;
             return;
          elsif Needed > Item.Room.all'Length then
@@ -522,6 +525,14 @@ package body Model_Runner.CLI.Interactive is
             Picture_Kept := False;
          end if;
       end Drop_Kept_Picture;
+
+      --  The pending message dropped unsent -- Ctrl-C, Esc, too long -- and
+      --  the picture that came back with it: every way it goes, one way.
+      procedure Drop_Message is
+      begin
+         Drop_Kept_Picture;
+         Taken (Typing);
+      end Drop_Message;
 
       --  Encode what the conversation names and Pictures does not hold.
       procedure Gather_Pictures_Of
@@ -949,7 +960,11 @@ package body Model_Runner.CLI.Interactive is
             end if;
             L.Reset (Session);
             Model_Runner.CLI.Pictures.Release (Pictures);
-            Free_Text (Next_Picture);
+            --  A message kept to send again keeps its picture: it goes
+            --  into the new conversation, as /reset beside it was for.
+            if not Picture_Kept then
+               Free_Text (Next_Picture);
+            end if;
             Have_Stats := False;
             Pres.Put_Note (Screen, "cli.interactive.reset_done");
 
@@ -1384,7 +1399,9 @@ package body Model_Runner.CLI.Interactive is
                      --  picture named for the conversation before is not
                      --  this one's.
                      L.Reset (Session);
-                     Free_Text (Next_Picture);
+                     if not Picture_Kept then
+                        Free_Text (Next_Picture);
+                     end if;
                      Have_Stats := False;
                   end if;
                   if E.Is_Error (Outcome) then
@@ -1417,7 +1434,9 @@ package body Model_Runner.CLI.Interactive is
                Pres.Put_Note (Screen, "cli.interactive.no_projector");
             else
                Free_Text (Next_Picture);
-               Picture_Kept := False;
+               --  Named while a message waits: that message's, dropped
+               --  with it; named alone, the next message's.
+               Picture_Kept := Pending (Typing) /= "";
                Next_Picture := new String'
                  (Model_Runner.CLI.Project_Commands.From_Session_Start (Path_Asked));
                Next_Is_Video := Asked.Kind = Show_Video;
@@ -2279,7 +2298,7 @@ package body Model_Runner.CLI.Interactive is
                   when Ada.Text_IO.End_Error =>
                      null;
                end;
-               Taken (Typing);
+               Drop_Message;
                declare
                   Refused : E.Error_Info := E.Make (E.Conversation_Too_Long);
                begin
@@ -2334,8 +2353,7 @@ package body Model_Runner.CLI.Interactive is
                      elsif Typed (Last_Key) = ASCII.ETX then
                         Pres.Put_Note (Screen, "cli.interactive.how_to_leave");
                      end if;
-                     Drop_Kept_Picture;
-                     Taken (Typing);
+                     Drop_Message;
                      if Line = "" then
                         goto Next_Line;
                      end if;
@@ -2347,8 +2365,7 @@ package body Model_Runner.CLI.Interactive is
                   if Model_Runner.Cancellation."/=" (Cancel, null)
                     and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
                   then
-                     Drop_Kept_Picture;
-                     Taken (Typing);
+                     Drop_Message;
                      --  Said when it was pressed, where it could be.
                      if not Model_Runner.Platform.Signals.Interrupt_Noted then
                         Pres.Put_Note (Screen, "cli.interactive.dropped");
@@ -2388,6 +2405,8 @@ package body Model_Runner.CLI.Interactive is
                         Submit;
 
                      when Too_Long =>
+                        --  Offer let the message go: its picture goes with it.
+                        Drop_Kept_Picture;
                         declare
                            Refused : E.Error_Info :=
                              E.Make (E.Conversation_Too_Long);

@@ -3698,7 +3698,8 @@ package body Model_Runner.CLI.Project_Commands is
                      --  Not past a value closed in quotes: reason="needs
                      --  input" 1 -- the 1 is the entry.
                      After_Setting :=
-                       not Began_Quoted_At (Value_Quoted, Index - 1)
+                       not (Began_Quoted_At (Value_Quoted, Index - 1)
+                            or else Began_Quoted_At (Began_Quoted, Index - 1))
                        and then (Command in "/reconfigure" | "/init" | "/obs"
                                  or else Is_Wordy (Ada.Characters.Handling.To_Lower
                                            (Before (Before'First .. Ada.Strings.Fixed.Index (Before, "=") - 1))));
@@ -3992,8 +3993,11 @@ package body Model_Runner.CLI.Project_Commands is
                if Ada.Strings.Fixed.Index (Part, ",") > 0
                  --  Not a title in quotes: "TASK-1, then cleanup".
                  and then not Began_Quoted_At (Quoted, Index)
-                 --  Nor a title's words: /task new Fix TASK-1,TASK-2 overlap.
-                 and then Ada.Characters.Handling.To_Lower (Action) not in "new" | "edit" | "revise" | "split"
+                 --  Nor a title's or a reason's words: /task new Fix
+                 --  TASK-1,TASK-2 overlap, /task move 5 blocked waiting for
+                 --  TASK-3,TASK-4.
+                 and then Ada.Characters.Handling.To_Lower (Action)
+                            not in "new" | "edit" | "revise" | "split" | "move" | "note"
                  --  Not a number a comma groups -- 1,000 -- which a list of
                  --  bare numbers is not: those were made IDs already.
                  and then ((for some Prefix of Names.Vector'(["TASK-", "REQ-", "SPEC-", "DEC-"]) =>
