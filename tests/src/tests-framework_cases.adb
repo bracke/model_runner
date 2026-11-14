@@ -4633,9 +4633,15 @@ package body Tests.Framework_Cases is
          Last    : Ada.Streams.Stream_Element_Offset;
          Said    : Unbounded_String;
 
+         --  A variable the case names itself is its, not the suite's: two of
+         --  one name, the child read the first.
+         Named_Extra : constant String :=
+           (if Ada.Strings.Fixed.Index (Extra, "=") = 0 then ""
+            else Extra (Extra'First .. Ada.Strings.Fixed.Index (Extra, "=") - 1));
+
          procedure Keep_Variable (Name, Value : String) is
          begin
-            if Name /= "TERM" then
+            if Name /= "TERM" and then Name /= Named_Extra then
                Options.Environment.Append (To_Unbounded_String (String'(Name & "=" & Value)));
             end if;
          end Keep_Variable;
