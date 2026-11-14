@@ -60,7 +60,8 @@ package body Model_Runner.CLI.Execute.Models_Command is
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;
       Picked : out Boolean;
-      Title  : String := "cli.choose.header")
+      Title  : String := "cli.choose.header";
+      Offer_Downloads : Boolean := True)
    is
       use Ada.Directories;
 
@@ -175,6 +176,10 @@ package body Model_Runner.CLI.Execute.Models_Command is
       procedure Add_Suggestion
         (Name, Size, Reference : String; Bytes : Long_Long_Integer) is
       begin
+         --  Only what is on the machine, where that is asked.
+         if not Offer_Downloads then
+            return;
+         end if;
          if Count < Max then
             Count := Count + 1;
             Shown (Count) :=
@@ -392,7 +397,7 @@ package body Model_Runner.CLI.Execute.Models_Command is
       Path   : out Model_Runner.Text.Bounded;
       Picked : out Boolean) is
    begin
-      Choose_Model (Screen, Path, Picked, Title => "cli.choose.header_next");
+      Choose_Model (Screen, Path, Picked, Title => "cli.choose.header_next", Offer_Downloads => False);
    end Choose_Next_Model;
 
    --  How many files a shard-named model is, from its -of-000NN suffix;

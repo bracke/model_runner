@@ -15964,6 +15964,114 @@ package body Tests.CLI_Cases is
       end;
    end Model_Switch_Carries_The_Conversation;
 
+   --  /model alone offers the models on this machine, and only those:
+   --  nothing to download. A home of its own with one model in its models
+   --  folder, the selector drawn, and Esc keeping the model running.
+   procedure Model_Selector_Offers_Only_Models_On_Hand
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package U renames Ada.Strings.Unbounded;
+
+      Home    : constant String := Ada.Directories.Full_Name ("obj/selector-home");
+      Model   : constant String := Home & "/models/on-hand-model.gguf";
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Drawn   : U.Unbounded_String;
+      Words   : Hostkit.String_Vectors.Vector;
+
+      --  The environment but for the home and where data and settings
+      --  live: those are this test's own.
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name not in "TERM" | "HOME" | "XDG_DATA_HOME" | "XDG_CONFIG_HOME" | "XDG_CACHE_HOME" then
+            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      procedure Take (Quiet : Integer) is
+      begin
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, Quiet) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               U.Append (Drawn, Character'Val (B));
+            end loop;
+         end loop;
+      end Take;
+
+      procedure Send (Text : String) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Text'Length));
+      begin
+         for Index in Text'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index - Text'First + 1)) := Character'Pos (Text (Index));
+         end loop;
+         Assert (Hostkit.Descriptors."="
+                   (Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last), Hostkit.Descriptors.Transfer_Ok),
+                 "a key was not sent");
+      end Send;
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      if Ada.Directories.Exists (Home) then
+         Ada.Directories.Delete_Tree (Home);
+      end if;
+      Ada.Directories.Create_Path (Home & "/models");
+      Tiny_Model.Write (Model, Room => 64);
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+      Options.Environment.Append (U.To_Unbounded_String ("HOME=" & Home));
+      Options.Replace_Environment := True;
+      Options.Working_Directory := U.To_Unbounded_String (Home);
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 100))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      Words.Append (U.To_Unbounded_String (Model));
+      Words.Append (U.To_Unbounded_String ("--backend"));
+      Words.Append (U.To_Unbounded_String ("cpu"));
+      Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+              "the session did not start");
+      Hostkit.Pty.Close_Device (Pair);
+      Take (5000);
+      declare
+         Before : constant Natural := U.Length (Drawn);
+      begin
+         Send ("/model" & ASCII.CR);
+         Take (3000);
+         Send ([1 => ASCII.ESC]);
+         Take (2000);
+         Send ("/exit" & ASCII.CR);
+         Take (3000);
+         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+         Hostkit.Pty.Close (Pair);
+         declare
+            Offered : constant String := U.Slice (Drawn, Before + 1, U.Length (Drawn));
+         begin
+            Assert (Ada.Strings.Fixed.Index (Offered, "on-hand-model.gguf") > 0,
+                    "the model on hand was not offered: " & Offered);
+            Assert (Ada.Strings.Fixed.Index (Offered, "download") = 0,
+                    "a model to download was offered: " & Offered);
+         end;
+      end;
+   end Model_Selector_Offers_Only_Models_On_Hand;
+
    --  A message's markup: bold, italic and code, a line break and a list's
    --  items, escapes, and the asterisks of a glob left alone; drawn styled
    --  with bullets and wrapped under each item's text, or plain.
@@ -18439,6 +18547,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Startup_Says_Model_And_Settings'Access,
          "once loaded, a run says which model runs and with the settings it decided");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
+         "/model alone offers the models on this machine and nothing to download");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Switch_Carries_The_Conversation'Access,
          "/model goes on with another model, the conversation with it, and back where one will not load");

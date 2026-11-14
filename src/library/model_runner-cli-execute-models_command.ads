@@ -16,10 +16,11 @@ private package Model_Runner.CLI.Execute.Models_Command is
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;
       Picked : out Boolean;
-      Title  : String := "cli.choose.header");
+      Title  : String := "cli.choose.header";
+      Offer_Downloads : Boolean := True);
 
-   --  The same list, for a conversation's /model: the model it goes on
-   --  with.
+   --  The models on this machine alone, for a conversation's /model: the
+   --  model it goes on with. Nothing to download is offered.
    --
    --  @param Screen Where the list goes.
    --  @param Path The chosen model's file.
