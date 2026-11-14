@@ -15538,9 +15538,10 @@ package body Tests.CLI_Cases is
       end;
    end Load_Spinner_Leaves_Nothing_Behind;
 
-   --  Before it loads, a run at a terminal says which model starts and with
-   --  what: the file's name, then each setting -- the ones named on the
-   --  command line as named, the rest as what decides them.
+   --  Once loaded, before it answers, a run at a terminal says which model
+   --  runs and with what -- each setting as decided: the backend, the
+   --  context the session holds, the reply's length and the sampling, the
+   --  model's own or the defaults where the command line named none.
    procedure Startup_Says_Model_And_Settings
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -15548,6 +15549,9 @@ package body Tests.CLI_Cases is
       package U renames Ada.Strings.Unbounded;
       Model   : constant String := Ada.Directories.Full_Name ("obj/startup-model.gguf");
       Catalog : Model_Runner.Localization.Catalog;
+
+      function Said (Key, Value : String) return String
+      is (Model_Runner.Localization.Text (Catalog, Key, [Model_Runner.Localization.Named ("value", Value)]));
    begin
       Tiny_Model.Write (Model, Room => 64);
       declare
@@ -15576,41 +15580,59 @@ package body Tests.CLI_Cases is
          end loop;
          Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
          declare
-            Text     : constant String := U.To_String (Seen);
-            Loading  : constant Natural := Ada.Strings.Fixed.Index (Text, "opening model");
-            Before   : constant String := Text (Text'First .. (if Loading = 0 then Text'Last else Loading - 1));
-            Expected : constant String :=
-              Model_Runner.Localization.Text
-                (Catalog, "cli.run.starting",
-                 [Model_Runner.Localization.Named ("model", "startup-model.gguf"),
-                  Model_Runner.Localization.Named ("backend", "cpu"),
-                  Model_Runner.Localization.Named
-                    ("size", Model_Runner.Localization.Text (Catalog, "cli.run.starting.chosen")),
-                  Model_Runner.Localization.Named ("count", "8"),
-                  Model_Runner.Localization.Named
-                    ("detail",
-                     Model_Runner.Localization.Text
-                       (Catalog, "cli.run.starting.temperature", [Model_Runner.Localization.Named ("value", "0")])
-                     & ", " & Model_Runner.Localization.Text (Catalog, "cli.run.starting.rest"))]);
-            Line_Start : Natural := Expected'First;
+            Text      : constant String := U.To_String (Seen);
+            Loaded    : constant Natural := Ada.Strings.Fixed.Index (Text, "finalizing model");
+            Answering : constant Natural := Ada.Strings.Fixed.Index (Text, "prompt rendered");
+            Between   : constant String :=
+              (if Loaded = 0 or else Answering <= Loaded then "" else Text (Loaded .. Answering - 1));
+            Defaults  : constant Model_Runner.Sampling.Configuration := (others => <>);
+            --  The plain message with a context to be read off the screen:
+            --  the session's, which the test does not choose.
+            Context_At : constant Natural := Ada.Strings.Fixed.Index (Between, "context: ");
+            Context_To : Natural := Context_At + 9;
          begin
-            Assert (Loading > 0, "the run did not load: " & Text);
-            --  Each of its lines, as the plain text has it, but for an
-            --  item's bullet, drawn for a terminal.
-            for At_Char in Expected'First .. Expected'Last + 1 loop
-               if At_Char > Expected'Last or else Expected (At_Char) = ASCII.LF then
-                  declare
-                     Line : constant String := Expected (Line_Start .. At_Char - 1);
-                     Bare : constant String :=
-                       (if Line'Length > 2 and then Line (Line'First .. Line'First + 1) = "- "
-                        then Line (Line'First + 2 .. Line'Last) else Line);
-                  begin
-                     Assert (Ada.Strings.Fixed.Index (Before, Bare) > 0,
-                             "before the load, [" & Bare & "] was not said: " & Before);
-                  end;
-                  Line_Start := At_Char + 1;
-               end if;
+            Assert (Between /= "", "the run did not load, then answer: " & Text);
+            Assert (Context_At > 0, "no context was said between the load and the answer: " & Between);
+            while Context_To <= Between'Last and then Between (Context_To) in '0' .. '9' loop
+               Context_To := Context_To + 1;
             end loop;
+            Assert (Context_To > Context_At + 9, "the context said was no number: " & Between);
+            declare
+               Expected : constant String :=
+                 Model_Runner.Localization.Text
+                   (Catalog, "cli.run.starting",
+                    [Model_Runner.Localization.Named ("model", "startup-model.gguf"),
+                     Model_Runner.Localization.Named ("backend", "cpu"),
+                     Model_Runner.Localization.Named ("size", Between (Context_At + 9 .. Context_To - 1)),
+                     Model_Runner.Localization.Named ("count", "8"),
+                     Model_Runner.Localization.Named
+                       ("detail",
+                        Said ("cli.run.starting.temperature", "0")
+                        & ", " & Said ("cli.run.starting.top_k",
+                                       Ada.Strings.Fixed.Trim (Defaults.Top_K'Image, Ada.Strings.Left))
+                        & ", " & Said ("cli.run.starting.top_p", "0.95")
+                        & ", " & Said ("cli.run.starting.min_p", "0.05"))]);
+               Line_Start : Natural := Expected'First;
+            begin
+               Assert (Defaults.Top_P = 0.95 and then Defaults.Min_P = 0.05,
+                       "the sampling defaults moved; this test spells them");
+               --  Each of its lines, as the plain text has it, but for an
+               --  item's bullet, drawn for a terminal.
+               for At_Char in Expected'First .. Expected'Last + 1 loop
+                  if At_Char > Expected'Last or else Expected (At_Char) = ASCII.LF then
+                     declare
+                        Line : constant String := Expected (Line_Start .. At_Char - 1);
+                        Bare : constant String :=
+                          (if Line'Length > 2 and then Line (Line'First .. Line'First + 1) = "- "
+                           then Line (Line'First + 2 .. Line'Last) else Line);
+                     begin
+                        Assert (Ada.Strings.Fixed.Index (Between, Bare) > 0,
+                                "between the load and the answer, [" & Bare & "] was not said: " & Between);
+                     end;
+                     Line_Start := At_Char + 1;
+                  end if;
+               end loop;
+            end;
          end;
          Model_Runner.Localization.Close (Catalog);
       end;
@@ -18239,7 +18261,7 @@ package body Tests.CLI_Cases is
          "the load's steps are drawn with the spinner, fit the window and leave nothing behind");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Startup_Says_Model_And_Settings'Access,
-         "before it loads, a run says which model starts and with which settings");
+         "once loaded, a run says which model runs and with the settings it decided");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Typed_Message_Gets_A_Blank_Line'Access,
          "blank lines stand under the banner, between a message typed and the reply, and after it");

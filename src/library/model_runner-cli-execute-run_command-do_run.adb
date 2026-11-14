@@ -1,4 +1,3 @@
-with Model_Runner.Sampling;
 with Model_Runner.Grammar.Rooms;
 with Model_Runner.CLI.Pictures.Rooms;
 with Model_Runner.CLI.Options.Rooms;
@@ -373,81 +372,7 @@ is
       Do_Run (With_Panels (Again), Screen, Catalog, Status);
    end Retry_On_Processor;
 
-   --  Which model starts, and with what: said at a terminal before it
-   --  loads, a setting not named said as what decides it.
-   procedure Say_Starting is
-      package Choice renames Model_Runner.Sampling;
-      Path   : constant String := T.To_String (Item.Model_Path);
-      Name   : constant String :=
-        (declare
-           Cut : constant Natural := Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
-         begin
-           Path (Cut + 1 .. Path'Last));
-      Chosen : constant String := Loc.Text (Catalog, "cli.run.starting.chosen");
-      Parts  : Ada.Strings.Unbounded.Unbounded_String;
-      Named  : Natural := 0;
-
-      --  A setting's number as it was likely typed: 0.4, not 0.40.
-      function Number (Value : Model_Runner.Numerics.Real) return String is
-         Shown : constant String := T.Image (Long_Float (Value), Decimals => 3);
-         Last  : Natural := Shown'Last;
-      begin
-         if Ada.Strings.Fixed.Index (Shown, ".") = 0 then
-            return Shown;
-         end if;
-         while Last > Shown'First and then Shown (Last) = '0' loop
-            Last := Last - 1;
-         end loop;
-         if Shown (Last) = '.' then
-            Last := Last - 1;
-         end if;
-         return Shown (Shown'First .. Last);
-      end Number;
-
-      procedure Part (Given : Boolean; Key, Value : String) is
-      begin
-         if Given then
-            if Named > 0 then
-               Ada.Strings.Unbounded.Append (Parts, ", ");
-            end if;
-            Ada.Strings.Unbounded.Append
-              (Parts, Loc.Text (Catalog, Key, [Loc.Named ("value", Value)]));
-            Named := Named + 1;
-         end if;
-      end Part;
-   begin
-      Part (Item.Sampling_Given (Choice.Temp), "cli.run.starting.temperature",
-            Number (Item.Sampling.Temperature));
-      Part (Item.Sampling_Given (Choice.Top_K), "cli.run.starting.top_k",
-            T.Image (Long_Long_Integer (Item.Sampling.Top_K)));
-      Part (Item.Sampling_Given (Choice.Top_P), "cli.run.starting.top_p",
-            Number (Item.Sampling.Top_P));
-      Part (Item.Sampling_Given (Choice.Min_P), "cli.run.starting.min_p",
-            Number (Item.Sampling.Min_P));
-      if Named = 0 then
-         Parts := Ada.Strings.Unbounded.To_Unbounded_String
-           (Loc.Text (Catalog, "cli.run.starting.sampling_own"));
-      elsif Named < 4 then
-         Ada.Strings.Unbounded.Append
-           (Parts, ", " & Loc.Text (Catalog, "cli.run.starting.rest"));
-      end if;
-      Pres.Put_Note
-        (Screen, "cli.run.starting",
-         [Loc.Named ("model", Name),
-          Loc.Named ("backend",
-                     (if Item.Backend_Set then Model_Runner.Backend.Backend_Name (Item.Backend) else Chosen)),
-          Loc.Named ("size",
-                     (if Item.Context_Size = 0 then Chosen
-                      else T.Image (Long_Long_Integer (Item.Context_Size)))),
-          Loc.Named ("count", T.Image (Long_Long_Integer (Item.Max_Tokens))),
-          Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Parts))]);
-   end Say_Starting;
-
 begin
-   if Pres.Error_Is_Terminal (Screen) then
-      Say_Starting;
-   end if;
-
    --  More workers asked than the run takes -- the machine's cores, or one
    --  where products are not shared -- is said, not cut without a word.
    if Item.Threads > Team_Size then

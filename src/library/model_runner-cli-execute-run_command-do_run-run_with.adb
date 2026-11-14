@@ -1,3 +1,4 @@
+with Model_Runner.Sampling;
 with Model_Runner.Conversation.Rooms;
 
 separate (Model_Runner.CLI.Execute.Run_Command.Do_Run)
@@ -131,6 +132,50 @@ procedure Run_With (Team : Workers_CPU.Pool_Reference) is
          Model_Runner.Bytes.Free (Room);
          Model_Runner.Bytes.Free (Whole);
    end Save_Draft;
+
+   --  Which model runs, and with what -- each setting as the run has it,
+   --  decided: the backend that answers, the context the session holds,
+   --  the reply's length and the sampling, the model's own where none was
+   --  named. Said at a terminal once the session is open.
+   procedure Say_Running is
+      Path : constant String := T.To_String (Item.Model_Path);
+      Cut  : constant Natural := Ada.Strings.Fixed.Index (Path, "/", Ada.Strings.Backward);
+      Used : constant Model_Runner.Sampling.Configuration := Opt.Sampling_For (Item, Prepared);
+
+      --  A setting's number as it was likely typed: 0.4, not 0.400.
+      function Number (Value : Model_Runner.Numerics.Real) return String is
+         Shown : constant String := T.Image (Long_Float (Value), Decimals => 3);
+         Last  : Natural := Shown'Last;
+      begin
+         if Ada.Strings.Fixed.Index (Shown, ".") = 0 then
+            return Shown;
+         end if;
+         while Last > Shown'First and then Shown (Last) = '0' loop
+            Last := Last - 1;
+         end loop;
+         if Shown (Last) = '.' then
+            Last := Last - 1;
+         end if;
+         return Shown (Shown'First .. Last);
+      end Number;
+
+      function Part (Key, Value : String) return String
+      is (Loc.Text (Catalog, Key, [Loc.Named ("value", Value)]));
+   begin
+      Pres.Put_Note
+        (Screen, "cli.run.starting",
+         [Loc.Named ("model", Path (Cut + 1 .. Path'Last)),
+          Loc.Named ("backend", Model_Runner.Backend.Backend_Name (Item.Backend)),
+          Loc.Named ("size", T.Image (Long_Long_Integer (L.Capacity (Session)))),
+          Loc.Named ("count", T.Image (Long_Long_Integer (Item.Max_Tokens))),
+          Loc.Named
+            ("detail",
+             Part ("cli.run.starting.temperature", Number (Used.Temperature))
+             & ", " & Part ("cli.run.starting.top_k", T.Image (Long_Long_Integer (Used.Top_K)))
+             & ", " & Part ("cli.run.starting.top_p", Number (Used.Top_P))
+             & ", " & Part ("cli.run.starting.min_p", Number (Used.Min_P)))]);
+   end Say_Running;
+
 begin
    Status := E.Exit_Success;
 
@@ -264,6 +309,10 @@ begin
    end if;
 
    Say_Device_Room (Screen, Session);
+
+   if Pres.Error_Is_Terminal (Screen) then
+      Say_Running;
+   end if;
 
    --  A context nobody named, held to what the device's room was counted
    --  for rather than the model's own: said, because a conversation that

@@ -994,10 +994,7 @@ en.cli.work.runner.session = the session's model
 en.cli.work.runner_apart = a model named by model=PATH runs apart, with file tools only: it runs no checks and makes no helpers -- /work without model= runs the session's model, which does
 en.cli.work.steps_capped = steps={value} is more than {name} may take: it runs {count}, as {other} allows
 en.cli.run.capped = {name} {value} is more than this run takes: it runs {count}
-en.cli.run.starting = **Starting** `{model}`\n- backend: {backend}\n- context: {size}\n- replies up to {count} tokens\n- sampling: {detail}
-en.cli.run.starting.chosen = chosen as it loads
-en.cli.run.starting.sampling_own = the model's own, or the defaults
-en.cli.run.starting.rest = the rest the model's own, or the defaults
+en.cli.run.starting = **Running** `{model}`\n- backend: {backend}\n- context: {size} tokens\n- replies up to {count} tokens\n- sampling: {detail}
 en.cli.run.starting.temperature = temperature {value}
 en.cli.run.starting.top_k = top-k {value}
 en.cli.run.starting.top_p = top-p {value}
@@ -2620,10 +2617,7 @@ da.cli.work.runner.session = sessionens model
 da.cli.work.runner_apart = en model angivet med model=PATH kører for sig, kun med filværktøjer: den kører ingen tjek og laver ingen hjælpere -- /work uden model= kører sessionens model, som gør
 da.cli.work.steps_capped = steps={value} er flere end {name} må tage: den kører {count}, som {other} tillader
 da.cli.run.capped = {name} {value} er flere end denne kørsel tager: den kører {count}
-da.cli.run.starting = **Starter** `{model}`\n- backend: {backend}\n- kontekst: {size}\n- svar på op til {count} tokens\n- sampling: {detail}
-da.cli.run.starting.chosen = vælges under indlæsningen
-da.cli.run.starting.sampling_own = modellens egne eller standardværdierne
-da.cli.run.starting.rest = resten modellens egne eller standardværdierne
+da.cli.run.starting = **Kører** `{model}`\n- backend: {backend}\n- kontekst: {size} tokens\n- svar på op til {count} tokens\n- sampling: {detail}
 da.cli.run.starting.temperature = temperatur {value}
 da.cli.run.starting.top_k = top-k {value}
 da.cli.run.starting.top_p = top-p {value}
@@ -3995,10 +3989,7 @@ qps.cli.work.runner.session = ⟦ŧhé ßéßßíóñ'ß móðéĺ⟧
 qps.cli.work.runner_apart = ⟦á móðéĺ ñáméð bý móðéĺ=PAŦH ŕúñß ápáŕŧ, wíŧh fíĺé ŧóóĺß óñĺý: íŧ ŕúñß ñó çhéçkß áñð mákéß ñó héĺpéŕß -- /wóŕk wíŧhóúŧ móðéĺ= ŕúñß ŧhé ßéßßíóñ'ß móðéĺ, whíçh ðóéß⟧
 qps.cli.work.steps_capped = ⟦ßŧépß={value} íß móŕé ŧháñ {name} máý ŧáké: íŧ ŕúñß {count}, áß {other} áĺĺówß⟧
 qps.cli.run.capped = ⟦{name} {value} íß móŕé ŧháñ ŧhíß ŕúñ ŧáķéß: íŧ ŕúñß {count}⟧
-qps.cli.run.starting = ⟦**Šŧáŕŧíñg** `{model}`\n- báçκéñð: {backend}\n- çóñŧéxŧ: {size}\n- ŕéṕĺíéß úṕ ŧó {count} ŧóκéñß\n- ßáḿṕĺíñg: {detail}⟧
-qps.cli.run.starting.chosen = ⟦çhóßéñ áß íŧ ĺóáðß⟧
-qps.cli.run.starting.sampling_own = ⟦ŧhé ḿóðéĺ'ß óẃñ, óŕ ŧhé ðéƒáúĺŧß⟧
-qps.cli.run.starting.rest = ⟦ŧhé ŕéßŧ ŧhé ḿóðéĺ'ß óẃñ, óŕ ŧhé ðéƒáúĺŧß⟧
+qps.cli.run.starting = ⟦**Ŕúññíñg** `{model}`\n- báçκéñð: {backend}\n- çóñŧéxŧ: {size} ŧóκéñß\n- ŕéṕĺíéß úṕ ŧó {count} ŧóκéñß\n- ßáḿṕĺíñg: {detail}⟧
 qps.cli.run.starting.temperature = ⟦ŧéḿṕéŕáŧúŕé {value}⟧
 qps.cli.run.starting.top_k = ⟦ŧóṕ-κ {value}⟧
 qps.cli.run.starting.top_p = ⟦ŧóṕ-ṕ {value}⟧
