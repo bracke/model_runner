@@ -80,6 +80,8 @@ package Model_Runner.CLI.Interactive is
       Show_Picture,
       Show_Video,
       Switch_Model,
+      Undo_Changes,
+      Compact_Now,
       Unknown);
 
    --  The word a caller types for an interactive command.

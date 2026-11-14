@@ -1,3 +1,8 @@
+with Model_Runner.Platform;
+with Model_Runner.Localization;
+with Model_Runner.Presentation;
+with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Tool_Turns;
 with Interfaces;
 with Model_Runner.Output;
 with Model_Runner.Output.Repetition;
@@ -1869,9 +1874,102 @@ package body Tests.Agent_Loop_Cases is
               & Ag.Stop_Reason'Image (Ended.Reason));
    end A_Pace_Is_The_Works_Not_Each_Runs;
 
+   --  A conversation's turn, end to end: the model's call to write a file
+   --  goes to the conversation's approver. With no terminal to ask at it is
+   --  not run and nothing is written; once the tool is allowed it runs and
+   --  the file is there; and /undo's store puts back what the turn changed --
+   --  the new file gone, a changed one as it was.
+   procedure A_Conversation_Turn_Asks_Then_Writes_Then_Undoes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Turns renames Model_Runner.CLI.Tool_Turns;
+      Catalog  : aliased Model_Runner.Localization.Catalog;
+      Screen   : aliased Model_Runner.Presentation.Console;
+      Restored : Ada.Strings.Unbounded.Unbounded_String;
+
+      function Content_Of (Name : String) return String is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Dir & "/" & Name);
+         declare
+            Line : constant String := Ada.Text_IO.Get_Line (File);
+         begin
+            Ada.Text_IO.Close (File);
+            return Line;
+         end;
+      end Content_Of;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      if Image = null then
+         Tiny_Model.Build (Image);
+      end if;
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Model_Runner.CLI.Options.Normal);
+      Turns.Set_Base (Ada.Directories.Full_Name (Dir));
+      Put ("kept.txt", "as it was");
+
+      --  No terminal to ask at: the write is not run.
+      declare
+         Approve : aliased Turns.Conversation_Approver (Screen'Unchecked_Access);
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Turns.Begin_Turn;
+         Replies.Replies.Append (Write ("asked.txt", "never"));
+         Run (Replies, Seen, Ended, Approver => Approve'Unchecked_Access);
+         Assert (not Ada.Directories.Exists (Dir & "/asked.txt"),
+                 "a write nobody could be asked about was run");
+      end;
+
+      --  Allowed: the read runs unasked, the writes run, and the file the
+      --  turn changed and the one it made are kept for /undo.
+      declare
+         Approve : aliased Turns.Conversation_Approver (Screen'Unchecked_Access);
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+      begin
+         Turns.Allow_Always (Approve, "write_file");
+         Turns.Begin_Turn;
+         Replies.Replies.Append (Read ("kept.txt"));
+         Replies.Replies.Append (Write ("made.txt", "hello"));
+         Replies.Replies.Append (Write ("kept.txt", "changed"));
+         Run (Replies, Seen, Ended, Approver => Approve'Unchecked_Access);
+         Assert (Ada.Directories.Exists (Dir & "/made.txt") and then Content_Of ("made.txt") = "hello",
+                 "a write the user allowed did not run");
+         Assert (Content_Of ("kept.txt") = "changed", "the second write did not run");
+      end;
+
+      --  /undo: the turn's changes put back, and only that turn's.
+      Turns.Undo (Restored);
+      Assert (not Ada.Directories.Exists (Dir & "/made.txt"),
+              "a file the turn made was not taken away again");
+      Assert (Content_Of ("kept.txt") = "as it was",
+              "a file the turn changed was not put back: " & Content_Of ("kept.txt"));
+      Assert (Ada.Strings.Unbounded.Index (Restored, "made.txt") > 0
+              and then Ada.Strings.Unbounded.Index (Restored, "kept.txt") > 0,
+              "what was put back was not said: " & Ada.Strings.Unbounded.To_String (Restored));
+      Turns.Undo (Restored);
+      Assert (Ada.Strings.Unbounded.Length (Restored) = 0,
+              "a second /undo put back something no turn changed");
+      Model_Runner.Localization.Close (Catalog);
+   end A_Conversation_Turn_Asks_Then_Writes_Then_Undoes;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, A_Conversation_Turn_Asks_Then_Writes_Then_Undoes'Access,
+         "a conversation's write is asked first, runs once allowed, and /undo puts the files back");
       Register_Routine
         (T, Loop_Keeps_To_Its_Rules'Access,
          "a reply's calls are noted, refused as repeats and approved as the loop's rules say");

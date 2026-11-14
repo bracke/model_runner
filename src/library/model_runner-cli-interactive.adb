@@ -1,3 +1,5 @@
+with Model_Runner.CLI.Mentions;
+with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Instructions;
 with Model_Runner.CLI.Conversations;
 with Ada.Streams;
@@ -69,7 +71,9 @@ package body Model_Runner.CLI.Interactive is
          when Load_Conversation => "/load",
          when Show_Picture => "/image",
          when Show_Video   => "/video",
-         when Switch_Model => "/model");
+         when Switch_Model => "/model",
+         when Undo_Changes => "/undo",
+         when Compact_Now  => "/compact");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -524,6 +528,10 @@ package body Model_Runner.CLI.Interactive is
           else "The user's standing instructions, from the " & Model_Runner.CLI.Instructions.File_Name
                & " files where this conversation is held:" & ASCII.LF & Standing
                & (if Own = "" then "" else ASCII.LF & Own));
+
+      --  What the user did that the model is to be told with the next
+      --  message, beside the commands typed with !: files /undo put back.
+      Told_Next : Ada.Strings.Unbounded.Unbounded_String;
 
       --  Whether a turn has the built-in tools: where the run gives them,
       --  the caller named no tools of their own, and the context has room.
@@ -1617,6 +1625,56 @@ package body Model_Runner.CLI.Interactive is
                end;
             end if;
 
+         elsif Asked.Kind = Undo_Changes then
+            --  The files the last turn that changed any changed, put back;
+            --  and the model told, with the next message, that they are.
+            declare
+               Restored : Ada.Strings.Unbounded.Unbounded_String;
+            begin
+               Model_Runner.CLI.Tool_Turns.Undo (Restored);
+               if Ada.Strings.Unbounded.Length (Restored) = 0 then
+                  Pres.Put_Note (Screen, "cli.interactive.nothing_to_undo");
+               else
+                  declare
+                     Listed : String := Ada.Strings.Unbounded.To_String (Restored);
+                  begin
+                     Ada.Strings.Unbounded.Append
+                       (Told_Next,
+                        "(note from the harness, not the user: the user undid what your turn changed in these"
+                        & " files; they are as they were before it)" & ASCII.LF & Listed & ASCII.LF);
+                     for C of Listed loop
+                        if C = ASCII.LF then
+                           C := ' ';
+                        end if;
+                     end loop;
+                     Pres.Put_Note (Screen, "cli.interactive.undone",
+                                    [Loc.Named ("detail", Ada.Strings.Fixed.Trim (Listed, Ada.Strings.Both))]);
+                  end;
+               end if;
+            end;
+
+         elsif Asked.Kind = Compact_Now then
+            --  The conversation's oldest turns into a summary, now: the
+            --  last few kept whole.
+            declare
+               Gone : Natural := 0;
+            begin
+               Conv.Compact
+                 (Messages, Keep_Recent => 2, Dropped => Gone,
+                  Synopsis_Room =>
+                    Positive'Max (Conv.Least_Synopsis,
+                                  Natural'Min (Conv.Default_Synopsis, L.Capacity (Session) / 2)));
+               if Gone = 0 then
+                  Pres.Put_Note (Screen, "cli.interactive.nothing_to_compact");
+               else
+                  --  What the cache held is not the conversation any more.
+                  L.Reset (Session);
+                  Have_Stats := False;
+                  Pres.Put_Note (Screen, "cli.interactive.compacted_now",
+                                 [Loc.Named ("value", T.Image (Long_Long_Integer (Gone)))]);
+               end if;
+            end;
+
          elsif Asked.Kind in Show_Picture | Show_Video then
             --  A picture, or a video's frames, for the next turn: named
             --  now, shown when the words that go with it are typed.
@@ -1842,6 +1900,8 @@ package body Model_Runner.CLI.Interactive is
                --  rule every agent's turn has.
                Agent_Request.Max_Tokens := Opt.Reply_Tokens (Item, L.Capacity (Session));
                Agent_Request.Fill_Context := False;
+               --  What this turn changes kept apart, for /undo.
+               Model_Runner.CLI.Tool_Turns.Begin_Turn;
                Agent_Turn (Messages, Agent_Request, Stop_Set, Reason);
                Turn_Taken := True;
                Have_Stats := False;
@@ -2280,18 +2340,28 @@ package body Model_Runner.CLI.Interactive is
                declare
                   Seen : Natural := Project_Seen;
                   Told : constant String := Model_Runner.CLI.Project_Commands.Changes_Since (Seen);
+                  --  Files the message mentions with @, which go with it.
+                  Named    : Ada.Strings.Unbounded.Unbounded_String;
+                  Attached : constant String := Model_Runner.CLI.Mentions.Attached (Prompt, Named);
                begin
+                  if Ada.Strings.Unbounded.Length (Named) > 0 then
+                     Pres.Put_Note (Screen, "cli.interactive.attached",
+                                    [Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Named))]);
+                  end if;
                   --  A blank line between the message typed and the reply.
                   Pres.Put_Blank_Line (Screen);
                   Take_Turn
                     (Told
+                     & Ada.Strings.Unbounded.To_String (Told_Next)
                      & (if Ada.Strings.Unbounded.Length (Shell_Said) = 0 then ""
                         else "(note from the harness, not the user: the user ran these commands in a shell"
                              & " before this message; what they wrote follows)" & ASCII.LF
                              & Ada.Strings.Unbounded.To_String (Shell_Said) & ASCII.LF)
-                     & Prompt);
+                     & Prompt
+                     & Attached);
                   if Turn_Taken then
                      Shell_Said := Ada.Strings.Unbounded.Null_Unbounded_String;
+                     Told_Next := Ada.Strings.Unbounded.Null_Unbounded_String;
                      Project_Seen := Seen;
                      Keep_Conversation;
                      --  A blank line after the reply and what was said of

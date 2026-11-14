@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.Sampling;
 with Model_Runner.Conversation.Rooms;
 
@@ -738,7 +739,7 @@ begin
          --  is made, one that changes something asked of the user first.
          Talk_Runner  : aliased Model_Runner.Tools.Builtin.Instance;
          Talk_Asker   : aliased Console_Inquirer (Screen'Unchecked_Access);
-         Talk_Approve : aliased Conversation_Approver (Screen'Unchecked_Access);
+         Talk_Approve : aliased Model_Runner.CLI.Tool_Turns.Conversation_Approver (Screen'Unchecked_Access);
          Talk_Watch   : aliased Agent_Watch (Screen'Unchecked_Access, Trace => False, Log => null);
          Talk_Tools   : Model_Runner.Tools.Definitions;
          Talk_Ready   : Boolean := False;
@@ -762,6 +763,8 @@ begin
             if not Talk_Ready then
                Talk_Runner.Use_Inquirer (Talk_Asker'Unchecked_Access);
                Talk_Runner.Set_Base (Ada.Directories.Current_Directory);
+               --  And /undo's files where the tools' are.
+               Model_Runner.CLI.Tool_Turns.Set_Base (Ada.Directories.Current_Directory);
                Model_Runner.Tools.Read (Talk_Tools, Talk_Runner.Offered_Text, Read);
                Talk_Ready := True;
             end if;

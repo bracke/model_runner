@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Mentions;
 with Model_Runner.Config;
 with Model_Runner.CLI.Instructions;
 with Model_Runner.Agent;
@@ -102,6 +103,18 @@ with Speed_Run;
 with Tiny_Model;
 
 package body Tests.CLI_Cases is
+
+   --  The suite's own settings file back, after a case that named another:
+   --  cleared, the user's own was read by every case after it.
+   procedure Restore_Settings is
+      Own : constant String := Ada.Directories.Full_Name ("obj/suite-config");
+   begin
+      if Ada.Directories.Exists (Own) then
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
+      else
+         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+      end if;
+   end Restore_Settings;
 
    use AUnit.Assertions;
    use type Model_Runner.CLI.Options.Color_Mode;
@@ -2638,10 +2651,10 @@ package body Tests.CLI_Cases is
          Assert (Command ("init|two-inputs", Json => True) /= 0
                  and then Shows ("""name"": ""alpha""") and then Shows ("""name"": ""beta"""),
                  "the inputs missing were not each an entry: " & Last_Output);
-         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         Restore_Settings;
       exception
          when others =>
-            Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+            Restore_Settings;
             raise;
       end;
       if Ada.Directories.Exists (Project) then
@@ -9142,7 +9155,7 @@ package body Tests.CLI_Cases is
       Create (Script, Out_File, Input);
       --  Read from a file, a turn is sent by an empty line.
       Put (Script, "hello" & LF & LF & "/tools off" & LF & "plain talk" & LF & LF
-                   & "/tools on" & LF & "again" & LF & LF & "/exit" & LF);
+                   & "/tools on" & LF & "again" & LF & LF & "/undo" & LF & "/compact" & LF & "/exit" & LF);
       Close (Script);
       declare
          Copy    : aliased constant B.Byte_Array := Image.all;
@@ -9214,6 +9227,13 @@ package body Tests.CLI_Cases is
                     and then Project_Tools.Text.Contains
                                (Said, Model_Runner.Localization.Text (Catalog, "cli.interactive.tools_on")),
                     "/tools off and /tools on were not said: " & Said);
+            --  /undo with nothing a turn changed; /compact, three turns in,
+            --  a summary of the oldest.
+            Assert (Project_Tools.Text.Contains
+                      (Said, Model_Runner.Localization.Text (Catalog, "cli.interactive.nothing_to_undo")),
+                    "/undo with nothing to put back did not say so: " & Said);
+            Assert (Project_Tools.Text.Contains (Said, "turns are a summary now"),
+                    "/compact did not make a summary of the oldest turns: " & Said);
          end;
          L.Close (Session);
          Model_Runner.Localization.Close (Catalog);
@@ -16476,6 +16496,62 @@ package body Tests.CLI_Cases is
               "standing instructions were on in the suite");
    end Suite_Runs_On_Its_Own_Settings;
 
+   --  A file mentioned with @ goes with the message: its content after the
+   --  words, under its path; sentence punctuation is not the path's; a path
+   --  that names no file, a folder, or bytes that are not text, stays words;
+   --  a file named twice goes once; past the cap, its first part, said.
+   procedure Mentioned_Files_Are_Attached
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package M renames Model_Runner.CLI.Mentions;
+      Folder : constant String := "obj/mentions";
+      File   : Ada.Text_IO.File_Type;
+      Named  : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      if Ada.Directories.Exists (Folder) then
+         Ada.Directories.Delete_Tree (Folder);
+      end if;
+      Ada.Directories.Create_Path (Folder);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Folder & "/notes.txt");
+      Ada.Text_IO.Put_Line (File, "the notes' words");
+      Ada.Text_IO.Close (File);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Folder & "/blob.bin");
+      Ada.Text_IO.Put (File, "a" & ASCII.NUL & "b");
+      Ada.Text_IO.Close (File);
+      declare
+         Said : constant String :=
+           M.Attached ("Read @" & Folder & "/notes.txt, then @" & Folder & "/notes.txt again; also @"
+                       & Folder & "/missing.txt and @" & Folder & " and @" & Folder & "/blob.bin.", Named);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Said, "the notes' words") > 0
+                 and then Ada.Strings.Fixed.Index (Said, "The file " & Folder & "/notes.txt") > 0,
+                 "a mentioned file did not go with the message: " & Said);
+         Assert (Ada.Strings.Fixed.Count (Said, "the notes' words") = 1,
+                 "a file named twice went twice");
+         Assert (Ada.Strings.Unbounded.To_String (Named) = Folder & "/notes.txt",
+                 "what was attached was said as " & Ada.Strings.Unbounded.To_String (Named));
+         Assert (Ada.Strings.Fixed.Index (Said, "missing") = 0
+                 and then Ada.Strings.Fixed.Index (Said, "blob") = 0,
+                 "a missing file, a folder or a binary one went with the message: " & Said);
+      end;
+      Assert (M.Attached ("an email@example.org is no mention", Named) = "",
+              "an @ inside a word was taken for a mention");
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Folder & "/big.txt");
+      for Line in 1 .. M.Most_Bytes / 20 + 50 loop
+         Ada.Text_IO.Put_Line (File, "nineteen characters");
+      end loop;
+      Ada.Text_IO.Close (File);
+      declare
+         Said : constant String := M.Attached ("@" & Folder & "/big.txt", Named);
+      begin
+         Assert (Said'Length < M.Most_Bytes + 400
+                 and then Ada.Strings.Fixed.Index (Said, "its first") > 0,
+                 "a file past the cap was not cut, and said:" & Said'Length'Image);
+      end;
+      Ada.Directories.Delete_Tree (Folder);
+   end Mentioned_Files_Are_Attached;
+
    --  /model alone offers the models on this machine, and only those:
    --  nothing to download. A home of its own with one model in its models
    --  folder, the selector drawn, and Esc keeping the model running.
@@ -18431,7 +18507,7 @@ package body Tests.CLI_Cases is
       declare
          Status : constant Natural := Without_A_Model;
       begin
-         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         Restore_Settings;
          Assert (Status = 0,
                  "the settings file's model did not run where none was "
                  & "named: status" & Natural'Image (Status));
@@ -18444,14 +18520,14 @@ package body Tests.CLI_Cases is
       declare
          Status : constant Natural := Without_A_Model;
       begin
-         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         Restore_Settings;
          Assert (Status = E.Exit_Status (E.Make (E.CLI_Missing_Model_Path)),
                  "with no model in the settings and none named, run ended "
                  & "with status" & Natural'Image (Status));
       end;
    exception
       when others =>
-         Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         Restore_Settings;
          raise;
    end The_Settings_Model_Stands_In_For_None_Named;
 
@@ -19146,6 +19222,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
          "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Mentioned_Files_Are_Attached'Access,
+         "a file mentioned with @ goes with the message; words that name no text file stay words");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Suite_Runs_On_Its_Own_Settings'Access,
          "the suite runs on its own settings and no one's standing instructions");

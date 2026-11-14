@@ -1029,6 +1029,14 @@ package body Model_Runner.CLI.Completion is
             S.Close (Store);
       end From_Project;
    begin
+      --  A file mentioned, anywhere in a message: @ and its path, the file
+      --  attached to the message when it is sent.
+      if Current'Length >= 1 and then Current (Current'First) = '@' then
+         for Path of Paths (Current (Current'First + 1 .. Current'Last), Project_Only => False) loop
+            Result.Append ("@" & Path);
+         end loop;
+         return Result;
+      end if;
       if Position = 1 then
          --  The command itself.
          for Kind in Model_Runner.CLI.Interactive.Command_Kind loop
