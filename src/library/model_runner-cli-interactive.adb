@@ -1,3 +1,6 @@
+with Ada.Streams;
+with Hostkit.Spawn;
+with Hostkit.Shell;
 with Ada.Directories;
 with Ada.Finalization;
 with Ada.Calendar;
@@ -1143,6 +1146,8 @@ package body Model_Runner.CLI.Interactive is
                   end;
                end if;
             end loop;
+            --  And a line typed after !, which is no command of the list.
+            Pres.Put_Help_Line (Screen, "cli.interactive.help.shell");
             Put_Project_Help (Gap => True);
 
          elsif Asked.Kind = Settings then
@@ -2024,6 +2029,100 @@ package body Model_Runner.CLI.Interactive is
       --  Whether the last line was a command, not words for the model.
       After_Command : Boolean := False;
 
+      --  What commands typed with ! said, for the next message: the model
+      --  sees it there, after a note that says where it came from.
+      Shell_Said : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The most of a command's output kept for the model: the rest is
+      --  shown on the screen and left out of the conversation.
+      Shell_Kept_Most : constant := 16 * 1024;
+
+      --  A command typed after !: run by the host's shell in the session's
+      --  directory, what it writes shown as it comes, and kept -- up to
+      --  Shell_Kept_Most -- for the next message. Ctrl-C reaches it as it
+      --  reaches the session.
+      procedure Run_Shell (Command : String) is
+         package D renames Hostkit.Descriptors;
+         use type Hostkit.Spawn.Spawn_Outcome;
+         use type Ada.Streams.Stream_Element_Offset;
+         Ends    : D.Pipe_Ends;
+         Options : Hostkit.Spawn.Options;
+         Child   : Hostkit.Spawn.Process_Handle;
+         Result  : Hostkit.Spawn.Status;
+         Words   : Hostkit.String_Vectors.Vector;
+         Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+         Last    : Ada.Streams.Stream_Element_Offset;
+         Kept    : Ada.Strings.Unbounded.Unbounded_String;
+         Total   : Natural := 0;
+         Ended_On_Line : Boolean := True;
+         Ignored : Boolean;
+         pragma Unreferenced (Ignored);
+      begin
+         if not D.Create_Pipe (Ends) or else not D.Set_Inheritable (Ends.Write_End, True) then
+            D.Close (Ends.Read_End);
+            D.Close (Ends.Write_End);
+            Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+            return;
+         end if;
+         Options.Output := Ends.Write_End;
+         Options.Error_Output := Ends.Write_End;
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
+         Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Command));
+         if Hostkit.Spawn.Start (Hostkit.Shell.Executable, Words, Options, Child) /= Hostkit.Spawn.Spawn_Ok then
+            D.Close (Ends.Read_End);
+            D.Close (Ends.Write_End);
+            Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+            return;
+         end if;
+         --  Only the child writes now: its end of the pipe closes with it.
+         D.Close (Ends.Write_End);
+         loop
+            exit when D."/=" (D.Read (Ends.Read_End, Buffer, Last), D.Transfer_Ok) or else Last < Buffer'First;
+            declare
+               Piece : String (1 .. Natural (Last));
+            begin
+               for Index in Piece'Range loop
+                  Piece (Index) := Character'Val (Buffer (Ada.Streams.Stream_Element_Offset (Index)));
+               end loop;
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Output, Piece);
+               Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+               Ended_On_Line := Piece (Piece'Last) = ASCII.LF;
+               if Total < Shell_Kept_Most then
+                  Ada.Strings.Unbounded.Append
+                    (Kept, Piece (1 .. Natural'Min (Piece'Last, Shell_Kept_Most - Total)));
+               end if;
+               Total := Total + Piece'Length;
+            end;
+         end loop;
+         D.Close (Ends.Read_End);
+         if not Ended_On_Line then
+            Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);
+         end if;
+         Ignored := Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result);
+         declare
+            use type Hostkit.Spawn.Wait_State;
+            Exited       : constant Boolean := Result.State = Hostkit.Spawn.Wait_Exited;
+            --  Its exit status, or that it was stopped -- Ctrl-C, a signal.
+            Status_Image : constant String :=
+              (if Exited then T.Image (Long_Long_Integer (Result.Exit_Code)) else "stopped");
+            Left_Out     : constant Natural := Total - Natural'Min (Total, Shell_Kept_Most);
+         begin
+            if not Exited or else Result.Exit_Code /= 0 then
+               Pres.Put_Note (Screen, "cli.interactive.shell_status", [Loc.Named ("value", Status_Image)]);
+            end if;
+            Ada.Strings.Unbounded.Append
+              (Shell_Said,
+               "$ " & Command & ASCII.LF & Ada.Strings.Unbounded.To_String (Kept)
+               & (if Ada.Strings.Unbounded.Length (Kept) > 0
+                    and then Ada.Strings.Unbounded.Element (Kept, Ada.Strings.Unbounded.Length (Kept)) /= ASCII.LF
+                  then [1 => ASCII.LF] else "")
+               & (if Left_Out > 0 then "[" & T.Image (Long_Long_Integer (Left_Out)) & " more bytes left out]"
+                                       & ASCII.LF else "")
+               & "[exit status " & Status_Image & "]" & ASCII.LF);
+            Pres.Put_Note (Screen, "cli.interactive.shell_kept");
+         end;
+      end Run_Shell;
+
       procedure Submit is
       begin
          if Pending (Typing) = "" then
@@ -2059,8 +2158,15 @@ package body Model_Runner.CLI.Interactive is
                begin
                   --  A blank line between the message typed and the reply.
                   Pres.Put_Blank_Line (Screen);
-                  Take_Turn (Told & Prompt);
+                  Take_Turn
+                    (Told
+                     & (if Ada.Strings.Unbounded.Length (Shell_Said) = 0 then ""
+                        else "(note from the harness, not the user: the user ran these commands in a shell"
+                             & " before this message; what they wrote follows)" & ASCII.LF
+                             & Ada.Strings.Unbounded.To_String (Shell_Said) & ASCII.LF)
+                     & Prompt);
                   if Turn_Taken then
+                     Shell_Said := Ada.Strings.Unbounded.Null_Unbounded_String;
                      Project_Seen := Seen;
                      --  A blank line after the reply and what was said of
                      --  it, before the next prompt.
@@ -2540,6 +2646,26 @@ package body Model_Runner.CLI.Interactive is
                   --  before it.
                   if Model_Runner.Cancellation."/=" (Cancel, null) then
                      Cancel.Reset;
+                  end if;
+                  --  A line beginning ! is a command for the shell, typed with
+                  --  no message pending: run, and what it says kept for the
+                  --  next message.
+                  if Pending (Typing) = ""
+                    and then Ada.Strings.Fixed.Index (Line, [1 => ASCII.LF]) = 0
+                    and then T.Trim (Line)'Length > 0
+                    and then T.Trim (Line) (T.Trim (Line)'First) = '!'
+                  then
+                     declare
+                        Said    : constant String := T.Trim (Line);
+                        Command : constant String := T.Trim (Said (Said'First + 1 .. Said'Last));
+                     begin
+                        if Command = "" then
+                           Pres.Put_Note (Screen, "cli.interactive.shell_usage");
+                        else
+                           Run_Shell (Command);
+                        end if;
+                     end;
+                     goto Next_Line;
                   end if;
                   --  At a terminal Enter sends the message, as a chat's
                   --  line does; a line ending in a backslash goes on to the

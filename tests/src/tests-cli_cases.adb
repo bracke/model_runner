@@ -15963,6 +15963,141 @@ package body Tests.CLI_Cases is
                  "the turn typed before the switches was lost: " & U.To_String (Text));
       end;
    end Model_Switch_Carries_The_Conversation;
+   --  A line after ! runs in the shell: what it writes is shown, a status
+   --  other than nought is said, and the commands and their words go with
+   --  the next message, which the model is given whole.
+   procedure Shell_Command_Goes_With_The_Next_Message
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package U renames Ada.Strings.Unbounded;
+
+      First_Model  : constant String := Ada.Directories.Full_Name ("obj/shell-model.gguf");
+      Project : constant String := Ada.Directories.Full_Name ("obj/shell-project");
+      Saved   : constant String := Project & "/with-shell.txt";
+      Plain   : constant String := "../bin/model_runner";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name
+          (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Drawn   : U.Unbounded_String;
+      Words   : Hostkit.String_Vectors.Vector;
+      Catalog : Model_Runner.Localization.Catalog;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      procedure Take (Quiet : Integer) is
+      begin
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, Quiet) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               U.Append (Drawn, Character'Val (B));
+            end loop;
+         end loop;
+      end Take;
+
+      procedure Send (Text : String) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Text'Length));
+      begin
+         for Index in Text'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index - Text'First + 1)) := Character'Pos (Text (Index));
+         end loop;
+         Assert (Hostkit.Descriptors."="
+                   (Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last), Hostkit.Descriptors.Transfer_Ok),
+                 "a key was not sent");
+      end Send;
+
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      --  Room for the command's words beside the message.
+      Tiny_Model.Write (First_Model, Room => 512);
+      if Ada.Directories.Exists (Project) then
+         Ada.Directories.Delete_Tree (Project);
+      end if;
+      Ada.Directories.Create_Path (Project);
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Options.Working_Directory := U.To_Unbounded_String (Project);
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 100))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      Words.Append (U.To_Unbounded_String (First_Model));
+      Words.Append (U.To_Unbounded_String ("--backend"));
+      Words.Append (U.To_Unbounded_String ("cpu"));
+      Words.Append (U.To_Unbounded_String ("--max-tokens"));
+      Words.Append (U.To_Unbounded_String ("1"));
+      Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+              "the session did not start");
+      Hostkit.Pty.Close_Device (Pair);
+      Take (5000);
+      --  A command, its output shown and kept; one that fails, its status
+      --  said; then a message, which carries both.
+      Send ("!echo shell-marker-42" & ASCII.CR);
+      Take (3000);
+      Send ("!exit 3" & ASCII.CR);
+      Take (3000);
+      Send ("hi" & ASCII.CR);
+      Take (5000);
+      Send ("/save " & Saved & ASCII.CR);
+      Take (3000);
+      Send ("/exit" & ASCII.CR);
+      Take (3000);
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Hostkit.Pty.Close (Pair);
+
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      declare
+         Whole : constant String := U.To_String (Drawn);
+      begin
+         Assert (Ada.Strings.Fixed.Index (Whole, "shell-marker-42") > 0,
+                 "the command's output was not shown: " & Whole);
+         Assert (Ada.Strings.Fixed.Index
+                   (Whole, Model_Runner.Localization.Text
+                             (Catalog, "cli.interactive.shell_status",
+                              [Model_Runner.Localization.Named ("value", "3")])) > 0,
+                 "a command that failed did not say its status: " & Whole);
+      end;
+      Model_Runner.Localization.Close (Catalog);
+
+      --  The message the model was given holds what the commands wrote.
+      Assert (Ada.Directories.Exists (Saved), "the conversation was not saved");
+      declare
+         Held : Ada.Text_IO.File_Type;
+         Text : U.Unbounded_String;
+      begin
+         Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, Saved);
+         while not Ada.Text_IO.End_Of_File (Held) loop
+            U.Append (Text, Ada.Text_IO.Get_Line (Held) & ASCII.LF);
+         end loop;
+         Ada.Text_IO.Close (Held);
+         Assert (U.Index (Text, "$ echo shell-marker-42") > 0
+                 and then U.Index (Text, "shell-marker-42" & ASCII.LF) > 0
+                 and then U.Index (Text, "[exit status 3]") > 0,
+                 "the message did not carry what the commands wrote: " & U.To_String (Text));
+      end;
+   end Shell_Command_Goes_With_The_Next_Message;
 
    --  /model alone offers the models on this machine, and only those:
    --  nothing to download. A home of its own with one model in its models
@@ -18634,6 +18769,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
          "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Shell_Command_Goes_With_The_Next_Message'Access,
+         "a line after ! runs in the shell, and what it writes goes with the next message");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Switch_Carries_The_Conversation'Access,
          "/model goes on with another model, the conversation with it, and back where one will not load");
