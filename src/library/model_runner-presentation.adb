@@ -627,9 +627,20 @@ package body Model_Runner.Presentation is
    --  nothing. The parameter stays because every writer here takes one and a
    --  writer that does not is a writer somebody will call from the wrong
    --  place.
+   --  Whether the last line written to the terminal was a progress line,
+   --  which the next one takes the place of.
+   Progress_Last : Boolean := False;
+   pragma Atomic (Progress_Last);
+
+   procedure End_Progress_Line is
+   begin
+      Progress_Last := False;
+   end End_Progress_Line;
+
    procedure Error_Line (Item : in out Console; Text : String) is
       pragma Unreferenced (Item);
    begin
+      Progress_Last := False;
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Text);
    exception
       when Ada.IO_Exceptions.Device_Error | Ada.IO_Exceptions.Use_Error =>
@@ -1183,6 +1194,7 @@ package body Model_Runner.Presentation is
 
    procedure Put_Prompt (Item : in out Console; Key : String) is
    begin
+      Progress_Last := False;
       Ada.Text_IO.Put (Ada.Text_IO.Current_Error, Message (Item, Key) & ' ');
       Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
    exception
@@ -1196,6 +1208,7 @@ package body Model_Runner.Presentation is
    procedure Clear_Screen (Item : in out Console) is
    begin
       if Item.Capabilities.Error_Is_Terminal then
+         Progress_Last := False;
          Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[H" & ASCII.ESC & "[2J");
          Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
       end if;
@@ -1209,6 +1222,7 @@ package body Model_Runner.Presentation is
       Key       : String;
       Arguments : Loc.Argument_List) is
    begin
+      Progress_Last := False;
       Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Message (Item, Key, Arguments));
       Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
    exception
@@ -1881,6 +1895,7 @@ package body Model_Runner.Presentation is
       --  and sending it through Current_Output puts it in the middle of
       --  whatever else a test was capturing there, which is how a layout
       --  check came to read " a Statistics" as a line.
+      Progress_Last := False;
       String'Write
         (Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output), Item);
       if Item'Length > 0 then
@@ -2006,7 +2021,20 @@ package body Model_Runner.Presentation is
               [Loc.Named ("completed", T.Image (Long_Long_Integer (Item.Completed))),
                Loc.Named ("total", T.Image (Long_Long_Integer (Item.Total)))]);
       begin
-         Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
+         --  At a terminal each step takes the place of the one before it,
+         --  where nothing else was written between: the load reads as one
+         --  line that changes, not a column of finished steps. The line is
+         --  ended, so what is written next starts on a line of its own.
+         if Owner.Capabilities.Error_Is_Terminal then
+            if Progress_Last then
+               Ada.Text_IO.Put (Ada.Text_IO.Current_Error, ASCII.ESC & "[1A" & ASCII.CR & ASCII.ESC & "[K");
+            end if;
+            Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
+            Ada.Text_IO.Flush (Ada.Text_IO.Current_Error);
+            Progress_Last := True;
+         else
+            Ada.Text_IO.Put_Line (Ada.Text_IO.Current_Error, Line);
+         end if;
       end;
    exception
       --  An observer must never fail the work it is observing.

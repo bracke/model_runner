@@ -504,6 +504,13 @@ package Model_Runner.Presentation is
    --  @return It, coloured or not.
    function Coloured_Commands (Item : Console; Text : String) return String;
 
+   --  Say that something other than progress was written to the terminal:
+   --  the next progress line goes below it rather than over the last
+   --  progress line. Every writer here says so itself; one elsewhere
+   --  that writes to the terminal while a model loads -- the line editor,
+   --  a download's meter -- calls this first.
+   procedure End_Progress_Line;
+
    --  Clear a terminal's screen, its cursor at the top: nothing where
    --  standard error is no terminal.
    --

@@ -868,6 +868,7 @@ package body Model_Runner.CLI.Choosers is
          return 0;
       end if;
       Guard.Held := True;
+      Model_Runner.Presentation.End_Progress_Line;
       Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
       if not Term.Set_Raw (Input) then
          return 0;
@@ -1146,6 +1147,7 @@ package body Model_Runner.CLI.Choosers is
             return "";
          end if;
          Guard.Held := True;
+         Model_Runner.Presentation.End_Progress_Line;
          Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
          if not Term.Set_Raw (Input) then
             Gave_Up := True;
@@ -1515,6 +1517,7 @@ package body Model_Runner.CLI.Choosers is
          return "";
       end if;
       Guard.Held := True;
+      Model_Runner.Presentation.End_Progress_Line;
       Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
       if not Term.Set_Raw (Input) then
          return "";
@@ -2781,6 +2784,7 @@ package body Model_Runner.CLI.Choosers is
          return "";
       end if;
       Guard.Held := True;
+      Model_Runner.Presentation.End_Progress_Line;
       Model_Runner.Platform.Signals.Hold_Terminal_Mode (Guard.Saved);
       if not Term.Set_Raw (Input) then
          return "";

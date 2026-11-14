@@ -106,6 +106,7 @@ package body Model_Runner.CLI.Execute.Acquisition is
                  & " MB/s"
             else "");
       begin
+         Model_Runner.Presentation.End_Progress_Line;
          Ada.Text_IO.Put
            (Ada.Text_IO.Standard_Error,
             ASCII.CR & "downloading  " & Percent & "   "
