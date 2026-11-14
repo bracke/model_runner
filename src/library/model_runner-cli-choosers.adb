@@ -644,7 +644,8 @@ package body Model_Runner.CLI.Choosers is
          if Guard.Bracketed then
             --  Bracketed paste off, and the modified keys' reporting back
             --  to the terminal's own.
-            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l" & ASCII.ESC & "[>4m" & ASCII.ESC & "[<u");
+            Ada.Text_IO.Put
+              (Ada.Text_IO.Standard_Error, ASCII.ESC & "[?2004l" & ASCII.ESC & "[>4m" & ASCII.ESC & "[<u");
             Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
             Guard.Bracketed := False;
          end if;
