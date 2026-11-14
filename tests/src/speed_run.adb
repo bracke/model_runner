@@ -749,6 +749,19 @@ package body Speed_Run is
                      then (if Pass = 1 then 0 else Result.Prompt)
                           + Outcome.Prompt_Tokens - Outcome.Reused_Tokens
                      else Outcome.Prompt_Tokens);
+                  Result.Prompt_Total :=
+                    (if Turning
+                     then (if Pass = 1 then 0 else Result.Prompt_Total)
+                          + Outcome.Prompt_Tokens
+                     else Outcome.Prompt_Tokens);
+                  Result.Prompt_Reused :=
+                    (if Turning
+                     then (if Pass = 1 then 0 else Result.Prompt_Reused)
+                          + Outcome.Reused_Tokens
+                     else Outcome.Reused_Tokens);
+                  Result.Rewind_Failed :=
+                    Result.Rewind_Failed
+                    or else Gen."=" (Outcome.Cache_Event, Gen.Rewind_Failed);
                   Result.Produced :=
                     (if Turning
                      then (if Pass = 1 then 0 else Result.Produced)
@@ -905,6 +918,9 @@ package body Speed_Run is
       Into.Ran := True;
       Into.Runs := Into.Runs + 1;
       Into.Prompt := Into.Prompt + Item.Prompt;
+      Into.Prompt_Total := Into.Prompt_Total + Item.Prompt_Total;
+      Into.Prompt_Reused := Into.Prompt_Reused + Item.Prompt_Reused;
+      Into.Rewind_Failed := Into.Rewind_Failed or else Item.Rewind_Failed;
       Into.Produced := Into.Produced + Item.Produced;
       Into.Generate := Into.Generate + Item.Generate;
       Into.Evaluate := Into.Evaluate + Item.Evaluate;
@@ -971,6 +987,9 @@ package body Speed_Run is
 
       return "median of" & Natural'Image (Item.Runs) & " runs: "
         & Natural'Image (Item.Prompt) & " prompt tokens,"
+        & (if Item.Prompt_Reused = 0 then ""
+           else Natural'Image (Item.Prompt_Reused) & " reused of"
+                & Natural'Image (Item.Prompt_Total) & " cumulative,")
         & Natural'Image (Item.Produced) & " generated; "
         & Seconds (Item.Wall) & " wall -- "
         & Seconds (Item.Evaluate) & " evaluating the prompt"

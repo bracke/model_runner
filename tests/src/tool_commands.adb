@@ -62,6 +62,8 @@ package body Tool_Commands is
      & " --draft-lookup --draft-next --draft-floor --draft-adapts"
      & " --kv-cache --repeats --turns --host-depth"
      & " --paged --no-paged --memory-limit --no-cache"
+     & " --cache-hit-min --evaluated-max --prompt-seconds-max --expect-digest"
+     & " --warmup"
      & " --anyway --wait"
      & " --budget --device-timeline --context-size --device-memory --ignore-eos ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
@@ -107,7 +109,9 @@ package body Tool_Commands is
      & " [--kv-cache MODE] [--repeats N] [--turns DIR] [--host-depth N] [--paged] [--no-paged]"
      & " [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N] [--ignore-eos]"
-     & " [--device-memory BYTES] [--memory-limit BYTES] [--no-cache]";
+     & " [--device-memory BYTES] [--memory-limit BYTES] [--no-cache]"
+     & " [--cache-hit-min PERCENT] [--evaluated-max N]"
+     & " [--prompt-seconds-max SECONDS] [--expect-digest HEX] [--warmup]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
    Takes_Outside   : aliased constant String :=
      "[--anyway] [--wait MINUTES] -- COMMAND [ARGUMENT ...]";

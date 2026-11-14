@@ -3361,6 +3361,99 @@ begin
                return 0;
          end Whole;
 
+         function Bound (Name : String) return Long_Float is
+         begin
+            return Long_Float'Value (Option (Name, ""));
+         exception
+            when others =>
+               return -1.0;
+         end Bound;
+
+         --  A turns campaign can be a gate rather than a figure inspected
+         --  by hand.  Every bound is explicit so the command remains useful
+         --  for another model and machine, while the baseline document owns
+         --  the values chosen for this one.
+         procedure Check_Cache_Baseline (Item : Speed_Run.Report) is
+            Asked : constant Boolean :=
+              Given ("--cache-hit-min") or else Given ("--evaluated-max")
+              or else Given ("--prompt-seconds-max")
+              or else Given ("--expect-digest");
+            Good  : Boolean := True;
+            Hit   : constant Long_Float :=
+              (if Item.Prompt_Total = 0 then 0.0
+               else 100.0 * Long_Float (Item.Prompt_Reused)
+                    / Long_Float (Item.Prompt_Total));
+
+            procedure Refuse (Why : String) is
+            begin
+               Good := False;
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error, "cache regression: " & Why);
+            end Refuse;
+         begin
+            if not Asked then
+               return;
+            elsif Option ("--turns", "") = "" then
+               Refuse ("thresholds require --turns DIR");
+            elsif not Item.Ran then
+               Refuse ("the campaign did not complete");
+            else
+               if Item.Rewind_Failed then
+                  Refuse ("a session rewind failed");
+               end if;
+               if Given ("--cache-hit-min")
+                 and then Bound ("--cache-hit-min") < 0.0
+               then
+                  Refuse ("--cache-hit-min must be a nonnegative number");
+               elsif Bound ("--cache-hit-min") >= 0.0
+                 and then Hit < Bound ("--cache-hit-min")
+               then
+                  Refuse
+                    ("hit rate" & Long_Float'Image (Hit) & "% is below"
+                     & Long_Float'Image (Bound ("--cache-hit-min")) & "%");
+               end if;
+               if Given ("--evaluated-max")
+                 and then Item.Prompt > Whole ("--evaluated-max")
+               then
+                  Refuse
+                    (Natural'Image (Item.Prompt) & " evaluated tokens exceed"
+                     & Natural'Image (Whole ("--evaluated-max")));
+               end if;
+               if Given ("--prompt-seconds-max")
+                 and then Bound ("--prompt-seconds-max") < 0.0
+               then
+                  Refuse
+                    ("--prompt-seconds-max must be a nonnegative number");
+               elsif Bound ("--prompt-seconds-max") >= 0.0
+                 and then Long_Float (Item.Evaluate)
+                              > Bound ("--prompt-seconds-max")
+               then
+                  Refuse
+                    (Duration'Image (Item.Evaluate) & " prompt seconds exceed"
+                     & Long_Float'Image (Bound ("--prompt-seconds-max")));
+               end if;
+               if Given ("--expect-digest")
+                 and then Item.Digest /= Option ("--expect-digest", "")
+               then
+                  Refuse
+                    ("output digest " & Item.Digest & " differs from "
+                     & Option ("--expect-digest", ""));
+               end if;
+            end if;
+
+            if Good then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "cache regression: passed --"
+                  & Natural'Image (Item.Prompt_Reused) & " reused of"
+                  & Natural'Image (Item.Prompt_Total) & ","
+                  & Natural'Image (Item.Prompt) & " evaluated,"
+                  & Duration'Image (Item.Evaluate) & " s prompt time");
+            else
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            end if;
+         end Check_Cache_Baseline;
+
          --  The storage the session keeps its context in, named the way
          --  the command names it: f32, f16, q8 or q4, and by default what
          --  the command keeps by default.
@@ -3604,6 +3697,28 @@ begin
             Set : constant String := Option ("--prompt-set", "");
          begin
             if Set = "" then
+               if Given ("--warmup") then
+                  declare
+                     Warm : Speed_Run.Report;
+                  begin
+                     Measure
+                       (Option ("--prompt-file",
+                                "../tests/fixtures/speed-prompt-110.txt"),
+                        Warm);
+                     if not Warm.Ran then
+                        Ada.Text_IO.Put_Line
+                          (Ada.Text_IO.Standard_Error,
+                           "speed: the warm-up campaign did not complete");
+                        Ada.Command_Line.Set_Exit_Status
+                          (Ada.Command_Line.Failure);
+                        return;
+                     end if;
+                     Ada.Text_IO.Put_Line
+                       (Ada.Text_IO.Standard_Error,
+                        "warm-up: " & Speed_Run.Summary (Warm));
+                  end;
+               end if;
+
                --  Unnamed, the 110-token prompt the llama.cpp comparisons
                --  are taken against: the six-token one said nothing of a
                --  prompt's rate. The published figures that were taken from
@@ -3614,6 +3729,7 @@ begin
                   Result);
                Ada.Text_IO.Put_Line
                  (Ada.Text_IO.Standard_Error, Speed_Run.Summary (Result));
+               Check_Cache_Baseline (Result);
 
                --  A timeline waits on every submission before the next,
                --  so it says what each step costs and nothing of how they

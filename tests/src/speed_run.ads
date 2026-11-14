@@ -56,6 +56,9 @@ package Speed_Run is
 
       Runs      : Natural := 0;
       Prompt    : Natural := 0;   --  prompt tokens
+      Prompt_Total  : Natural := 0; -- cumulative prompt tokens before reuse
+      Prompt_Reused : Natural := 0; -- cumulative tokens kept from the session
+      Rewind_Failed : Boolean := False;
       Produced  : Natural := 0;   --  tokens generated
 
       Digest    : String (1 .. 16) := [others => '0'];

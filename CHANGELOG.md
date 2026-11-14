@@ -15,6 +15,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Cache regressions are executable, and the remaining production measurements are complete.** `tests speed` now reports cumulative/reused prompt tokens for a turns campaign and can fail on a rewind, minimum cache-hit rate, evaluated-token or prompt-time ceiling, and output digest. The committed five-turn workload carries the Qwen3 0.6B thresholds. A filled 11,142-token Qwen3 8B run peaked at 9.68 GiB without swap, and its delegate trial completed in 184 s with 72 s in one helper, supporting the 8,192-token, one-helper operating point.
+
 - **Native macOS and Windows runs respect host capabilities.** Speech no longer reads the platform's documented zero/unknown available-memory answer as zero bytes and refuses every model. CPU layout tests now follow whether byte-product kernels exist, the large-tree refresh bound allows hosted-runner variance while still catching the former quadratic scan, and Windows drive-rooted PATH entries survive the check runner's absolute-directory filter.
 
 - **Cache and isolated-session production baseline.** Qwen3 0.6B reused 132 of 191 cumulative prompt tokens over five conversational turns (69%), with the same output in five campaigns; the measured context and routing decisions, and their regression thresholds, are recorded in `docs/cache-session-baseline.md`. Fixed and adaptive routing each completed 5/5 `find` trials, with fixed faster at the median, so no classifier was added. CI now pins the published versionlib revision whose Git API this crate uses instead of compiling against versionlib's older default branch.

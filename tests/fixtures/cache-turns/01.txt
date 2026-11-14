@@ -1,0 +1,1 @@
+Summarize this rule in one short sentence: a retained session may reuse an unchanged committed prompt prefix.
