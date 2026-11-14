@@ -232,6 +232,16 @@ package Model_Runner.Platform is
    --  @return The directory, or an empty string when none is known.
    function Sessions_Directory return String;
 
+   --  Directory the conversations are kept in, each written as it goes so
+   --  it can be taken up again (--continue, --resume).
+   --
+   --  MODEL_RUNNER_CONVERSATIONS overrides it, then conversations-dir in the
+   --  settings file; otherwise it sits beside the models, under
+   --  model_runner's data home. Empty when no home is known.
+   --
+   --  @return The directory, or an empty string when none is known.
+   function Conversations_Directory return String;
+
    --  Resolve a session name a caller typed to the file to read or write.
    --
    --  As with a model, a name that carries a path is taken as one. A bare

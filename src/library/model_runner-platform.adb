@@ -743,6 +743,9 @@ package body Model_Runner.Platform is
    -- Sessions_Directory --
    -------------------------
 
+   function Conversations_Directory return String
+   is (Data_Directory ("MODEL_RUNNER_CONVERSATIONS", "conversations-dir", "conversations"));
+
    function Sessions_Directory return String
    is (Data_Directory ("MODEL_RUNNER_SESSIONS", "sessions-dir", "sessions"));
 

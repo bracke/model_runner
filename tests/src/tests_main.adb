@@ -138,6 +138,10 @@ procedure Tests_Main is
          end if;
       end if;
       Model_Runner.Durable_Syncs.Skip_Syncs (True);
+      --  The suite's sessions keep their conversations in its own folder,
+      --  not among the user's: every conversation is kept as it goes.
+      Ada.Environment_Variables.Set
+        ("MODEL_RUNNER_CONVERSATIONS", Ada.Directories.Full_Name ("obj/conversations"));
    end Ready_For_The_Suite;
 
    --  The token the probe's interrupt handling is bound to: here, as the

@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Conversations;
 with Ada.Strings.Fixed;
 with Model_Runner.CLI.Interactive;
 with Ada.Directories;
@@ -154,6 +155,38 @@ package body Model_Runner.CLI.Execute is
             end if;
          end loop;
       end Run_Switching;
+      --  A run of the command as asked: its model, or the settings file's,
+      --  or one chosen from those on hand.
+      procedure Run_Asked (Given : Opt.Command) is
+      begin
+         if T.Is_Empty (Given.Model_Path) then
+            declare
+               Chosen : Opt.Command := Given;
+               Picked : Boolean;
+
+               --  The settings file's own model, where it names one:
+               --  a path, an alias or a reference, as one named here
+               --  would be, and the list is not asked.
+               Default : constant String := Model_Runner.Config.Value ("model");
+            begin
+               if Default /= "" then
+                  Chosen.Model_Path := T.To_Bounded (Default);
+                  Picked := True;
+               else
+                  Choose_Model (Screen, Chosen.Model_Path, Picked);
+               end if;
+               if Picked then
+                  Run_Switching (Chosen);
+               else
+                  Pres.Report (Screen, E.Make (E.CLI_Missing_Model_Path));
+                  Status := E.Exit_Usage;
+               end if;
+            end;
+         else
+            Run_Switching (Given);
+         end if;
+      end Run_Asked;
+
    begin
       case Item.Kind is
          when Opt.Command_Version =>
@@ -174,32 +207,44 @@ package body Model_Runner.CLI.Execute is
             --  /model in a conversation offers the models on hand as a run
             --  without one does.
             Model_Runner.CLI.Interactive.Set_Model_Picker (Choose_Next_Model'Access);
-            if T.Is_Empty (Item.Model_Path) then
-               declare
-                  Chosen : Opt.Command := Item;
-                  Picked : Boolean;
-
-                  --  The settings file's own model, where it names one:
-                  --  a path, an alias or a reference, as one named here
-                  --  would be, and the list is not asked.
-                  Default : constant String := Model_Runner.Config.Value ("model");
-               begin
-                  if Default /= "" then
-                     Chosen.Model_Path := T.To_Bounded (Default);
-                     Picked := True;
-                  else
-                     Choose_Model (Screen, Chosen.Model_Path, Picked);
-                  end if;
-                  if Picked then
-                     Run_Switching (Chosen);
-                  else
-                     Pres.Report (Screen, E.Make (E.CLI_Missing_Model_Path));
-                     Status := E.Exit_Usage;
-                  end if;
-               end;
-            else
-               Run_Switching (Item);
-            end if;
+            declare
+               --  The command, with the model of a conversation taken up
+               --  where it names none.
+               Asked  : Opt.Command := Item;
+               Resume : Boolean := True;
+            begin
+               if Item.Continue_Last or else Item.Resume then
+                  declare
+                     Kept   : Model_Runner.Text.Bounded;
+                     Picked : Boolean := False;
+                  begin
+                     if Item.Continue_Last then
+                        Kept := T.To_Bounded (Model_Runner.CLI.Conversations.Latest);
+                        Picked := not T.Is_Empty (Kept);
+                     else
+                        Model_Runner.CLI.Conversations.Choose (Screen, Kept, Picked);
+                     end if;
+                     if not Picked then
+                        if Model_Runner.CLI.Conversations.Latest = "" then
+                           Pres.Put_Note (Screen, "cli.conversations.none");
+                        end if;
+                        Status := E.Exit_Success;
+                        Resume := False;
+                     else
+                        Model_Runner.CLI.Interactive.Resume_From (T.To_String (Kept));
+                        if T.Is_Empty (Asked.Model_Path)
+                          and then Model_Runner.CLI.Conversations.Model_Of (T.To_String (Kept)) /= ""
+                        then
+                           Asked.Model_Path :=
+                             T.To_Bounded (Model_Runner.CLI.Conversations.Model_Of (T.To_String (Kept)));
+                        end if;
+                     end if;
+                  end;
+               end if;
+               if Resume then
+                  Run_Asked (Asked);
+               end if;
+            end;
 
          when Opt.Command_Embed =>
             --  Unasked, the device where the model fits it, as run takes

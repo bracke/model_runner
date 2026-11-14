@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Conversations;
 with Ada.Streams;
 with Hostkit.Spawn;
 with Hostkit.Shell;
@@ -361,6 +362,14 @@ package body Model_Runner.CLI.Interactive is
    Picker_Given : Model_Picker := null;
    Switch_To    : Ada.Strings.Unbounded.Unbounded_String;
    Carried      : Ada.Strings.Unbounded.Unbounded_String;
+   --  Whether the carried file is a kept conversation -- taken up, not
+   --  passed on -- and so stays where it is.
+   Carried_Kept : Boolean := False;
+
+   --  The file the conversation is kept in as it goes: made at its first
+   --  answer, kept across a change of model, and a new one after /reset or
+   --  /load.
+   Kept_In : Ada.Strings.Unbounded.Unbounded_String;
 
    --  A model as a person names it: its file's name, or a reference's
    --  last part.
@@ -388,8 +397,20 @@ package body Model_Runner.CLI.Interactive is
 
    function Carrying return Boolean is (Ada.Strings.Unbounded.Length (Carried) > 0);
 
+   procedure Resume_From (Path : String) is
+   begin
+      Carried := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+      Carried_Kept := True;
+      Kept_In := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+   end Resume_From;
+
    procedure Drop_Carried is
    begin
+      if Carried_Kept then
+         Carried := Ada.Strings.Unbounded.Null_Unbounded_String;
+         Carried_Kept := False;
+         return;
+      end if;
       if Carrying and then Ada.Directories.Exists (Ada.Strings.Unbounded.To_String (Carried)) then
          Ada.Directories.Delete_File (Ada.Strings.Unbounded.To_String (Carried));
       end if;
@@ -1017,6 +1038,8 @@ package body Model_Runner.CLI.Interactive is
 
          elsif Asked.Kind = Reset then
             Conv.Clear (Messages);
+            --  Started over: the next answer begins a conversation kept apart.
+            Kept_In := Ada.Strings.Unbounded.Null_Unbounded_String;
             --  The conversation starts over as the session started it: with
             --  the --system message, which a reset had dropped with the rest.
             if Item.Has_System and then Item.System_Text /= null then
@@ -1491,6 +1514,8 @@ package body Model_Runner.CLI.Interactive is
                         Free_Text (Next_Picture);
                      end if;
                      Have_Stats := False;
+                     --  Another conversation now: kept apart from the one before.
+                     Kept_In := Ada.Strings.Unbounded.Null_Unbounded_String;
                   end if;
                   if E.Is_Error (Outcome) then
                      Pres.Report (Screen, Outcome);
@@ -2171,6 +2196,36 @@ package body Model_Runner.CLI.Interactive is
          end;
       end Run_Shell;
 
+      --  Whether this session wrote the conversation it keeps.
+      Kept_Here : Boolean := False;
+
+      --  The conversation written where it is kept, after each turn: a new
+      --  file at its first answer, with the model it is spoken with noted
+      --  beside it so taking it up starts that model again. A file that
+      --  will not write is no reason to stop talking.
+      procedure Keep_Conversation is
+         Wrote : E.Error_Info;
+         Model : constant String := T.To_String (Item.Model_Path);
+      begin
+         if Ada.Strings.Unbounded.Length (Kept_In) = 0 then
+            Kept_In := Ada.Strings.Unbounded.To_Unbounded_String
+              (Model_Runner.CLI.Conversations.New_Path (Model));
+         end if;
+         if Ada.Strings.Unbounded.Length (Kept_In) = 0 then
+            return;
+         end if;
+         Model_Runner.CLI.Checkpoint.Save (Ada.Strings.Unbounded.To_String (Kept_In), Messages, Wrote);
+         if E.Is_Ok (Wrote) then
+            Model_Runner.CLI.Conversations.Note_Model
+              (Ada.Strings.Unbounded.To_String (Kept_In),
+               (if Ada.Directories.Exists (Model) then Ada.Directories.Full_Name (Model) else Model));
+            Kept_Here := True;
+         end if;
+      exception
+         when others =>
+            null;
+      end Keep_Conversation;
+
       procedure Submit is
       begin
          if Pending (Typing) = "" then
@@ -2216,6 +2271,7 @@ package body Model_Runner.CLI.Interactive is
                   if Turn_Taken then
                      Shell_Said := Ada.Strings.Unbounded.Null_Unbounded_String;
                      Project_Seen := Seen;
+                     Keep_Conversation;
                      --  A blank line after the reply and what was said of
                      --  it, before the next prompt.
                      Pres.Put_Blank_Line (Screen);
@@ -2391,6 +2447,8 @@ package body Model_Runner.CLI.Interactive is
               (Path, Messages, Loaded, Outcome, Replace => True, Check => Check_Loaded'Access);
             if E.Is_Error (Outcome) then
                Pres.Report (Screen, Outcome);
+            elsif Carried_Kept then
+               Pres.Put_Note (Screen, "cli.interactive.resumed", [Loc.Named ("detail", Model_Name (Path))]);
             else
                Pres.Put_Note
                  (Screen, "cli.interactive.model_switched",
@@ -2795,6 +2853,11 @@ package body Model_Runner.CLI.Interactive is
          if Model_Runner.Platform.Signals.Ending_Asked then
             Status := E.Exit_Cancelled;
          end if;
+      end if;
+
+      --  Leaving for good, a conversation kept: how to take it up again.
+      if Kept_Here and then Ada.Strings.Unbounded.Length (Switch_To) = 0 then
+         Pres.Put_Note (Screen, "cli.interactive.kept_as");
       end if;
 
       Gen.Release (Last_Result);

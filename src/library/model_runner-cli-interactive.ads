@@ -235,6 +235,12 @@ package Model_Runner.CLI.Interactive is
    --  The carried conversation given up, its file removed.
    procedure Drop_Carried;
 
+   --  Take up a kept conversation in the next session: read in at its start
+   --  in place of the banner, and written on to as it goes.
+   --
+   --  @param Path The conversation's file.
+   procedure Resume_From (Path : String);
+
    --  The smallest context a conversation is offered the built-in tools in:
    --  their definitions and the turns of a call and its answer need room,
    --  and in less they crowd the conversation out.

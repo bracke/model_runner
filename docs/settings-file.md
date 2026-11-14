@@ -58,13 +58,14 @@ is named) and `speech-shortcut` (`ctrl-g` unless said). Any option
 the `run` command accepts works this way; a key the command does not take is
 ignored.
 
-Five keys are **not** options — a model, places, a secret and what the lists leave out:
+Six keys are **not** options — a model, places, a secret and what the lists leave out:
 
 | key            | falls back for                | env override           |
 |----------------|-------------------------------|------------------------|
 | `model`        | the model `model_runner` and `run` take when none is named, in place of the list to choose from: a path, an alias or a Hugging Face reference | — |
 | `models-dir`   | where a bare model name is found and a download is kept | `MODEL_RUNNER_MODELS` |
 | `sessions-dir` | where a bare session name is kept | `MODEL_RUNNER_SESSIONS` |
+| `conversations-dir` | where conversations are kept as they go, for `--continue` and `--resume` | `MODEL_RUNNER_CONVERSATIONS` |
 | `hf-token`     | the Hugging Face token for a gated repository | `HF_TOKEN` |
 | `models-hide`  | models the lists to choose from leave out -- `run` without a model, `/model` in a conversation: name patterns, a space between them, `*` for any run of characters, matched to a file's name in any case (`models-hide = tinyllama* *-f32.gguf`) | — |
 

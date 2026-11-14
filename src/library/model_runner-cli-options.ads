@@ -423,6 +423,11 @@ package Model_Runner.CLI.Options is
       --  keeping the system message, the task, and the most recent turns.
       Compact : Boolean := False;
 
+      --  Take up a kept conversation in the session: the latest
+      --  (--continue), or one chosen from those kept (--resume).
+      Continue_Last : Boolean := False;
+      Resume        : Boolean := False;
+
       --  A model to embed with for the agent's retrieve tool, so it ranks a
       --  folder's passages by meaning. Empty means retrieve embeds with the
       --  model being run, or, if that is set aside, ranks by words alone. A

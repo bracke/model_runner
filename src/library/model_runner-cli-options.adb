@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 146) of Registry_Row :=
+   Registry : constant array (1 .. 148) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -65,6 +65,10 @@ package body Model_Runner.CLI.Options is
        Text ("deny_arg")),
       (Text ("--compact"), [Command_Run => True, others => False],
        Text ("compact")),
+      (Text ("--continue"), [Command_Run => True, others => False],
+       Text ("continue")),
+      (Text ("--resume"), [Command_Run => True, others => False],
+       Text ("resume")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
       (Text ("--think"), [Command_Run => True, others => False],
        Text ("think")),
@@ -1603,6 +1607,22 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Compact := True;
+
+                  elsif Name = "--continue" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Continue_Last := True;
+
+                  elsif Name = "--resume" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Resume := True;
 
                   elsif Name = "--repack" then
                      declare
@@ -3249,6 +3269,12 @@ package body Model_Runner.CLI.Options is
 
          Index := Index + 1;
       end loop;
+
+      --  Taking up a kept conversation is a session, with no word for it:
+      --  model_runner --continue.
+      if Result.Kind = Command_None and then (Result.Continue_Last or else Result.Resume) then
+         Result.Kind := Command_Run;
+      end if;
 
       if Result.Kind = Command_None then
          Status := E.Make (E.CLI_Missing_Command);
