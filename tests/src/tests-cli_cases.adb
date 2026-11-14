@@ -15986,6 +15986,8 @@ package body Tests.CLI_Cases is
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
       Result  : Hostkit.Spawn.Status;
+      --  Waited for, not read: the session's end is what is asked.
+      pragma Warnings (Off, Result);
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
       Drawn   : U.Unbounded_String;
