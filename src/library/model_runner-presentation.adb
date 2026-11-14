@@ -1,3 +1,4 @@
+with Model_Runner.Markup;
 with Ada.Task_Identification;
 with Ada.Calendar;
 with Hostkit.Descriptors;
@@ -120,16 +121,45 @@ package body Model_Runner.Presentation is
    is (Styles (Item, Answer) and then not Item.Structured);
 
    --  Look up a localized message, tolerating an absent catalog.
+   --  The terminal's width, where standard error is one: 0 elsewhere.
+   function Error_Columns return Natural is
+      Size : Hostkit.Terminal_Control.Window_Size;
+   begin
+      if Hostkit.Terminal_Control.Size (Hostkit.Descriptors.Standard_Error, Size) then
+         return Size.Columns;
+      end if;
+      return 0;
+   exception
+      when others =>
+         return 0;
+   end Error_Columns;
+
+   --  A message with its markup kept as marks, for a message that frames
+   --  it (Loc.Named_Marked) and Drawn at the end.
+   function Marked_Message
+     (Item      : Console;
+      Key       : String;
+      Arguments : Loc.Argument_List := Loc.Empty_Arguments) return String
+   is (if Item.Catalog = null then "<" & Key & ">"
+       else Loc.Text (Item.Catalog.all, Key, Arguments, Marked => True));
+
+   --  Marked text as it is shown: its markup drawn where diagnostics are
+   --  styled, its items wrapped to the window; plain text elsewhere.
+   function Drawn (Item : Console; Text : String) return String is
+     (if not Model_Runner.Markup.Has_Marks (Text) then Text
+      else Model_Runner.Markup.Render
+        (Text,
+         Styled => Styles_Diagnostics (Item),
+         Width  =>
+           (if Item.Capabilities.Error_Is_Terminal and then not Item.Structured
+            then Error_Columns else 0)));
+
    function Message
      (Item      : Console;
       Key       : String;
       Arguments : Loc.Argument_List := Loc.Empty_Arguments) return String is
    begin
-      if Item.Catalog = null then
-         return "<" & Key & ">";
-      else
-         return Loc.Text (Item.Catalog.all, Key, Arguments);
-      end if;
+      return Drawn (Item, Marked_Message (Item, Key, Arguments));
    end Message;
 
    --------------------
@@ -1257,13 +1287,13 @@ package body Model_Runner.Presentation is
       Key       : String;
       Arguments : Loc.Argument_List := Loc.Empty_Arguments)
    is
-      Said : constant String := Message (Item, Key, Arguments);
+      Said : constant String := Marked_Message (Item, Key, Arguments);
    begin
       if Item.Next_Held and then Key'Length > 9 and then Key (Key'First .. Key'First + 8) = "cli.next." then
          return;
       end if;
       if Item.Structured then
-         Put_Record (Item, "note", Key, Arguments, Said);
+         Put_Record (Item, "note", Key, Arguments, Model_Runner.Markup.Plain (Said));
          return;
       end if;
       if Item.Level = Opt.Quiet then
@@ -1273,10 +1303,12 @@ package body Model_Runner.Presentation is
       --  colour: its "next:" muted, coloured after the line is rendered.
       declare
          --  Coloured once rendered: an argument's escapes are escaped.
+         --  Its markup kept through the frame and drawn last: drawn first,
+         --  the frame's argument escaped its styles.
+         Framed  : constant String :=
+           Marked_Message (Item, "diagnostic.note", [Loc.Named_Marked ("detail", Unindented (Said))]);
          Line    : constant String :=
-           (if Styles_Diagnostics (Item)
-            then Commands_Coloured (Message (Item, "diagnostic.note", [Loc.Named ("detail", Unindented (Said))]))
-            else Message (Item, "diagnostic.note", [Loc.Named ("detail", Unindented (Said))]));
+           Drawn (Item, (if Styles_Diagnostics (Item) then Commands_Coloured (Framed) else Framed));
          Lead    : constant String := Message (Item, "diagnostic.next_lead");
          --  Its way on dimmed wherever the note begins with one.
          At_Lead : constant Natural :=
@@ -1711,9 +1743,11 @@ package body Model_Runner.Presentation is
       --  rendered argument has its control characters escaped, colour too.
       declare
          Line     : constant String :=
-           Message (Item, "diagnostic.warning_line",
-                    [Loc.Named ("severity", Severity),
-                     Loc.Named ("detail", Unindented (Message (Item, Key, Arguments)))]);
+           Drawn (Item,
+                  Marked_Message
+                    (Item, "diagnostic.warning_line",
+                     [Loc.Named ("severity", Severity),
+                      Loc.Named_Marked ("detail", Unindented (Marked_Message (Item, Key, Arguments)))]));
          At_Label : constant Natural := (if Severity = "" then 0 else Ada.Strings.Fixed.Index (Line, Severity));
       begin
          if Styles_Diagnostics (Item) and then At_Label > 0 then

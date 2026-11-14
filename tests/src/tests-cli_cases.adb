@@ -1,3 +1,6 @@
+with Model_Runner.Markup;
+with Ada.Strings.Hash;
+with Ada.Containers.Indefinite_Hashed_Maps;
 with AUnit.Test_Cases;
 with Ada.Real_Time;
 with Ada.IO_Exceptions;
@@ -10918,15 +10921,19 @@ package body Tests.CLI_Cases is
       --  about the English for it.
       function Took_A_Turn (Lines : String) return Boolean is
          Said : constant String := Conversed (Lines);
-         None : constant String :=
+         Banner : constant String :=
+           Model_Runner.Localization.Text (Catalog, "cli.interactive.banner");
+         --  The banner's first line: its lines after are a list, drawn
+         --  indented under the note.
+         Banner_Title : constant String :=
+           Banner (Banner'First .. (if Ada.Strings.Fixed.Index (Banner, [1 => ASCII.LF]) = 0 then Banner'Last
+                                    else Ada.Strings.Fixed.Index (Banner, [1 => ASCII.LF]) - 1));
+         No_Stats : constant String :=
            Model_Runner.Localization.Text (Catalog, "cli.interactive.no_stats");
       begin
-         Assert (Project_Tools.Text.Contains
-                   (Said,
-                    Model_Runner.Localization.Text
-                      (Catalog, "cli.interactive.banner")),
+         Assert (Project_Tools.Text.Contains (Said, Banner_Title),
                  "the loop did not start");
-         return not Project_Tools.Text.Contains (Said, None);
+         return not Project_Tools.Text.Contains (Said, No_Stats);
       end Took_A_Turn;
    begin
       --  Room for a turn to complete: the default context is sixteen tokens,
@@ -15673,6 +15680,164 @@ package body Tests.CLI_Cases is
       end;
    end Typed_Message_Gets_A_Blank_Line;
 
+   --  A message's markup: bold, italic and code, a line break and a list's
+   --  items, escapes, and the asterisks of a glob left alone; drawn styled
+   --  with bullets and wrapped under each item's text, or plain.
+   procedure Message_Markup_Is_Read_And_Drawn
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package M renames Model_Runner.Markup;
+      ESC    : constant Character := ASCII.ESC;
+      Bullet : constant String :=
+        Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#A2#);
+
+      function Styled (Template : String; Width : Natural := 0) return String
+      is (M.Render (M.Marked (Template), Styled => True, Width => Width));
+      function Plain (Template : String) return String
+      is (M.Plain (M.Marked (Template)));
+   begin
+      Assert (Styled ("a **bold** b") = "a " & ESC & "[1mbold" & ESC & "[22m b",
+              "bold was drawn as [" & Styled ("a **bold** b") & "]");
+      Assert (Styled ("an *aside*") = "an " & ESC & "[3maside" & ESC & "[23m",
+              "italic was drawn as [" & Styled ("an *aside*") & "]");
+      Assert (Styled ("`a *b* c`") = ESC & "[36ma *b* c" & ESC & "[39m",
+              "code was not taken literally: [" & Styled ("`a *b* c`") & "]");
+      Assert (Styled ("**an *inner* one**") =
+                ESC & "[1man " & ESC & "[3minner" & ESC & "[23m one" & ESC & "[22m",
+              "italic inside bold was drawn as [" & Styled ("**an *inner* one**") & "]");
+      Assert (Plain ("a **bold** *it* `code`") = "a bold it code",
+              "plain text kept markup: [" & Plain ("a **bold** *it* `code`") & "]");
+
+      --  What is not markup stays as it is.
+      Assert (Plain ("a * stands for one, dir/** for all") = "a * stands for one, dir/** for all",
+              "a glob's asterisks were read as markup");
+      Assert (Plain ("specs/*/requirements.md") = "specs/*/requirements.md",
+              "a lone asterisk was read as markup");
+      Assert (Plain ("2 * 3 and 4 * 5") = "2 * 3 and 4 * 5",
+              "asterisks with spaces round them were read as markup");
+      Assert (Plain ("\*not\* and \`not\` and \\n") = "*not* and `not` and \n",
+              "escapes were not taken literally: [" & Plain ("\*not\* and \`not\` and \\n") & "]");
+      Assert (not M.Has_Marks (M.Marked ("plain text, no markup")),
+              "text without markup gained marks");
+
+      --  Lines and items: a bullet styled, a hyphen plain.
+      Assert (Plain ("Title\n- one\n- two") = "Title" & ASCII.LF & "- one" & ASCII.LF & "- two",
+              "items were made plain as [" & Plain ("Title\n- one\n- two") & "]");
+      Assert (Styled ("Title\n- one") = "Title" & ASCII.LF & Bullet & " one",
+              "an item was drawn as [" & Styled ("Title\n- one") & "]");
+      Assert (Plain ("a - b") = "a - b", "a hyphen inside a line was taken for an item");
+
+      --  A long item wraps under its text, an indented one under its own.
+      Assert (Styled ("- one two three four", Width => 12)
+                = Bullet & " one two" & ASCII.LF & "  three" & ASCII.LF & "  four",
+              "an item was wrapped as [" & Styled ("- one two three four", Width => 12) & "]");
+      Assert (M.Render ("    " & M.Marked ("- **one** two three"), Styled => True, Width => 14)
+                = "    " & Bullet & " " & ESC & "[1mone" & ESC & "[22m two" & ASCII.LF & "      three",
+              "an indented item was wrapped as ["
+              & M.Render ("    " & M.Marked ("- **one** two three"), Styled => True, Width => 14) & "]");
+   end Message_Markup_Is_Read_And_Drawn;
+
+   --  An argument is never markup, whatever it holds: a path, a model's
+   --  words. A message framing another keeps that one's marks.
+   procedure Message_Arguments_Are_Never_Markup
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Catalog : Model_Runner.Localization.Catalog;
+      Value   : constant String := "**x** `y` *z* \n";
+      Said    : Ada.Strings.Unbounded.Unbounded_String;
+   begin
+      Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Said := Ada.Strings.Unbounded.To_Unbounded_String
+        (Model_Runner.Localization.Text
+           (Catalog, "cli.interactive.line_after_key", [Model_Runner.Localization.Named ("value", Value)],
+            Marked => True));
+      Assert (Ada.Strings.Unbounded.To_String (Said) = Value,
+              "an argument was read as markup: [" & Ada.Strings.Unbounded.To_String (Said) & "]");
+
+      --  A marked frame keeps a marked message's marks; a plain argument
+      --  holding the same bytes has them escaped.
+      declare
+         Inner  : constant String :=
+           Model_Runner.Localization.Text (Catalog, "cli.interactive.banner", Marked => True);
+         Framed : constant String :=
+           Model_Runner.Localization.Text
+             (Catalog, "diagnostic.note", [Model_Runner.Localization.Named_Marked ("detail", Inner)],
+              Marked => True);
+         Forged : constant String :=
+           Model_Runner.Localization.Text
+             (Catalog, "diagnostic.note", [Model_Runner.Localization.Named ("detail", Inner)],
+              Marked => True);
+      begin
+         Assert (Model_Runner.Markup.Has_Marks (Inner), "the banner has no marks");
+         Assert (Model_Runner.Markup.Has_Marks (Framed), "a marked frame lost its argument's marks");
+         Assert (not Model_Runner.Markup.Has_Marks (Forged), "a plain argument's marks were kept");
+      end;
+      Model_Runner.Localization.Close (Catalog);
+   end Message_Arguments_Are_Never_Markup;
+
+   --  A list is the same list in every language: each message's lines and
+   --  items as many in every locale as in English.
+   procedure Catalog_Lists_Agree_Across_Locales
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Maps is new Ada.Containers.Indefinite_Hashed_Maps
+        (String, String, Ada.Strings.Hash, "=");
+      English : Maps.Map;
+      Elsewhere : Maps.Map;
+      File    : Ada.Text_IO.File_Type;
+      Checked : Natural := 0;
+
+      function Count (Text, Pattern : String) return Natural
+      is (Ada.Strings.Fixed.Count (Text, Pattern));
+   begin
+      Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Model_Runner.Platform.Catalog_Path);
+      while not Ada.Text_IO.End_Of_File (File) loop
+         declare
+            Line  : constant String := Ada.Text_IO.Get_Line (File);
+            Equal : constant Natural := Ada.Strings.Fixed.Index (Line, " = ");
+            Dot   : constant Natural := Ada.Strings.Fixed.Index (Line, ".");
+         begin
+            if Equal > 0 and then Dot > 1 and then Dot < Equal and then Line (Line'First) /= '#' then
+               declare
+                  Locale : constant String := Line (Line'First .. Dot - 1);
+                  Key    : constant String := Line (Dot + 1 .. Equal - 1);
+                  Value  : constant String := Line (Equal + 3 .. Line'Last);
+               begin
+                  if Locale = "en" then
+                     English.Include (Key, Value);
+                  else
+                     Elsewhere.Include (Locale & " " & Key, Value);
+                  end if;
+               end;
+            end if;
+         end;
+      end loop;
+      Ada.Text_IO.Close (File);
+      for Position in Elsewhere.Iterate loop
+         declare
+            Name  : constant String := Maps.Key (Position);
+            Space : constant Natural := Ada.Strings.Fixed.Index (Name, " ");
+            Key   : constant String := Name (Space + 1 .. Name'Last);
+            Value : constant String := Maps.Element (Position);
+         begin
+            if English.Contains (Key)
+              and then (Count (English (Key), "\n") > 0 or else Count (Value, "\n") > 0)
+            then
+               Checked := Checked + 1;
+               Assert (Count (English (Key), "\n") = Count (Value, "\n")
+                       and then Count (English (Key), "\n- ") = Count (Value, "\n- "),
+                       Name & " has" & Count (Value, "\n")'Image & " lines and"
+                       & Count (Value, "\n- ")'Image & " items, English" & Count (English (Key), "\n")'Image
+                       & " and" & Count (English (Key), "\n- ")'Image);
+            end if;
+         end;
+      end loop;
+      Assert (Checked > 0, "no message of several lines was found to check");
+   end Catalog_Lists_Agree_Across_Locales;
+
    ---------------------------------------------
 
    --  A vocabulary that wants no beginning marker is not given one.
@@ -17976,6 +18141,15 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Typed_Message_Gets_A_Blank_Line'Access,
          "a blank line stands between a message typed and the reply");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Message_Markup_Is_Read_And_Drawn'Access,
+         "a message's markup -- bold, italic, code, lines, items -- is read and drawn");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Message_Arguments_Are_Never_Markup'Access,
+         "a message's arguments are never markup; a framed message keeps its marks");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Catalog_Lists_Agree_Across_Locales'Access,
+         "a message's lines and items are as many in every locale as in English");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Harmony_Replies_Are_Shown_As_Text'Access,
          "a harmony reply is shown as its reasoning and answer, its calls "

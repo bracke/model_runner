@@ -40,6 +40,10 @@ package Model_Runner.Localization is
    type Argument is record
       Name  : Model_Runner.Text.Bounded;
       Value : Ada.Strings.Unbounded.Unbounded_String;
+      --  Whether the value is a message rendered with its marks kept
+      --  (Text with Marked), whose marks stay marks: a value from anywhere
+      --  else has every control escaped, marks among them.
+      Marked : Boolean := False;
    end record;
 
    type Argument_List is array (Positive range <>) of Argument;
@@ -52,6 +56,14 @@ package Model_Runner.Localization is
    --  @param Value Replacement text.
    --  @return Argument ready for Text.
    function Named (Name, Value : String) return Argument;
+
+   --  An argument that is itself a message rendered with its marks kept,
+   --  for a message that frames another: its marks are kept.
+   --
+   --  @param Name Placeholder name.
+   --  @param Value Text Text made with Marked.
+   --  @return The argument.
+   function Named_Marked (Name, Value : String) return Argument;
 
    --  Open a catalog.
    --
@@ -116,14 +128,21 @@ package Model_Runner.Localization is
 
    --  Render a message.
    --
+   --  The message's own markup (Model_Runner.Markup) is read before its
+   --  arguments go in, so a value -- a path, a model's words -- is never
+   --  markup, whatever it holds.
+   --
    --  @param Item Catalog to read.
    --  @param Key Stable message identifier.
    --  @param Arguments Named arguments the message may reference.
+   --  @param Marked Whether the markup is kept as marks, for the console
+   --    to draw (Model_Runner.Markup.Render); otherwise plain text.
    --  @return Rendered text, or the emergency form naming Key.
    function Text
      (Item      : Catalog;
       Key       : String;
-      Arguments : Argument_List := Empty_Arguments) return String;
+      Arguments : Argument_List := Empty_Arguments;
+      Marked    : Boolean := False) return String;
 
    --  Report whether a key resolves, without rendering it.
    --

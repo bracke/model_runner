@@ -25,6 +25,24 @@ Append the literal at the end of its domain group in
 `MR-DOMAIN-NNNN` ordinal is the literal's position within its group, and the
 catalog key is derived from its name.
 
+## Formatting a message
+
+A catalog entry is one line. Within it, `Model_Runner.Markup` reads a little
+markup:
+
+- `\n` breaks the line; a line that begins `- ` is a list item.
+- `**words**` is bold, `*words*` italic, `` `words` `` code (nothing inside
+  code is markup).
+- `\\`, `\*` and `` \` `` are the character itself.
+
+A marker opens only where text follows it and closes only where text comes
+before it, on the same line, so a glob's asterisks (`a * stands for`,
+`specs/*/requirements.md`) stay as they are. At a terminal that shows colour
+the markup is drawn as styles and items get a bullet, wrapped under their own
+text; elsewhere it is plain text and items keep their hyphen. Arguments are
+never markup: they go in after the markup is read. A message whose lines or
+items differ in number between locales fails the suite.
+
 ## Building and testing
 
 ```

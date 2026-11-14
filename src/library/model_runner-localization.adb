@@ -1,3 +1,4 @@
+with Model_Runner.Markup;
 with Messages.Arguments;
 with Messages.Result;
 
@@ -20,7 +21,10 @@ package body Model_Runner.Localization is
    -----------
 
    function Named (Name, Value : String) return Argument
-   is (Name => T.To_Bounded (Name), Value => Ada.Strings.Unbounded.To_Unbounded_String (Value));
+   is (Name => T.To_Bounded (Name), Value => Ada.Strings.Unbounded.To_Unbounded_String (Value), Marked => False);
+
+   function Named_Marked (Name, Value : String) return Argument
+   is (Name => T.To_Bounded (Name), Value => Ada.Strings.Unbounded.To_Unbounded_String (Value), Marked => True);
 
    --  Reduce a locale such as "de_AT.UTF-8" to the identifier the catalog
    --  understands. The catalog performs its own fallback from a region to a
@@ -190,8 +194,40 @@ package body Model_Runner.Localization is
    function Text
      (Item      : Catalog;
       Key       : String;
-      Arguments : Argument_List := Empty_Arguments) return String
+      Arguments : Argument_List := Empty_Arguments;
+      Marked    : Boolean := False) return String
    is
+      --  An argument's stand-in while the markup is read: a private-use
+      --  character, U+E000 on, which no control escape touches and no
+      --  markup is made of.
+      function Stand_In (Index : Positive) return String
+      is (Character'Val (16#EE#) & Character'Val (16#80#) & Character'Val (16#80# + Index));
+
+      --  The value an argument stands for, escaped as the whole message
+      --  was before: its line breaks kept, and a marked one's marks.
+      function Value_Of (Index : Positive) return String is
+         Given : Argument renames Arguments (Arguments'First + Index - 1);
+         Value : constant String := Ada.Strings.Unbounded.To_String (Given.Value);
+      begin
+         if not Given.Marked or else not Model_Runner.Markup.Has_Marks (Value) then
+            return T.Escape_Controls (Value, Keep_Line_Breaks => True);
+         end if;
+         declare
+            Kept  : Unbounded_String;
+            Start : Positive := Value'First;
+         begin
+            for At_Char in Value'Range loop
+               if Model_Runner.Markup.Is_Mark (Value (At_Char)) then
+                  Append (Kept, T.Escape_Controls (Value (Start .. At_Char - 1), Keep_Line_Breaks => True));
+                  Append (Kept, Value (At_Char));
+                  Start := At_Char + 1;
+               end if;
+            end loop;
+            Append (Kept, T.Escape_Controls (Value (Start .. Value'Last), Keep_Line_Breaks => True));
+            return To_String (Kept);
+         end;
+      end Value_Of;
+
       --  The emergency form. It names the identifier that could not be
       --  rendered and nothing else, and it never consults the catalog, so a
       --  failure inside localization cannot recurse.
@@ -204,12 +240,12 @@ package body Model_Runner.Localization is
          return Emergency;
       end if;
 
-      for Entry_Value of Arguments loop
-         if not T.Is_Empty (Entry_Value.Name) then
-            --  A value cut to fit says so: what follows it was not shown.
+      --  Each argument by its stand-in: the markup read in the message
+      --  alone, and the values put in after.
+      for Index in Arguments'Range loop
+         if not T.Is_Empty (Arguments (Index).Name) and then Index - Arguments'First + 1 <= 63 then
             Messages.Arguments.Set
-              (Values, T.To_String (Entry_Value.Name),
-               Ada.Strings.Unbounded.To_String (Entry_Value.Value));
+              (Values, T.To_String (Arguments (Index).Name), Stand_In (Index - Arguments'First + 1));
          end if;
       end loop;
 
@@ -224,8 +260,30 @@ package body Model_Runner.Localization is
          --  not be able to clear a screen or hide what follows any more than
          --  a model file can. Parameters were escaped as they went in and
          --  are plain ASCII by now, so this pass leaves them as they are.
-         return T.Escape_Controls
-           (Messages.Result.Output_Text (Result.Text), Keep_Line_Breaks => True);
+         declare
+            Read   : constant String :=
+              Model_Runner.Markup.Marked
+                (T.Escape_Controls (Messages.Result.Output_Text (Result.Text), Keep_Line_Breaks => True));
+            Filled : Unbounded_String;
+            Index  : Natural := Read'First;
+         begin
+            --  The values in, in place of their stand-ins.
+            while Index <= Read'Last loop
+               if Index + 2 <= Read'Last
+                 and then Read (Index) = Character'Val (16#EE#)
+                 and then Read (Index + 1) = Character'Val (16#80#)
+                 and then Character'Pos (Read (Index + 2)) in 16#81# .. 16#80# + 63
+                 and then Character'Pos (Read (Index + 2)) - 16#80# <= Arguments'Length
+               then
+                  Append (Filled, Value_Of (Character'Pos (Read (Index + 2)) - 16#80#));
+                  Index := Index + 3;
+               else
+                  Append (Filled, Read (Index));
+                  Index := Index + 1;
+               end if;
+            end loop;
+            return (if Marked then To_String (Filled) else Model_Runner.Markup.Plain (To_String (Filled)));
+         end;
       else
          return Emergency;
       end if;
