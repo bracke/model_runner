@@ -1678,8 +1678,9 @@ package body Tests.Tools_Cases is
       begin
          Tools.Read (All_Defs, Builtin.All_Definitions_Text, Status);
          Assert (E.Is_Ok (Status), "the full definitions would not read");
-         Assert (Tools.Count (All_Defs) = 22,
-                 "the full set is not twenty-two tools");
+         Assert (Tools.Count (All_Defs) = 23,
+                 "the full set is not twenty-three tools");
+         Assert (Tools.Offers (All_Defs, "todo"), "todo is not offered");
          Assert (Tools.Offers (All_Defs, "shell"), "shell is not offered");
          Assert (Tools.Offers (All_Defs, "http_get"),
                  "http_get is not offered");

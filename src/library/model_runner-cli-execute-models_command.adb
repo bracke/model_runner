@@ -168,31 +168,53 @@ package body Model_Runner.CLI.Execute.Models_Command is
          if Read_U64 = 0 then
             return "(none)";
          end if;
-         At_Byte := 25;   --  past the magic, the version and the two counts
-         --  The first keys, each skipped as its type says, until the one.
-         for Key_Index in 1 .. 16 loop
-            declare
-               Key  : constant String := Read_Text;
-               Kind : constant Natural := Read_U32;
-            begin
-               case Kind is
-                  when 8 =>
-                     declare
-                        Value : constant String := Read_Text;
-                     begin
-                        if Key = "general.architecture" then
-                           return Value;
-                        end if;
-                     end;
-                  when 0 | 1 | 7 => At_Byte := At_Byte + 1;
-                  when 2 | 3 => At_Byte := At_Byte + 2;
-                  when 4 | 5 | 6 => At_Byte := At_Byte + 4;
-                  when 10 | 11 | 12 => At_Byte := At_Byte + 8;
-                  when others => return "";
-               end case;
-            end;
-         end loop;
-         return "";
+         At_Byte := 9;
+         declare
+            Tensors : constant Interfaces.Unsigned_64 := Read_U64;
+            Keys    : constant Interfaces.Unsigned_64 := Read_U64;
+            Said    : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            At_Byte := 25;   --  past the magic, the version and the two counts
+            --  The first keys, each skipped as its type says: the
+            --  architecture, and how many blocks it says it has.
+            for Key_Index in 1 .. Natural (Interfaces.Unsigned_64'Min (Keys, 24)) loop
+               declare
+                  Key  : constant String := Read_Text;
+                  Kind : constant Natural := Read_U32;
+                  Arch : constant String := Ada.Strings.Unbounded.To_String (Said);
+               begin
+                  case Kind is
+                     when 8 =>
+                        declare
+                           Value : constant String := Read_Text;
+                        begin
+                           if Key = "general.architecture" then
+                              Said := Ada.Strings.Unbounded.To_Unbounded_String (Value);
+                           end if;
+                        end;
+                     when 4 | 5 =>
+                        declare
+                           Count : constant Natural := Read_U32;
+                        begin
+                           --  Fewer tensors than the blocks it says it has:
+                           --  part of a model -- a next-token head, a
+                           --  drafting block -- not a model.
+                           if Arch /= "" and then Key = Arch & ".block_count"
+                             and then Interfaces.Unsigned_64 (Count) > Tensors
+                           then
+                              return "(part)";
+                           end if;
+                        end;
+                     when 0 | 1 | 7 => At_Byte := At_Byte + 1;
+                     when 2 | 3 => At_Byte := At_Byte + 2;
+                     when 6 => At_Byte := At_Byte + 4;
+                     when 10 | 11 | 12 => At_Byte := At_Byte + 8;
+                     when others => exit;
+                  end case;
+               end;
+            end loop;
+            return Ada.Strings.Unbounded.To_String (Said);
+         end;
       exception
          when others =>
             if Ada.Streams.Stream_IO.Is_Open (File) then
@@ -209,7 +231,7 @@ package body Model_Runner.CLI.Execute.Models_Command is
          Said : constant String := Architecture_Of (Full_Path);
       begin
          return Said not in "whisper" | "clip" | "bert" | "nomic-bert" | "nomic-bert-moe"
-                           | "jina-bert-v2" | "qwen_image" | "(none)";
+                           | "jina-bert-v2" | "qwen_image" | "(none)" | "(part)";
       end Converses;
 
       --  Whether the settings file hides a model from the lists: its

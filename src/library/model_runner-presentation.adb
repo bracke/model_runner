@@ -1183,7 +1183,15 @@ package body Model_Runner.Presentation is
    end Command_Bold;
 
    procedure Put_Help_Line (Item : in out Console; Key : String) is
-      Text : constant String := Message (Item, Key);
+   begin
+      if Item.Structured then
+         Put_Record (Item, "note", Key, Loc.Empty_Arguments, Message (Item, Key));
+         return;
+      end if;
+      Put_Help_Line_Text (Item, Message (Item, Key));
+   end Put_Help_Line;
+
+   procedure Put_Help_Line_Text (Item : in out Console; Text : String) is
       --  The command and its words end where two spaces begin what it
       --  does; its description starts in one column for every command,
       --  and a command too long for that column has it on the line below.
@@ -1191,7 +1199,7 @@ package body Model_Runner.Presentation is
       Column : constant := 20;
    begin
       if Item.Structured then
-         Put_Record (Item, "note", Key, Loc.Empty_Arguments, Text);
+         Put_Record (Item, "note", "cli.interactive.help.own", Loc.Empty_Arguments, Text);
          return;
       end if;
       if Gap = 0 then
@@ -1262,7 +1270,7 @@ package body Model_Runner.Presentation is
          end loop;
          Flush;
       end;
-   end Put_Help_Line;
+   end Put_Help_Line_Text;
 
    ---------------
    -- Put_Usage --

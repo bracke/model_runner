@@ -1,3 +1,4 @@
+with Model_Runner.Tools.Todo;
 with Ada.Calendar.Formatting;
 with Ada.Characters.Handling;
 with Ada.Directories;
@@ -1075,7 +1076,7 @@ package body Model_Runner.Tools.Builtin is
          begin
             return (if Named in "calculator" | "string_length" | "reverse_text" | "lookup"
                               | "base64_encode" | "base64_decode" | "now"
-                              | "memory_put" | "memory_get"
+                              | "memory_put" | "memory_get" | "todo"
                     then ""
                     elsif Named in "http_get" | "web_search"
                       and then Pm.Allows (Allowed, Pm.Use_Network)
@@ -2607,6 +2608,15 @@ package body Model_Runner.Tools.Builtin is
       return Said (Now_Text);
    end On_Now;
 
+   function On_Todo (Self : in out Instance; Args : String) return Reply is
+      pragma Unreferenced (Self);
+      Have  : Boolean;
+      Items : constant String := Text_Argument (Args, "items", Have);
+   begin
+      return (if Have then Said (Model_Runner.Tools.Todo.Set (Items))
+              else Failure ("todo needs items: the whole list, one item a line"));
+   end On_Todo;
+
    function On_Sql (Self : in out Instance; Args : String) return Reply
    is (Sql (Args, U.To_String (Self.Base)));
 
@@ -2619,6 +2629,7 @@ package body Model_Runner.Tools.Builtin is
       (W ("base64_encode"), On_Base64_Encode'Access), (W ("base64_decode"), On_Base64_Decode'Access),
       (W ("now"), On_Now'Access),
       (W ("memory_put"), Memory_Put'Access), (W ("memory_get"), Memory_Get'Access),
+      (W ("todo"), On_Todo'Access),
       (W ("shell"), On_Shell'Access), (W ("run_python"), On_Run_Python'Access),
       (W ("http_get"), On_Http_Get'Access), (W ("web_search"), On_Web_Search'Access),
       (W ("sql"), On_Sql'Access), (W ("retrieve"), On_Retrieve'Access),

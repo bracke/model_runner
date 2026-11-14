@@ -1,3 +1,5 @@
+with Model_Runner.Tools.Todo;
+with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Instructions;
@@ -73,7 +75,8 @@ package body Model_Runner.CLI.Interactive is
          when Show_Video   => "/video",
          when Switch_Model => "/model",
          when Undo_Changes => "/undo",
-         when Compact_Now  => "/compact");
+         when Compact_Now  => "/compact",
+         when Plan_Mode    => "/plan");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -350,7 +353,7 @@ package body Model_Runner.CLI.Interactive is
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
-                            | Show_Picture | Show_Video | Help | Switch_Model | Show_Tools
+                            | Show_Picture | Show_Video | Help | Switch_Model | Show_Tools | Plan_Mode
                then
                   return (Kind, First, Last);
                else
@@ -532,6 +535,10 @@ package body Model_Runner.CLI.Interactive is
       --  What the user did that the model is to be told with the next
       --  message, beside the commands typed with !: files /undo put back.
       Told_Next : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  A message one of the user's own commands made, to send once the
+      --  command is done.
+      Custom_Message : Ada.Strings.Unbounded.Unbounded_String;
 
       --  Whether a turn has the built-in tools: where the run gives them,
       --  the caller named no tools of their own, and the context has room.
@@ -1063,6 +1070,7 @@ package body Model_Runner.CLI.Interactive is
 
          elsif Asked.Kind = Reset then
             Conv.Clear (Messages);
+            Model_Runner.Tools.Todo.Clear;
             --  Started over: the next answer begins a conversation kept apart.
             Kept_In := Ada.Strings.Unbounded.Null_Unbounded_String;
             --  The conversation starts over as the session started it: with
@@ -1209,6 +1217,22 @@ package body Model_Runner.CLI.Interactive is
             end loop;
             --  And a line typed after !, which is no command of the list.
             Pres.Put_Help_Line (Screen, "cli.interactive.help.shell");
+            --  The user's own commands, each with what its file says.
+            declare
+               Own : constant Model_Runner.Framework.Name_Lists.Vector :=
+                 Model_Runner.CLI.Custom_Commands.Names;
+            begin
+               if not Own.Is_Empty then
+                  Pres.Put_Heading (Screen, "cli.interactive.help.heading.own", Pres.Diagnostic, Gap => True);
+                  for Name of Own loop
+                     Pres.Put_Help_Line_Text
+                       (Screen,
+                        Name & "  " & Model_Runner.CLI.Custom_Commands.Described
+                                        (Model_Runner.CLI.Custom_Commands.File_Of
+                                           (Name (Name'First + 1 .. Name'Last))));
+                  end loop;
+               end if;
+            end;
             Put_Project_Help (Gap => True);
 
          elsif Asked.Kind = Settings then
@@ -1653,6 +1677,22 @@ package body Model_Runner.CLI.Interactive is
                end if;
             end;
 
+         elsif Asked.Kind = Plan_Mode then
+            --  Plan mode on (/plan, /plan on) or off (/plan off): while it
+            --  is on, the model reads and proposes; nothing is changed.
+            declare
+               Said : constant String :=
+                 (if Asked.First = 0 then "" else Line (Asked.First .. Asked.Last));
+            begin
+               if Said not in "" | "on" | "off" then
+                  Pres.Put_Note (Screen, "cli.interactive.plan_usage");
+               else
+                  Model_Runner.CLI.Tool_Turns.Set_Planning (Said /= "off");
+                  Pres.Put_Note (Screen, (if Said = "off" then "cli.interactive.plan_off"
+                                          else "cli.interactive.plan_on"));
+               end if;
+            end;
+
          elsif Asked.Kind = Compact_Now then
             --  The conversation's oldest turns into a summary, now: the
             --  last few kept whole.
@@ -1701,6 +1741,14 @@ package body Model_Runner.CLI.Interactive is
                  (Screen, "cli.interactive.picture_pending",
                   [Loc.Named ("detail", Next_Picture.all)]);
             end if;
+
+         elsif Model_Runner.CLI.Custom_Commands.File_Of (First (First'First + 1 .. First'Last)) /= "" then
+            --  One of the user's own: its file's text, the words after it
+            --  put in, is the next message -- sent once the command is done.
+            Custom_Message := Ada.Strings.Unbounded.To_Unbounded_String
+              (Model_Runner.CLI.Custom_Commands.Message
+                 (Model_Runner.CLI.Custom_Commands.File_Of (First (First'First + 1 .. First'Last)),
+                  (if Space = 0 then "" else T.Trim (Line (Space + 1 .. Line'Last)))));
 
          else
             --  An answer, however quiet: said as the error it is, with
@@ -1903,6 +1951,51 @@ package body Model_Runner.CLI.Interactive is
                --  What this turn changes kept apart, for /undo.
                Model_Runner.CLI.Tool_Turns.Begin_Turn;
                Agent_Turn (Messages, Agent_Request, Stop_Set, Reason);
+               --  The to-do list the model keeps, where the turn changed it.
+               if Model_Runner.Tools.Todo.Changed and then Model_Runner.Tools.Todo.Items /= "" then
+                  declare
+                     List  : constant String := Model_Runner.Tools.Todo.Items;
+                     Start : Positive := List'First;
+                  begin
+                     Pres.Put_Heading (Screen, "cli.interactive.todo_heading", Pres.Diagnostic);
+                     for Index in List'Range loop
+                        if List (Index) = ASCII.LF then
+                           declare
+                              Line : constant String := List (Start .. Index - 1);
+                              Done : constant Boolean := Line'Length >= 3 and then Line (Line'First + 1) = 'x';
+                           begin
+                              Pres.Put_Note
+                                (Screen, "cli.interactive.todo_item",
+                                 [Loc.Named ("value",
+                                             (if Done then Character'Val (16#E2#) & Character'Val (16#9C#)
+                                                           & Character'Val (16#93#)
+                                              else Character'Val (16#E2#) & Character'Val (16#97#)
+                                                   & Character'Val (16#8B#))
+                                             & " " & Line (Line'First + 4 .. Line'Last))]);
+                           end;
+                           Start := Index + 1;
+                        end if;
+                     end loop;
+                  end;
+               end if;
+               --  The user's hook after a turn, where the settings file names
+               --  one: what it said shown, and where it failed, the model
+               --  told with the next message.
+               declare
+                  Failed : Boolean;
+                  Said   : constant String :=
+                    Model_Runner.CLI.Tool_Turns.Run_Hook ("hook.after-turn", "", Failed);
+               begin
+                  if Said /= "" then
+                     Pres.Put_Note (Screen, "cli.interactive.hook_said", [Loc.Named ("detail", Said)]);
+                     if Failed then
+                        Ada.Strings.Unbounded.Append
+                          (Told_Next,
+                           "(note from the harness, not the user: the user's check after your last turn"
+                           & " failed; it said)" & ASCII.LF & Said & ASCII.LF);
+                     end if;
+                  end if;
+               end;
                Turn_Taken := True;
                Have_Stats := False;
                if Reason /= Model_Runner.Agent.Answered then
@@ -2353,6 +2446,11 @@ package body Model_Runner.CLI.Interactive is
                   Take_Turn
                     (Told
                      & Ada.Strings.Unbounded.To_String (Told_Next)
+                     & (if Model_Runner.CLI.Tool_Turns.Planning and then Tools_On
+                        then "(note from the harness, not the user: plan mode is on -- only tools that read"
+                             & " run; read what you need and answer with a plan of the changes, step by"
+                             & " step, without making them)" & ASCII.LF
+                        else "")
                      & (if Ada.Strings.Unbounded.Length (Shell_Said) = 0 then ""
                         else "(note from the harness, not the user: the user ran these commands in a shell"
                              & " before this message; what they wrote follows)" & ASCII.LF
@@ -2900,6 +2998,13 @@ package body Model_Runner.CLI.Interactive is
                            Handled := Handle_Command (T.Trim (Line));
                            After_Command := Turns_Asked = Before;
                         end;
+                        --  A command of the user's own made a message: sent.
+                        if Ada.Strings.Unbounded.Length (Custom_Message) > 0 then
+                           Restore (Typing, Ada.Strings.Unbounded.To_String (Custom_Message));
+                           Custom_Message := Ada.Strings.Unbounded.Null_Unbounded_String;
+                           After_Command := False;
+                           Submit;
+                        end if;
 
                      when Command_Mid_Message =>
                         --  The message pending was typed before the

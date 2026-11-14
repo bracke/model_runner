@@ -1,3 +1,5 @@
+with Model_Runner.Agent;
+with Model_Runner.CLI.Tool_Turns;
 with Hostkit.Parent_Watch;
 with Model_Runner.CLI.Execute;
 with Ada.Strings.Fixed;
@@ -2947,6 +2949,48 @@ begin
          Model_Runner.CLI.Project_Commands.Run_Without_Model
            (Ada.Strings.Unbounded.To_String (Line), Screen, Status);
          Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Exit_Status (Status));
+      end;
+
+   elsif Command = "approve-probe" then
+      --  The conversation's approver asked, at this process's terminal,
+      --  about the calls named after the command (NAME ARGUMENTS pairs), and
+      --  each verdict printed: what a test drives with keys at a pty.
+      declare
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : aliased Model_Runner.Presentation.Console;
+      begin
+         declare
+            Program : constant String :=
+              Ada.Directories.Full_Name (Model_Runner.Platform.Executable_Directory);
+            Beside  : constant String :=
+              Ada.Directories.Containing_Directory (Ada.Directories.Containing_Directory (Program))
+              & "/resources/messages/catalog.txt";
+         begin
+            Model_Runner.Localization.Open
+              (Catalog, (if Ada.Directories.Exists (Beside) then Beside
+                         else Model_Runner.Platform.Catalog_Path), "en");
+         end;
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Model_Runner.CLI.Options.Color_Never,
+            (Input_Is_Terminal  => Model_Runner.Platform.Is_Terminal (0),
+             Output_Is_Terminal => Model_Runner.Platform.Is_Terminal (1),
+             Error_Is_Terminal  => Model_Runner.Platform.Is_Terminal (2),
+             Colour_Suppressed  => True),
+            Model_Runner.CLI.Options.Normal);
+         declare
+            Approve : Model_Runner.CLI.Tool_Turns.Conversation_Approver (Screen'Unchecked_Access);
+            Index   : Positive := 2;
+         begin
+            while Index + 1 <= Ada.Command_Line.Argument_Count loop
+               Ada.Text_IO.Put_Line
+                 ("VERDICT " & Ada.Command_Line.Argument (Index) & " "
+                  & Model_Runner.Agent.Verdict'Image
+                      (Approve.Consider (Ada.Command_Line.Argument (Index),
+                                         Ada.Command_Line.Argument (Index + 1))));
+               Ada.Text_IO.Flush;
+               Index := Index + 2;
+            end loop;
+         end;
       end;
 
    elsif Command = "schema" then

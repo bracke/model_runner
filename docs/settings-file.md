@@ -69,6 +69,30 @@ Six keys are **not** options — a model, places, a secret and what the lists le
 | `hf-token`     | the Hugging Face token for a gated repository | `HF_TOKEN` |
 | `models-hide`  | models the lists to choose from leave out -- `run` without a model, `/model` in a conversation: name patterns, a space between them, `*` for any run of characters, matched to a file's name in any case (`models-hide = tinyllama* *-f32.gguf`) | — |
 
+## Hooks
+
+Two keys run a command of yours in a conversation that uses the tools, by
+the host's shell in the session's folder:
+
+| key | runs | what it says |
+|-----|------|--------------|
+| `hook.after-edit` | after each `write_file` or `edit_file` that ran; `$FILE` in it is the file's quoted path | put after the tool's answer, so the model reads it too |
+| `hook.after-turn` | after each turn with the tools | shown; where it fails, the model is told with the next message |
+
+```
+hook.after-edit = gnatpp $FILE
+hook.after-turn = alr build
+```
+
+## Your own commands
+
+A Markdown file `NAME.md` in `.model_runner/commands` under the session's
+folder, or in `commands` beside this file, is the command `/NAME` in a
+conversation: its text is sent as a message, `$ARGUMENTS` in it replaced by
+the words after the command -- or, where it holds none, the words put after
+it. Its first line that holds words is what `/help` says it does. A command
+of the conversation's or the project's own of the same name is that one.
+
 ## Aliases
 
 A key beginning `alias.` gives a short name for a model — a path or a

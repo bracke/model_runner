@@ -1,3 +1,6 @@
+with Model_Runner.Tools.Runner;
+with Model_Runner.Tools.Builtin;
+with Model_Runner.Errors;
 with Ada.Strings.Unbounded;
 with Model_Runner.Agent;
 with Model_Runner.Presentation;
@@ -24,6 +27,15 @@ package Model_Runner.CLI.Tool_Turns is
    overriding function Consider
      (Self : in out Conversation_Approver; Named : String; Arguments : String)
       return Model_Runner.Agent.Verdict;
+
+   --  Plan mode: while it is on, a call that would change something is not
+   --  run and nobody is asked -- the model reads, and proposes.
+   --
+   --  @param On Whether plan mode is on.
+   procedure Set_Planning (On : Boolean);
+
+   --  Whether plan mode is on.
+   function Planning return Boolean;
 
    --  Let a tool run unasked for the rest of the session, as "yes, and
    --  this tool" does.
@@ -60,6 +72,31 @@ package Model_Runner.CLI.Tool_Turns is
    --  @param Restored The files put back, a line each; "" where no turn
    --    changed any.
    procedure Undo (Restored : out Ada.Strings.Unbounded.Unbounded_String);
+
+   --  The built-in tools with the user's hooks: after a write or an edit
+   --  that ran, the settings file's hook.after-edit runs -- $FILE in it
+   --  the file's quoted path -- and what it said, with how it ended, is
+   --  put after the tool's answer, so the model reads it too.
+   type Hooked_Instance is new Model_Runner.Tools.Builtin.Instance with null record;
+
+   overriding procedure Run
+     (Self      : in out Hooked_Instance;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
+      Status    : out Model_Runner.Errors.Error_Info);
+
+   --  A hook the settings file names, run by the host's shell in the
+   --  session's folder: "" where none is set, else what it said and how it
+   --  ended.
+   --
+   --  @param Key The setting: hook.after-edit, hook.after-turn.
+   --  @param File The file to put for $FILE, or "".
+   --  @param Failed Whether it ended other than with status 0.
+   --  @return What it said, its status after.
+   function Run_Hook (Key, File : String; Failed : out Boolean) return String;
 
 private
 

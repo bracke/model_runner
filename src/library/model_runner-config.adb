@@ -21,6 +21,11 @@ package body Model_Runner.Config is
    Filled : Natural := 0;
    Loaded : Boolean := False;
 
+   --  The file the store was read from: one named after it -- a test, a
+   --  harness pointing MODEL_RUNNER_CONFIG elsewhere -- is read in its place.
+   Loaded_From : String (1 .. 4096) := [others => ' '];
+   Loaded_Last : Natural := 0;
+
    function Trim (Item : String) return String
    is (Ada.Strings.Fixed.Trim (Item, Ada.Strings.Both));
 
@@ -71,10 +76,13 @@ package body Model_Runner.Config is
          end if;
       end Handle_Line;
    begin
-      if Loaded then
+      if Loaded and then Loaded_From (1 .. Loaded_Last) = Path then
          return;
       end if;
       Loaded := True;
+      Filled := 0;
+      Loaded_Last := Natural'Min (Path'Length, Loaded_From'Length);
+      Loaded_From (1 .. Loaded_Last) := Path (Path'First .. Path'First + Loaded_Last - 1);
 
       if Path = "" then
          return;

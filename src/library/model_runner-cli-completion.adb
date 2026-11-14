@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Custom_Commands;
 with Ada.Containers.Indefinite_Hashed_Sets;
 with Ada.Strings.Hash;
 with Model_Runner.Framework.Templates;
@@ -1045,6 +1046,8 @@ package body Model_Runner.CLI.Completion is
             end if;
          end loop;
          Offer_Words (Project_Commands);
+         --  And the user's own.
+         Offer_All (Model_Runner.CLI.Custom_Commands.Names);
       elsif Command = "/help" and then Position = 2 then
          for Kind in Model_Runner.CLI.Interactive.Command_Kind loop
             declare

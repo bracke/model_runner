@@ -14,8 +14,9 @@
 --  three that have one. Nothing is written back; a missing or unreadable
 --  file is simply no settings.
 --
---  Task safety: loaded once on first use and read-only after; the first
---  use should be from one task.
+--  Task safety: loaded on first use, and again where the file it names
+--  has changed since, read-only between; the first use should be from one
+--  task.
 package Model_Runner.Config is
 
    --  A setting's value, or the empty string when the file does not give it.

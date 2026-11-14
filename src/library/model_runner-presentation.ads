@@ -268,6 +268,13 @@ package Model_Runner.Presentation is
    --  @param Key Stable message identifier of the line.
    procedure Put_Help_Line (Item : in out Console; Key : String);
 
+   --  A help line given as its text rather than its key: a command of the
+   --  user's own, which no catalog holds.
+   --
+   --  @param Item Console to write to.
+   --  @param Text The command, two spaces, and what it does.
+   procedure Put_Help_Line_Text (Item : in out Console; Text : String);
+
    --  Write how a command is used on standard error, a form a line: the
    --  text's parts, which " -- " parts, each set in on a line of its own
    --  with its command in bold at a terminal that shows colour.

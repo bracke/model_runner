@@ -1,3 +1,6 @@
+with Model_Runner.Tools.Runner;
+with Model_Runner.CLI.Tool_Turns;
+with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
 with Model_Runner.Config;
 with Model_Runner.CLI.Instructions;
@@ -9152,10 +9155,22 @@ package body Tests.CLI_Cases is
    begin
       --  Room for the tools: a context of Tools_Least_Context.
       Tiny_Model.Build (Image, Room => Model_Runner.CLI.Interactive.Tools_Least_Context);
+      --  A command of the user's own, which sends its text as a message.
+      declare
+         Folder : constant String :=
+           Ada.Directories.Containing_Directory (Model_Runner.Platform.Config_File) & "/commands";
+         Own    : File_Type;
+      begin
+         Ada.Directories.Create_Path (Folder);
+         Create (Own, Out_File, Folder & "/greet.md");
+         Put_Line (Own, "Say hello to $ARGUMENTS.");
+         Close (Own);
+      end;
       Create (Script, Out_File, Input);
       --  Read from a file, a turn is sent by an empty line.
       Put (Script, "hello" & LF & LF & "/tools off" & LF & "plain talk" & LF & LF
-                   & "/tools on" & LF & "again" & LF & LF & "/undo" & LF & "/compact" & LF & "/exit" & LF);
+                   & "/tools on" & LF & "again" & LF & LF & "/undo" & LF & "/compact" & LF
+                   & "/greet everyone" & LF & "/exit" & LF);
       Close (Script);
       declare
          Copy    : aliased constant B.Byte_Array := Image.all;
@@ -9217,8 +9232,9 @@ package body Tests.CLI_Cases is
          Close (From);
          Close (Err);
          Assert (Status = 0, "the session left with status" & Status'Image);
-         Assert (Loop_Turns = 2,
-                 "the tool loop was given" & Loop_Turns'Image & " turns, not the two with the tools on");
+         Assert (Loop_Turns = 3,
+                 "the tool loop was given" & Loop_Turns'Image
+                 & " turns, not the two typed with the tools on and the one /greet sent");
          declare
             Said : constant String := Text_Of (Log);
          begin
@@ -16552,6 +16568,181 @@ package body Tests.CLI_Cases is
       Ada.Directories.Delete_Tree (Folder);
    end Mentioned_Files_Are_Attached;
 
+   --  The conversation's approver at a terminal, driven by keys: a read runs
+   --  unasked; a write is asked in the selector, and Down Enter -- the tool
+   --  for the session -- lets it and the next write run, the next unasked;
+   --  a shell call is asked, and Esc refuses it. Asked twice in all.
+   procedure Approver_Selector_Answers_By_Keys
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Spawn.Spawn_Outcome;
+      use type Ada.Streams.Stream_Element_Offset;
+      package U renames Ada.Strings.Unbounded;
+      Plain   : constant String := "bin/tests";
+      Binary  : constant String :=
+        Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Pair    : Hostkit.Pty.Pair;
+      Options : Hostkit.Spawn.Options;
+      Child   : Hostkit.Spawn.Process_Handle;
+      Result  : Hostkit.Spawn.Status;
+      pragma Warnings (Off, Result);
+      Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
+      Last    : Ada.Streams.Stream_Element_Offset;
+      Drawn   : U.Unbounded_String;
+      Words   : Hostkit.String_Vectors.Vector;
+
+      procedure Keep_Variable (Name, Value : String) is
+      begin
+         if Name /= "TERM" then
+            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+         end if;
+      end Keep_Variable;
+
+      procedure Take (Quiet : Integer) is
+      begin
+         while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, Quiet) loop
+            exit when Hostkit.Descriptors."/="
+                        (Hostkit.Descriptors.Read (Pair.From_Child, Buffer, Last),
+                         Hostkit.Descriptors.Transfer_Ok)
+              or else Last < Buffer'First;
+            for B of Buffer (Buffer'First .. Last) loop
+               U.Append (Drawn, Character'Val (B));
+            end loop;
+         end loop;
+      end Take;
+
+      procedure Send (Text : String) is
+         Keys : Ada.Streams.Stream_Element_Array (1 .. Ada.Streams.Stream_Element_Offset (Text'Length));
+      begin
+         for Index in Text'Range loop
+            Keys (Ada.Streams.Stream_Element_Offset (Index - Text'First + 1)) := Character'Pos (Text (Index));
+         end loop;
+         Assert (Hostkit.Descriptors."="
+                   (Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last), Hostkit.Descriptors.Transfer_Ok),
+                 "a key was not sent");
+      end Send;
+
+      function Count (Text, Pattern : String) return Natural is (Ada.Strings.Fixed.Count (Text, Pattern));
+   begin
+      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
+        or else Pair.Device = Hostkit.Descriptors.Invalid
+      then
+         Ada.Text_IO.Put_Line ("note: no pseudo-terminal here; not checked");
+         return;
+      end if;
+      Ada.Environment_Variables.Iterate (Keep_Variable'Access);
+      Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
+      Options.Replace_Environment := True;
+      Assert (Hostkit.Pty.Set_Size (Pair, (Rows => 24, Columns => 100))
+              and then Hostkit.Pty.Attach (Pair, Options),
+              "the pseudo-terminal was not made ready");
+      Words.Append (U.To_Unbounded_String ("approve-probe"));
+      Words.Append (U.To_Unbounded_String ("read_file"));
+      Words.Append (U.To_Unbounded_String ("{""path"": ""a.txt""}"));
+      Words.Append (U.To_Unbounded_String ("write_file"));
+      Words.Append (U.To_Unbounded_String ("{""path"": ""a.txt"", ""content"": ""x""}"));
+      Words.Append (U.To_Unbounded_String ("write_file"));
+      Words.Append (U.To_Unbounded_String ("{""path"": ""b.txt"", ""content"": ""y""}"));
+      Words.Append (U.To_Unbounded_String ("shell"));
+      Words.Append (U.To_Unbounded_String ("{""command"": ""true""}"));
+      Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
+              "the probe did not start");
+      Hostkit.Pty.Close_Device (Pair);
+      Take (3000);
+      Send (ASCII.ESC & "[B" & ASCII.CR);
+      Take (2000);
+      Send ([1 => ASCII.ESC]);
+      Take (3000);
+      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the probe was not waited for");
+      Hostkit.Pty.Close (Pair);
+      declare
+         Said : constant String := U.To_String (Drawn);
+      begin
+         Assert (Count (Said, "VERDICT read_file ALLOW") = 1, "a read was not allowed unasked: " & Said);
+         Assert (Count (Said, "VERDICT write_file ALLOW") = 2,
+                 "the writes were not allowed, the tool for the session: " & Said);
+         Assert (Count (Said, "VERDICT shell DENY") = 1, "Esc did not refuse the shell call: " & Said);
+         Assert (Count (Said, "may it run") = 2,
+                 "the selector was not shown twice -- the first write and the shell call -- but"
+                 & Count (Said, "may it run")'Image & " times: " & Said);
+      end;
+   end Approver_Selector_Answers_By_Keys;
+
+   --  The user's own commands and hooks, as the settings folder holds them:
+   --  a command file found by its name, its words put in for $ARGUMENTS --
+   --  or after its text where it holds none -- listed, and described by its
+   --  first line; and a hook after an edit run with $FILE, what it said put
+   --  after the tool's answer, a failing one said to fail.
+   procedure Own_Commands_And_Hooks_Run
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Cc renames Model_Runner.CLI.Custom_Commands;
+      Settings : constant String := Model_Runner.Platform.Config_File;
+      Folder   : constant String := Ada.Directories.Containing_Directory (Settings) & "/commands";
+      File     : Ada.Text_IO.File_Type;
+   begin
+      Ada.Directories.Create_Path (Folder);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Folder & "/greet.md");
+      Ada.Text_IO.Put_Line (File, "# Greet someone");
+      Ada.Text_IO.Put_Line (File, "Say hello to $ARGUMENTS, warmly.");
+      Ada.Text_IO.Close (File);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Folder & "/plain.md");
+      Ada.Text_IO.Put_Line (File, "Review the change.");
+      Ada.Text_IO.Close (File);
+      Assert (Cc.File_Of ("greet") = Folder & "/greet.md", "a command's file was not found");
+      Assert (Cc.File_Of ("../greet") = "" and then Cc.File_Of ("absent") = "",
+              "a name outside the folder, or one with no file, was found");
+      Assert (Ada.Strings.Fixed.Index
+                (Cc.Message (Cc.File_Of ("greet"), "the team"), "Say hello to the team, warmly.") > 0,
+              "the words were not put in for $ARGUMENTS");
+      Assert (Cc.Message (Cc.File_Of ("plain"), "the parser")
+                = "Review the change." & ASCII.LF & ASCII.LF & "the parser",
+              "the words were not put after a text with no $ARGUMENTS: ["
+              & Cc.Message (Cc.File_Of ("plain"), "the parser") & "]");
+      Assert (Cc.Names.Contains ("/greet") and then Cc.Names.Contains ("/plain"), "a command was not listed");
+      Assert (Cc.Described (Cc.File_Of ("greet")) = "Greet someone",
+              "a command was described as [" & Cc.Described (Cc.File_Of ("greet")) & "]");
+      Ada.Directories.Delete_File (Folder & "/plain.md");
+
+      --  The hooks: settings of their own, the suite's back after.
+      declare
+         Own      : constant String := Ada.Directories.Full_Name ("obj/hook-settings");
+         Edited   : constant String := Ada.Directories.Full_Name ("obj/hooked.txt");
+         Failed   : Boolean;
+         Runner   : Model_Runner.CLI.Tool_Turns.Hooked_Instance;
+         Answer   : String (1 .. 4096);
+         Last     : Natural;
+         Status   : E.Error_Info;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
+         Ada.Text_IO.Put_Line (File, "hook.after-edit = echo formatted $FILE");
+         Ada.Text_IO.Put_Line (File, "hook.after-turn = echo checked; exit 3");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
+         Model_Runner.CLI.Tool_Turns.Set_Base (Ada.Directories.Full_Name ("obj"));
+         Runner.Set_Base (Ada.Directories.Full_Name ("obj"));
+         Model_Runner.Tools.Runner.Run
+           (Runner, "write_file", "{""path"": ""hooked.txt"", ""content"": ""x""}", Answer, Last, Status);
+         Assert (E.Is_Ok (Status) and then Ada.Directories.Exists (Edited), "the write did not run");
+         Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "formatted " & Edited) > 0,
+                 "the hook after an edit was not run on the file, or not said: " & Answer (1 .. Last));
+         declare
+            Said : constant String := Model_Runner.CLI.Tool_Turns.Run_Hook ("hook.after-turn", "", Failed);
+         begin
+            Assert (Failed and then Ada.Strings.Fixed.Index (Said, "checked") > 0,
+                    "a failing hook after a turn was not said to fail: " & Said);
+         end;
+         Restore_Settings;
+         Assert (Model_Runner.CLI.Tool_Turns.Run_Hook ("hook.after-turn", "", Failed) = ""
+                 and then not Failed,
+                 "a hook ran where no setting names one");
+         Ada.Directories.Delete_File (Edited);
+      end;
+   end Own_Commands_And_Hooks_Run;
+
    --  /model alone offers the models on this machine, and only those:
    --  nothing to download. A home of its own with one model in its models
    --  folder, the selector drawn, and Esc keeping the model running.
@@ -16643,7 +16834,7 @@ package body Tests.CLI_Cases is
       --  Beside it a speech model's header and a file of tensors alone, no
       --  metadata: neither holds a conversation, and neither is offered.
       declare
-         procedure Header (Path, Architecture : String) is
+         procedure Header (Path, Architecture : String; Blocks : Natural := 0) is
             use Ada.Streams;
             Architecture_Key : constant String := "general.architecture";
             File  : Ada.Streams.Stream_IO.File_Type;
@@ -16669,13 +16860,20 @@ package body Tests.CLI_Cases is
             Put ("GGUF");
             Put (3, 4);
             Put (0, 8);
-            Put ((if Architecture = "" then 0 else 1), 8);
+            Put ((if Architecture = "" then 0 elsif Blocks > 0 then 2 else 1), 8);
             if Architecture /= "" then
                Put (Interfaces.Unsigned_64 (Architecture_Key'Length), 8);
                Put (Architecture_Key);
                Put (8, 4);
                Put (Interfaces.Unsigned_64 (Architecture'Length), 8);
                Put (Architecture);
+               --  More blocks than its tensors -- it has none: a part.
+               if Blocks > 0 then
+                  Put (Interfaces.Unsigned_64 (Architecture'Length + 12), 8);
+                  Put (Architecture & ".block_count");
+                  Put (4, 4);
+                  Put (Interfaces.Unsigned_64 (Blocks), 4);
+               end if;
             end if;
             Ada.Streams.Stream_IO.Create (File, Ada.Streams.Stream_IO.Out_File, Path);
             Ada.Streams.Stream_IO.Write (File, Bytes (1 .. Used));
@@ -16684,6 +16882,7 @@ package body Tests.CLI_Cases is
       begin
          Header (Home & "/models/speech-model.gguf", "whisper");
          Header (Home & "/models/tensors-alone.gguf", "");
+         Header (Home & "/models/head-part.gguf", "llama", Blocks => 30);
       end;
       Ada.Environment_Variables.Iterate (Keep_Variable'Access);
       Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
@@ -16737,6 +16936,8 @@ package body Tests.CLI_Cases is
                     "a group chosen did not offer its files: " & U.To_String (Group_Files));
             Assert (Ada.Strings.Fixed.Index (Offered, "hidden-model") = 0,
                     "a model the settings file hides was offered: " & Offered);
+            Assert (Ada.Strings.Fixed.Index (Offered, "head-part") = 0,
+                    "part of a model was offered as one: " & Offered);
             Assert (Ada.Strings.Fixed.Index (Offered, "speech-model") = 0
                     and then Ada.Strings.Fixed.Index (Offered, "tensors-alone") = 0,
                     "a model that holds no conversation was offered: " & Offered);
@@ -19222,6 +19423,12 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
          "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Own_Commands_And_Hooks_Run'Access,
+         "the user's own commands are found, filled in and listed, and hooks run and are said");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Approver_Selector_Answers_By_Keys'Access,
+         "the conversation's approver asks in the selector and answers by the keys pressed");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Mentioned_Files_Are_Attached'Access,
          "a file mentioned with @ goes with the message; words that name no text file stay words");

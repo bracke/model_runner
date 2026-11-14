@@ -58,6 +58,11 @@ package body Model_Runner.Tools.Registry is
        W (Sc.Definition
          ("memory_put", "Remember a value under a key for later.",
                                [Sc.Text ("key"), Sc.Text ("value")]))),
+      (W ("todo"), Memory, True, Changes, Agent_Memory, False, No_Path,
+       W (Sc.Definition
+         ("todo", "Keep the to-do list of a task of several steps, which the user sees: the whole list each"
+            & " time, one item a line, '[ ] ' before one still to do and '[x] ' before one done.",
+            [Sc.Text ("items")]))),
       (W ("memory_get"), Memory, True, Reads, Agent_Memory, False, No_Path,
        W (Sc.Definition
          ("memory_get", "Recall the value remembered under a key.", [Sc.Text ("key")]))),

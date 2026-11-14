@@ -1,3 +1,4 @@
+with Model_Runner.Tools.Todo;
 with Model_Runner.Platform;
 with Model_Runner.Localization;
 with Model_Runner.Presentation;
@@ -1947,6 +1948,39 @@ package body Tests.Agent_Loop_Cases is
          Assert (Ada.Directories.Exists (Dir & "/made.txt") and then Content_Of ("made.txt") = "hello",
                  "a write the user allowed did not run");
          Assert (Content_Of ("kept.txt") = "changed", "the second write did not run");
+      end;
+
+      --  Plan mode: even a tool allowed for the session is not run.
+      declare
+         Approve : aliased Turns.Conversation_Approver (Screen'Unchecked_Access);
+      begin
+         Turns.Allow_Always (Approve, "write_file");
+         Turns.Set_Planning (True);
+         Assert (Ag."=" (Approve.Consider ("write_file", "{""path"": ""planned.txt""}"), Ag.Deny),
+                 "a write ran while planning");
+         Assert (Ag."=" (Approve.Consider ("read_file", "{""path"": ""kept.txt""}"), Ag.Allow),
+                 "a read was refused while planning");
+         Turns.Set_Planning (False);
+      end;
+
+      --  The to-do list the model keeps, through the runner: kept, its
+      --  marks read, and said to have changed once.
+      declare
+         Runner : Model_Runner.Tools.Builtin.Instance;
+         Answer : String (1 .. 1024);
+         Last   : Natural;
+         Status : E.Error_Info;
+      begin
+         Model_Runner.Tools.Todo.Clear;
+         Tr.Run (Runner, "todo", "{""items"": ""- [x] read the code\n- [ ] change it\n\n  write the test""}",
+                 Answer, Last, Status);
+         Assert (E.Is_Ok (Status) and then Ada.Strings.Fixed.Index (Answer (1 .. Last), "2 to do, 1 done") > 0,
+                 "the todo tool answered " & Answer (1 .. Last));
+         Assert (Model_Runner.Tools.Todo.Items
+                   = "[x] read the code" & ASCII.LF & "[ ] change it" & ASCII.LF & "[ ] write the test" & ASCII.LF,
+                 "the to-do list was kept as [" & Model_Runner.Tools.Todo.Items & "]");
+         Assert (Model_Runner.Tools.Todo.Changed and then not Model_Runner.Tools.Todo.Changed,
+                 "a changed list was not said to have changed, once");
       end;
 
       --  /undo: the turn's changes put back, and only that turn's.

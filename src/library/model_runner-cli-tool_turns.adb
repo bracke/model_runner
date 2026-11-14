@@ -1,3 +1,6 @@
+with Hostkit.Shell;
+with Model_Runner.Processes;
+with Model_Runner.Config;
 with Ada.Containers.Indefinite_Vectors;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
@@ -30,6 +33,15 @@ package body Model_Runner.CLI.Tool_Turns is
    Turns_Kept : constant := 32;
 
    Base : Unbounded_String;
+
+   Plan_On : Boolean := False;
+
+   procedure Set_Planning (On : Boolean) is
+   begin
+      Plan_On := On;
+   end Set_Planning;
+
+   function Planning return Boolean is (Plan_On);
 
    procedure Set_Base (Directory : String) is
    begin
@@ -176,6 +188,10 @@ package body Model_Runner.CLI.Tool_Turns is
       if not Reg.Asks_First (Named) then
          return Model_Runner.Agent.Allow;
       end if;
+      --  Planning: nothing is changed, and nobody is asked.
+      if Plan_On then
+         return Model_Runner.Agent.Deny;
+      end if;
       if Ada.Strings.Fixed.Index (US.To_String (Self.Always), " " & Named & " ") > 0 then
          return Allowed;
       end if;
@@ -203,5 +219,79 @@ package body Model_Runner.CLI.Tool_Turns is
             return Model_Runner.Agent.Deny;
       end case;
    end Consider;
+
+   function Run_Hook (Key, File : String; Failed : out Boolean) return String is
+      Command : constant String := Model_Runner.Config.Value (Key);
+      Asked   : Model_Runner.Processes.Request;
+   begin
+      Failed := False;
+      if Command = "" then
+         return "";
+      end if;
+      declare
+         --  $FILE, each, the file's path quoted for the shell.
+         Line  : Unbounded_String;
+         From  : Positive := Command'First;
+         At_It : Natural := Ada.Strings.Fixed.Index (Command, "$FILE");
+      begin
+         while At_It > 0 loop
+            Append (Line, Command (From .. At_It - 1) & Hostkit.Shell.Quote (File));
+            From := At_It + 5;
+            At_It := Ada.Strings.Fixed.Index (Command (From .. Command'Last), "$FILE");
+         end loop;
+         Append (Line, Command (From .. Command'Last));
+         Asked.Program := To_Unbounded_String (Hostkit.Shell.Executable);
+         Asked.Arguments.Append (To_Unbounded_String (Hostkit.Shell.Command_Option));
+         Asked.Arguments.Append (Line);
+         Asked.Directory := (if Length (Base) > 0 then Base
+                             else To_Unbounded_String (Ada.Directories.Current_Directory));
+         Asked.Limit := 120.0;
+      end;
+      declare
+         Ran : constant Model_Runner.Processes.Result := Model_Runner.Processes.Run (Asked);
+      begin
+         Failed := not Model_Runner.Processes.Succeeded (Ran);
+         return Model_Runner.Processes.Told (Ran, Key);
+      end;
+   end Run_Hook;
+
+   overriding procedure Run
+     (Self      : in out Hooked_Instance;
+      Named     : String;
+      Arguments : String;
+      Result    : out String;
+      Last      : out Natural;
+      Outcome   : out Model_Runner.Tools.Runner.Call_Outcome;
+      Status    : out Model_Runner.Errors.Error_Info)
+   is
+      package Reg renames Model_Runner.Tools.Registry;
+   begin
+      Model_Runner.Tools.Builtin.Run
+        (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last, Outcome, Status);
+      if Model_Runner.Errors.Is_Ok (Status)
+        and then Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Write_Files)
+        and then Model_Runner.Config.Value ("hook.after-edit") /= ""
+      then
+         declare
+            Failed : Boolean;
+            Path   : constant String := Path_Of (Arguments);
+            Said   : constant String :=
+              Run_Hook ("hook.after-edit",
+                        (if Path = "" or else Path (Path'First) = '/' or else Length (Base) = 0 then Path
+                         else To_String (Base) & "/" & Path),
+                        Failed);
+            Added  : constant String := ASCII.LF & "[the user's hook after an edit"
+                                        & (if Failed then ", which failed" else "") & ": " & Said & "]";
+            Room   : constant Natural := Result'Last - Last;
+         begin
+            --  As much as the answer has room for.
+            if Room > 0 then
+               Result (Last + 1 .. Last + Natural'Min (Room, Added'Length)) :=
+                 Added (Added'First .. Added'First + Natural'Min (Room, Added'Length) - 1);
+               Last := Last + Natural'Min (Room, Added'Length);
+            end if;
+         end;
+      end if;
+   end Run;
 
 end Model_Runner.CLI.Tool_Turns;

@@ -737,7 +737,7 @@ begin
          --  A turn of the conversation with the built-in tools: the agent
          --  loop on the conversation's own history, each call shown as it
          --  is made, one that changes something asked of the user first.
-         Talk_Runner  : aliased Model_Runner.Tools.Builtin.Instance;
+         Talk_Runner  : aliased Model_Runner.CLI.Tool_Turns.Hooked_Instance;
          Talk_Asker   : aliased Console_Inquirer (Screen'Unchecked_Access);
          Talk_Approve : aliased Model_Runner.CLI.Tool_Turns.Conversation_Approver (Screen'Unchecked_Access);
          Talk_Watch   : aliased Agent_Watch (Screen'Unchecked_Access, Trace => False, Log => null);
