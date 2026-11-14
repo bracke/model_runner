@@ -782,7 +782,7 @@ its answer back on the next turn:
 ```
 $ model_runner run MODEL --tools-file tools.json \
     --prompt "What is the weather in Paris?" > reply.txt
-model_runner: tool call: get_weather {"city": "Paris"}
+tool call: get_weather {"city": "Paris"}
 
 $ model_runner run MODEL --tools-file tools.json \
     --prompt "What is the weather in Paris?" \
@@ -1544,11 +1544,11 @@ string, a lost placeholder or a truncated line is visible at a glance.
 ```
 $ model_runner --locale da run x.gguf --bogus
 model_runner: fejl: MR-CLI-0003: ukendt tilvalg: --bogus
-model_runner: kør 'model_runner help' for at se brugen
+kør 'model_runner help' for at se brugen
 
 $ model_runner --locale qps run x.gguf --bogus
 ⟦model_runner: ⟦éŕŕóŕ⟧: MR-CLI-0003: ⟦úñkñówñ ópŧíóñ: --bogus⟧⟧
-⟦model_runner: ⟦ŕúñ 'model_runner héĺp' fóŕ úßágé⟧⟧
+⟦⟦ŕúñ 'model_runner héĺp' fóŕ úßágé⟧⟧
 ```
 
 Two lines, not one: the diagnostic and the hint that follows it. Both are
