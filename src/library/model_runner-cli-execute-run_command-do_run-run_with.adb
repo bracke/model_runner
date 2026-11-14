@@ -765,7 +765,31 @@ begin
                Talk_Runner.Set_Base (Ada.Directories.Current_Directory);
                --  And /undo's files where the tools' are.
                Model_Runner.CLI.Tool_Turns.Set_Base (Ada.Directories.Current_Directory);
-               Model_Runner.Tools.Read (Talk_Tools, Talk_Runner.Offered_Text, Read);
+               --  Of those, the ones a conversation has use for: not the
+               --  demonstrations -- a calculator, a fact table, text turned
+               --  round or into base64 -- nor a scratchpad, which the
+               --  conversation itself is. A model offered a fact table
+               --  answered the capital of France from it.
+               declare
+                  Can  : Model_Runner.Tools.Definitions;
+                  Kept : Ada.Strings.Unbounded.Unbounded_String;
+               begin
+                  Model_Runner.Tools.Read (Can, Talk_Runner.Offered_Text, Read);
+                  for Index in 1 .. Model_Runner.Tools.Count (Can) loop
+                     declare
+                        Named : constant String := Model_Runner.Tools.Tool_Name (Can, Index);
+                     begin
+                        if not Model_Runner.CLI.Tool_Turns.Left_Out_Of_Talk (Named) then
+                           Ada.Strings.Unbounded.Append
+                             (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
+                                    & Model_Runner.Tools.Definition (Can, Index));
+                        end if;
+                     end;
+                  end loop;
+                  Model_Runner.Tools.Close (Can);
+                  Model_Runner.Tools.Read
+                    (Talk_Tools, "[" & Ada.Strings.Unbounded.To_String (Kept) & "]", Read);
+               end;
                Talk_Ready := True;
             end if;
             Talk_Watch.Text := Agent_Sink'Unchecked_Access;

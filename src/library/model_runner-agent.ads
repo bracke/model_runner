@@ -292,6 +292,15 @@ package Model_Runner.Agent is
       Named     : String;
       Arguments : String) return Verdict is abstract;
 
+   --  Why the last call Consider declined was declined, in words the model
+   --  is to read, where the approver has its own; empty for the loop's.
+   --
+   --  @param Self The approver.
+   --  @param Reason Its words, or empty.
+   procedure Explain
+     (Self   : in out Approver;
+      Reason : out Ada.Strings.Unbounded.Unbounded_String) is null;
+
    --  A reference to whatever is gating the loop's calls.
    type Approver_Reference is access all Approver'Class;
 

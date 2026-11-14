@@ -151,6 +151,19 @@ package body Model_Runner.CLI.Tool_Turns is
       end loop;
    end Undo;
 
+   overriding procedure Explain
+     (Self   : in out Conversation_Approver;
+      Reason : out Ada.Strings.Unbounded.Unbounded_String) is
+   begin
+      Reason :=
+        (if Self.Planned
+         then To_Unbounded_String
+                ("not run: plan mode is on, and nothing is changed until the user ends it -- do not try"
+                 & " another way to change it; describe the change instead, as a step of your plan,"
+                 & " and answer with the plan")
+         else Null_Unbounded_String);
+   end Explain;
+
    procedure Allow_Always (Self : in out Conversation_Approver; Named : String) is
    begin
       if Ada.Strings.Fixed.Index (US.To_String (Self.Always), " " & Named & " ") = 0 then
@@ -188,8 +201,10 @@ package body Model_Runner.CLI.Tool_Turns is
       if not Reg.Asks_First (Named) then
          return Model_Runner.Agent.Allow;
       end if;
+      Self.Planned := False;
       --  Planning: nothing is changed, and nobody is asked.
       if Plan_On then
+         Self.Planned := True;
          return Model_Runner.Agent.Deny;
       end if;
       if Ada.Strings.Fixed.Index (US.To_String (Self.Always), " " & Named & " ") > 0 then

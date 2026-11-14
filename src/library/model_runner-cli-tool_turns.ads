@@ -28,6 +28,21 @@ package Model_Runner.CLI.Tool_Turns is
      (Self : in out Conversation_Approver; Named : String; Arguments : String)
       return Model_Runner.Agent.Verdict;
 
+   --  In plan mode, a refusal that says so: the change described, not made.
+   overriding procedure Explain
+     (Self   : in out Conversation_Approver;
+      Reason : out Ada.Strings.Unbounded.Unbounded_String);
+
+   --  Whether a built-in tool is left out of a conversation's: the
+   --  demonstrations -- a calculator, a fact table, text turned round or
+   --  into base64 -- and the scratchpad memory, which the conversation is.
+   --
+   --  @param Named The tool's name.
+   --  @return True when it is not offered.
+   function Left_Out_Of_Talk (Named : String) return Boolean
+   is (Named in "calculator" | "string_length" | "reverse_text" | "lookup"
+              | "base64_encode" | "base64_decode" | "memory_put" | "memory_get");
+
    --  Plan mode: while it is on, a call that would change something is not
    --  run and nobody is asked -- the model reads, and proposes.
    --
@@ -105,6 +120,8 @@ private
         --  The tools allowed for the session, a space either side of each.
         Always : Ada.Strings.Unbounded.Unbounded_String :=
           Ada.Strings.Unbounded.To_Unbounded_String (" ");
+        --  Whether the last refusal was plan mode's.
+        Planned : Boolean := False;
      end record;
 
 end Model_Runner.CLI.Tool_Turns;

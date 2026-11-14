@@ -2462,6 +2462,22 @@ package body Model_Runner.CLI.Interactive is
                      Told_Next := Ada.Strings.Unbounded.Null_Unbounded_String;
                      Project_Seen := Seen;
                      Keep_Conversation;
+                     --  Where the conversation stands, under the reply:
+                     --  the model, the context it fills, the tools, the plan.
+                     if Pres.Error_Is_Terminal (Screen) then
+                        Pres.Put_Aside
+                          (Screen, "cli.interactive.status",
+                           [Loc.Named ("model", Model_Name (T.To_String (Item.Model_Path))),
+                            Loc.Named ("count", T.Image (Long_Long_Integer (L.Position (Session)))),
+                            Loc.Named ("total", T.Image (Long_Long_Integer (L.Capacity (Session)))),
+                            Loc.Named ("detail",
+                                       (if Tools_On
+                                        then " · " & Pres.Message_Value (Screen, "cli.interactive.status.tools")
+                                        else "")
+                                       & (if Model_Runner.CLI.Tool_Turns.Planning
+                                          then " · " & Pres.Message_Value (Screen, "cli.interactive.status.plan")
+                                          else ""))]);
+                     end if;
                      --  A blank line after the reply and what was said of
                      --  it, before the next prompt.
                      Pres.Put_Blank_Line (Screen);

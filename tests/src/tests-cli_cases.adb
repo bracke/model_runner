@@ -15991,6 +15991,11 @@ package body Tests.CLI_Cases is
             Assert (First > 0 and then Blank_Before (First),
                     "no blank line stood between the banner and the first prompt: ["
                     & Seen (Seen'First .. Natural'Min (Seen'Last, First + 2)) & "]");
+            --  Under the reply, where the conversation stands: the model, the
+            --  context it fills.
+            Assert (Ada.Strings.Fixed.Index (Seen (Message .. Seen'Last), "blank-line-model") > 0
+                    and then Ada.Strings.Fixed.Index (Seen (Message .. Seen'Last), " tokens") > 0,
+                    "no status line stood under the reply: " & Seen (Message .. Seen'Last));
             Assert (Next > 0 and then Blank_Before (Next),
                     "no blank line stood between the reply and the next prompt: ["
                     & Seen (Message .. Natural'Min (Seen'Last, Next + 2)) & "]");

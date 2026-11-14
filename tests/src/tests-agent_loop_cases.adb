@@ -1960,8 +1960,34 @@ package body Tests.Agent_Loop_Cases is
                  "a write ran while planning");
          Assert (Ag."=" (Approve.Consider ("read_file", "{""path"": ""kept.txt""}"), Ag.Allow),
                  "a read was refused while planning");
+         --  Refused in plan mode, the model is told to describe the change.
+         declare
+            Why : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            Approve.Explain (Why);
+            Assert (Ada.Strings.Unbounded.Index (Why, "plan mode is on") > 0
+                    and then Ada.Strings.Unbounded.Index (Why, "describe the change") > 0,
+                    "a refusal in plan mode did not say to describe the change: "
+                    & Ada.Strings.Unbounded.To_String (Why));
+         end;
          Turns.Set_Planning (False);
+         --  Refused for another reason, the loop's own words stand.
+         declare
+            Why : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            Assert (Ag."=" (Approve.Consider ("shell", "{""command"": ""true""}"), Ag.Deny),
+                    "a shell call nobody could be asked about ran");
+            Approve.Explain (Why);
+            Assert (Ada.Strings.Unbounded.Length (Why) = 0, "a refusal outside plan mode was explained as one");
+         end;
       end;
+
+      --  A conversation's tools: the useful ones, not the demonstrations.
+      Assert (Turns.Left_Out_Of_Talk ("lookup") and then Turns.Left_Out_Of_Talk ("calculator")
+              and then Turns.Left_Out_Of_Talk ("memory_put")
+              and then not Turns.Left_Out_Of_Talk ("read_file")
+              and then not Turns.Left_Out_Of_Talk ("todo") and then not Turns.Left_Out_Of_Talk ("shell"),
+              "a conversation's tools were not the useful ones");
 
       --  The to-do list the model keeps, through the runner: kept, its
       --  marks read, and said to have changed once.

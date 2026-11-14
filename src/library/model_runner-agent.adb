@@ -1776,12 +1776,20 @@ package body Model_Runner.Agent is
 
                               when Deny =>
                                  --  The gate declined this one call. The model
-                                 --  is told and may take another way.
-                                 Items (Call).Text := U.To_Unbounded_String
-                                   ("error: running """ & Named
-                                    & """ was not approved; do not repeat it "
-                                    & "-- take a different approach or answer "
-                                    & "without it");
+                                 --  is told -- in the gate's own words where it
+                                 --  has them -- and may take another way.
+                                 declare
+                                    Why : U.Unbounded_String;
+                                 begin
+                                    Approve.Explain (Why);
+                                    Items (Call).Text :=
+                                      (if U.Length (Why) > 0 then Why
+                                       else U.To_Unbounded_String
+                                              ("error: running """ & Named
+                                               & """ was not approved; do not repeat it "
+                                               & "-- take a different approach or answer "
+                                               & "without it"));
+                                 end;
                                  Items (Call).Ended :=
                                    (Answer  => Model_Runner.Tools.Runner.Refused,
                                     Refusal => Model_Runner.Tools.Runner.Not_Permitted, others => <>);
