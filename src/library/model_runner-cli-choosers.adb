@@ -2082,33 +2082,67 @@ package body Model_Runner.CLI.Choosers is
         (if Status = Null_Unbounded_String then ""
          else "  " & T.Escape_Controls (To_String (Status)));
 
-      --  The line as it is drawn: a line feed a paste put in it as a mark
-      --  of its own (U+21B5), which takes one column and moves no row, and
-      --  a C1 control -- one an earlier session's history held -- shown as
-      --  the other controls are, not obeyed.
-      function Visible (Part : String) return String is
-         Mark   : constant String := Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#B5#);
-         Result : Unbounded_String;
-         Index  : Natural := Part'First;
+      --  The line as it is drawn, after the lead before it -- the prompt:
+      --  a line feed in it breaks the row, drawn as blanks to the row's end
+      --  -- columns as any other, so the rows counted are the rows drawn,
+      --  and the cursor after a break stands at the next row's start; a
+      --  break that meets the edge a row just filled is that row's end,
+      --  not a blank row -- and a C1 control, one an earlier session's
+      --  history held, shown as the other controls are, not obeyed.
+      function Visible (Lead, Part : String; W : Positive) return String is
+         Result  : Unbounded_String := To_Unbounded_String (Lead);
+         --  Columns drawn so far, as the terminal wraps them: each piece
+         --  after a break starts at a row's start, so is measured alone.
+         Total   : Natural := 0;
+         Piece   : Unbounded_String;
+         First   : Boolean := True;
+         After_Break : Boolean := False;
+         Index   : Natural := Part'First;
+
+         procedure End_Piece is
+            Drawn : constant String := To_String (Piece);
+         begin
+            if First then
+               Total := Model_Runner.UTF8.Wrapped_Columns (Lead & Drawn, W);
+               First := False;
+            else
+               Total := Total + Model_Runner.UTF8.Wrapped_Columns (Drawn, W);
+            end if;
+            if Drawn /= "" then
+               After_Break := False;
+            end if;
+            Append (Result, Drawn);
+            Piece := Null_Unbounded_String;
+         end End_Piece;
       begin
          if Ada.Strings.Fixed.Index (Part, [1 => ASCII.LF]) = 0
            and then Ada.Strings.Fixed.Index (Part, [1 => Character'Val (16#C2#)]) = 0
          then
-            return Part;
+            return Lead & Part;
          end if;
          while Index <= Part'Last loop
             if Part (Index) = ASCII.LF then
-               Append (Result, Mark);
+               End_Piece;
+               declare
+                  Column : constant Natural := Total mod W;
+                  Blanks : constant Natural :=
+                    (if Column = 0 and then Total > 0 and then not After_Break then 0 else W - Column);
+               begin
+                  Append (Result, [1 .. Blanks => ' ']);
+                  Total := Total + Blanks;
+                  After_Break := True;
+               end;
             elsif Part (Index) = Character'Val (16#C2#) and then Index < Part'Last
               and then Character'Pos (Part (Index + 1)) in 16#80# .. 16#9F#
             then
-               Append (Result, T.Escape_Controls (Part (Index .. Index + 1)));
+               Append (Piece, T.Escape_Controls (Part (Index .. Index + 1)));
                Index := Index + 1;
             else
-               Append (Result, Part (Index));
+               Append (Piece, Part (Index));
             end if;
             Index := Index + 1;
          end loop;
+         End_Piece;
          return To_String (Result);
       end Visible;
 
@@ -2131,7 +2165,8 @@ package body Model_Runner.CLI.Choosers is
       procedure Redraw is
          W        : constant Positive := Columns;
          Typed    : constant String := To_String (Text);
-         Line     : constant String := Visible (Typed);
+         Shown_Line : constant String := Visible (Prompt, Typed, W);
+         Line     : constant String := Shown_Line (Shown_Line'First + Prompt'Length .. Shown_Line'Last);
          --  The suggestion cut to what is left of the line's last row: a
          --  long one -- an earlier line of kilobytes -- was drawn whole on
          --  every key.
@@ -2146,9 +2181,9 @@ package body Model_Runner.CLI.Choosers is
          --  the edge on the next row.
          Shown_Total : constant Natural :=
            Model_Runner.UTF8.Wrapped_Columns (Prompt & Line & Shown_Ghost & Status_Shown, W);
+         Before_Cursor : constant String := Visible (Prompt, Typed (Typed'First .. Typed'First + Cursor - 1), W);
          At_Cursor : constant Natural :=
-           Model_Runner.UTF8.Wrapped_Columns (Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1)), W);
-         Before_Cursor : constant String := Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1));
+           Model_Runner.UTF8.Wrapped_Columns (Before_Cursor, W);
          --  The row the drawing ends on, from the prompt's: past the last
          --  row when a line ending at the edge moves on to the next.
          Moves_On : constant Boolean :=
