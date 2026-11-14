@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Instructions;
 with Model_Runner.CLI.Conversations;
 with Ada.Streams;
 with Hostkit.Spawn;
@@ -507,6 +508,20 @@ package body Model_Runner.CLI.Interactive is
 
       Messages_Room : Model_Runner.Conversation.Rooms.Holder;
       Messages      : Conv.History renames Messages_Room.Data.all;
+
+      --  The user's standing instructions, AGENTS.md from the settings folder
+      --  and the session's folder up: before the system message, in every
+      --  turn of the conversation.
+      Standing : constant String :=
+        Model_Runner.CLI.Instructions.Gathered (Ada.Directories.Current_Directory);
+
+      --  The system message the conversation is given: the instructions and
+      --  then its own -- --system's, or /system's.
+      function System_For (Own : String) return String
+      is (if Standing = "" then Own
+          else "The user's standing instructions, from the " & Model_Runner.CLI.Instructions.File_Name
+               & " files where this conversation is held:" & ASCII.LF & Standing
+               & (if Own = "" then "" else ASCII.LF & Own));
 
       --  Whether a turn has the built-in tools: where the run gives them,
       --  the caller named no tools of their own, and the context has room.
@@ -1042,11 +1057,15 @@ package body Model_Runner.CLI.Interactive is
             Kept_In := Ada.Strings.Unbounded.Null_Unbounded_String;
             --  The conversation starts over as the session started it: with
             --  the --system message, which a reset had dropped with the rest.
-            if Item.Has_System and then Item.System_Text /= null then
+            if Standing /= "" or else (Item.Has_System and then Item.System_Text /= null) then
                declare
                   Restored : E.Error_Info;
                begin
-                  Conv.Set_System (Messages, Item.System_Text.all, Restored);
+                  Conv.Set_System
+                    (Messages,
+                     System_For (if Item.Has_System and then Item.System_Text /= null
+                                 then Item.System_Text.all else ""),
+                     Restored);
                   if E.Is_Error (Restored) then
                      Pres.Report (Screen, Restored);
                   end if;
@@ -1285,7 +1304,8 @@ package body Model_Runner.CLI.Interactive is
                if not Model_Runner.UTF8.Is_Valid (Content) then
                   Outcome := E.Make (E.IO_Invalid_UTF8);
                else
-                  Conv.Set_System (Messages, Content, Outcome);
+                  --  The standing instructions stay before it.
+                  Conv.Set_System (Messages, System_For (Content), Outcome);
                end if;
                if E.Is_Error (Outcome) then
                   Pres.Report (Screen, Outcome);
@@ -2413,11 +2433,20 @@ package body Model_Runner.CLI.Interactive is
          return;
       end if;
 
-      if Item.Has_System and then Item.System_Text /= null then
-         Conv.Set_System (Messages, Item.System_Text.all, Condition);
+      if Standing /= "" or else (Item.Has_System and then Item.System_Text /= null) then
+         Conv.Set_System
+           (Messages,
+            System_For (if Item.Has_System and then Item.System_Text /= null then Item.System_Text.all else ""),
+            Condition);
          if E.Is_Error (Condition) then
             Pres.Report (Screen, Condition);
          end if;
+      end if;
+      --  Said, so it is known what the model was told beside the words typed.
+      if Standing /= "" then
+         Pres.Put_Note
+           (Screen, "cli.interactive.instructions",
+            [Loc.Named ("detail", Model_Runner.CLI.Instructions.Found (Ada.Directories.Current_Directory))]);
       end if;
 
       declare

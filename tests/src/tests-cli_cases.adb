@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Instructions;
 with Model_Runner.Agent;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Markup;
@@ -16401,6 +16402,61 @@ package body Tests.CLI_Cases is
       Model_Runner.Localization.Close (Catalog);
    end Kept_Conversation_Is_Taken_Up;
 
+   --  The user's standing instructions: AGENTS.md from the session's folder
+   --  and every folder above it, the outermost first so the nearest has the
+   --  last word, each under the path it came from; and no more than the cap.
+   procedure Standing_Instructions_Are_Gathered
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Ins renames Model_Runner.CLI.Instructions;
+      Outer : constant String := Ada.Directories.Full_Name ("obj/instructions-outer");
+      Inner : constant String := Outer & "/inner";
+      File  : Ada.Text_IO.File_Type;
+   begin
+      if Ada.Directories.Exists (Outer) then
+         Ada.Directories.Delete_Tree (Outer);
+      end if;
+      Ada.Directories.Create_Path (Inner);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Outer & "/" & Ins.File_Name);
+      Ada.Text_IO.Put_Line (File, "outer-rule");
+      Ada.Text_IO.Close (File);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Inner & "/" & Ins.File_Name);
+      Ada.Text_IO.Put_Line (File, "inner-rule");
+      Ada.Text_IO.Close (File);
+      declare
+         Said  : constant String := Ins.Gathered (Inner);
+         Files : constant String := Ins.Found (Inner);
+         At_Outer : constant Natural := Ada.Strings.Fixed.Index (Said, "outer-rule");
+         At_Inner : constant Natural := Ada.Strings.Fixed.Index (Said, "inner-rule");
+      begin
+         Assert (At_Outer > 0 and then At_Inner > At_Outer,
+                 "the instructions were not both read, the outer first: " & Said);
+         Assert (Ada.Strings.Fixed.Index (Said, "From " & Inner & "/" & Ins.File_Name & ":") > 0,
+                 "an instruction was not set under the file it came from: " & Said);
+         Assert (Ada.Strings.Fixed.Index (Files, Outer & "/" & Ins.File_Name) > 0
+                 and then Ada.Strings.Fixed.Index (Files, Inner & "/" & Ins.File_Name) > 0,
+                 "the files read were not named: " & Files);
+      end;
+      --  The outer folder's alone where the session is held there.
+      Assert (Ada.Strings.Fixed.Index (Ins.Gathered (Outer), "inner-rule") = 0,
+              "a folder below the session's was read");
+      --  Past the cap: cut, and said.
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Inner & "/" & Ins.File_Name);
+      for Line in 1 .. Ins.Most_Bytes / 40 + 10 loop
+         Ada.Text_IO.Put_Line (File, "a rule long enough to fill the cap ......");
+      end loop;
+      Ada.Text_IO.Close (File);
+      declare
+         Said : constant String := Ins.Gathered (Inner);
+      begin
+         Assert (Said'Length <= Ins.Most_Bytes + 100
+                 and then Ada.Strings.Fixed.Index (Said, "more bytes of instructions left out") > 0,
+                 "instructions past the cap were not cut and said:" & Said'Length'Image);
+      end;
+      Ada.Directories.Delete_Tree (Outer);
+   end Standing_Instructions_Are_Gathered;
+
    --  /model alone offers the models on this machine, and only those:
    --  nothing to download. A home of its own with one model in its models
    --  folder, the selector drawn, and Esc keeping the model running.
@@ -19071,6 +19127,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
          "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Standing_Instructions_Are_Gathered'Access,
+         "AGENTS.md is read from the session's folder and those above it, the outermost first, capped");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Kept_Conversation_Is_Taken_Up'Access,
          "a conversation is kept as it goes, and --continue takes it up with its model");
