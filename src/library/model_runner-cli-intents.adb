@@ -594,7 +594,8 @@ package body Model_Runner.CLI.Intents is
      (Store  : in out Model_Runner.Framework.Stores.Store;
       Kind   : Model_Runner.Framework.Intent.Intent_Kind;
       Words  : Model_Runner.Framework.Name_Lists.Vector;
-      Screen : in out Model_Runner.Presentation.Console)
+      Screen : in out Model_Runner.Presentation.Console;
+      Quoted : Quoted_Flags := [1 .. 0 => False])
    is
       Plain    : Names.Vector;
       Settings : Names.Vector;
@@ -713,14 +714,17 @@ package body Model_Runner.CLI.Intents is
       --  The setting a decision is to govern, by its whole name.
       Governed_Setting : Unbounded_String;
    begin
-      for Part of Words loop
+      for Place in 1 .. Natural (Words.Length) loop
          declare
+            Part  : constant String := Words (Place);
             Equal : constant Natural := Ada.Strings.Fixed.Index (Part, "=");
          begin
             --  --set NAME=VALUE, as a task takes it, is NAME=VALUE.
             if Part = "--set" then
                null;
+            --  "x=1 must hold" in quotes: words, not a setting.
             elsif Equal > Part'First
+              and then not (Place in Quoted'Range and then Quoted (Place))
               and then (for all C of Part (Part'First .. Equal - 1) =>
                           C in 'a' .. 'z' | 'A' .. 'Z' | '_')
             then

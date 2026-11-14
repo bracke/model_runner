@@ -131,6 +131,10 @@ package body Model_Runner.CLI.Held_Output is
             --  JSON in a fence: one opened ``` or ```json, not ```python.
             Json_Fence : Boolean := False;
 
+            --  An answer that is JSON whole: read once, not again for every
+            --  line, which copied the whole reply per line.
+            Whole_JSON : constant Boolean := Self.Styled and then Pres.Looks_Like_JSON (To_String (Self.Held));
+
             procedure Flush_Skipped is
                Count : constant String := Ada.Strings.Fixed.Trim (Natural'Image (Skipped), Ada.Strings.Both);
             begin
@@ -160,7 +164,7 @@ package body Model_Runner.CLI.Held_Output is
                   Line  : constant String :=
                     (if not Self.Styled then Raw
                      elsif Fence then Raw
-                     elsif (In_Fence and then Json_Fence) or else Pres.Looks_Like_JSON (To_String (Self.Held))
+                     elsif (In_Fence and then Json_Fence) or else Whole_JSON
                      then Pres.JSON_Coloured (Raw)
                      else Raw);
                begin

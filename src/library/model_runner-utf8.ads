@@ -98,7 +98,8 @@ package Model_Runner.UTF8 is
       Code_Point : out Natural;
       Length     : out Natural);
 
-   --  Columns a terminal gives a code point: none for a combining mark,
+   --  Columns a terminal gives a code point: none for a C1 control, a
+   --  combining mark,
    --  a zero-width joiner or a variation selector, two for an East Asian
    --  wide or full-width character or an emoji, one otherwise.
    --
@@ -126,6 +127,17 @@ package Model_Runner.UTF8 is
    --  @param Row Columns a row has.
    --  @return Cells from the first row's start to where the text ends.
    function Wrapped_Columns (Item : String; Row : Positive) return Natural;
+
+   --  Where a row begins in text drawn on a terminal Row columns wide, as
+   --  Wrapped_Columns counts its rows: what is drawn of a line taller than
+   --  the window, from its first row in sight.
+   --
+   --  @param Item Text as drawn, from a row's start.
+   --  @param Skip Rows before the one asked for; 0 is the first.
+   --  @param Row Columns a row has.
+   --  @return Index of the first byte drawn on that row, or Item'Last + 1
+   --    when the text ends before it.
+   function Row_Start (Item : String; Skip : Natural; Row : Positive) return Positive;
 
    --  Bytes of the longest leading run of whole code points that fits in
    --  so many columns: where to cut text that must fit a window.

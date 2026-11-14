@@ -1510,6 +1510,27 @@ package body Tests.Tools_Cases is
          Assert (Asked.Settings.First_Element = "notes=for the sky"
                  and then Asked.Positional.Contains ("extra"),
                  "a quoted value took the word after its quote: " & Cl.Canonical (Asked));
+         --  And said: notes="see" the file named a task "TASK-001 the file".
+         Assert (Ada.Strings.Unbounded.To_String (Asked.Stray) = "extra", "a word after a quoted value was not said");
+      end;
+      --  IDs a comma apart, however typed, each as the project keeps it;
+      --  text in quotes is text, never NAME=VALUE; --verbose and words
+      --  matched to a title stay as typed.
+      declare
+         Lower  : constant Cl.Request := Pc.Request_Of ("/task show task-1,task-2");
+         Spaced : constant Cl.Request := Pc.Request_Of ("/work 1, 2");
+         Equals : constant Cl.Request := Pc.Request_Of ("/task new ""a=b is broken"" kind=bugfix");
+         Worded : constant Cl.Request := Pc.Request_Of ("/work fix issue 42");
+      begin
+         Assert (Lower.Positional.Contains ("TASK-1") and then Lower.Positional.Contains ("TASK-2"),
+                 "a list in lower case was not read as tasks: " & Cl.Canonical (Lower));
+         Assert (Spaced.Positional.Contains ("TASK-001") and then Spaced.Positional.Contains ("TASK-002"),
+                 "1, 2 was not read as tasks: " & Cl.Canonical (Spaced));
+         Assert (Equals.Positional.Contains ("a=b is broken")
+                 and then Equals.Settings.First_Element = "kind=bugfix",
+                 "quoted text was taken as a setting: " & Cl.Canonical (Equals));
+         Assert (Worded.Positional.Contains ("42"),
+                 "a number among words to match became a task: " & Cl.Canonical (Worded));
       end;
       --  A value that names rather than says runs on into nothing, and no
       --  value runs on into an ID: the word after it is a word.

@@ -94,7 +94,12 @@ begin
             end;
          end if;
          Command.Action := T.To_Bounded ("cancel");
-         Command.Cancel_Confirmed := True;
+         --  Confirmed when asked above or answered by yes: otherwise the
+         --  cancel itself asks.
+         Command.Cancel_Confirmed :=
+           Argument (2) = "yes"
+           or else (Model_Runner.CLI.Choosers.Is_Available (Screen)
+                    and then not Waiting_In_Workspace (Argument (1)));
          Command.Action_Argument := T.To_Bounded
            (Argument (1) & (if Argument (2) = "anyway" then " anyway" else ""));
          Model_Runner.CLI.Tasks.Run (Command, Screen, Status);

@@ -170,7 +170,7 @@ begin
                --  A path typed where the session was started, as the
                --  project names it -- set.bootstrap.sources reads it so.
                declare
-                  Word  : constant String := All_Words (Index);
+                  Word  : constant String := Home_Expanded (All_Words (Index));
                   Whole : constant String :=
                     (if Below_Top /= Null_Unbounded_String and then Word /= ""
                        and then Word (Word'First) /= '/' and then Ada.Strings.Fixed.Index (Word, "*") = 0

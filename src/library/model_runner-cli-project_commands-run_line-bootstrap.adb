@@ -89,8 +89,10 @@ procedure Bootstrap (Store : in out S.Store) is
          end loop;
       end Walk;
    begin
-      for Path of Positional loop
+      for Typed of Positional loop
          declare
+            --  ~/notes.md as a shell names it: under HOME.
+            Path : constant String := Home_Expanded (Typed);
             --  Where the session was started, below the project's
             --  top: a name is from there first, as Tab and /impact
             --  take it -- a pattern is the whole project's.

@@ -59,9 +59,14 @@ begin
       then
          declare
             Asked : constant Names.Vector := Positional;
+            --  full last is how each is shown, not one more asked for.
+            Whole : constant Boolean := Asked.Last_Element = "full";
          begin
-            for One of Asked loop
-               Positional := [One];
+            for Index in 1 .. Natural (Asked.Length) - (if Whole then 1 else 0) loop
+               Positional := [Asked (Index)];
+               if Whole then
+                  Positional.Append ("full");
+               end if;
                With_Store (Show_Result'Access);
             end loop;
             Positional := Asked;

@@ -17432,6 +17432,12 @@ package body Tests.Framework_Cases is
          end;
          Model_Runner.Presentation.Put_Diff_Line (Screen, "+added");
          Model_Runner.Presentation.Put_Diff_Line (Screen, "-removed");
+         --  For a program, a diff's line and a row are records, as every
+         --  other line there is.
+         Model_Runner.Presentation.Use_Structured (Screen, True);
+         Model_Runner.Presentation.Put_Diff_Line (Screen, "+structured line");
+         Model_Runner.Presentation.Put_Row (Screen, "rowed.py", "Python, source");
+         Model_Runner.Presentation.Use_Structured (Screen, False);
          Set_Output (Standard_Output);
          declare
             use type Model_Runner.Presentation.Tone;
@@ -17464,6 +17470,14 @@ package body Tests.Framework_Cases is
                  and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), [1 => ASCII.ESC]) = 0,
                  "a held next step was said, a line typed during work not shown, or a clear screen"
                  & " written where there is no terminal");
+         Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
+                                          "{""kind"": ""diff_line"", ""key"": """", ""text"": ""+structured line""}")
+                 > 0
+                 and then Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"),
+                                                   "{""kind"": ""row"", ""key"": """", ""detail"": ""Python, source"","
+                                                   & " ""text"": ""rowed.py""}") > 0,
+                 "a diff line or a row was written as text in structured output: "
+                 & Read_Whole ("obj/session-next.txt"));
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/help task") > 0,
                  "a usage error in a command did not point to that command's help");
          Assert (Ada.Strings.Fixed.Index (Read_Whole ("obj/session-next.txt"), "/task accept TASK-7") > 0,
@@ -18690,8 +18704,11 @@ package body Tests.Framework_Cases is
             Assert
            (Model_Runner.CLI.Project_Commands.From_Session_Start (Absolute_Root) = Absolute_Root
             and then Model_Runner.CLI.Project_Commands.From_Session_Start ("") = ""
-            and then Model_Runner.CLI.Project_Commands.From_Session_Start ("~/model") = "~/model",
-            "paths already rooted at the session start were changed");
+            --  ~ as a shell names it: under HOME.
+            and then (not Ada.Environment_Variables.Exists ("HOME")
+                      or else Model_Runner.CLI.Project_Commands.From_Session_Start ("~/model")
+                              = Ada.Environment_Variables.Value ("HOME") & "/model"),
+            "paths already rooted at the session start were changed, or ~ was not HOME");
          end;
          Model_Runner.CLI.Project_Commands.Run
            ("/work " & To_String (First), Screen, Agent);

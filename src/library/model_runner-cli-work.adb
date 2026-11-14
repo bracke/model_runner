@@ -1142,8 +1142,11 @@ package body Model_Runner.CLI.Work is
            and then (for all One of Named => S.Exists (Store, Model_Runner.Framework.Tasks_Area, One))
          then
             Chosen := To_Unbounded_String (Named.First_Element);
+            --  One named twice is worked once.
             for Index in 2 .. Natural (Named.Length) loop
-               Remaining.Append (Named (Index));
+               if Named (Index) /= Named.First_Element and then not Remaining.Contains (Named (Index)) then
+                  Remaining.Append (Named (Index));
+               end if;
             end loop;
          end if;
       end;
@@ -1394,13 +1397,21 @@ package body Model_Runner.CLI.Work is
                   Given.Include ("all", "yes");
                   --  As /work all takes them: none a document ticks done.
                   Remaining.Clear;
+                  --  Each left out said, as /work all says it.
                   for Id of Ready loop
                      if Model_Runner.CLI.Tasks.Ticked_Done (Store, Id) = "" then
                         Remaining.Append (Id);
+                     else
+                        Pres.Put_Note (Screen, "cli.work.skipped_done",
+                                       [Loc.Named ("name", Id),
+                                        Loc.Named ("detail", Model_Runner.CLI.Tasks.Ticked_Done (Store, Id))]);
                      end if;
                   end loop;
                   if Remaining.Is_Empty then
-                     Remaining := Ready;
+                     Pres.Put_Note (Screen, "cli.work.nothing_ready");
+                     Say_What_Is_Ready;
+                     S.Close (Store);
+                     return;
                   end if;
                   Chosen := To_Unbounded_String (Remaining.First_Element);
                   Remaining.Delete_First;

@@ -2291,6 +2291,95 @@ package body Tests.CLI_Cases is
          end;
       end;
 
+      --  Filtering, both lines of keys are drawn -- how to leave among
+      --  them -- and the list pages by the rows it is drawn in; details
+      --  longer than the window are cut, and said to be.
+      declare
+         Items : Ch.Choice_List;
+         Pick  : Ch.Selector;
+         Words : constant Ch.Wording :=
+           (Title  => To_Unbounded_String ("title"),
+            Keys   => To_Unbounded_String ("ESC-LEAVES"),
+            Filter => To_Unbounded_String ("FILTER"),
+            others => To_Unbounded_String ("none"));
+         Long  : Unbounded_String;
+      begin
+         for Index in 1 .. 40 loop
+            Append (Long, "detail" & Natural'Image (Index) & ASCII.LF);
+         end loop;
+         for Index in 1 .. 40 loop
+            Ch.Append (Items, (Label => To_Unbounded_String ("a" & Natural'Image (Index)),
+                               Details => Long, others => <>));
+         end loop;
+         Pick := Ch.Start (Items);
+         Ch.Press (Pick, (Ch.Printable, '/'), 10);
+         Ch.Press (Pick, (Ch.Printable, 'a'), 10);
+         declare
+            Lines : constant Model_Runner.Framework.Name_Lists.Vector := Ch.Render (Pick, Words, 23, 79);
+         begin
+            Assert (Holds (Lines, "ESC-LEAVES"), "filtering, the keys line that says how to leave was cut");
+            Assert (Natural (Lines.Length) <= 23, "the selector drew more rows than the window has");
+         end;
+         Ch.Press (Pick, (Ch.Escape, ' '), 10);
+         Ch.Press (Pick, (Ch.Tab, ' '), 10);
+         declare
+            Lines : constant Model_Runner.Framework.Name_Lists.Vector := Ch.Render (Pick, Words, 23, 79);
+            Room  : constant Positive := Ch.List_Room (Pick, Words, 23, 79);
+         begin
+            Assert (Holds (Lines, "ESC-LEAVES"), "long details cut the keys line");
+            Assert (Holds (Lines, Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#A6#)),
+                    "details cut to the window were not said to be cut");
+            Assert (Holds (Lines, "a 1"), "long details left no room for the choice");
+            Assert (not Holds (Lines, "a" & Natural'Image (1 + Room)), "the list drew more rows than it said");
+            Ch.Press (Pick, (Ch.Page_Down, ' '), Room);
+            declare
+               After : constant Model_Runner.Framework.Name_Lists.Vector := Ch.Render (Pick, Words, 23, 79);
+            begin
+               Assert (Holds (After, "a" & Natural'Image (1 + Room)),
+                       "Page Down went past choices never shown");
+            end;
+         end;
+      end;
+
+      --  A character's first byte typed into a filter keeps the cursor where
+      --  it was, the list waiting for the rest.
+      declare
+         Items : Ch.Choice_List;
+         Pick  : Ch.Selector;
+         Words : constant Ch.Wording := (others => To_Unbounded_String ("k"));
+      begin
+         for Index in 1 .. 9 loop
+            Ch.Append (Items, Item ("caf" & Character'Val (16#C3#) & Character'Val (16#A9#) & Natural'Image (Index)));
+         end loop;
+         Pick := Ch.Start (Items);
+         for Step in 1 .. 6 loop
+            Ch.Press (Pick, (Ch.Down, ' '), 20);
+         end loop;
+         Ch.Press (Pick, (Ch.Printable, '/'), 20);
+         Ch.Press (Pick, (Ch.Printable, Character'Val (16#C3#)), 20);
+         Ch.Press (Pick, (Ch.Printable, Character'Val (16#A9#)), 20);
+         declare
+            Lines : constant Model_Runner.Framework.Name_Lists.Vector := Ch.Render (Pick, Words, 20, 60);
+            Marked : Boolean := False;
+         begin
+            for Line of Lines loop
+               if Ada.Strings.Fixed.Index (Line, Character'Val (16#B8#) & " caf") > 0
+                 and then Ada.Strings.Fixed.Index (Line, " 7") > 0
+               then
+                  Marked := True;
+               end if;
+            end loop;
+            Assert (Marked, "an é typed into the filter moved the cursor off the choice it was on");
+         end;
+      end;
+
+      --  A C1 control takes no column; a row of text drawn from where it is.
+      Assert (Model_Runner.UTF8.Columns ("a" & Character'Val (16#C2#) & Character'Val (16#9B#) & "b") = 2,
+              "a C1 control was counted a column");
+      Assert (Model_Runner.UTF8.Row_Start ("abcdefghij", 2, 4) = 9, "the third row of four did not begin at i");
+      Assert (Model_Runner.UTF8.Row_Start ("abc", 0, 4) = 1, "the first row did not begin at the start");
+      Assert (Model_Runner.UTF8.Row_Start ("abc", 1, 4) = 4, "a row past the text did not end it");
+
       --  A wide character that meets the edge goes to the next row whole.
       Assert (Model_Runner.UTF8.Wrapped_Columns
                 ("abc" & Character'Val (16#E4#) & Character'Val (16#B8#) & Character'Val (16#AD#), 4) = 6,
@@ -2481,8 +2570,19 @@ package body Tests.CLI_Cases is
       Assert (Command ("task|context|TASK-002|--set|--verbose") = 0 and then Shows ("## Rules"),
               "task context --verbose did not show the text the agent reads: " & Last_Output);
 
+      --  One title twice, as case differs, is one part: the task itself.
+      declare
+         Split_Status : constant Natural := Command ("task|split|TASK-001|Parser; parser");
+      begin
+         --  Refused: an error, said where errors go, not captured here.
+         Assert (Split_Status /= 0, "task split took one title twice as two parts");
+      end;
       Assert (Command ("task|split|TASK-001|One; Two") = 0 and then Shows ("is waiting for parts"),
               "task split did not make the parts and block the parent: " & Last_Output);
+      --  A state in words, whole: waiting for parts, not every waiting.
+      Assert (Command ("task|list|waiting|for|parts") = 0
+              and then Shows ("TASK-001") and then not Shows ("TASK-002"),
+              "task list waiting for parts listed more than those: " & Last_Output);
       Assert (Command ("task|depend|TASK-004|TASK-003") = 0 and then Shows ("waits for"),
               "task depend did not make one wait for the other: " & Last_Output);
       Assert (Command ("task|accept|TASK-002") = 0
@@ -10465,6 +10565,16 @@ package body Tests.CLI_Cases is
               "submitting lost the turn");
       I.Taken (Typing);
       Assert (I.Pending (Typing) = "", "the turn was not emptied");
+
+      --  A message kept back is put back whole: a first line that looks
+      --  like a command, and its blank lines, are its text.
+      I.Restore (Typing, "/var/log/syslog says:" & ASCII.LF & ASCII.LF & "error X");
+      Assert (I.Pending (Typing) = "/var/log/syslog says:" & ASCII.LF & ASCII.LF & "error X",
+              "a kept message was not put back whole: " & I.Pending (Typing));
+      Offer ("more", I.Held);
+      Assert (I.Pending (Typing) = "/var/log/syslog says:" & ASCII.LF & ASCII.LF & "error X" & ASCII.LF & "more",
+              "a line after a kept message was not added to it: " & I.Pending (Typing));
+      I.Taken (Typing);
 
       --  A line of nothing but spaces is blank. An empty submission is the
       --  caller's business, and it sees an empty turn.

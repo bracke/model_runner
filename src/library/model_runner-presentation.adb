@@ -544,7 +544,11 @@ package body Model_Runner.Presentation is
       function Starts (Prefix : String) return Boolean
       is (Text'Length >= Prefix'Length and then Text (Text'First .. Text'First + Prefix'Length - 1) = Prefix);
    begin
-      if Item.Structured or else not Styles (Item, Answer) or else Text = "" then
+      --  For a program, a record as every other line on standard output
+      --  is: a diff line written as text broke the JSON lines.
+      if Item.Structured then
+         Put_Record (Item, "diff_line", "", Loc.Empty_Arguments, Bare);
+      elsif not Styles (Item, Answer) or else Text = "" then
          Put_Line (Item, Text);
       elsif Starts ("+++") or else Starts ("---") or else Starts ("@@") or else Starts ("diff ")
         or else Starts ("index ")
@@ -850,6 +854,12 @@ package body Model_Runner.Presentation is
       Main_Shown  : constant String := T.Escape_Controls (Main, Keep_Tabs => True);
       Aside_Shown : constant String := T.Escape_Controls (Aside, Keep_Tabs => True);
    begin
+      --  For a program, a record as every other line on standard output
+      --  is: a row written as text broke the JSON lines.
+      if Item.Structured then
+         Put_Record (Item, "row", "", [Loc.Named ("detail", Aside)], Main);
+         return;
+      end if;
       Put_Line (Item, Lead
                       & (if Styled and then Main_Tone /= Plain
                          then Terminal_Styles.Decorate (Main_Shown, Role_Of (Main_Tone)) else Main_Shown)

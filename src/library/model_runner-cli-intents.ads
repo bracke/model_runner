@@ -15,6 +15,9 @@ with Model_Runner.Presentation;
 --  requirement derives its task -- without a model.
 package Model_Runner.CLI.Intents is
 
+   --  Of a command's words, by place, whether each was typed in quotes.
+   type Quoted_Flags is array (Positive range <>) of Boolean;
+
    --  Carry out one of the commands on a register.
    --
    --  @param Store The project's state, open.
@@ -22,11 +25,14 @@ package Model_Runner.CLI.Intents is
    --  @param Words What followed the command, a word each, NAME=VALUE ones
    --    among them.
    --  @param Screen Where to write.
+   --  @param Quoted Of the words, by place, each typed in quotes: a word
+   --    of text, never NAME=VALUE -- "x=1 must hold".
    procedure Run
      (Store  : in out Model_Runner.Framework.Stores.Store;
       Kind   : Model_Runner.Framework.Intent.Intent_Kind;
       Words  : Model_Runner.Framework.Name_Lists.Vector;
-      Screen : in out Model_Runner.Presentation.Console);
+      Screen : in out Model_Runner.Presentation.Console;
+      Quoted : Quoted_Flags := [1 .. 0 => False]);
 
    --  Move the project along after a change to what it says: derive what
    --  accepted requirements imply, work out readiness, and say what that

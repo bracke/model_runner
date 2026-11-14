@@ -729,6 +729,24 @@ package body Model_Runner.CLI.Tasks is
                         --  two words written as two -- list to integrate,
                         --  list checks failed -- whole, not its first word.
                         elsif Name = "state" and then Cut = 0 and then Pair /= "" then
+                           --  waiting for parts, waiting on an ended task:
+                           --  the longer state when its words follow.
+                           if Pair = "waiting" and then Index < Argument'Last then
+                              declare
+                                 Rest : constant String := Argument (Index + 1 .. Argument'Last);
+                              begin
+                                 for Longer of Model_Runner.Framework.Name_Lists.Vector'
+                                                 (["for parts", "on an ended task"])
+                                 loop
+                                    if Ada.Strings.Fixed.Head (Rest, Longer'Length) = Longer
+                                      and then (Rest'Length = Longer'Length
+                                                or else Rest (Rest'First + Longer'Length) = ' ')
+                                    then
+                                       return "waiting " & Longer;
+                                    end if;
+                                 end loop;
+                              end;
+                           end if;
                            if Pair in "to" | "checks" | "serves" and then Index < Argument'Last then
                               declare
                                  Rest : constant String := Argument (Index + 1 .. Argument'Last);
@@ -3027,11 +3045,21 @@ package body Model_Runner.CLI.Tasks is
             return;
          end if;
          --  Parts it has, which these join: said, not added unsaid; and one
-         --  part alone, where it has none, is the task itself.
+         --  part alone, where it has none, is the task itself -- counted
+         --  as titles differ, Parser; parser being one.
          declare
-            Had : constant Model_Runner.Framework.Name_Lists.Vector := Tk.Children (Store, First_Word);
+            Had      : constant Model_Runner.Framework.Name_Lists.Vector := Tk.Children (Store, First_Word);
+            Distinct : Natural := 0;
          begin
-            if Natural (Titles.Length) = 1 and then Had.Is_Empty then
+            for Index in 1 .. Natural (Titles.Length) loop
+               if not (for some Earlier in 1 .. Index - 1 =>
+                         Ada.Characters.Handling.To_Lower (Titles (Earlier))
+                         = Ada.Characters.Handling.To_Lower (Titles (Index)))
+               then
+                  Distinct := Distinct + 1;
+               end if;
+            end loop;
+            if Distinct = 1 and then Had.Is_Empty then
                Outcome := E.Make (E.Framework_Input_Invalid);
                E.Add_Text (Outcome, "name", "the parts of " & First_Word);
                E.Add_Text (Outcome, "value", Titles.First_Element);
@@ -4220,7 +4248,7 @@ package body Model_Runner.CLI.Tasks is
 
          --  profile=NAME: the profile it is planned with, as /work takes
          --  it; nothing else is taken.
-         function Profile_Given return String is
+         function Profile_Typed return String is
             Words : constant String := After_First;
             Start : Natural := Words'First;
          begin
@@ -4233,6 +4261,14 @@ package body Model_Runner.CLI.Tasks is
                end if;
             end loop;
             return "";
+         end Profile_Typed;
+
+         --  Not typed: the one /work would take, work.profile's.
+         function Profile_Given return String is
+            Typed : constant String := Profile_Typed;
+         begin
+            return (if Typed /= "" then Typed
+                    else R.Get (Model_Runner.Framework.Configurations.Required (Store), "scalar.work.profile"));
          end Profile_Given;
 
          --  A word it does not take: the first, or none.
@@ -6391,6 +6427,11 @@ package body Model_Runner.CLI.Tasks is
                  (Screen, "cli.task.moved",
                   [Loc.Named ("name", First_Word),
                    Loc.Named ("value", Model_Runner.Framework.State_Said (After_First))]);
+               --  What became ready said, as /task cancel says it.
+               Change := S.No_Changes;
+               Commit;
+               Say_Became_Ready;
+               Say_Parts_Left (First_Word);
                Say_Left_Waiting (First_Word);
             end if;
          else
@@ -6425,8 +6466,10 @@ package body Model_Runner.CLI.Tasks is
                declare
                   --  Given up with "anyway": said as what happened, and the
                   --  work it held named.
+                  --  Only an ending gives a workspace up: blocked keeps it.
                   Space : constant String :=
-                    Model_Runner.Framework.Workspaces.Active_For (Store, First_Word);
+                    (if Next in "failed" | "cancelled" | "rejected"
+                     then Model_Runner.Framework.Workspaces.Active_For (Store, First_Word) else "");
                   Lost  : constant Model_Runner.Framework.Name_Lists.Vector :=
                     (if Space = "" then Model_Runner.Framework.Name_Lists.Empty_Vector
                      else Model_Runner.Framework.Workspaces.Changes (Store, Space));

@@ -120,6 +120,20 @@ package Model_Runner.CLI.Choosers is
       Nothing : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
+   --  How many choices a selector shows at once in a window: the rows
+   --  Render gives its list, which Press pages and scrolls by.
+   --
+   --  @param Item The selector.
+   --  @param Words What it says around the choices.
+   --  @param Rows The window's height.
+   --  @param Columns The window's width.
+   --  @return The rows the list keeps, at least one.
+   function List_Room
+     (Item    : Selector;
+      Words   : Wording;
+      Rows    : Positive;
+      Columns : Positive) return Positive;
+
    --  A selector as lines to draw, fitted to a window.
    --
    --  @param Item The selector.

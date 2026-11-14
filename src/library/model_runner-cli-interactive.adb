@@ -2,6 +2,7 @@ with Ada.Finalization;
 with Ada.Calendar;
 with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
+with Ada.Strings.Maps;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Unchecked_Deallocation;
@@ -41,6 +42,10 @@ with Model_Runner.Conversation.Rooms;
 with Model_Runner.CLI.Pictures.Rooms;
 
 package body Model_Runner.CLI.Interactive is
+
+   --  The turn kept for a reply with no words to keep: an ellipsis, U+2026.
+   Elided_Reply : constant String :=
+     [Character'Val (16#E2#), Character'Val (16#80#), Character'Val (16#A6#)];
 
    ------------------
    -- Command_Word --
@@ -168,6 +173,9 @@ package body Model_Runner.CLI.Interactive is
       end Tail;
 
       Trimmed : String renames Line (Lead .. Tail);
+
+      --  A command's word ends at a space or a tab, as Parse has it.
+      Word_End : constant Ada.Strings.Maps.Character_Set := Ada.Strings.Maps.To_Set (" " & ASCII.HT);
    begin
       if Item.Room = null then
          Effect := Too_Long;
@@ -196,8 +204,8 @@ package body Model_Runner.CLI.Interactive is
         and then Ada.Strings.Fixed.Index (Line, [1 => ASCII.LF]) = 0
         and then Model_Runner.CLI.Project_Commands.Runs_Mid_Message
                    (Trimmed (Trimmed'First
-                             .. (if Ada.Strings.Fixed.Index (Trimmed, " ") = 0 then Trimmed'Last
-                                 else Ada.Strings.Fixed.Index (Trimmed, " ") - 1)))
+                             .. (if Ada.Strings.Fixed.Index (Trimmed, Word_End) = 0 then Trimmed'Last
+                                 else Ada.Strings.Fixed.Index (Trimmed, Word_End) - 1)))
       then
          Effect := Command_Mid_Message;
          return;
@@ -243,6 +251,23 @@ package body Model_Runner.CLI.Interactive is
       end if;
       return Item.Room.all (1 .. Item.Used);
    end Pending;
+
+   -------------
+   -- Restore --
+   -------------
+
+   procedure Restore (Item : in out Turn; Text : String) is
+   begin
+      Item.Used := 0;
+      if Item.Room = null or else Text'Length > Max_Turn_Bytes then
+         return;
+      end if;
+      if Text'Length > Item.Room.all'Length then
+         Grow (Item.Room, Text'Length);
+      end if;
+      Item.Room.all (1 .. Text'Length) := Text;
+      Item.Used := Text'Length;
+   end Restore;
 
    -----------
    -- Taken --
@@ -764,9 +789,27 @@ package body Model_Runner.CLI.Interactive is
       --  Handle one slash command. Returns True when the input was a command.
       function Handle_Command (Line : String) return Boolean is
          Asked : constant Parsed_Command := Parse (Line);
-         Space : constant Natural := Ada.Strings.Fixed.Index (Line, " ");
+         --  The command's word ends at a space or a tab, as Parse has it.
+         Space : constant Natural :=
+           Ada.Strings.Fixed.Index (Line, Ada.Strings.Maps.To_Set (" " & ASCII.HT));
          First : constant String :=
            (if Space = 0 then Line else Line (Line'First .. Space - 1));
+
+         --  A path as Tab completes it, quoted when it holds a space: the
+         --  quotes are not part of its name.
+         function Path_Asked return String is
+            Text  : constant String := Line (Asked.First .. Asked.Last);
+            First : Positive := Text'First;
+            Last  : Natural := Text'Last;
+         begin
+            if Text'Length > 0 and then Text (Text'First) = '"' then
+               First := First + 1;
+               if Last >= First and then Text (Last) = '"' then
+                  Last := Last - 1;
+               end if;
+            end if;
+            return Text (First .. Last);
+         end Path_Asked;
       begin
          if Asked.Kind = Not_A_Command then
             return False;
@@ -1202,7 +1245,7 @@ package body Model_Runner.CLI.Interactive is
             else
                declare
                   Path  : constant String :=
-                    Model_Runner.CLI.Project_Commands.From_Session_Start (Line (Asked.First .. Asked.Last));
+                    Model_Runner.CLI.Project_Commands.From_Session_Start (Path_Asked);
                   Wrote : E.Error_Info;
                begin
                   Model_Runner.CLI.Checkpoint.Save (Path, Messages, Wrote);
@@ -1222,7 +1265,7 @@ package body Model_Runner.CLI.Interactive is
             else
                declare
                   Path    : constant String :=
-                    Model_Runner.CLI.Project_Commands.From_Session_Start (Line (Asked.First .. Asked.Last));
+                    Model_Runner.CLI.Project_Commands.From_Session_Start (Path_Asked);
                   Loaded  : Boolean;
                   Outcome : E.Error_Info;
                begin
@@ -1263,7 +1306,7 @@ package body Model_Runner.CLI.Interactive is
             else
                Free_Text (Next_Picture);
                Next_Picture := new String'
-                 (Model_Runner.CLI.Project_Commands.From_Session_Start (Line (Asked.First .. Asked.Last)));
+                 (Model_Runner.CLI.Project_Commands.From_Session_Start (Path_Asked));
                Next_Is_Video := Asked.Kind = Show_Video;
                Pres.Put_Note
                  (Screen, "cli.interactive.picture_pending",
@@ -1636,6 +1679,18 @@ package body Model_Runner.CLI.Interactive is
                Outcome);
          end if;
 
+         --  A reply with nothing to keep as a turn -- gpt-oss cut while
+         --  still in its analysis, or an end at once -- is not an error of
+         --  the conversation: the question stays, answered by an elision,
+         --  and the cache that holds it is kept. Dropped, the question was
+         --  lost and the whole conversation read again.
+         if E."=" (Outcome.Code, E.Conversation_Empty)
+           and then Conv.Length (Messages) > 0
+           and then not Conv."=" (Conv.Sender_At (Messages, Conv.Length (Messages)), Conv.Assistant_Role)
+         then
+            Conv.Append (Messages, Conv.Assistant_Role, Elided_Reply, Outcome);
+         end if;
+
          if E.Is_Error (Outcome) then
             Pres.Report (Screen, Outcome);
             Conv.Drop_Last (Messages, 1);
@@ -1730,19 +1785,10 @@ package body Model_Runner.CLI.Interactive is
                   --  pending, to add to or send again -- its picture is
                   --  named again with /image where it was the picture.
                   if Kept_Back then
-                     declare
-                        Again : Line_Effect;
-                        From  : Positive := Prompt'First;
-                     begin
-                        for Index in Prompt'First .. Prompt'Last + 1 loop
-                           if Index > Prompt'Last or else Prompt (Index) = ASCII.LF then
-                              if Index > From then
-                                 Offer (Typing, Prompt (From .. Index - 1), Again);
-                              end if;
-                              From := Index + 1;
-                           end if;
-                        end loop;
-                     end;
+                     --  Whole, as it was: offered again line by line, a
+                     --  first line that looked like a command was dropped,
+                     --  and so were its blank lines.
+                     Restore (Typing, Prompt);
                      Pres.Put_Note (Screen, "cli.interactive.message_kept");
                   end if;
                end;

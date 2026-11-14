@@ -170,6 +170,14 @@ package Model_Runner.CLI.Interactive is
    --  @return The accumulated text.
    function Pending (Item : Turn) return String;
 
+   --  Put a message back whole, as it was pending: a turn refused before
+   --  the model read it, kept to add to or send again. Its lines are not
+   --  read again, so a line that looks like a command stays text.
+   --
+   --  @param Item Turn to put it in, emptied first.
+   --  @param Text The message, at most Max_Turn_Bytes.
+   procedure Restore (Item : in out Turn; Text : String);
+
    --  Empty the turn, after its prompt has been taken.
    --
    --  @param Item Turn to empty.

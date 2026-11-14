@@ -267,7 +267,12 @@ package body Model_Runner.CLI.Choosers is
          case Pressed.Kind is
             when Printable =>
                Append (Item.Filter, Pressed.Char);
-               Refilter (Item);
+               --  A character part way -- é's first byte -- matches
+               --  nothing yet: the list waits for the rest, and the cursor
+               --  stays on the choice it was on.
+               if Model_Runner.UTF8.Safe_Prefix_Length (To_String (Item.Filter)) = Length (Item.Filter) then
+                  Refilter (Item);
+               end if;
                return;
             when Backspace =>
                if Length (Item.Filter) > 0 then
@@ -328,7 +333,9 @@ package body Model_Runner.CLI.Choosers is
             elsif Pressed.Char /= ' ' then
                Item.Filtering := True;
                Append (Item.Filter, Pressed.Char);
-               Refilter (Item);
+               if Model_Runner.UTF8.Safe_Prefix_Length (To_String (Item.Filter)) = Length (Item.Filter) then
+                  Refilter (Item);
+               end if;
                return;
             end if;
          when Return_Key =>
@@ -441,6 +448,85 @@ package body Model_Runner.CLI.Choosers is
       return Result;
    end Wrapped;
 
+   --  A selector's parts as they are drawn in a window: the keys' lines
+   --  counted first -- every one of them shown, what Esc does among them --
+   --  then the details cut to what is left, the title, and the rows the
+   --  list keeps.
+   type Layout is record
+      Title   : Framework.Name_Lists.Vector;
+      Details : Framework.Name_Lists.Vector;
+      Keys    : Framework.Name_Lists.Vector;
+      Shown   : Natural := 0;
+      Room    : Positive := 1;
+   end record;
+
+   --  An ellipsis, U+2026: details cut where the window ends them.
+   Ellipsis : constant String :=
+     Character'Val (16#E2#) & Character'Val (16#80#) & Character'Val (16#A6#);
+
+   function Laid_Out
+     (Item    : Selector;
+      Words   : Wording;
+      Rows    : Positive;
+      Columns : Positive) return Layout
+   is
+      Result : Layout;
+   begin
+      --  The keys, wrapped where the window is narrow -- not cut, so
+      --  what Esc does is always there to read. Filtering, the keys too:
+      --  how to take it back, and how to leave.
+      Result.Keys := Wrapped ((if Item.Filtering or else Length (Item.Filter) > 0
+                               then To_String (Words.Filter) & " " & To_String (Item.Filter)
+                               else To_String (Words.Keys)),
+                              Columns);
+      if Item.Filtering or else Length (Item.Filter) > 0 then
+         Result.Keys.Append_Vector (Wrapped (To_String (Words.Keys), Columns));
+      end if;
+      if Item.Details and then Item.Cursor > 0 then
+         Result.Details := Wrapped
+           (To_String (Item.Items (Item.Visible (Item.Cursor)).Details), Positive'Max (1, Columns - 4));
+         --  No more than leaves a title line, a choice, the blanks and the
+         --  keys: cut, and said to be cut.
+         declare
+            Most : constant Integer := Rows - Integer (Result.Keys.Length) - 4;
+         begin
+            if Most < 1 then
+               Result.Details.Clear;
+            elsif Integer (Result.Details.Length) > Most then
+               while Integer (Result.Details.Length) >= Most loop
+                  Result.Details.Delete_Last;
+               end loop;
+               Result.Details.Append (Ellipsis);
+            end if;
+         end;
+      end if;
+      Result.Title := Wrapped (To_String (Words.Title), Columns);
+      declare
+         Extra : constant Integer :=
+           Integer (Result.Details.Length) + (if Result.Details.Is_Empty then 0 else 1);
+         Below : constant Integer := 1 + Integer (Result.Keys.Length) + Extra;
+      begin
+         --  A title too long for the window keeps its last lines, the
+         --  question, and room for a few choices.
+         Result.Shown :=
+           Natural (Integer'Max (1, Integer'Min (Integer (Result.Title.Length),
+                                                 Rows - Below - Integer'Min (Visible_Count (Item), 4))));
+         Result.Room := Positive (Integer'Max (1, Rows - Below - Result.Shown));
+      end;
+      return Result;
+   end Laid_Out;
+
+   ---------------
+   -- List_Room --
+   ---------------
+
+   function List_Room
+     (Item    : Selector;
+      Words   : Wording;
+      Rows    : Positive;
+      Columns : Positive) return Positive
+   is (Laid_Out (Item, Words, Rows, Columns).Room);
+
    ------------
    -- Render --
    ------------
@@ -451,46 +537,25 @@ package body Model_Runner.CLI.Choosers is
       Rows    : Positive;
       Columns : Positive) return Framework.Name_Lists.Vector
    is
-      Result  : Framework.Name_Lists.Vector;
-      Details : Framework.Name_Lists.Vector;
-      Room    : Integer;
+      Parts  : constant Layout := Laid_Out (Item, Words, Rows, Columns);
+      Result : Framework.Name_Lists.Vector;
+      Room   : constant Positive := Parts.Room;
    begin
-      if Item.Details and then Item.Cursor > 0 then
-         Details := Wrapped
-           (To_String (Item.Items (Item.Visible (Item.Cursor)).Details), Positive'Max (1, Columns - 4));
-
-      end if;
-
       --  The title -- a line or several, as a plan shown above its
       --  question -- the list, a blank, the details, the keys.
-      declare
-         Title : constant Framework.Name_Lists.Vector :=
-           Wrapped (To_String (Words.Title), Columns);
-         Extra : constant Integer :=
-           Integer (Details.Length) + (if Details.Is_Empty then 0 else 1);
-         --  A title too long for the window keeps its last lines, the
-         --  question, and room for a few choices.
-         Shown : constant Integer :=
-           Integer'Max (1, Integer'Min (Integer (Title.Length),
-                                        Rows - 2 - Extra - Integer'Min (Visible_Count (Item), 4)));
-      begin
-         Room := Integer'Max (1, Rows - 2 - Shown - Extra);
-         if Title.Is_Empty then
-            Result.Append ("");
+      if Parts.Title.Is_Empty then
+         Result.Append ("");
+      end if;
+      for Index in Integer (Parts.Title.Length) - Parts.Shown + 1 .. Integer (Parts.Title.Length) loop
+         if Index >= 1 then
+            Result.Append (Fit (Parts.Title (Index), Columns));
          end if;
-         for Index in Integer (Title.Length) - Shown + 1 .. Integer (Title.Length) loop
-            if Index >= 1 then
-               Result.Append (Fit (Title (Index), Columns));
-            end if;
-         end loop;
-      end;
+      end loop;
       if Visible_Count (Item) = 0 then
          Result.Append (Fit ("    " & To_String (Words.Nothing), Columns));
       end if;
-      --  The rows drawn hold the cursor: Press scrolls by the rows the
-      --  window has, and a title of several lines, the details, or a
-      --  filter that put Top back to the first leave fewer -- the marker
-      --  was below the last row drawn, and Enter took what no one saw.
+      --  The rows drawn hold the cursor: Press scrolls by List_Room, and a
+      --  filter that put Top back to the first leaves it to be found here.
       declare
          Top : Positive := Positive'Max (1, Item.Top);
       begin
@@ -515,27 +580,13 @@ package body Model_Runner.CLI.Choosers is
          end loop;
       end;
       Result.Append ("");
-      if not Details.Is_Empty then
-         for Line of Details loop
+      if not Parts.Details.Is_Empty then
+         for Line of Parts.Details loop
             Result.Append (Fit ("    " & Line, Columns));
          end loop;
          Result.Append ("");
       end if;
-      --  The keys, wrapped where the window is narrow -- not cut, so
-      --  what Esc does is always there to read.
-      for Line of Wrapped ((if Item.Filtering or else Length (Item.Filter) > 0
-                            then To_String (Words.Filter) & " " & To_String (Item.Filter)
-                            else To_String (Words.Keys)),
-                           Columns)
-      loop
-         Result.Append (Line);
-      end loop;
-      --  Filtering, the keys too: how to take it back, and how to leave.
-      if Item.Filtering or else Length (Item.Filter) > 0 then
-         for Line of Wrapped (To_String (Words.Keys), Columns) loop
-            Result.Append (Line);
-         end loop;
-      end if;
+      Result.Append_Vector (Parts.Keys);
 
       while Natural (Result.Length) > Rows loop
          Result.Delete_Last;
@@ -677,11 +728,21 @@ package body Model_Runner.CLI.Choosers is
          Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       end Draw;
 
+      --  The choices a page holds: the rows Render gives the list, at the
+      --  size Draw draws at -- not the window's less a guess, which paged
+      --  past choices never shown when details or a long title took rows.
       function Window_Rows return Positive is
-         Size : Term.Window_Size;
+         Size  : Term.Window_Size;
+         Rows  : Positive := 24;
+         Width : Positive := 80;
       begin
-         return (if Term.Size (Output, Size) and then Size.Rows > 6
-                 then Size.Rows - 5 else 10);
+         if Term.Size (Output, Size) and then Size.Rows > 2
+           and then Size.Columns > 8
+         then
+            Rows := Size.Rows - 1;
+            Width := Size.Columns - 1;
+         end if;
+         return List_Room (State, Words, Rows, Width);
       end Window_Rows;
       --  The cursor where the caller puts it: the safe choice, where one is.
       procedure Place_Cursor is
@@ -1105,6 +1166,136 @@ package body Model_Runner.CLI.Choosers is
       Typed  : Unbounded_String;
       Buffer : Ada.Streams.Stream_Element_Array (1 .. 1);
       Last   : Ada.Streams.Stream_Element_Offset;
+
+      --  Where the line stands on the screen, so that a backspace takes
+      --  back what is there: the column it began at, the window's width
+      --  (0 when the terminal did not say, and a backspace is the plain
+      --  one), and the row of the line the cursor is on. At a row's start
+      --  a plain backspace stayed put -- a terminal does not go back a row
+      --  -- and after the last column it took the cell before it.
+      Start      : Natural := 0;
+      Width      : Natural := 0;
+      Cursor_Row : Natural := 0;
+
+      --  Bytes read while asking where the cursor was that were not the
+      --  answer: keys typed ahead, taken before the terminal is read.
+      Ahead : Unbounded_String;
+
+      --  A C2 byte held for the byte after it: a C1 control -- U+009B is
+      --  CSI -- is dropped with it, not echoed for the terminal to obey.
+      Held_C2 : Boolean := False;
+
+      function Image (N : Natural) return String
+      is (Ada.Strings.Fixed.Trim (Natural'Image (N), Ada.Strings.Both));
+
+      --  The terminal asked where its cursor is (ESC [ 6 n), its answer
+      --  ESC [ row ; column R read back; no answer soon, and nothing known.
+      procedure Find_Start is
+         Size  : Term.Window_Size;
+         Got   : Unbounded_String;
+         Byte  : Character;
+      begin
+         if not Term.Size (Output, Size) or else Size.Columns < 2 then
+            return;
+         end if;
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[6n");
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+         for Count in 1 .. 32 loop
+            exit when not Hostkit.Descriptors.Wait_Readable (Input, (if Count = 1 then 150 else 50));
+            exit when Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+              or else Last < Buffer'First;
+            Byte := Character'Val (Buffer (Buffer'First));
+            Append (Got, Byte);
+            exit when Byte = 'R';
+         end loop;
+         declare
+            Text  : constant String := To_String (Got);
+            From  : constant Natural := Ada.Strings.Fixed.Index (Text, ASCII.ESC & "[", Ada.Strings.Backward);
+            Semi  : Natural := 0;
+         begin
+            if From > 0 and then Text (Text'Last) = 'R' then
+               Semi := Ada.Strings.Fixed.Index (Text (From .. Text'Last), ";");
+            end if;
+            if Semi > From + 2 and then Semi < Text'Last - 1
+              and then (for all C of Text (From + 2 .. Semi - 1) => C in '0' .. '9')
+              and then (for all C of Text (Semi + 1 .. Text'Last - 1) => C in '0' .. '9')
+              and then Text'Last - Semi <= 6
+            then
+               Start := Natural'Value (Text (Semi + 1 .. Text'Last - 1));
+               Start := (if Start > 0 then Start - 1 else 0);
+               if Start < Size.Columns then
+                  Width := Size.Columns;
+               end if;
+               Ahead := To_Unbounded_String (Text (Text'First .. From - 1));
+            else
+               Ahead := Got;
+            end if;
+         end;
+      end Find_Start;
+
+      --  Cells from the first row's start to the end of the line typed.
+      function Cells return Natural is
+         Pad : constant String (1 .. Start) := [others => ' '];
+      begin
+         return Model_Runner.UTF8.Wrapped_Columns (Pad & To_String (Typed), Width);
+      end Cells;
+
+      --  The row the cursor is on after drawing so many cells: on the last
+      --  column's row while the terminal waits to wrap.
+      function Row_After (Count : Natural) return Natural
+      is (if Count > 0 and then Count mod Width = 0 then Count / Width - 1 else Count / Width);
+
+      --  The last character taken back, and the screen from where it
+      --  began wiped.
+      procedure Erase is
+      begin
+         if Width = 0 then
+            Erase_Last (Typed);
+            return;
+         end if;
+         Delete (Typed, Last_Character (Typed), Length (Typed));
+         declare
+            Now : constant Natural := Cells;
+         begin
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
+            if Cursor_Row > Now / Width then
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error,
+                                ASCII.ESC & "[" & Image (Cursor_Row - Now / Width) & "A");
+            end if;
+            if Now mod Width > 0 then
+               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[" & Image (Now mod Width) & "C");
+            end if;
+            Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.ESC & "[J");
+            Cursor_Row := Now / Width;
+         end;
+      end Erase;
+
+      procedure Echo (Bytes : String) is
+      begin
+         Append (Typed, Bytes);
+         Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Bytes);
+         if Width > 0 then
+            Cursor_Row := Row_After (Cells);
+         end if;
+      end Echo;
+
+      function Next_Key (Key : out Character) return Boolean is
+      begin
+         if Length (Ahead) > 0 then
+            Key := Element (Ahead, 1);
+            Delete (Ahead, 1, 1);
+            return True;
+         end if;
+         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
+           or else Last < Buffer'First
+         then
+            return False;
+         end if;
+         Key := Character'Val (Buffer (Buffer'First));
+         return True;
+      end Next_Key;
+
+      Key : Character;
    begin
       Outcome := Unavailable;
       if not Is_Available or else not Term.Save_Mode (Input, Guard.Saved) then
@@ -1116,42 +1307,46 @@ package body Model_Runner.CLI.Choosers is
          return "";
       end if;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
+      Find_Start;
       loop
-         if Hostkit.Descriptors.Read (Input, Buffer, Last) /= Hostkit.Descriptors.Transfer_Ok
-           or else Last < Buffer'First
-         then
+         if not Next_Key (Key) then
             Outcome := Ended;
             exit;
          end if;
-         declare
-            Key : constant Character := Character'Val (Buffer (Buffer'First));
-         begin
-            if Key in ASCII.CR | ASCII.LF then
-               Outcome := Entered;
-               exit;
-            elsif Key = ASCII.ESC then
-               --  A key's sequence -- an arrow -- means nothing here and
-               --  is let go; Escape alone gives the question up.
-               if not Key_Sequence_Skipped then
-                  Outcome := Escaped;
-                  exit;
-               end if;
-            elsif Key = ASCII.ETX then
-               Outcome := Interrupted;
-               exit;
-            elsif Key = ASCII.EOT and then Length (Typed) = 0 then
-               Outcome := Ended;
-               exit;
-            elsif Key in ASCII.DEL | ASCII.BS then
-               if Length (Typed) > 0 then
-                  Erase_Last (Typed);
-               end if;
-            elsif Key >= ' ' then
-               Append (Typed, Key);
-               Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, Key);
+         if Held_C2 then
+            Held_C2 := False;
+            if Character'Pos (Key) in 16#80# .. 16#9F# then
+               goto Next;
             end if;
-            Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
-         end;
+            Echo ([1 => Character'Val (16#C2#)]);
+         end if;
+         if Key in ASCII.CR | ASCII.LF then
+            Outcome := Entered;
+            exit;
+         elsif Key = ASCII.ESC then
+            --  A key's sequence -- an arrow -- means nothing here and
+            --  is let go; Escape alone gives the question up.
+            if not Key_Sequence_Skipped then
+               Outcome := Escaped;
+               exit;
+            end if;
+         elsif Key = ASCII.ETX then
+            Outcome := Interrupted;
+            exit;
+         elsif Key = ASCII.EOT and then Length (Typed) = 0 then
+            Outcome := Ended;
+            exit;
+         elsif Key in ASCII.DEL | ASCII.BS then
+            if Length (Typed) > 0 then
+               Erase;
+            end if;
+         elsif Key = Character'Val (16#C2#) then
+            Held_C2 := True;
+         elsif Key >= ' ' then
+            Echo ([1 => Key]);
+         end if;
+         <<Next>>
+         Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       end loop;
       Ada.Text_IO.Put (Ada.Text_IO.Standard_Error, ASCII.CR);
       Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Error);
@@ -1602,26 +1797,51 @@ package body Model_Runner.CLI.Choosers is
          else "  " & T.Escape_Controls (To_String (Status)));
 
       --  The line as it is drawn: a line feed a paste put in it as a mark
-      --  of its own (U+21B5), which takes one column and moves no row.
+      --  of its own (U+21B5), which takes one column and moves no row, and
+      --  a C1 control -- one an earlier session's history held -- shown as
+      --  the other controls are, not obeyed.
       function Visible (Part : String) return String is
          Mark   : constant String := Character'Val (16#E2#) & Character'Val (16#86#) & Character'Val (16#B5#);
          Result : Unbounded_String;
+         Index  : Natural := Part'First;
       begin
-         if Ada.Strings.Fixed.Index (Part, [1 => ASCII.LF]) = 0 then
+         if Ada.Strings.Fixed.Index (Part, [1 => ASCII.LF]) = 0
+           and then Ada.Strings.Fixed.Index (Part, [1 => Character'Val (16#C2#)]) = 0
+         then
             return Part;
          end if;
-         for C of Part loop
-            if C = ASCII.LF then
+         while Index <= Part'Last loop
+            if Part (Index) = ASCII.LF then
                Append (Result, Mark);
+            elsif Part (Index) = Character'Val (16#C2#) and then Index < Part'Last
+              and then Character'Pos (Part (Index + 1)) in 16#80# .. 16#9F#
+            then
+               Append (Result, T.Escape_Controls (Part (Index .. Index + 1)));
+               Index := Index + 1;
             else
-               Append (Result, C);
+               Append (Result, Part (Index));
             end if;
+            Index := Index + 1;
          end loop;
          return To_String (Result);
       end Visible;
 
+      --  Whether the last Redraw went on to the next row itself: a line
+      --  that ended exactly at the edge, the cursor after it.
+      Moved_On : Boolean := False;
+
       --  The prompt and the line drawn again from the prompt's row, the
       --  cursor put where it is in the line.
+      procedure Redraw;
+
+      --  On to the row after the line drawn last: once -- a line that
+      --  ended at the edge was on it already, and a second line end left
+      --  a blank row.
+      procedure Leave_Line is
+      begin
+         Put (if Moved_On then [1 => ASCII.CR] else ASCII.CR & ASCII.LF);
+      end Leave_Line;
+
       procedure Redraw is
          W        : constant Positive := Columns;
          Typed    : constant String := To_String (Text);
@@ -1642,31 +1862,69 @@ package body Model_Runner.CLI.Choosers is
            Model_Runner.UTF8.Wrapped_Columns (Prompt & Line & Shown_Ghost & Status_Shown, W);
          At_Cursor : constant Natural :=
            Model_Runner.UTF8.Wrapped_Columns (Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1)), W);
-         Wrapped  : Boolean := False;
-         End_Row  : Natural;
+         Before_Cursor : constant String := Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1));
+         --  The row the drawing ends on, from the prompt's: past the last
+         --  row when a line ending at the edge moves on to the next.
+         Moves_On : constant Boolean :=
+           Shown_Total > 0 and then Shown_Total mod W = 0 and then At_Cursor = Shown_Total;
+         Last_Row : constant Natural :=
+           (if Shown_Total > 0 and then Shown_Total mod W = 0 and then not Moves_On
+            then Shown_Total / W - 1 else Shown_Total / W);
+         --  A line taller than the window is drawn from its first row in
+         --  sight, not whole: the climb back up stops at the screen's top,
+         --  and drawing the whole of it from a middle row put a copy of its
+         --  upper rows into the scrollback on every key. The rows in sight
+         --  end at the line's end, or at the cursor's row when it is
+         --  further up.
+         Size     : Term.Window_Size;
+         Height   : constant Natural :=
+           (if Term.Size (Hostkit.Descriptors.Standard_Error, Size) and then Size.Rows > 1
+            then Size.Rows else 0);
+         Skip     : constant Natural :=
+           (if Height = 0 or else Last_Row < Height then 0
+            else Natural'Min (At_Cursor / W, Last_Row + 1 - Height));
+         Cut      : constant Boolean := Height > 0 and then Last_Row >= Skip + Height;
+         End_Row  : constant Natural := (if Cut then Skip + Height - 1 else Last_Row);
+         Wrapped  : constant Boolean := Moves_On and then not Cut;
       begin
          if W /= Drawn_Width and then Drawn_Before /= Null_Unbounded_String then
             Drawn_Row := Model_Runner.UTF8.Wrapped_Columns (To_String (Drawn_Before), W) / W;
          end if;
+         if Height > 0 then
+            Drawn_Row := Natural'Min (Drawn_Row, Height - 1);
+         end if;
          if Drawn_Row > 0 then
             Put (ASCII.ESC & "[" & Image (Drawn_Row) & "A");
          end if;
-         Put (ASCII.CR & ASCII.ESC & "[J" & Prompt & Pres.Coloured_Commands (Screen, Line));
-         --  What Right would take, dimmed after it.
-         if Shown_Ghost /= "" then
-            Put (ASCII.ESC & "[2m" & Shown_Ghost & ASCII.ESC & "[0m");
-         end if;
-         if Status /= Null_Unbounded_String then
-            Put (ASCII.ESC & "[2m" & Status_Shown & ASCII.ESC & "[0m");
+         if Skip = 0 and then not Cut then
+            Put (ASCII.CR & ASCII.ESC & "[J" & Prompt & Pres.Coloured_Commands (Screen, Line));
+            --  What Right would take, dimmed after it.
+            if Shown_Ghost /= "" then
+               Put (ASCII.ESC & "[2m" & Shown_Ghost & ASCII.ESC & "[0m");
+            end if;
+            if Status /= Null_Unbounded_String then
+               Put (ASCII.ESC & "[2m" & Status_Shown & ASCII.ESC & "[0m");
+            end if;
+            Drawn_Before := To_Unbounded_String (Before_Cursor);
+         else
+            --  The rows in sight alone, plain: a colour begun on a row out
+            --  of sight is not known on the rows after it.
+            declare
+               Whole : constant String := Prompt & Line & Shown_Ghost & Status_Shown;
+               From  : constant Positive := Model_Runner.UTF8.Row_Start (Whole, Skip, W);
+               Upto  : constant Natural :=
+                 (if Cut then Model_Runner.UTF8.Row_Start (Whole, Skip + Height, W) - 1 else Whole'Last);
+            begin
+               Put (ASCII.CR & ASCII.ESC & "[J" & Whole (From .. Upto));
+               Drawn_Before := To_Unbounded_String
+                 (Before_Cursor (Natural'Min (From, Before_Cursor'Last + 1) .. Before_Cursor'Last));
+            end;
          end if;
          --  Ended exactly at the edge with the cursor there: on to the next
          --  row, as the terminal would only once another character came.
-         if Shown_Total > 0 and then Shown_Total mod W = 0 and then At_Cursor = Shown_Total then
+         if Wrapped then
             Put (ASCII.LF & ASCII.CR);
-            Wrapped := True;
          end if;
-         End_Row := (if Shown_Total > 0 and then Shown_Total mod W = 0 and then not Wrapped
-                     then Shown_Total / W - 1 else Shown_Total / W);
          if End_Row > At_Cursor / W then
             Put (ASCII.ESC & "[" & Image (End_Row - At_Cursor / W) & "A");
          end if;
@@ -1674,9 +1932,9 @@ package body Model_Runner.CLI.Choosers is
          if At_Cursor mod W > 0 then
             Put (ASCII.ESC & "[" & Image (At_Cursor mod W) & "C");
          end if;
-         Drawn_Row := At_Cursor / W;
+         Drawn_Row := At_Cursor / W - Skip;
+         Moved_On := Wrapped;
          Drawn_Width := W;
-         Drawn_Before := To_Unbounded_String (Prompt & Visible (Typed (Typed'First .. Typed'First + Cursor - 1)));
          Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       end Redraw;
 
@@ -1878,7 +2136,7 @@ package body Model_Runner.CLI.Choosers is
                Cursor := Length (Text);
                Ghost := Null_Unbounded_String;
                Redraw;
-               Put (ASCII.CR & ASCII.LF);
+               Leave_Line;
                --  Commands each with what it does, a line each.
                if (for all One of Choices => One'Length > 1 and then One (One'First) = '/')
                  and then (for all One of Choices => Described (One) /= "")
@@ -2326,7 +2584,15 @@ package body Model_Runner.CLI.Choosers is
                      Complete_Word;
                   end if;
                when others =>
-                  if Key >= ' ' then
+                  --  A C1 control, typed or pasted -- U+009B is CSI -- is
+                  --  dropped with its lead byte, as the other controls in
+                  --  a paste are: drawn, the terminal obeyed it.
+                  if Character'Pos (Key) in 16#80# .. 16#9F# and then Cursor > 0
+                    and then Element (Text, Cursor) = Character'Val (16#C2#)
+                  then
+                     Delete (Text, Cursor, Cursor);
+                     Cursor := Cursor - 1;
+                  elsif Key >= ' ' then
                      Insert (Text, Cursor + 1, [1 => Key]);
                      Cursor := Cursor + 1;
                   end if;
@@ -2353,7 +2619,7 @@ package body Model_Runner.CLI.Choosers is
       Cursor := Length (Text);
       Ghost := Null_Unbounded_String;
       Redraw;
-      Put (ASCII.CR & ASCII.LF);
+      Leave_Line;
       Ada.Text_IO.Flush (Ada.Text_IO.Standard_Error);
       Finalize (Guard);
       Last_Read_Kept := False;

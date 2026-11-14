@@ -294,7 +294,9 @@ package body Model_Runner.UTF8 is
    function Code_Point_Columns (Code_Point : Natural) return Natural is
    begin
       case Code_Point is
-         when 16#0300# .. 16#036F# | 16#0483# .. 16#0489# | 16#0591# .. 16#05BD#
+         --  The C1 controls with the marks: a terminal draws none of them.
+         when 16#0080# .. 16#009F#
+            | 16#0300# .. 16#036F# | 16#0483# .. 16#0489# | 16#0591# .. 16#05BD#
             | 16#0610# .. 16#061A# | 16#064B# .. 16#065F# | 16#0E31# | 16#0E34# .. 16#0E3A#
             | 16#1AB0# .. 16#1AFF# | 16#1DC0# .. 16#1DFF# | 16#200B# .. 16#200F#
             | 16#20D0# .. 16#20FF# | 16#FE00# .. 16#FE0F# | 16#FE20# .. 16#FE2F#
@@ -397,6 +399,49 @@ package body Model_Runner.UTF8 is
       end loop;
       return Total;
    end Wrapped_Columns;
+
+   ---------------
+   -- Row_Start --
+   ---------------
+
+   function Row_Start (Item : String; Skip : Natural; Row : Positive) return Positive is
+      Index  : Natural := Item'First;
+      Total  : Natural := 0;
+      Target : constant Natural := Skip * Row;
+      Bytes, Width : Natural;
+   begin
+      if Skip = 0 then
+         return Item'First;
+      end if;
+      while Index <= Item'Last loop
+         Step (Item, Index, Bytes, Width);
+         if Item (Index) = ASCII.HT then
+            if Total >= Target then
+               return Index;
+            end if;
+            declare
+               Column : constant Natural := Total mod Row;
+               Stop   : constant Natural := Natural'Min ((Column / 8 + 1) * 8, Row - 1);
+            begin
+               if not (Column = 0 and then Total > 0) then
+                  Total := Total - Column + Natural'Max (Column, Stop);
+               end if;
+            end;
+         else
+            --  A wide character pushed past a row's last cell begins the
+            --  next row.
+            if Width = 2 and then Row > 1 and then Total mod Row = Row - 1 then
+               Total := Total + 1;
+            end if;
+            if Total >= Target then
+               return Index;
+            end if;
+            Total := Total + Width;
+         end if;
+         Index := Index + Bytes;
+      end loop;
+      return Item'Last + 1;
+   end Row_Start;
 
    -------------
    -- Fitting --

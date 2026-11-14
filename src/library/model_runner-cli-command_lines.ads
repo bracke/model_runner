@@ -31,6 +31,11 @@ package Model_Runner.CLI.Command_Lines is
       --  Whether its last word is free text kept as typed -- a note's --
       --  not words to be quoted.
       Free_Last  : Boolean := False;
+
+      --  A word typed after a value of words closed in quotes, which it
+      --  would have run on into unquoted: notes="see" the file. Not taken
+      --  as an operand -- it was glued to the task named -- but said.
+      Stray      : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  A request as the one line that reads back as it: the command, its

@@ -6,6 +6,7 @@ procedure Run_Line
 is
    All_Words  : constant Names.Vector := Identifiers_As_Kept (Split (Line));
    Open_Quote : constant Boolean := Left_Open;
+   Quoted     : constant Flag_Lists.Vector := Began_Quoted;
    --  "" for a line of no words: First_Element of none raised before the
    --  handler below was in force, out to whoever ran the line.
    Word       : constant String := (if All_Words.Is_Empty then "" else All_Words.First_Element);
@@ -390,6 +391,25 @@ begin
       Asked : constant Model_Runner.CLI.Command_Lines.Request := Request_Of (Line);
    begin
       Positional := Asked.Positional;
+      --  notes="see" the file: the file is neither the value nor a task.
+      if Asked.Stray /= Null_Unbounded_String and then not Free_Text then
+         Outcome := E.Make (E.CLI_Unexpected_Operand);
+         E.Add_Text (Outcome, "value", To_String (Asked.Stray));
+         Pres.Report (Screen, Outcome);
+         Last_Status := E.Exit_Status (Outcome);
+         return;
+      end if;
+      --  --verbose is how much is said, read above: not an operand -- /init
+      --  --verbose asked for no template of that name. The code queries
+      --  read it among their words themselves.
+      if Opt."=" (Command.Level, Opt.Verbose)
+        and then Word not in "/search" | "/scan" | "/tree" | "/sym" | "/refs" | "/deps" | "/users"
+                           | "/impact" | "/trace"
+      then
+         while Positional.Find_Index ("--verbose") /= Names.No_Index loop
+            Positional.Delete (Positional.Find_Index ("--verbose"));
+         end loop;
+      end if;
       --  A value is held to so many characters: one longer is refused,
       --  not cut -- cut, a long note or title was saved shortened and the
       --  command said it was done.
