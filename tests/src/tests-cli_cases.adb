@@ -1,3 +1,5 @@
+with Model_Runner.Agent;
+with Model_Runner.Tools.Registry;
 with Model_Runner.Markup;
 with Ada.Strings.Hash;
 with Ada.Containers.Indefinite_Hashed_Maps;
@@ -9098,6 +9100,135 @@ package body Tests.CLI_Cases is
                  "a capture that never opened returned '" & Back & "'");
       end;
    end Capture_Catches_And_Restores;
+
+   --  A conversation's turns go to the tool loop where the run gives one,
+   --  the model's context has room for the tools and none of the caller's
+   --  own were named; /tools off makes a turn plain talk again and /tools
+   --  on gives the tools back, each said. A stand-in loop counts the turns
+   --  it is given and answers each.
+   procedure Conversation_Turns_Use_The_Tools
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package Back renames Model_Runner.Backend;
+      use Ada.Text_IO;
+
+      Image  : B.Byte_Array_Access;
+      Input  : constant String := "obj/tools-turns-in.txt";
+      Log    : constant String := "obj/tools-turns-err.txt";
+      Script : File_Type;
+      Loop_Turns : Natural := 0;
+      LF : constant Character := Character'Val (10);
+
+      procedure Stand_In
+        (Messages : in out Model_Runner.Conversation.History;
+         Request  : Model_Runner.Generation.Request;
+         Stop_Set : Model_Runner.Stops.Set;
+         Reason   : out Model_Runner.Agent.Stop_Reason)
+      is
+         pragma Unreferenced (Request, Stop_Set);
+         Added : E.Error_Info;
+      begin
+         Loop_Turns := Loop_Turns + 1;
+         Model_Runner.Conversation.Append
+           (Messages, Model_Runner.Conversation.Assistant_Role, "answered by the loop", Added);
+         Reason := Model_Runner.Agent.Answered;
+      end Stand_In;
+   begin
+      --  Room for the tools: a context of Tools_Least_Context.
+      Tiny_Model.Build (Image, Room => Model_Runner.CLI.Interactive.Tools_Least_Context);
+      Create (Script, Out_File, Input);
+      --  Read from a file, a turn is sent by an empty line.
+      Put (Script, "hello" & LF & LF & "/tools off" & LF & "plain talk" & LF & LF
+                   & "/tools on" & LF & "again" & LF & LF & "/exit" & LF);
+      Close (Script);
+      declare
+         Copy    : aliased constant B.Byte_Array := Image.all;
+         Rig     : Harness (Copy'Access);
+         Session : L.Session;
+         Catalog : aliased Model_Runner.Localization.Catalog;
+         Screen  : aliased Model_Runner.Presentation.Console;
+         Options : Opt.Command;
+         From    : File_Type;
+         Err     : File_Type;
+         Status  : Natural := 0;
+         Outcome : E.Error_Info;
+      begin
+         Start (Rig, Back.Backend_Reference);
+         L.Open (Session, Rig.Ready, Status => Outcome);
+         Assert (E.Is_Ok (Outcome), "the session did not open");
+         Assert (L.Capacity (Session) >= Model_Runner.CLI.Interactive.Tools_Least_Context,
+                 "the session's context was" & L.Capacity (Session)'Image & ", too small for the tools");
+         Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+         Model_Runner.Presentation.Open
+           (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+            (Output_Is_Terminal => False, Error_Is_Terminal => False,
+             Input_Is_Terminal  => False, Colour_Suppressed => True),
+            Opt.Normal);
+         Options.Max_Tokens := 2;
+         Options.Max_Tokens_Set := True;
+         Options.Sampling.Temperature := 0.0;
+         Open (From, In_File, Input);
+         Create (Err, Out_File, Log);
+         Set_Input (From);
+         Set_Error (Err);
+         Captured_Output.Open ("obj/tools-turns-out.txt");
+         begin
+            Model_Runner.CLI.Interactive.Run
+              (Options, Screen, Rig.Ready, Session, null, Status => Status,
+               Agent_Turn => Stand_In'Access);
+         exception
+            when others =>
+               declare
+                  Ignored : constant String := Captured_Output.Close;
+                  pragma Unreferenced (Ignored);
+               begin
+                  null;
+               end;
+               Set_Input (Standard_Input);
+               Set_Error (Standard_Error);
+               Close (From);
+               Close (Err);
+               raise;
+         end;
+         declare
+            Ignored : constant String := Captured_Output.Close;
+            pragma Unreferenced (Ignored);
+         begin
+            null;
+         end;
+         Set_Input (Standard_Input);
+         Set_Error (Standard_Error);
+         Close (From);
+         Close (Err);
+         Assert (Status = 0, "the session left with status" & Status'Image);
+         Assert (Loop_Turns = 2,
+                 "the tool loop was given" & Loop_Turns'Image & " turns, not the two with the tools on");
+         declare
+            Said : constant String := Text_Of (Log);
+         begin
+            Assert (Project_Tools.Text.Contains
+                      (Said, Model_Runner.Localization.Text (Catalog, "cli.interactive.tools_off"))
+                    and then Project_Tools.Text.Contains
+                               (Said, Model_Runner.Localization.Text (Catalog, "cli.interactive.tools_on")),
+                    "/tools off and /tools on were not said: " & Said);
+         end;
+         L.Close (Session);
+         Model_Runner.Localization.Close (Catalog);
+      end;
+      B.Free (Image);
+
+      --  What asks first: a call that changes something or runs a program;
+      --  one that only reads runs unasked, and one not known is asked.
+      Assert (not Model_Runner.Tools.Registry.Asks_First ("read_file")
+              and then not Model_Runner.Tools.Registry.Asks_First ("list_directory"),
+              "a tool that only reads asks first");
+      Assert (Model_Runner.Tools.Registry.Asks_First ("write_file")
+              and then Model_Runner.Tools.Registry.Asks_First ("edit_file")
+              and then Model_Runner.Tools.Registry.Asks_First ("shell")
+              and then Model_Runner.Tools.Registry.Asks_First ("no_such_tool"),
+              "a tool that changes something, runs a program, or is not known, runs unasked");
+   end Conversation_Turns_Use_The_Tools;
 
    --  Every interactive command, run rather than parsed.
    --
@@ -18772,6 +18903,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Shell_Command_Goes_With_The_Next_Message'Access,
          "a line after ! runs in the shell, and what it writes goes with the next message");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Conversation_Turns_Use_The_Tools'Access,
+         "a conversation's turns go to the tool loop while the tools are on, and /tools on and off say so");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Switch_Carries_The_Conversation'Access,
          "/model goes on with another model, the conversation with it, and back where one will not load");

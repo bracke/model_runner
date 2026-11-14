@@ -21,7 +21,6 @@ with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Speech_Input;
 with Model_Runner.Clocks;
-with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.Limits;
@@ -30,11 +29,9 @@ with Model_Runner.Localization;
 with Model_Runner.Platform.Signals;
 with Model_Runner.Platform.Signals.Waiting;
 with Model_Runner.Sampling;
-with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Output.Harmony;
 with Model_Runner.Output.Reasoning;
-with Model_Runner.Agent;
 with Model_Runner.Tokenizer;
 with Model_Runner.Tensors;
 with Model_Runner.Numerics;
@@ -347,7 +344,7 @@ package body Model_Runner.CLI.Interactive is
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
-                            | Show_Picture | Show_Video | Help | Switch_Model
+                            | Show_Picture | Show_Video | Help | Switch_Model | Show_Tools
                then
                   return (Kind, First, Last);
                else
@@ -475,7 +472,12 @@ package body Model_Runner.CLI.Interactive is
       Rules    : Model_Runner.Generation.Grammar_Reference := null;
       Tools    : access constant Model_Runner.Tools.Definitions := null;
       Status   : out Natural;
-      Cancel   : Model_Runner.Cancellation.Token_Reference := null)
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null;
+      Agent_Turn : access procedure
+        (Messages : in out Model_Runner.Conversation.History;
+         Request  : Model_Runner.Generation.Request;
+         Stop_Set : Model_Runner.Stops.Set;
+         Reason   : out Model_Runner.Agent.Stop_Reason) := null)
    is
       Bounds : constant Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
@@ -484,6 +486,13 @@ package body Model_Runner.CLI.Interactive is
 
       Messages_Room : Model_Runner.Conversation.Rooms.Holder;
       Messages      : Conv.History renames Messages_Room.Data.all;
+
+      --  Whether a turn has the built-in tools: where the run gives them,
+      --  the caller named no tools of their own, and the context has room.
+      --  /tools on and /tools off change it.
+      Tools_On : Boolean :=
+        Agent_Turn /= null and then Tools = null
+        and then L.Capacity (Session) >= Tools_Least_Context;
 
       --  The project's revision the conversation last saw: what it moved by
       --  since is said before the next turn.
@@ -1269,8 +1278,22 @@ package body Model_Runner.CLI.Interactive is
                end if;
             end;
 
+         elsif Asked.Kind = Show_Tools and then Asked.First > 0
+           and then Line (Asked.First .. Asked.Last) in "on" | "off"
+         then
+            --  The built-in tools for the turns to come, or not.
+            if Agent_Turn = null or else Tools /= null then
+               Pres.Put_Note (Screen, "cli.interactive.tools_unavailable");
+            else
+               Tools_On := Line (Asked.First .. Asked.Last) = "on";
+               Pres.Put_Note (Screen, (if Tools_On then "cli.interactive.tools_on"
+                                       else "cli.interactive.tools_off"));
+            end if;
+
          elsif Asked.Kind = Show_Tools then
-            if Tools = null or else Model_Runner.Tools.Count (Tools.all) = 0
+            if Tools_On then
+               Pres.Put_Note (Screen, "cli.interactive.tools_builtin");
+            elsif Tools = null or else Model_Runner.Tools.Count (Tools.all) = 0
             then
                Pres.Put_Note (Screen, "cli.interactive.no_tools");
             else
@@ -1759,6 +1782,31 @@ package body Model_Runner.CLI.Interactive is
          --  usually holds an exact prefix of it and only the new suffix has to
          --  be evaluated.
          Request.Reuse_Committed_Prefix := True;
+         --  With the tools: the turn is the agent loop's -- it renders,
+         --  generates, runs the calls it is allowed, and answers.
+         if Tools_On and then Sender = Conv.User_Role then
+            Free_Text (Rendered);
+            declare
+               Agent_Request : Gen.Request := Request;
+               Reason        : Model_Runner.Agent.Stop_Reason;
+               use type Model_Runner.Agent.Stop_Reason;
+            begin
+               --  A reply a step: room for its reasoning and its call, the
+               --  rule every agent's turn has.
+               Agent_Request.Max_Tokens := Opt.Reply_Tokens (Item, L.Capacity (Session));
+               Agent_Request.Fill_Context := False;
+               Agent_Turn (Messages, Agent_Request, Stop_Set, Reason);
+               Turn_Taken := True;
+               Have_Stats := False;
+               if Reason /= Model_Runner.Agent.Answered then
+                  Pres.Put_Note
+                    (Screen, "cli.interactive.agent_stopped",
+                     [Loc.Named ("value", Model_Runner.Agent.Reason_Words (Reason))]);
+               end if;
+            end;
+            return;
+         end if;
+
          Request.Hold_Back :=
            Model_Runner.Templates.Opening
              (L.Template (Prepared).all, Messages,

@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Choosers;
 with Model_Runner.Output.Harmony;
 with Model_Runner.CLI.Held_Output;
 with Model_Runner.Output.Reasoning;
@@ -398,6 +399,72 @@ package body Model_Runner.CLI.Execute.Run_Command is
       else
          return Model_Runner.Agent.Deny;
       end if;
+   end Consider;
+
+   --  What a conversation's turn with the tools asks the user before a call
+   --  runs. A call that only reads -- the files, the clock, a sum, the
+   --  project's graph -- runs unasked; one that changes something, starts a
+   --  program or reaches the network is shown and asked in the selector:
+   --  this once, this tool always for the session, not this one (the model
+   --  is told and may try another way), or stop the turn. Esc is no.
+   type Conversation_Approver (Screen : access Pres.Console) is
+     limited new Model_Runner.Agent.Approver with record
+        --  The tools allowed for the session, a space either side of each.
+        Always : US.Unbounded_String := US.To_Unbounded_String (" ");
+     end record;
+
+   overriding function Consider
+     (Self : in out Conversation_Approver; Named : String; Arguments : String)
+      return Model_Runner.Agent.Verdict;
+
+   overriding function Consider
+     (Self : in out Conversation_Approver; Named : String; Arguments : String)
+      return Model_Runner.Agent.Verdict
+   is
+      package Reg renames Model_Runner.Tools.Registry;
+      package Ch renames Model_Runner.CLI.Choosers;
+      Items : Ch.Choice_List;
+      Taken : Natural;
+
+      function Option (Key : String) return Ch.Choice
+      is ((Label      => US.To_Unbounded_String
+                           (Pres.Message_Value (Self.Screen.all, Key)),
+           Tag        => US.Null_Unbounded_String,
+           Details    => US.Null_Unbounded_String,
+           Selectable => True));
+
+      --  The call as it is shown: its name and arguments, cut to a line.
+      Shown : constant String := Named & " " & Arguments;
+   begin
+      if not Reg.Asks_First (Named) then
+         return Model_Runner.Agent.Allow;
+      end if;
+      if Ada.Strings.Fixed.Index (US.To_String (Self.Always), " " & Named & " ") > 0 then
+         return Model_Runner.Agent.Allow;
+      end if;
+      --  No terminal to ask at: not run.
+      if not Ch.Is_Available (Self.Screen.all) then
+         return Model_Runner.Agent.Deny;
+      end if;
+      Ch.Append (Items, Option ("cli.agent.approve.once"));
+      Ch.Append (Items, Option ("cli.agent.approve.always"));
+      Ch.Append (Items, Option ("cli.agent.approve.no"));
+      Ch.Append (Items, Option ("cli.agent.approve.stop"));
+      Taken := Ch.Choose
+        (Self.Screen.all, "cli.agent.approve.title", Items,
+         Heading => Pres.Message_Value (Self.Screen.all, "cli.agent.approve.title") & " "
+                    & (if Shown'Length > 200 then Shown (Shown'First .. Shown'First + 199) & "..." else Shown));
+      case Taken is
+         when 1 =>
+            return Model_Runner.Agent.Allow;
+         when 2 =>
+            US.Append (Self.Always, Named & " ");
+            return Model_Runner.Agent.Allow;
+         when 4 =>
+            return Model_Runner.Agent.Halt;
+         when others =>
+            return Model_Runner.Agent.Deny;
+      end case;
    end Consider;
 
    --  Puts the model's question to the user on the console and reads their

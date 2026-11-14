@@ -149,4 +149,17 @@ package Model_Runner.Tools.Registry is
    function Graph_Finding (Kind : String) return Boolean is
      (Kind in "symbol" | "references" | "depends_on" | "used_by" | "impact" | "search" | "declaration");
 
+   --  Whether a call of a tool is put to the user before it runs, in a
+   --  conversation: it changes something, starts a program, reaches the
+   --  network, hands work to a helper or runs the project's checks. One
+   --  that only reads or works things out runs unasked; one not known is
+   --  asked.
+   --
+   --  @param Named The tool's name.
+   --  @return True when the user is asked first.
+   function Asks_First (Named : String) return Boolean
+   is (not Known (Named)
+       or else Needs (Named) not in Facts | Text | Clock | Memory | Read_Files
+                                   | Retrieval | Ask_User | Project_Graph);
+
 end Model_Runner.Tools.Registry;

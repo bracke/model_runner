@@ -1,3 +1,6 @@
+with Model_Runner.Conversation;
+with Model_Runner.Agent;
+with Model_Runner.Stops;
 with Model_Runner.Text;
 with Model_Runner.Cancellation;
 with Model_Runner.CLI.Options;
@@ -232,6 +235,11 @@ package Model_Runner.CLI.Interactive is
    --  The carried conversation given up, its file removed.
    procedure Drop_Carried;
 
+   --  The smallest context a conversation is offered the built-in tools in:
+   --  their definitions and the turns of a call and its answer need room,
+   --  and in less they crowd the conversation out.
+   Tools_Least_Context : constant := 4096;
+
    procedure Run
      (Item     : Model_Runner.CLI.Options.Command;
       Screen   : in out Model_Runner.Presentation.Console;
@@ -240,7 +248,16 @@ package Model_Runner.CLI.Interactive is
       Rules    : Model_Runner.Generation.Grammar_Reference := null;
       Tools    : access constant Model_Runner.Tools.Definitions := null;
       Status   : out Natural;
-      Cancel   : Model_Runner.Cancellation.Token_Reference := null);
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null;
+      --  A turn with the built-in tools: the message is in Messages, and
+      --  the model may read, write and run things -- each that changes
+      --  something asked of the user first -- until it answers. Null where
+      --  the run gives none; then the model only talks.
+      Agent_Turn : access procedure
+        (Messages : in out Model_Runner.Conversation.History;
+         Request  : Model_Runner.Generation.Request;
+         Stop_Set : Model_Runner.Stops.Set;
+         Reason   : out Model_Runner.Agent.Stop_Reason) := null);
 
 private
 

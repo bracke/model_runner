@@ -732,11 +732,75 @@ begin
    --  Interactive mode owns its own loop; it needs the same prepared model
    --  and session, so it is entered here rather than earlier.
    if Item.Prompt_Kind = Opt.Prompt_Interactive then
-      Model_Runner.CLI.Interactive.Run
-        (Item, Screen, Prepared, Session,
-         (if Rules_Ready then Rules'Unchecked_Access else null),
-         (if Tools_Ready then Offered'Unchecked_Access else null),
-         Status, Cancel'Unchecked_Access);
+      declare
+         --  A turn of the conversation with the built-in tools: the agent
+         --  loop on the conversation's own history, each call shown as it
+         --  is made, one that changes something asked of the user first.
+         Talk_Runner  : aliased Model_Runner.Tools.Builtin.Instance;
+         Talk_Asker   : aliased Console_Inquirer (Screen'Unchecked_Access);
+         Talk_Approve : aliased Conversation_Approver (Screen'Unchecked_Access);
+         Talk_Watch   : aliased Agent_Watch (Screen'Unchecked_Access, Trace => False, Log => null);
+         Talk_Tools   : Model_Runner.Tools.Definitions;
+         Talk_Ready   : Boolean := False;
+
+         --  The most steps a turn takes: a conversation's task is read,
+         --  changed and checked in more than a single prompt's few.
+         Talk_Steps : constant Positive := Positive'Max (Item.Max_Steps, 32);
+
+         procedure Converse
+           (Messages : in out Conv.History;
+            Request  : Gen.Request;
+            Stops_In : Model_Runner.Stops.Set;
+            Reason   : out Model_Runner.Agent.Stop_Reason)
+         is
+            Loop_Out : Model_Runner.Agent.Outcome;
+            Read     : E.Error_Info;
+         begin
+            --  Wired once, on the first turn: the questions it may put, the
+            --  tree its file tools are held to, and the tools that wiring
+            --  can carry out.
+            if not Talk_Ready then
+               Talk_Runner.Use_Inquirer (Talk_Asker'Unchecked_Access);
+               Talk_Runner.Set_Base (Ada.Directories.Current_Directory);
+               Model_Runner.Tools.Read (Talk_Tools, Talk_Runner.Offered_Text, Read);
+               Talk_Ready := True;
+            end if;
+            Talk_Watch.Text := Agent_Sink'Unchecked_Access;
+            Agent_Sink.Screen := Screen'Unchecked_Access;
+            Model_Runner.Agent.Run
+              (Source     => Prepared,
+               Session    => Session,
+               Messages   => Messages,
+               Offered    => Talk_Tools,
+               Executor   => Talk_Runner,
+               Generation => Request,
+               Stop_Set   => Stops_In,
+               Sink       => Agent_Sink'Unchecked_Access,
+               Time       => Clock'Unchecked_Access,
+               Seeds      => Seeds'Unchecked_Access,
+               Cancel     => Cancel'Unchecked_Access,
+               Max_Steps  => Talk_Steps,
+               Thinking   => Item.Thinking,
+               Effort     => Item.Effort,
+               Hide_Reasoning => Item.Hide_Reasoning,
+               Watch      => Talk_Watch'Unchecked_Access,
+               Approve    => Talk_Approve'Unchecked_Access,
+               Tool_Syntax =>
+                 Model_Runner.Templates.Reading_Syntax (L.Template_Format (Prepared)),
+               Compact    => True,
+               Result     => Loop_Out);
+            Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
+            Reason := Loop_Out.Reason;
+         end Converse;
+      begin
+         Model_Runner.CLI.Interactive.Run
+           (Item, Screen, Prepared, Session,
+            (if Rules_Ready then Rules'Unchecked_Access else null),
+            (if Tools_Ready then Offered'Unchecked_Access else null),
+            Status, Cancel'Unchecked_Access,
+            Agent_Turn => Converse'Access);
+         Model_Runner.Tools.Close (Talk_Tools);
+      end;
       Cleanup;
       return;
    end if;
