@@ -1,6 +1,7 @@
 with Model_Runner.Processes;
 with Model_Runner.Tools.Runner;
 with Model_Runner.CLI.Language_Server;
+with Model_Runner.CLI.MCP;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
@@ -16796,6 +16797,72 @@ package body Tests.CLI_Cases is
          Restore_Settings;
          Assert (not Model_Runner.CLI.Language_Server.Configured, "a server was named where no setting names one");
          Ada.Directories.Delete_File (Edited);
+         Ada.Directories.Delete_File (Own);
+      end;
+
+      --  MCP servers: each named one started and its tools, over pages,
+      --  offered as mcp__NAME__TOOL; a call sent to it and its text
+      --  answered, other content said to be there; an error answered as a
+      --  failed call; a server that will not start said, the rest used;
+      --  and every one let go of after.
+      declare
+         Own      : constant String := Ada.Directories.Full_Name ("obj/mcp-settings");
+         Plain    : constant String := "bin/tests";
+         Server   : constant String :=
+           Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+         Runner   : Model_Runner.CLI.Tool_Turns.Hooked_Instance;
+         Answer   : String (1 .. 4096);
+         Last     : Natural;
+         Status   : E.Error_Info;
+         Notes    : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
+         Ada.Text_IO.Put_Line (File, "mcp.fake = " & Server & " fake-mcp");
+         Ada.Text_IO.Put_Line (File, "mcp.broken = exit 1");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
+         Assert (Model_Runner.CLI.MCP.Configured, "named servers were not seen");
+         Model_Runner.CLI.MCP.Start_All (Notes);
+         Assert (Ada.Strings.Unbounded.Index (Notes, "broken: ") > 0
+                 and then Ada.Strings.Unbounded.Index (Notes, "fake") = 0,
+                 "the servers' failures were not said as they are: " & Ada.Strings.Unbounded.To_String (Notes));
+         declare
+            Offered : constant String := Model_Runner.CLI.MCP.Definitions;
+         begin
+            Assert (Ada.Strings.Fixed.Index (Offered, """mcp__fake__echo""") > 0
+                    and then Ada.Strings.Fixed.Index (Offered, """mcp__fake__fail""") > 0
+                    and then Ada.Strings.Fixed.Index (Offered, "Say the text back") > 0
+                    and then Ada.Strings.Fixed.Index (Offered, """required"":[""text""]") > 0,
+                    "a server's tools, both pages, were not offered as it said them: " & Offered);
+            declare
+               Read  : E.Error_Info;
+               Tools : Model_Runner.Tools.Definitions;
+            begin
+               Model_Runner.Tools.Read (Tools, "[" & Offered & "]", Read);
+               Assert (E.Is_Ok (Read) and then Model_Runner.Tools.Count (Tools) = 2,
+                       "the servers' tools were not read as tool definitions");
+               Model_Runner.Tools.Close (Tools);
+            end;
+         end;
+         Assert (Ada.Strings.Fixed.Index (Model_Runner.CLI.MCP.Listing, "fake: running, 2 tools") > 0,
+                 "/mcp's listing was: " & Model_Runner.CLI.MCP.Listing);
+         Model_Runner.Tools.Runner.Run
+           (Runner, "mcp__fake__echo", "{""text"": ""hello""}", Answer, Last, Status);
+         Assert (E.Is_Ok (Status)
+                 and then Answer (1 .. Last) = "echo: hello" & ASCII.LF & "[image, image/png, not shown]",
+                 "a server's answer was not the tool's: [" & Answer (1 .. Last) & "]");
+         declare
+            Outcome : Model_Runner.Tools.Runner.Call_Outcome;
+         begin
+            Runner.Run ("mcp__fake__fail", "{}", Answer, Last, Outcome, Status);
+            Assert (Model_Runner.Tools.Runner."=" (Outcome.Answer, Model_Runner.Tools.Runner.Failed)
+                    and then Answer (1 .. Last) = "it failed on purpose",
+                    "a server's error was not a failed call: " & Answer (1 .. Last));
+         end;
+         Model_Runner.CLI.MCP.Stop_All;
+         Assert (not Model_Runner.CLI.MCP.Owns ("mcp__fake__echo"), "a stopped server's tools were still owned");
+         Restore_Settings;
+         Assert (not Model_Runner.CLI.MCP.Configured, "a server was named where no setting names one");
          Ada.Directories.Delete_File (Own);
       end;
    end Own_Commands_And_Hooks_Run;

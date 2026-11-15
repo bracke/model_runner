@@ -1,3 +1,4 @@
+with Model_Runner.CLI.MCP;
 with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.Sampling;
@@ -843,6 +844,25 @@ begin
                      end;
                   end loop;
                   Model_Runner.Tools.Close (Can);
+                  --  And the tools of the user's servers, those started: one
+                  --  that would not start said, and the rest go on.
+                  if Model_Runner.CLI.MCP.Configured then
+                     declare
+                        Notes   : Ada.Strings.Unbounded.Unbounded_String;
+                     begin
+                        Model_Runner.CLI.MCP.Start_All (Notes);
+                        if Ada.Strings.Unbounded.Length (Notes) > 0 then
+                           Pres.Put_Note
+                             (Screen, "cli.interactive.mcp_failed",
+                              [Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Notes))]);
+                        end if;
+                        if Model_Runner.CLI.MCP.Definitions /= "" then
+                           Ada.Strings.Unbounded.Append
+                             (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
+                                    & Model_Runner.CLI.MCP.Definitions);
+                        end if;
+                     end;
+                  end if;
                   Model_Runner.Tools.Read
                     (Talk_Tools, "[" & Ada.Strings.Unbounded.To_String (Kept) & "]", Read);
                end;
@@ -875,6 +895,9 @@ begin
                Result     => Loop_Out);
             Close_Helper;
             Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
+            --  The answer's last line ended, so that what is said under it
+            --  -- the status line -- is not put on the end of it.
+            Pres.End_Line (Pres.Standard_Output_Sink (Agent_Sink));
             Reason := Loop_Out.Reason;
          end Converse;
       begin
@@ -885,8 +908,10 @@ begin
             Status, Cancel'Unchecked_Access,
             Agent_Turn => Converse'Access);
          Model_Runner.Tools.Close (Talk_Tools);
-         --  The language server, where one was started, let go of.
+         --  The language server and the user's servers, where started,
+         --  let go of.
          Model_Runner.CLI.Language_Server.Stop;
+         Model_Runner.CLI.MCP.Stop_All;
       end;
       Cleanup;
       return;

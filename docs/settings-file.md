@@ -105,6 +105,33 @@ tools.allow = shell(alr build*) shell(git status) write_file(src/*) edit_file(sr
 tools.deny  = shell(git push*) shell(rm -rf*) fetch_url
 ```
 
+## MCP servers
+
+A key `mcp.NAME` names a Model Context Protocol server -- a program of
+yours, or one published, that offers tools of its own -- and the command
+that starts it, by the host's shell in the session's folder:
+
+```
+mcp.files  = npx -y @modelcontextprotocol/server-filesystem /home/me/notes
+mcp.github = GITHUB_PERSONAL_ACCESS_TOKEN=... npx -y @modelcontextprotocol/server-github
+```
+
+A conversation starts them when its first turn with the tools begins,
+speaks the protocol with each on its standard input and output (a JSON-RPC
+message a line; what a server writes to standard error is not shown), and
+offers their tools to the model as `mcp__NAME__TOOL`, described and shaped
+as the server says. A call is sent to its server and waited for up to five
+minutes -- Ctrl-C stops the wait and asks the server to stop -- and its
+answer's text is the tool's answer, a picture or other content said to be
+there, up to 64 KiB. An error the server answers is a failed call the model
+is told of. Every call is asked about first, as a shell's is; `tools.allow`
+lets one run unasked (`mcp__files__*` for all of a server's tools), and
+plan mode refuses them. A server that will not start or list its tools is
+said once and the others are used; `/mcp` lists the servers, whether each
+runs, and how many tools it gives. They are stopped when the conversation
+ends. Only servers spoken to on standard input and output are supported,
+not those reached over HTTP.
+
 ## A language server
 
 `lsp` names a language server, a command speaking the Language Server

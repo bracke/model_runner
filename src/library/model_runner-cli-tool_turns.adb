@@ -1,3 +1,4 @@
+with Model_Runner.CLI.MCP;
 with Model_Runner.CLI.Language_Server;
 with Hostkit.Shell;
 with Model_Runner.Processes;
@@ -434,6 +435,31 @@ package body Model_Runner.CLI.Tool_Turns is
          end if;
       end Add;
    begin
+      --  A server's tool: sent to it, and its answer the tool's.
+      if Model_Runner.CLI.MCP.Owns (Named) then
+         declare
+            use type Model_Runner.CLI.MCP.Call_End;
+            package Tr renames Model_Runner.Tools.Runner;
+            Said  : Unbounded_String;
+            Ended : Model_Runner.CLI.MCP.Call_End;
+         begin
+            Model_Runner.CLI.MCP.Call (Named, Arguments, Tr.Context_Of (Self).Cancel, Said, Ended);
+            Last := Result'First - 1;
+            Add (To_String (Said));
+            Outcome := Tr.Done;
+            Outcome.Answer :=
+              (case Ended is
+                 when Model_Runner.CLI.MCP.Answered  => Tr.Answered,
+                 when Model_Runner.CLI.MCP.Failed    => Tr.Failed,
+                 when Model_Runner.CLI.MCP.Cancelled => Tr.Cancelled,
+                 when Model_Runner.CLI.MCP.Timed_Out => Tr.Timed_Out);
+            --  What it changed is not known: taken as changed.
+            Outcome.Changed := Ended = Model_Runner.CLI.MCP.Answered;
+            Outcome.Truncated := Length (Said) > Result'Length;
+            Status := Model_Runner.Errors.Success;
+         end;
+         return;
+      end if;
       Model_Runner.Tools.Builtin.Run
         (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last, Outcome, Status);
       if Model_Runner.Errors.Is_Ok (Status)

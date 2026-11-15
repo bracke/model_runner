@@ -85,6 +85,7 @@ package Model_Runner.CLI.Interactive is
       Plan_Mode,
       Show_Jobs,
       Paste_Picture,
+      Show_Servers,
       Unknown);
 
    --  The word a caller types for an interactive command.

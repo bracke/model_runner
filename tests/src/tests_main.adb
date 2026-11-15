@@ -2994,6 +2994,88 @@ begin
          end;
       end;
 
+   elsif Command = "fake-mcp" then
+      --  A stand-in MCP server, a JSON-RPC message a line on standard input
+      --  and output: it answers initialize, lists two tools over two pages
+      --  -- echo, which says its text back, and fail, which answers as an
+      --  error -- and before answering a call asks the client a ping, as a
+      --  server may. What the conversation's MCP client is tested against.
+      declare
+         --  The text after Key up to Stop.
+         function After (Message, Key : String; Stop : Character) return String is
+            At_Key : constant Natural := Ada.Strings.Fixed.Index (Message, Key);
+            Ending : Natural;
+         begin
+            if At_Key = 0 then
+               return "";
+            end if;
+            Ending := At_Key + Key'Length;
+            while Ending <= Message'Last and then Message (Ending) /= Stop loop
+               Ending := Ending + 1;
+            end loop;
+            return Message (At_Key + Key'Length .. Ending - 1);
+         end After;
+
+         procedure Say (Json : String) is
+         begin
+            Ada.Text_IO.Put_Line (Json);
+            Ada.Text_IO.Flush;
+         end Say;
+
+         --  The call's "text" argument, a space after its colon or none.
+         function Text_Argument (Message : String) return String is
+            Rest : constant String := After (Message, """text"":", '}');
+            From : Positive := Rest'First;
+         begin
+            while From <= Rest'Last and then Rest (From) in ' ' | '"' loop
+               From := From + 1;
+            end loop;
+            return After (Rest (From - 1 .. Rest'Last) & """", """", '"');
+         end Text_Argument;
+      begin
+         loop
+            declare
+               Message : constant String := Ada.Text_IO.Get_Line;
+               Called  : constant String := After (Message, """method"":""", '"');
+               Id      : constant String := After (Message, """id"":", ',');
+            begin
+               if Called = "initialize" then
+                  Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""protocolVersion"":""2025-06-18"","
+                       & """capabilities"":{""tools"":{}},""serverInfo"":{""name"":""fake"",""version"":""1""}}}");
+               elsif Called = "tools/list" and then Ada.Strings.Fixed.Index (Message, "cursor") = 0 then
+                  Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""tools"":[{""name"":""echo"","
+                       & """description"":""Say the text back"",""inputSchema"":{""type"":""object"","
+                       & """properties"":{""text"":{""type"":""string""}},""required"":[""text""]}}],"
+                       & """nextCursor"":""page-2""}}");
+               elsif Called = "tools/list" then
+                  Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""tools"":[{""name"":""fail"","
+                       & """description"":""Always fails"",""inputSchema"":{""type"":""object""}}]}}");
+               elsif Called = "tools/call" then
+                  --  A request of its own first, its answer read before going on.
+                  Say ("{""jsonrpc"":""2.0"",""id"":""p1"",""method"":""ping""}");
+                  declare
+                     Pong : constant String := Ada.Text_IO.Get_Line;
+                  begin
+                     if Ada.Strings.Fixed.Index (Pong, """p1""") = 0 then
+                        Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""error"":{""code"":-1,"
+                             & """message"":""the ping was not answered""}}");
+                     elsif Ada.Strings.Fixed.Index (Message, """name"":""echo""") > 0 then
+                        Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""content"":[{""type"":""text"","
+                             & """text"":""echo: " & Text_Argument (Message) & """},"
+                             & "{""type"":""image"",""data"":""AA=="",""mimeType"":""image/png""}]}}");
+                     else
+                        Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""content"":[{""type"":""text"","
+                             & """text"":""it failed on purpose""}],""isError"":true}}");
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
+      exception
+         when Ada.IO_Exceptions.End_Error =>
+            null;
+      end;
+
    elsif Command = "fake-lsp" then
       --  A stand-in language server on standard input and output: answers
       --  initialize and shutdown, and on each opened or changed file says

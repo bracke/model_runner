@@ -1,3 +1,4 @@
+with Model_Runner.CLI.MCP;
 with Model_Runner.Processes;
 with Ada.Streams.Stream_IO;
 with Model_Runner.Tools.Todo;
@@ -80,7 +81,8 @@ package body Model_Runner.CLI.Interactive is
          when Compact_Now  => "/compact",
          when Plan_Mode    => "/plan",
          when Show_Jobs    => "/jobs",
-         when Paste_Picture => "/paste");
+         when Paste_Picture => "/paste",
+         when Show_Servers => "/mcp");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -1751,6 +1753,21 @@ package body Model_Runner.CLI.Interactive is
 
          elsif Asked.Kind = Show_Jobs then
             Jobs_Asked := True;
+
+         elsif Asked.Kind = Show_Servers then
+            --  The user's servers: started where they were not yet, and
+            --  each said with its state and how many tools it gives.
+            if not Model_Runner.CLI.MCP.Configured then
+               Pres.Put_Note (Screen, "cli.interactive.mcp_none");
+            else
+               declare
+                  Notes : Ada.Strings.Unbounded.Unbounded_String;
+               begin
+                  Model_Runner.CLI.MCP.Start_All (Notes);
+                  Pres.Put_Note (Screen, "cli.interactive.mcp_list",
+                                 [Loc.Named ("detail", Model_Runner.CLI.MCP.Listing)]);
+               end;
+            end if;
 
          elsif Asked.Kind = Plan_Mode then
             --  Plan mode on (/plan, /plan on) or off (/plan off): while it
