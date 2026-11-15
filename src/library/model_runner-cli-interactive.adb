@@ -2545,9 +2545,13 @@ package body Model_Runner.CLI.Interactive is
             Pres.Put_Note (Screen, "cli.interactive.shell_failed");
       end Start_Job;
 
-      --  The jobs that ended since last asked: said, and what each wrote
-      --  kept for the next message.
-      procedure Check_Jobs is
+      --  Job notes drawn while a line waited, for the editor to put above it.
+      Job_Notes : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  The jobs that ended since last asked: said -- or, Quietly, kept in
+      --  Job_Notes for the line editor to say -- and what each wrote kept
+      --  for the next message.
+      procedure Check_Jobs (Quietly : Boolean := False) is
          use type Hostkit.Spawn.Wait_State;
       begin
          for Index in Jobs'Range loop
@@ -2586,11 +2590,21 @@ package body Model_Runner.CLI.Interactive is
                            & (if Size > Kept then "[" & T.Image (Long_Long_Integer (Size - Kept))
                                                  & " more bytes left out]" & ASCII.LF else "")
                            & "[exit status " & Status_Image & "]" & ASCII.LF);
-                        Pres.Put_Note
-                          (Screen, "cli.interactive.job_done",
-                           [Loc.Named ("value", T.Image (Long_Long_Integer (Index))),
-                            Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Jobs (Index).Command)),
-                            Loc.Named ("state", Status_Image)]);
+                        declare
+                           Said : constant Loc.Argument_List :=
+                             [Loc.Named ("value", T.Image (Long_Long_Integer (Index))),
+                              Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Jobs (Index).Command)),
+                              Loc.Named ("state", Status_Image)];
+                        begin
+                           if Quietly then
+                              Ada.Strings.Unbounded.Append
+                                (Job_Notes,
+                                 (if Ada.Strings.Unbounded.Length (Job_Notes) = 0 then "" else [1 => ASCII.LF])
+                                 & Pres.Note_Line (Screen, "cli.interactive.job_done", Said));
+                           else
+                              Pres.Put_Note (Screen, "cli.interactive.job_done", Said);
+                           end if;
+                        end;
                      end;
                   end if;
                exception
@@ -2600,6 +2614,15 @@ package body Model_Runner.CLI.Interactive is
             end if;
          end loop;
       end Check_Jobs;
+
+      --  For the line editor, while it waits: the jobs that ended since.
+      function Jobs_Noticed return String is
+      begin
+         Check_Jobs (Quietly => True);
+         return Said : constant String := Ada.Strings.Unbounded.To_String (Job_Notes) do
+            Job_Notes := Ada.Strings.Unbounded.Null_Unbounded_String;
+         end return;
+      end Jobs_Noticed;
 
       procedure Submit is
       begin
@@ -2984,7 +3007,8 @@ package body Model_Runner.CLI.Interactive is
                           Dictate  =>
                             (if Model_Runner.CLI.Speech_Input.Is_Enabled (Speech)
                              then Speech'Unchecked_Access else null),
-                          Shortcut => Item.Speech_Shortcut);
+                          Shortcut => Item.Speech_Shortcut,
+                          Notice   => Jobs_Noticed'Unrestricted_Access);
                      --  Escape and Ctrl-C drop the line, as when a cooked
                      --  terminal passes them on: the key after what was typed.
                      Whole  : constant String :=

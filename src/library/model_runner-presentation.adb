@@ -1411,6 +1411,19 @@ package body Model_Runner.Presentation is
       end;
    end Put_Note;
 
+   function Note_Line
+     (Item      : Console;
+      Key       : String;
+      Arguments : Loc.Argument_List) return String
+   is
+      Framed : constant String :=
+        Marked_Message
+          (Item, "diagnostic.note",
+           [Loc.Named_Marked ("detail", Unindented (Marked_Message (Item, Key, Arguments)))]);
+   begin
+      return Drawn (Item, (if Styles_Diagnostics (Item) then Commands_Coloured (Framed) else Framed));
+   end Note_Line;
+
    ---------------
    -- Put_Aside --
    ---------------

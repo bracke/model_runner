@@ -43,6 +43,33 @@ package Model_Runner.CLI.Tool_Turns is
    is (Named in "calculator" | "string_length" | "reverse_text" | "lookup"
               | "base64_encode" | "base64_decode" | "memory_put" | "memory_get");
 
+   --  What the settings file's rules say of a call. tools.deny refuses a
+   --  call unasked -- any tool's, one that only reads too -- and
+   --  tools.allow runs one unasked; a call neither names is asked about as
+   --  before, and deny goes before allow. A rule is a tool's name, or its
+   --  name and a pattern in parentheses, matched to what the call is on:
+   --  its command, else its path, else its address, else its arguments as
+   --  they were written; * in a pattern stands for any run of characters.
+   --  Rules have a space between them; a pattern may hold spaces.
+   --
+   --    tools.allow = shell(alr build*) shell(git status) write_file(src/*)
+   --    tools.deny  = shell(git push*) fetch_url
+   --
+   --  Plan mode refuses a change that tools.allow names, as it refuses any.
+   type Rule_Answer is (No_Rule, Rule_Allows, Rule_Denies);
+
+   --  @param Named The tool's name.
+   --  @param Arguments The call's arguments, as JSON.
+   --  @return What the rules say of it.
+   function Rule_For (Named, Arguments : String) return Rule_Answer;
+
+   --  Whether Text is Pattern, * in it standing for any run of characters.
+   --
+   --  @param Pattern The pattern.
+   --  @param Text The text.
+   --  @return Whether it matches, the whole of it.
+   function Matches (Pattern, Text : String) return Boolean;
+
    --  Plan mode: while it is on, a call that would change something is not
    --  run and nobody is asked -- the model reads, and proposes.
    --
@@ -120,8 +147,9 @@ private
         --  The tools allowed for the session, a space either side of each.
         Always : Ada.Strings.Unbounded.Unbounded_String :=
           Ada.Strings.Unbounded.To_Unbounded_String (" ");
-        --  Whether the last refusal was plan mode's.
+        --  Whether the last refusal was plan mode's, or the rules'.
         Planned : Boolean := False;
+        Ruled   : Boolean := False;
      end record;
 
 end Model_Runner.CLI.Tool_Turns;

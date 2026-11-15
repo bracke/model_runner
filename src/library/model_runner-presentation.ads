@@ -310,6 +310,18 @@ package Model_Runner.Presentation is
    --  @return Rendered text.
    function Message_Value (Item : Console; Key : String) return String;
 
+   --  A note as Put_Note draws it, for a caller that writes it itself --
+   --  the line editor, above the line it is editing.
+   --
+   --  @param Item Console to read through.
+   --  @param Key Stable message identifier.
+   --  @param Arguments Values to substitute.
+   --  @return The note's line, styled where the console styles notes.
+   function Note_Line
+     (Item      : Console;
+      Key       : String;
+      Arguments : Model_Runner.Localization.Argument_List) return String;
+
    --  Look up a next step for embedding in other text, with its values.
    --
    --  @param Item Console to read through.

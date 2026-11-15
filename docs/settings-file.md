@@ -84,6 +84,27 @@ hook.after-edit = gnatpp $FILE
 hook.after-turn = alr build
 ```
 
+## Rules for the tools
+
+Two keys decide, for a conversation, which tool calls run without asking:
+
+| key | does |
+|-----|------|
+| `tools.allow` | a call it names runs unasked |
+| `tools.deny` | a call it names is refused unasked -- any tool's, one that only reads too; the model is told the settings refuse it |
+
+A rule is a tool's name, or its name with a pattern in parentheses matched to
+what the call is on: its `command`, else its `path`, else its `url`, else its
+arguments as written. `*` stands for any run of characters; rules have a space
+between them, and a pattern may hold spaces. Deny goes before allow; a call
+neither names is asked about as before; plan mode refuses a change even where
+`tools.allow` names it.
+
+```
+tools.allow = shell(alr build*) shell(git status) write_file(src/*) edit_file(src/*)
+tools.deny  = shell(git push*) shell(rm -rf*) fetch_url
+```
+
 ## A language server
 
 `lsp` names a language server, a command speaking the Language Server

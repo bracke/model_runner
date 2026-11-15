@@ -753,6 +753,51 @@ begin
          --  changed and checked in more than a single prompt's few.
          Talk_Steps : constant Positive := Positive'Max (Item.Max_Steps, 32);
 
+         --  Helpers: delegate hands a part of the work to one that starts
+         --  with nothing of the conversation and reports back only its
+         --  result, so what it read does not fill the conversation's
+         --  context. Its session is opened when the first is wanted and
+         --  closed when the turn ends -- no memory held for a helper never
+         --  made, nor one for a model /model let go -- its context the
+         --  conversation's, up to 8,192 tokens. Its calls are shown and
+         --  asked about as the conversation's own are.
+         Talk_Request  : aliased Gen.Request;
+         Helper_Room   : constant Natural :=
+           (if Item.Context_Size = 0 then 8192 else Natural'Min (Item.Context_Size, 8192));
+         Talk_Delegate : aliased Model_Delegator
+           (Src    => Prepared'Access,
+            Req    => Talk_Request'Access,
+            Stops  => Stop_Set'Access,
+            Time   => Clock'Unchecked_Access,
+            Seed   => Seeds'Unchecked_Access,
+            Steps  => Talk_Steps,
+            Budget => Item.Max_Total_Tokens,
+            Count  => 1);
+
+         procedure Open_Helper is
+            Opened : E.Error_Info;
+         begin
+            L.Open
+              (Talk_Delegate.Sessions (1), Prepared, Helper_Room,
+               Session_Bounds => Session_Bounds (Item),
+               Workers => Team, Cache => Item.Cache,
+               Values => Item.Values,
+               Status => Opened);
+            if E.Is_Ok (Opened) then
+               Talk_Delegate.Ready := 1;
+               Talk_Delegate.Leases.Open (1);
+            end if;
+         end Open_Helper;
+
+         procedure Close_Helper is
+         begin
+            if Talk_Delegate.Ready > 0 then
+               L.Close (Talk_Delegate.Sessions (1));
+               Talk_Delegate.Ready := 0;
+               Talk_Delegate.Leases.Open (0);
+            end if;
+         end Close_Helper;
+
          procedure Converse
            (Messages : in out Conv.History;
             Request  : Gen.Request;
@@ -767,6 +812,12 @@ begin
             --  can carry out.
             if not Talk_Ready then
                Talk_Runner.Use_Inquirer (Talk_Asker'Unchecked_Access);
+               Talk_Delegate.Opener   := Open_Helper'Unrestricted_Access;
+               Talk_Delegate.Approve  := Talk_Approve'Unchecked_Access;
+               Talk_Delegate.Watcher  := Talk_Watch'Unchecked_Access;
+               Talk_Delegate.Thinking := Item.Thinking;
+               Talk_Delegate.Effort   := Item.Effort;
+               Talk_Runner.Use_Delegator (Talk_Delegate'Unchecked_Access);
                Talk_Runner.Set_Base (Ada.Directories.Current_Directory);
                --  And /undo's files where the tools' are.
                Model_Runner.CLI.Tool_Turns.Set_Base (Ada.Directories.Current_Directory);
@@ -799,6 +850,7 @@ begin
             end if;
             Talk_Watch.Text := Agent_Sink'Unchecked_Access;
             Agent_Sink.Screen := Screen'Unchecked_Access;
+            Talk_Request := Request;
             Model_Runner.Agent.Run
               (Source     => Prepared,
                Session    => Session,
@@ -821,6 +873,7 @@ begin
                  Model_Runner.Templates.Reading_Syntax (L.Template_Format (Prepared)),
                Compact    => True,
                Result     => Loop_Out);
+            Close_Helper;
             Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
             Reason := Loop_Out.Reason;
          end Converse;

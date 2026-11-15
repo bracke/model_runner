@@ -281,6 +281,11 @@ package body Model_Runner.CLI.Execute.Run_Command is
       Named     : String;
       Arguments : String) is
    begin
+      --  Shown as the run's own are, marked as a helper's: a call it is
+      --  asked about is not one out of nowhere.
+      if Self.Parent /= null then
+         Pres.Put_Tool_Call (Self.Parent.Screen.all, "helper: " & Named, Arguments);
+      end if;
       if Self.Parent /= null and then Self.Parent.Trace then
          Record_Event
            (Self.Parent.all,
@@ -591,8 +596,10 @@ package body Model_Runner.CLI.Execute.Run_Command is
    protected body Session_Leaser is
       procedure Open (Ready : Natural) is
       begin
-         for I in 1 .. Ready loop
-            Available (I) := True;
+         --  The ones that opened, and only they: a pool opened again after
+         --  its sessions were closed hands out none of the closed ones.
+         for I in Available'Range loop
+            Available (I) := I <= Ready;
          end loop;
          Free_Count := Ready;
       end Open;
@@ -675,6 +682,15 @@ package body Model_Runner.CLI.Execute.Run_Command is
           Model_Runner.Templates.Thinking_Unstated;
         Effort : Model_Runner.Templates.Reasoning_Effort :=
           Model_Runner.Templates.Effort_Unstated;
+
+        --  Opens the sessions when the first helper is wanted, where they
+        --  are not opened before -- a conversation's, which holds no memory
+        --  for a helper it never makes; null where they are.
+        Opener : access procedure := null;
+
+        --  What is asked before a helper's call runs, as its caller's are;
+        --  null where every call runs unasked.
+        Approve : Model_Runner.Agent.Approver_Reference := null;
      end record;
 
    overriding procedure Run_Sub
@@ -732,6 +748,19 @@ package body Model_Runner.CLI.Execute.Run_Command is
                         (if Context.Tokens_Left = 0 then "token limit" else "timed out"),
             Timed  => Context.Tokens_Left /= 0,
             others => <>);
+         return;
+      end if;
+
+      --  Sessions opened on first want, where they were not before; and
+      --  none at all said, not waited for.
+      if Self.Ready = 0 and then Self.Opener /= null then
+         Self.Opener.all;
+      end if;
+      if Self.Ready = 0 then
+         Ended := (State  => Bi.Failed,
+                   Reason => Ada.Strings.Unbounded.To_Unbounded_String
+                               ("no session could be opened for a helper"),
+                   others => <>);
          return;
       end if;
 
@@ -818,6 +847,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
                             (L.Template_Format (Self.Src.all)),
                         Thinking         => Self.Thinking,
                         Effort           => Self.Effort,
+                        Approve          => Self.Approve,
                         Result           => Loop_Out);
                   end;
 

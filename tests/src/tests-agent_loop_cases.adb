@@ -13,6 +13,7 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Environment_Variables;
 with Ada.Text_IO;
 
 with AUnit.Assertions; use AUnit.Assertions;
@@ -1980,6 +1981,64 @@ package body Tests.Agent_Loop_Cases is
             Approve.Explain (Why);
             Assert (Ada.Strings.Unbounded.Length (Why) = 0, "a refusal outside plan mode was explained as one");
          end;
+      end;
+
+      --  The settings file's rules: deny refuses any tool's call, even one
+      --  that only reads, and goes before allow; allow runs a call unasked
+      --  where nobody could be asked; a pattern is matched to the call's
+      --  command or path; plan mode refuses what allow names; and a helper
+      --  is not asked for, its own calls are.
+      Assert (Turns.Matches ("alr build*", "alr build --release") and then Turns.Matches ("*", "")
+              and then Turns.Matches ("src/*.adb", "src/a.adb") and then not Turns.Matches ("src/*.adb", "src/a.ads")
+              and then Turns.Matches ("a*b*c", "aXbYbZc") and then not Turns.Matches ("git push*", "git status"),
+              "a rule's pattern did not match as * says");
+      declare
+         Own      : constant String := Ada.Directories.Full_Name (Dir & "/rule-settings");
+         Was      : constant String :=
+           (if Ada.Environment_Variables.Exists ("MODEL_RUNNER_CONFIG")
+            then Ada.Environment_Variables.Value ("MODEL_RUNNER_CONFIG") else "");
+         Settings : Ada.Text_IO.File_Type;
+         Approve  : aliased Turns.Conversation_Approver (Screen'Unchecked_Access);
+      begin
+         Ada.Text_IO.Create (Settings, Ada.Text_IO.Out_File, Own);
+         Ada.Text_IO.Put_Line (Settings, "tools.allow = shell(echo *) write_file(notes/*) shell(git *)");
+         Ada.Text_IO.Put_Line (Settings, "tools.deny = shell(git push*) read_file(secret*)");
+         Ada.Text_IO.Close (Settings);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
+         Assert (Ag."=" (Approve.Consider ("shell", "{""command"": ""echo hi""}"), Ag.Allow),
+                 "a call tools.allow names was not run unasked");
+         Assert (Ag."=" (Approve.Consider ("write_file", "{""path"": ""notes/a.txt"", ""content"": ""x""}"),
+                         Ag.Allow),
+                 "a write tools.allow names by its path was not run unasked");
+         Assert (Ag."=" (Approve.Consider ("write_file", "{""path"": ""other.txt"", ""content"": ""x""}"),
+                         Ag.Deny),
+                 "a write no rule names was run with nobody to ask");
+         Assert (Ag."=" (Approve.Consider ("shell", "{""command"": ""git push origin""}"), Ag.Deny),
+                 "tools.deny did not go before tools.allow");
+         declare
+            Why : Ada.Strings.Unbounded.Unbounded_String;
+         begin
+            Approve.Explain (Why);
+            Assert (Ada.Strings.Unbounded.Index (Why, "tools.deny") > 0,
+                    "a refusal by the rules was not said to be theirs: " & Ada.Strings.Unbounded.To_String (Why));
+         end;
+         Assert (Ag."=" (Approve.Consider ("read_file", "{""path"": ""secret.txt""}"), Ag.Deny),
+                 "tools.deny did not refuse a call that only reads");
+         Assert (Ag."=" (Approve.Consider ("read_file", "{""path"": ""kept.txt""}"), Ag.Allow),
+                 "a read no rule names was refused");
+         Assert (Ag."=" (Approve.Consider ("delegate", "{""task"": ""look""}"), Ag.Allow),
+                 "a helper was asked for");
+         Turns.Set_Planning (True);
+         Assert (Ag."=" (Approve.Consider ("shell", "{""command"": ""echo hi""}"), Ag.Deny),
+                 "plan mode ran a change tools.allow names");
+         Turns.Set_Planning (False);
+         if Was = "" then
+            Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONFIG");
+         else
+            Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Was);
+         end if;
+         Assert (Turns."=" (Turns.Rule_For ("shell", "{""command"": ""echo hi""}"), Turns.No_Rule),
+                 "a rule was read where no setting names one");
       end;
 
       --  A conversation's tools: the useful ones, not the demonstrations.

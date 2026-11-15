@@ -1872,7 +1872,8 @@ package body Model_Runner.CLI.Choosers is
       Complete : Completer := null;
       Describe : Describer := null;
       Dictate  : Dictation_Access := null;
-      Shortcut : Character := Character'Val (7)) return String
+      Shortcut : Character := Character'Val (7);
+      Notice   : Noticer := null) return String
    is
       Guard   : Raw_Guard;
       Text    : Unbounded_String;
@@ -2807,6 +2808,32 @@ package body Model_Runner.CLI.Choosers is
       end if;
       Redraw;
       loop
+         --  While no key comes, what happened meanwhile said above the
+         --  line, and the line drawn again under it.
+         if Notice /= null then
+            while not Waiting and then not Hostkit.Descriptors.Wait_Readable (Input, 500) loop
+               exit when Model_Runner.Platform.Signals.Ending_Asked;
+               declare
+                  Said : constant String := Notice.all;
+               begin
+                  if Said /= "" then
+                     if Drawn_Row > 0 then
+                        Put (ASCII.ESC & "[" & Image (Drawn_Row) & "A");
+                     end if;
+                     Put (ASCII.CR & ASCII.ESC & "[J");
+                     --  Its lines each begun at the row's start: the
+                     --  terminal is raw, and a line feed alone goes down.
+                     for C of Said loop
+                        Put (if C = ASCII.LF then ASCII.CR & ASCII.LF else [1 => C]);
+                     end loop;
+                     Put (ASCII.CR & ASCII.LF);
+                     Drawn_Row := 0;
+                     Drawn_Before := Null_Unbounded_String;
+                     Redraw;
+                  end if;
+               end;
+            end loop;
+         end if;
          if not Next (Into => Key) then
             Outcome := Ended;
             exit;

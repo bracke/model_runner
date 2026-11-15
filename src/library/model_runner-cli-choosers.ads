@@ -326,6 +326,10 @@ package Model_Runner.CLI.Choosers is
    --  What a word Tab lists stands for, shown beside it: empty for none.
    type Describer is access function (Word : String) return String;
 
+   --  What happened while the line waited, to be said above it: "" where
+   --  nothing did. Asked twice a second while no key comes.
+   type Noticer is access function return String;
+
    --  A line typed at the session's prompt, edited as it is typed and its
    --  commands coloured as they are: the cursor moves with the arrows,
    --  Home and End (Ctrl-A, Ctrl-E), Backspace and Delete take a character,
@@ -351,6 +355,8 @@ package Model_Runner.CLI.Choosers is
    --    nothing.
    --  @param Shortcut The key that starts and stops a recording: Ctrl-G
    --    unless said.
+   --  @param Notice What happened meanwhile, said above the line, which is
+   --    drawn again under it; null, nothing is.
    --  @return What was typed.
    function Edited_Line
      (Screen   : Model_Runner.Presentation.Console;
@@ -359,7 +365,8 @@ package Model_Runner.CLI.Choosers is
       Complete : Completer := null;
       Describe : Describer := null;
       Dictate  : Dictation_Access := null;
-      Shortcut : Character := Character'Val (7)) return String;
+      Shortcut : Character := Character'Val (7);
+      Notice   : Noticer := null) return String;
 
    --  Take the line typed last out of what Up and the dimmed suggestion
    --  offer again: a command refused is not one to be offered back.

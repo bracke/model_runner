@@ -16236,8 +16236,11 @@ package body Tests.CLI_Cases is
       Take (3000);
       --  And one in the background: ended by the time /jobs is asked, and
       --  what it wrote with the next message as well.
-      Send ("!&echo background-marker-7" & ASCII.CR);
-      Take (2000);
+      --  It ends while the prompt waits, and is said then, nothing typed.
+      Send ("!&sleep 1; echo background-marker-7" & ASCII.CR);
+      Take (3000);
+      Assert (U.Index (Drawn, "job 1 ended with status 0") > 0,
+              "a job's end was not said while the prompt waited: " & U.To_String (Drawn));
       Send ("/jobs" & ASCII.CR);
       Take (2000);
       Send ("hi" & ASCII.CR);

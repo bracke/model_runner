@@ -7,6 +7,9 @@ with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Tools.Registry;
 
@@ -43,6 +46,129 @@ package body Model_Runner.CLI.Tool_Turns is
    end Set_Planning;
 
    function Planning return Boolean is (Plan_On);
+
+   function Matches (Pattern, Text : String) return Boolean is
+      --  Greedy with one step back: where the last * was, and where in the
+      --  text it was tried to end.
+      P, X       : Natural := 0;
+      Star, Mark : Natural := 0;
+      Starred    : Boolean := False;
+   begin
+      P := Pattern'First;
+      X := Text'First;
+      while X <= Text'Last loop
+         if P <= Pattern'Last and then Pattern (P) = '*' then
+            Starred := True;
+            Star := P;
+            Mark := X;
+            P := P + 1;
+         elsif P <= Pattern'Last and then Pattern (P) = Text (X) then
+            P := P + 1;
+            X := X + 1;
+         elsif Starred then
+            P := Star + 1;
+            Mark := Mark + 1;
+            X := Mark;
+         else
+            return False;
+         end if;
+      end loop;
+      while P <= Pattern'Last and then Pattern (P) = '*' loop
+         P := P + 1;
+      end loop;
+      return P > Pattern'Last;
+   end Matches;
+
+   --  What a call is on, for a rule's pattern: its command, path or
+   --  address as the arguments give it, else the arguments as written.
+   function Subject_Of (Arguments : String) return String is
+      package Doc renames Jsonlib.Documents;
+      Document : Doc.Document;
+      Error    : Jsonlib.Errors.Error_Info;
+      use type Doc.Value_Kind;
+
+      --  Whether the arguments give Key as a string.
+      function Has (Key : String) return Boolean is
+        (Doc.Has_Member (Document, Doc.Root (Document), Key)
+         and then Doc.Kind (Document, Doc.Member (Document, Doc.Root (Document), Key)) = Doc.String_Value);
+
+      function Value (Key : String) return String is
+        (Doc.As_String (Document, Doc.Member (Document, Doc.Root (Document), Key)));
+   begin
+      Jsonlib.Parsers.Parse (Arguments, Document, Error);
+      if Jsonlib.Errors.Failed (Error) or else Doc.Kind (Document, Doc.Root (Document)) /= Doc.Object_Value then
+         return Arguments;
+      end if;
+      return (if Has ("command") then Value ("command")
+              elsif Has ("path") then Value ("path")
+              elsif Has ("url") then Value ("url")
+              else Arguments);
+   exception
+      when others =>
+         return Arguments;
+   end Subject_Of;
+
+   --  Whether one of a setting's rules names the call.
+   function Named_By (Rules, Named, Subject : String) return Boolean is
+      At_Rule : Natural := Rules'First;
+   begin
+      while At_Rule <= Rules'Last loop
+         if Rules (At_Rule) = ' ' then
+            At_Rule := At_Rule + 1;
+         else
+            declare
+               --  To the next space outside parentheses.
+               Ending : Natural := At_Rule;
+               Depth  : Natural := 0;
+            begin
+               while Ending <= Rules'Last and then (Depth > 0 or else Rules (Ending) /= ' ') loop
+                  if Rules (Ending) = '(' then
+                     Depth := Depth + 1;
+                  elsif Rules (Ending) = ')' and then Depth > 0 then
+                     Depth := Depth - 1;
+                  end if;
+                  Ending := Ending + 1;
+               end loop;
+               declare
+                  Rule  : constant String := Rules (At_Rule .. Ending - 1);
+                  Open  : constant Natural := Ada.Strings.Fixed.Index (Rule, "(");
+               begin
+                  if Open = 0 then
+                     if Matches (Rule, Named) then
+                        return True;
+                     end if;
+                  elsif Rule (Rule'Last) = ')'
+                    and then Matches (Rule (Rule'First .. Open - 1), Named)
+                    and then Matches (Rule (Open + 1 .. Rule'Last - 1), Subject)
+                  then
+                     return True;
+                  end if;
+               end;
+               At_Rule := Ending + 1;
+            end;
+         end if;
+      end loop;
+      return False;
+   end Named_By;
+
+   function Rule_For (Named, Arguments : String) return Rule_Answer is
+      Deny  : constant String := Model_Runner.Config.Value ("tools.deny");
+      Allow : constant String := Model_Runner.Config.Value ("tools.allow");
+   begin
+      if Deny = "" and then Allow = "" then
+         return No_Rule;
+      end if;
+      declare
+         Subject : constant String := Subject_Of (Arguments);
+      begin
+         if Named_By (Deny, Named, Subject) then
+            return Rule_Denies;
+         elsif Named_By (Allow, Named, Subject) then
+            return Rule_Allows;
+         end if;
+      end;
+      return No_Rule;
+   end Rule_For;
 
    procedure Set_Base (Directory : String) is
    begin
@@ -157,7 +283,11 @@ package body Model_Runner.CLI.Tool_Turns is
       Reason : out Ada.Strings.Unbounded.Unbounded_String) is
    begin
       Reason :=
-        (if Self.Planned
+        (if Self.Ruled
+         then To_Unbounded_String
+                ("not run: the user's settings (tools.deny) refuse this call -- do not try another way"
+                 & " to do the same; say that it is refused, and go on with what is allowed")
+         elsif Self.Planned
          then To_Unbounded_String
                 ("not run: plan mode is on, and nothing is changed until the user ends it -- do not try"
                  & " another way to change it; describe the change instead, as a step of your plan,"
@@ -198,15 +328,27 @@ package body Model_Runner.CLI.Tool_Turns is
 
       --  The call as it is shown: its name and arguments, cut to a line.
       Shown : constant String := Named & " " & Arguments;
+      Rule  : constant Rule_Answer := Rule_For (Named, Arguments);
    begin
-      if not Reg.Asks_First (Named) then
+      --  The user's rules refuse it, whatever it is.
+      if Rule = Rule_Denies then
+         Self.Planned := False;
+         Self.Ruled := True;
+         return Model_Runner.Agent.Deny;
+      end if;
+      --  A helper is not asked for: each of its own calls is.
+      if not Reg.Asks_First (Named) or else Named = "delegate" then
          return Model_Runner.Agent.Allow;
       end if;
       Self.Planned := False;
+      Self.Ruled := False;
       --  Planning: nothing is changed, and nobody is asked.
       if Plan_On then
          Self.Planned := True;
          return Model_Runner.Agent.Deny;
+      end if;
+      if Rule = Rule_Allows then
+         return Allowed;
       end if;
       if Ada.Strings.Fixed.Index (US.To_String (Self.Always), " " & Named & " ") > 0 then
          return Allowed;
