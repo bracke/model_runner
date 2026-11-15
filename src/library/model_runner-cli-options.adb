@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 148) of Registry_Row :=
+   Registry : constant array (1 .. 149) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -69,6 +69,8 @@ package body Model_Runner.CLI.Options is
        Text ("continue")),
       (Text ("--resume"), [Command_Run => True, others => False],
        Text ("resume")),
+      (Text ("--output-json"), [Command_Run => True, others => False],
+       Text ("output_json")),
       (Text ("--raw"), [Command_Run => True, others => False], Text ("raw")),
       (Text ("--think"), [Command_Run => True, others => False],
        Text ("think")),
@@ -1615,6 +1617,14 @@ package body Model_Runner.CLI.Options is
                         return;
                      end if;
                      Result.Continue_Last := True;
+
+                  elsif Name = "--output-json" then
+                     No_Value (Name, Value_Present,
+                               Argument (Value_First .. Argument'Last), Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Result.Output_Json := True;
 
                   elsif Name = "--resume" then
                      No_Value (Name, Value_Present,
@@ -3269,6 +3279,15 @@ package body Model_Runner.CLI.Options is
 
          Index := Index + 1;
       end loop;
+
+      --  One JSON object a reply is a single run's; the agent's loop says
+      --  its calls as it goes, and is not one reply.
+      if Result.Output_Json and then Result.Agent then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--output-json", E.Param_Identifier);
+         E.Add_Text (Status, "other", "--agent", E.Param_Identifier);
+         return;
+      end if;
 
       --  Taking up a kept conversation is a session, with no word for it:
       --  model_runner --continue.

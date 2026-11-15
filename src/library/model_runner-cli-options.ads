@@ -428,6 +428,10 @@ package Model_Runner.CLI.Options is
       Continue_Last : Boolean := False;
       Resume        : Boolean := False;
 
+      --  Write each prompt's reply as one JSON object on standard output,
+      --  for a program to read, in place of the text as it comes.
+      Output_Json : Boolean := False;
+
       --  A model to embed with for the agent's retrieve tool, so it ranks a
       --  folder's passages by meaning. Empty means retrieve embeds with the
       --  model being run, or, if that is set aside, ranks by words alone. A

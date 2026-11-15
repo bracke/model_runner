@@ -4,6 +4,10 @@ with Model_Runner.Conversation.Rooms;
 
 separate (Model_Runner.CLI.Execute.Run_Command.Do_Run)
 procedure Run_With (Team : Workers_CPU.Pool_Reference) is
+   --  Whether the last reply began inside a think block its prompt opened:
+   --  its answer, for --output-json, is what follows the block's close.
+   Reply_Opened_Thought : Boolean := False;
+
    use type Model_Runner.Clocks.Nanoseconds;
 
    --  Why the first layer that did not go over whole did not, as a
@@ -2025,7 +2029,7 @@ begin
             --  reads it back: the calls a reply asks for are read out
             --  of the reply, and a run that offered no tools has
             --  nothing to read.
-            Request.Retain_Text := Tools_Ready;
+            Request.Retain_Text := Tools_Ready or else Item.Output_Json;
 
             --  Who puts the beginning token in front.
             --
@@ -2064,6 +2068,7 @@ begin
             --  opened, for --hide-reasoning to leave out from its start.
             Unthought.Start_Reply
               (Inside => Model_Runner.Agent.Thought_Open ("", Rendered.all));
+            Reply_Opened_Thought := Model_Runner.Agent.Thought_Open ("", Rendered.all);
             --  At a terminal the think block is shown without its markers,
             --  in italics where answers are styled; written elsewhere, the
             --  text is the model's as it wrote it.
@@ -2083,7 +2088,10 @@ begin
                        (Model_Runner.Templates.Reading_Syntax
                           (L.Template_Format (Prepared)),
                         Model_Runner.Tools.Harmony_Call)
+                    and then not Item.Output_Json
                   then Tidied'Unchecked_Access
+                  --  For a program: nothing as it comes, the object after.
+                  elsif Item.Output_Json then null
                   elsif Item.Hide_Reasoning or else Model_Runner.Platform.Is_Terminal (1)
                   then Unthought'Unchecked_Access
                   else Sink'Unchecked_Access),
@@ -2113,6 +2121,52 @@ begin
       if Outcome.Reason = Gen.Runtime_Error then
          Fail (Outcome.Error);
          return;
+      end if;
+
+      --  For a program: the reply as one JSON object, a line of its own --
+      --  the model, the text and the answer in it (its reasoning left out),
+      --  why it ended, and what it took.
+      if Item.Output_Json then
+         declare
+            Said : String (1 .. Outcome.Text_Length);
+            Seconds_Of : constant Long_Float := 1.0E-9;
+
+            --  The answer: the reply less its reasoning -- where the prompt
+            --  opened the block, what follows its close, and nothing where
+            --  the reply never closed it.
+            function Answer_Text return String is
+               Close : constant Natural := Ada.Strings.Fixed.Index (Said, "</think>");
+            begin
+               if not Reply_Opened_Thought then
+                  return Model_Runner.Agent.Answer_Of (Said);
+               elsif Close = 0 then
+                  return "";
+               else
+                  return Ada.Strings.Fixed.Trim (Said (Close + 8 .. Said'Last), Ada.Strings.Both);
+               end if;
+            end Answer_Text;
+            function Number (Value : Long_Float) return String is (T.Image (Value, 3));
+         begin
+            if Outcome.Text /= null then
+               for Index in Said'Range loop
+                  Said (Index) :=
+                    Character'Val
+                      (Outcome.Text (Model_Runner.Bytes."+" (Outcome.Text'First,
+                                                             Model_Runner.Bytes.Byte_Count (Index - 1))));
+               end loop;
+            end if;
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Output,
+               "{""model"": " & T.JSON_Quoted (T.To_String (Item.Model_Path))
+               & ", ""text"": " & T.JSON_Quoted (Said)
+               & ", ""answer"": " & T.JSON_Quoted (Answer_Text)
+               & ", ""stop"": " & T.JSON_Quoted (T.To_Lower (Gen.Completion_Reason'Image (Outcome.Reason)))
+               & ", ""prompt_tokens"": " & T.Image (Long_Long_Integer (Outcome.Prompt_Tokens))
+               & ", ""generated_tokens"": " & T.Image (Long_Long_Integer (Outcome.Generated_Tokens))
+               & ", ""prompt_seconds"": " & Number (Long_Float (Outcome.Prefill_Ns) * Seconds_Of)
+               & ", ""reply_seconds"": " & Number (Long_Float (Outcome.Decode_Ns) * Seconds_Of) & "}");
+            Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+         end;
       end if;
 
       --  A run the reader interrupted did not succeed, and said so with

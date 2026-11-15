@@ -1,3 +1,4 @@
+with Model_Runner.Processes;
 with Model_Runner.Tools.Runner;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Custom_Commands;
@@ -16756,6 +16757,62 @@ package body Tests.CLI_Cases is
       end;
    end Own_Commands_And_Hooks_Run;
 
+   --  --output-json: a run writes its reply as one JSON object on a line of
+   --  standard output -- the model, the text and the answer, why it ended,
+   --  the tokens and the seconds -- and nothing else there; with --agent it
+   --  is refused, the loop being no one reply.
+   procedure Output_Json_Is_One_Object
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package U renames Ada.Strings.Unbounded;
+      Model  : constant String := Ada.Directories.Full_Name ("obj/json-model.gguf");
+      Plain  : constant String := "../bin/model_runner";
+      Binary : constant String :=
+        Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+      Asked  : Model_Runner.Processes.Request;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      Asked.Program := U.To_Unbounded_String (Binary);
+      Asked.Arguments.Append (U.To_Unbounded_String ("run"));
+      Asked.Arguments.Append (U.To_Unbounded_String (Model));
+      Asked.Arguments.Append (U.To_Unbounded_String ("--backend"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("cpu"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("--max-tokens"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("3"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("--temperature"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("0"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("--prompt"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("hello"));
+      Asked.Arguments.Append (U.To_Unbounded_String ("--output-json"));
+      Asked.Limit := 120.0;
+      declare
+         Ran  : constant Model_Runner.Processes.Result := Model_Runner.Processes.Run (Asked);
+         Said : constant String := U.To_String (Ran.Output);
+      begin
+         Assert (Model_Runner.Processes.Succeeded (Ran), "the run failed: " & U.To_String (Ran.Errors));
+         Assert (Said'Length > 2 and then Said (Said'First) = '{'
+                 and then Ada.Strings.Fixed.Count (Said, "" & ASCII.LF) = 1
+                 and then Said (Said'Last - 1 .. Said'Last) = "}" & ASCII.LF,
+                 "standard output was not one object on a line: [" & Said & "]");
+         Assert (Ada.Strings.Fixed.Index (Said, """model"": ") > 0
+                 and then Ada.Strings.Fixed.Index (Said, """text"": ") > 0
+                 and then Ada.Strings.Fixed.Index (Said, """answer"": ") > 0
+                 and then Ada.Strings.Fixed.Index (Said, """stop"": ""maximum_tokens""") > 0
+                 and then Ada.Strings.Fixed.Index (Said, """generated_tokens"": 3") > 0
+                 and then Ada.Strings.Fixed.Index (Said, """prompt_seconds"": ") > 0,
+                 "a field of the object was missing: " & Said);
+      end;
+      Asked.Arguments.Append (U.To_Unbounded_String ("--agent"));
+      declare
+         Ran : constant Model_Runner.Processes.Result := Model_Runner.Processes.Run (Asked);
+      begin
+         Assert (not Model_Runner.Processes.Succeeded (Ran)
+                 and then U.Index (Ran.Errors, "--output-json") > 0,
+                 "--output-json with --agent was not refused: " & U.To_String (Ran.Errors));
+      end;
+   end Output_Json_Is_One_Object;
+
    --  /model alone offers the models on this machine, and only those:
    --  nothing to download. A home of its own with one model in its models
    --  folder, the selector drawn, and Esc keeping the model running.
@@ -19436,6 +19493,9 @@ package body Tests.CLI_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Model_Selector_Offers_Only_Models_On_Hand'Access,
          "/model alone offers the models on this machine that converse, grouped, none hidden or to download");
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Output_Json_Is_One_Object'Access,
+         "--output-json writes each reply as one JSON object on a line, and is refused with --agent");
       AUnit.Test_Cases.Registration.Register_Routine
         (T, Own_Commands_And_Hooks_Run'Access,
          "the user's own commands are found, filled in and listed, and hooks run and are said");
