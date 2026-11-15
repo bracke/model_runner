@@ -16232,6 +16232,12 @@ package body Tests.CLI_Cases is
       Take (3000);
       Send ("!exit 3" & ASCII.CR);
       Take (3000);
+      --  And one in the background: ended by the time /jobs is asked, and
+      --  what it wrote with the next message as well.
+      Send ("!&echo background-marker-7" & ASCII.CR);
+      Take (2000);
+      Send ("/jobs" & ASCII.CR);
+      Take (2000);
       Send ("hi" & ASCII.CR);
       Take (5000);
       Send ("/save " & Saved & ASCII.CR);
@@ -16268,7 +16274,9 @@ package body Tests.CLI_Cases is
          Ada.Text_IO.Close (Held);
          Assert (U.Index (Text, "$ echo shell-marker-42") > 0
                  and then U.Index (Text, "shell-marker-42" & ASCII.LF) > 0
-                 and then U.Index (Text, "[exit status 3]") > 0,
+                 and then U.Index (Text, "[exit status 3]") > 0
+                 and then U.Index (Text, "background-marker-7" & ASCII.LF) > 0
+                 and then U.Index (Text, "(in the background)") > 0,
                  "the message did not carry what the commands wrote: " & U.To_String (Text));
       end;
    end Shell_Command_Goes_With_The_Next_Message;

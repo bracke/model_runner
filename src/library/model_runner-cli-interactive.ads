@@ -83,6 +83,8 @@ package Model_Runner.CLI.Interactive is
       Undo_Changes,
       Compact_Now,
       Plan_Mode,
+      Show_Jobs,
+      Paste_Picture,
       Unknown);
 
    --  The word a caller types for an interactive command.

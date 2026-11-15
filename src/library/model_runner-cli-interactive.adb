@@ -1,3 +1,5 @@
+with Model_Runner.Processes;
+with Ada.Streams.Stream_IO;
 with Model_Runner.Tools.Todo;
 with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
@@ -76,7 +78,9 @@ package body Model_Runner.CLI.Interactive is
          when Switch_Model => "/model",
          when Undo_Changes => "/undo",
          when Compact_Now  => "/compact",
-         when Plan_Mode    => "/plan");
+         when Plan_Mode    => "/plan",
+         when Show_Jobs    => "/jobs",
+         when Paste_Picture => "/paste");
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.CLI.Options.Text_Access;
@@ -387,9 +391,21 @@ package body Model_Runner.CLI.Interactive is
       return (if Cut = 0 or else Cut = Path'Last then Path else Path (Cut + 1 .. Path'Last));
    end Model_Name;
 
+   --  Where a session keeps its own passing files -- a conversation while
+   --  the model is changed, a picture pasted, what a background command
+   --  writes: beside the prefill cache, not in it.
+   function Session_Files return String is
+      Cache : constant String := Model_Runner.Platform.Cache_Directory;
+   begin
+      return (if Cache = "" then "" else Ada.Directories.Containing_Directory (Cache) & "/session");
+   exception
+      when others =>
+         return "";
+   end Session_Files;
+
    --  Where a conversation waits while the model is changed.
    function Carry_Path return String
-   is (Model_Runner.Platform.Cache_Directory & "/conversation-carried.txt");
+   is (Session_Files & "/conversation-carried.txt");
 
    procedure Set_Model_Picker (Picker : Model_Picker) is
    begin
@@ -535,6 +551,19 @@ package body Model_Runner.CLI.Interactive is
       --  What the user did that the model is to be told with the next
       --  message, beside the commands typed with !: files /undo put back.
       Told_Next : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Whether /jobs asked for the jobs running in the background: listed
+      --  once the command is done, where the jobs are known.
+      Jobs_Asked : Boolean := False;
+
+      --  The separator of the status line's parts, as UTF-8 bytes.
+      Middle_Dot : constant String := " " & Character'Val (16#C2#) & Character'Val (16#B7#) & " ";
+
+      --  Whether the turn being taken carries a picture.
+      With_Picture : Boolean := False;
+
+      --  Pictures pasted this session, each a file of its own.
+      Pasted_Count : Natural := 0;
 
       --  A message one of the user's own commands made, to send once the
       --  command is done.
@@ -1629,6 +1658,7 @@ package body Model_Runner.CLI.Interactive is
                      declare
                         Wrote : E.Error_Info;
                      begin
+                        Ada.Directories.Create_Path (Session_Files);
                         Model_Runner.CLI.Checkpoint.Save (Carry_Path, Messages, Wrote);
                         if E.Is_Error (Wrote) then
                            Pres.Report (Screen, Wrote);
@@ -1676,6 +1706,51 @@ package body Model_Runner.CLI.Interactive is
                   end;
                end if;
             end;
+
+         elsif Asked.Kind = Paste_Picture then
+            --  The picture on the clipboard, for the next message: written
+            --  where pictures are kept, then named as /image names one.
+            if T.Is_Empty (Item.Projector_Path) then
+               Pres.Put_Note (Screen, "cli.interactive.no_projector");
+            else
+               Pasted_Count := Pasted_Count + 1;
+               declare
+                  Path : constant String :=
+                    Session_Files & "/pasted-"
+                    & T.Image (Long_Long_Integer (Pasted_Count)) & ".png";
+                  Quoted : constant String := Hostkit.Shell.Quote (Path);
+                  Asked_For : Model_Runner.Processes.Request;
+                  Ran : Model_Runner.Processes.Result;
+               begin
+                  Ada.Directories.Create_Path (Session_Files);
+                  Asked_For.Program := Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Executable);
+                  Asked_For.Arguments.Append
+                    (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
+                  --  Wayland's clipboard, else X's.
+                  Asked_For.Arguments.Append
+                    (Ada.Strings.Unbounded.To_Unbounded_String
+                       ("wl-paste --type image/png > " & Quoted & " 2>/dev/null"
+                        & " || xclip -selection clipboard -t image/png -o > " & Quoted & " 2>/dev/null"));
+                  Asked_For.Limit := 10.0;
+                  Ran := Model_Runner.Processes.Run (Asked_For);
+                  if not Model_Runner.Processes.Succeeded (Ran)
+                    or else not Ada.Directories.Exists (Path)
+                    or else Ada.Directories."=" (Ada.Directories.Size (Path), 0)
+                  then
+                     Pres.Put_Note (Screen, "cli.interactive.paste_none");
+                  else
+                     Free_Text (Next_Picture);
+                     Picture_Kept := Pending (Typing) /= "";
+                     Next_Picture := new String'(Path);
+                     Next_Is_Video := False;
+                     Pres.Put_Note (Screen, "cli.interactive.picture_pending",
+                                    [Loc.Named ("detail", Next_Picture.all)]);
+                  end if;
+               end;
+            end if;
+
+         elsif Asked.Kind = Show_Jobs then
+            Jobs_Asked := True;
 
          elsif Asked.Kind = Plan_Mode then
             --  Plan mode on (/plan, /plan on) or off (/plan off): while it
@@ -1848,6 +1923,9 @@ package body Model_Runner.CLI.Interactive is
          Kept_Back := False;
          Picture_Failed := False;
          Turns_Asked := Turns_Asked + 1;
+         --  A turn with a picture is the model's own, not the tool loop's,
+         --  which hands a model words alone.
+         With_Picture := Sender = Conv.User_Role and then Next_Picture /= null;
          if Sender = Conv.User_Role and then Next_Picture /= null then
             --  The words and the picture named for them, as one turn of
             --  parts, the path quoted as JSON quotes it.
@@ -1937,7 +2015,7 @@ package body Model_Runner.CLI.Interactive is
          Request.Reuse_Committed_Prefix := True;
          --  With the tools: the turn is the agent loop's -- it renders,
          --  generates, runs the calls it is allowed, and answers.
-         if Tools_On and then Sender = Conv.User_Role then
+         if Tools_On and then Sender = Conv.User_Role and then not With_Picture then
             Free_Text (Rendered);
             declare
                Agent_Request : Gen.Request := Request;
@@ -2401,6 +2479,128 @@ package body Model_Runner.CLI.Interactive is
             null;
       end Keep_Conversation;
 
+      --  Commands run in the background with !&: each its process, the file
+      --  its words go to, and its line; checked between lines, and what one
+      --  that ended said goes with the next message as a command's does.
+      type Job is record
+         Child   : Hostkit.Spawn.Process_Handle;
+         Output  : Ada.Strings.Unbounded.Unbounded_String;
+         Command : Ada.Strings.Unbounded.Unbounded_String;
+         Running : Boolean := False;
+      end record;
+      Jobs_Most : constant := 16;
+      Jobs : array (1 .. Jobs_Most) of Job;
+
+      procedure Start_Job (Command : String) is
+         package D renames Hostkit.Descriptors;
+         use type Hostkit.Spawn.Spawn_Outcome;
+         Slot    : Natural := 0;
+         Written : D.Descriptor;
+         Options : Hostkit.Spawn.Options;
+         Words   : Hostkit.String_Vectors.Vector;
+      begin
+         for Index in Jobs'Range loop
+            if not Jobs (Index).Running then
+               Slot := Index;
+               exit;
+            end if;
+         end loop;
+         if Slot = 0 then
+            Pres.Put_Note (Screen, "cli.interactive.jobs_full");
+            return;
+         end if;
+         declare
+            Path : constant String :=
+              Session_Files & "/job-" & T.Image (Long_Long_Integer (Slot)) & ".txt";
+         begin
+            Ada.Directories.Create_Path (Session_Files);
+            if not D.Open_File (Path, D.Open_Write_Truncate, Written)
+              or else not D.Set_Inheritable (Written, True)
+            then
+               D.Close (Written);
+               Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+               return;
+            end if;
+            Options.Output := Written;
+            Options.Error_Output := Written;
+            Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
+            Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Command));
+            if Hostkit.Spawn.Start (Hostkit.Shell.Executable, Words, Options, Jobs (Slot).Child)
+               /= Hostkit.Spawn.Spawn_Ok
+            then
+               D.Close (Written);
+               Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+               return;
+            end if;
+            D.Close (Written);
+            Jobs (Slot).Output := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+            Jobs (Slot).Command := Ada.Strings.Unbounded.To_Unbounded_String (Command);
+            Jobs (Slot).Running := True;
+            Pres.Put_Note (Screen, "cli.interactive.job_started",
+                           [Loc.Named ("value", T.Image (Long_Long_Integer (Slot))),
+                            Loc.Named ("detail", Command)]);
+         end;
+      exception
+         when others =>
+            Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+      end Start_Job;
+
+      --  The jobs that ended since last asked: said, and what each wrote
+      --  kept for the next message.
+      procedure Check_Jobs is
+         use type Hostkit.Spawn.Wait_State;
+      begin
+         for Index in Jobs'Range loop
+            if Jobs (Index).Running then
+               declare
+                  Result : Hostkit.Spawn.Status;
+               begin
+                  if Hostkit.Spawn.Wait (Jobs (Index).Child, Hostkit.Spawn.Wait_Poll, Result)
+                    and then Result.State in Hostkit.Spawn.Wait_Exited | Hostkit.Spawn.Wait_Signalled
+                  then
+                     Jobs (Index).Running := False;
+                     declare
+                        Path   : constant String := Ada.Strings.Unbounded.To_String (Jobs (Index).Output);
+                        Size   : constant Natural :=
+                          (if Ada.Directories.Exists (Path) then Natural (Ada.Directories.Size (Path)) else 0);
+                        Kept   : constant Natural := Natural'Min (Size, Shell_Kept_Most);
+                        Words  : String (1 .. Kept);
+                        File   : Ada.Streams.Stream_IO.File_Type;
+                        Status_Image : constant String :=
+                          (if Result.State = Hostkit.Spawn.Wait_Exited
+                           then T.Image (Long_Long_Integer (Result.Exit_Code)) else "stopped");
+                     begin
+                        if Kept > 0 then
+                           Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+                           String'Read (Ada.Streams.Stream_IO.Stream (File), Words);
+                           Ada.Streams.Stream_IO.Close (File);
+                        end if;
+                        if Ada.Directories.Exists (Path) then
+                           Ada.Directories.Delete_File (Path);
+                        end if;
+                        Ada.Strings.Unbounded.Append
+                          (Shell_Said,
+                           "$ " & Ada.Strings.Unbounded.To_String (Jobs (Index).Command) & "   (in the background)"
+                           & ASCII.LF & Words
+                           & (if Kept > 0 and then Words (Words'Last) /= ASCII.LF then [1 => ASCII.LF] else "")
+                           & (if Size > Kept then "[" & T.Image (Long_Long_Integer (Size - Kept))
+                                                 & " more bytes left out]" & ASCII.LF else "")
+                           & "[exit status " & Status_Image & "]" & ASCII.LF);
+                        Pres.Put_Note
+                          (Screen, "cli.interactive.job_done",
+                           [Loc.Named ("value", T.Image (Long_Long_Integer (Index))),
+                            Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Jobs (Index).Command)),
+                            Loc.Named ("state", Status_Image)]);
+                     end;
+                  end if;
+               exception
+                  when others =>
+                     Jobs (Index).Running := False;
+               end;
+            end if;
+         end loop;
+      end Check_Jobs;
+
       procedure Submit is
       begin
          if Pending (Typing) = "" then
@@ -2472,10 +2672,10 @@ package body Model_Runner.CLI.Interactive is
                             Loc.Named ("total", T.Image (Long_Long_Integer (L.Capacity (Session)))),
                             Loc.Named ("detail",
                                        (if Tools_On
-                                        then " · " & Pres.Message_Value (Screen, "cli.interactive.status.tools")
+                                        then Middle_Dot & Pres.Message_Value (Screen, "cli.interactive.status.tools")
                                         else "")
                                        & (if Model_Runner.CLI.Tool_Turns.Planning
-                                          then " · " & Pres.Message_Value (Screen, "cli.interactive.status.plan")
+                                          then Middle_Dot & Pres.Message_Value (Screen, "cli.interactive.status.plan")
                                           else ""))]);
                      end if;
                      --  A blank line after the reply and what was said of
@@ -2690,6 +2890,8 @@ package body Model_Runner.CLI.Interactive is
 
       Read_Loop :
       while not Leaving loop
+         --  Jobs that ended while the last line was answered, or typed.
+         Check_Jobs;
          --  The prompt marker goes to standard error so that a redirected
          --  standard output still receives only generated text.
          --  At a terminal the line is edited, and its prompt drawn, as it is
@@ -2982,6 +3184,13 @@ package body Model_Runner.CLI.Interactive is
                      begin
                         if Command = "" then
                            Pres.Put_Note (Screen, "cli.interactive.shell_usage");
+                        elsif Command (Command'First) = '&' then
+                           --  !& and a command: run in the background.
+                           if T.Trim (Command (Command'First + 1 .. Command'Last)) = "" then
+                              Pres.Put_Note (Screen, "cli.interactive.shell_usage");
+                           else
+                              Start_Job (T.Trim (Command (Command'First + 1 .. Command'Last)));
+                           end if;
                         else
                            Run_Shell (Command);
                         end if;
@@ -3014,6 +3223,27 @@ package body Model_Runner.CLI.Interactive is
                            Handled := Handle_Command (T.Trim (Line));
                            After_Command := Turns_Asked = Before;
                         end;
+                        --  /jobs: those running, each with its number and line.
+                        if Jobs_Asked then
+                           Jobs_Asked := False;
+                           Check_Jobs;
+                           declare
+                              Any : Boolean := False;
+                           begin
+                              for Index in Jobs'Range loop
+                                 if Jobs (Index).Running then
+                                    Any := True;
+                                    Pres.Put_Note
+                                      (Screen, "cli.interactive.job_running",
+                                       [Loc.Named ("value", T.Image (Long_Long_Integer (Index))),
+                                        Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Jobs (Index).Command))]);
+                                 end if;
+                              end loop;
+                              if not Any then
+                                 Pres.Put_Note (Screen, "cli.interactive.jobs_none");
+                              end if;
+                           end;
+                        end if;
                         --  A command of the user's own made a message: sent.
                         if Ada.Strings.Unbounded.Length (Custom_Message) > 0 then
                            Restore (Typing, Ada.Strings.Unbounded.To_String (Custom_Message));
