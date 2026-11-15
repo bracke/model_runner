@@ -4,6 +4,7 @@ with Model_Runner.Errors;
 with Ada.Strings.Unbounded;
 with Model_Runner.Agent;
 with Model_Runner.Presentation;
+with Model_Runner.Code_Health.Hooks;
 
 --  A conversation's turns with the tools: what is asked before a call runs,
 --  and what /undo puts back.
@@ -119,7 +120,20 @@ package Model_Runner.CLI.Tool_Turns is
    --  that ran, the settings file's hook.after-edit runs -- $FILE in it
    --  the file's quoted path -- and what it said, with how it ended, is
    --  put after the tool's answer, so the model reads it too.
-   type Hooked_Instance is new Model_Runner.Tools.Builtin.Instance with null record;
+   type Hooked_Instance is new Model_Runner.Tools.Builtin.Instance with private;
+
+   --  Enable native Code Health for this runner.  Handler is invoked
+   --  synchronously after actual successful filesystem changes.
+   procedure Enable_Code_Health
+     (Self       : in out Hooked_Instance;
+      Handler    : not null Model_Runner.Code_Health.Hooks.Dispatcher_Reference;
+      Project    : String;
+      Status     : out Model_Runner.Errors.Error_Info;
+      Workspace  : String := "";
+      Task_Id    : String := "";
+      Generation : Natural := 0);
+
+   procedure Disable_Code_Health (Self : in out Hooked_Instance);
 
    overriding procedure Run
      (Self      : in out Hooked_Instance;
@@ -141,6 +155,10 @@ package Model_Runner.CLI.Tool_Turns is
    function Run_Hook (Key, File : String; Failed : out Boolean) return String;
 
 private
+
+   type Hooked_Instance is new Model_Runner.Tools.Builtin.Instance with record
+      Health : Model_Runner.Code_Health.Hooks.Context;
+   end record;
 
    type Conversation_Approver (Screen : access Model_Runner.Presentation.Console) is
      limited new Model_Runner.Agent.Approver with record

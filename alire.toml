@@ -53,6 +53,11 @@ jsonlib = "*"
 [[depends-on]]
 versionlib = "*"
 
+# Code Health reuses ada_quality's native source indicator contracts for
+# change-scoped formatting, hygiene, complexity, exception and security rules.
+[[depends-on]]
+ada_quality = "=0.1.0"
+
 # A downloaded model's digest is checked here when it came in ranges.
 [[depends-on]]
 cryptolib = "~0.1.0-dev"
@@ -94,6 +99,15 @@ jsonlib = { path = "../jsonlib" }
 
 [[pins]]
 versionlib = { path = "../versionlib" }
+
+[[pins]]
+ada_quality = { path = "../ada_quality" }
+
+[[pins]]
+database = { path = "../database" }
+
+[[pins]]
+project_tools = { path = "../project_tools" }
 
 [[pins]]
 ssh_lib = { path = "../sshlib" }

@@ -48,6 +48,24 @@ package body Model_Runner.CLI.Tool_Turns is
 
    function Planning return Boolean is (Plan_On);
 
+   procedure Enable_Code_Health
+     (Self       : in out Hooked_Instance;
+      Handler    : not null Model_Runner.Code_Health.Hooks.Dispatcher_Reference;
+      Project    : String;
+      Status     : out Model_Runner.Errors.Error_Info;
+      Workspace  : String := "";
+      Task_Id    : String := "";
+      Generation : Natural := 0) is
+   begin
+      Model_Runner.Code_Health.Hooks.Initialize
+        (Self.Health, Project, Handler, Status, Workspace, Task_Id, Generation);
+   end Enable_Code_Health;
+
+   procedure Disable_Code_Health (Self : in out Hooked_Instance) is
+   begin
+      Model_Runner.Code_Health.Hooks.Disable (Self.Health);
+   end Disable_Code_Health;
+
    function Matches (Pattern, Text : String) return Boolean is
       --  Greedy with one step back: where the last * was, and where in the
       --  text it was tried to end.
@@ -186,24 +204,23 @@ package body Model_Runner.CLI.Tool_Turns is
    end Begin_Turn;
 
    function Path_Of (Arguments : String) return String is
-      Key : constant Natural := Ada.Strings.Fixed.Index (Arguments, """path""");
-      Open, Close : Natural;
+      package Doc renames Jsonlib.Documents;
+      Document : Doc.Document;
+      Error    : Jsonlib.Errors.Error_Info;
+      use type Doc.Value_Kind;
    begin
-      if Key = 0 then
+      Jsonlib.Parsers.Parse (Arguments, Document, Error);
+      if Jsonlib.Errors.Failed (Error)
+        or else Doc.Kind (Document, Doc.Root (Document)) /= Doc.Object_Value
+        or else not Doc.Has_Member (Document, Doc.Root (Document), "path")
+        or else Doc.Kind (Document, Doc.Member (Document, Doc.Root (Document), "path")) /= Doc.String_Value
+      then
          return "";
       end if;
-      Open := Ada.Strings.Fixed.Index (Arguments (Key + 6 .. Arguments'Last), """");
-      if Open = 0 then
+      return Doc.As_String (Document, Doc.Member (Document, Doc.Root (Document), "path"));
+   exception
+      when others =>
          return "";
-      end if;
-      Close := Open + 1;
-      while Close <= Arguments'Last and then Arguments (Close) /= '"' loop
-         if Arguments (Close) = '\' then
-            Close := Close + 1;
-         end if;
-         Close := Close + 1;
-      end loop;
-      return (if Close > Arguments'Last then "" else Arguments (Open + 1 .. Close - 1));
    end Path_Of;
 
    procedure Before_Change (Path : String) is
@@ -434,6 +451,29 @@ package body Model_Runner.CLI.Tool_Turns is
             Last := Last + Natural'Min (Room, Words'Length);
          end if;
       end Add;
+
+      procedure Run_Code_Health is
+         package Ch renames Model_Runner.Code_Health;
+         Feedback : Unbounded_String;
+         Checked  : Model_Runner.Errors.Error_Info;
+         Trigger  : constant Ch.Trigger_Kind :=
+           (if Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Write_Files)
+            then Ch.After_File_Change
+            elsif Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Delegation)
+            then Ch.After_Delegation
+            else Ch.After_Command);
+      begin
+         Model_Runner.Code_Health.Hooks.After_Call
+           (Self.Health, Named,
+            Model_Runner.Tools.Builtin.Kind (Model_Runner.Tools.Builtin.Instance (Self), Named),
+            Model_Runner.Tools.Builtin.Touches (Model_Runner.Tools.Builtin.Instance (Self), Named), Outcome,
+            Trigger, Feedback, Checked);
+         if Model_Runner.Errors.Is_Error (Checked) then
+            Add (ASCII.LF & "[trusted Code Health metadata: assessment unavailable]");
+         elsif Length (Feedback) > 0 then
+            Add (ASCII.LF & "[trusted Code Health metadata:" & ASCII.LF & To_String (Feedback) & "]");
+         end if;
+      end Run_Code_Health;
    begin
       --  A server's tool: sent to it, and its answer the tool's.
       if Model_Runner.CLI.MCP.Owns (Named) then
@@ -458,10 +498,14 @@ package body Model_Runner.CLI.Tool_Turns is
             Outcome.Truncated := Length (Said) > Result'Length;
             Status := Model_Runner.Errors.Success;
          end;
+         Run_Code_Health;
          return;
       end if;
       Model_Runner.Tools.Builtin.Run
         (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last, Outcome, Status);
+      if Model_Runner.Errors.Is_Ok (Status) then
+         Run_Code_Health;
+      end if;
       if Model_Runner.Errors.Is_Ok (Status)
         and then Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Write_Files)
         and then Model_Runner.Config.Value ("hook.after-edit") /= ""

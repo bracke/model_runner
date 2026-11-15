@@ -21,6 +21,9 @@ aunit = "~26.0.0"
 [[depends-on]]
 project_tools = "~0.1.0"
 
+[[depends-on]]
+ada_quality = "=0.1.0"
+
 [[pins]]
 model_runner = { path = ".." }
 
@@ -80,6 +83,10 @@ jpeglib = { path = "../../jpeglib" }
 jsonlib = { path = "../../jsonlib" }
 [[pins]]
 versionlib = { path = "../../versionlib" }
+[[pins]]
+ada_quality = { path = "../../ada_quality" }
+[[pins]]
+database = { path = "../../database" }
 [[pins]]
 ssh_lib = { path = "../../sshlib" }
 
