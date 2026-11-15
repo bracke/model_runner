@@ -1,5 +1,6 @@
 with Model_Runner.Processes;
 with Model_Runner.Tools.Runner;
+with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
@@ -16754,6 +16755,45 @@ package body Tests.CLI_Cases is
                  and then not Failed,
                  "a hook ran where no setting names one");
          Ada.Directories.Delete_File (Edited);
+      end;
+
+      --  A language server: after a write or an edit its problems with the
+      --  file are put after the answer, or that it finds none. The test
+      --  program's stand-in, which sees an error on a line holding ERROR.
+      declare
+         Own      : constant String := Ada.Directories.Full_Name ("obj/lsp-settings");
+         Edited   : constant String := Ada.Directories.Full_Name ("obj/served.txt");
+         Plain    : constant String := "bin/tests";
+         Server   : constant String :=
+           Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
+         Runner   : Model_Runner.CLI.Tool_Turns.Hooked_Instance;
+         Answer   : String (1 .. 4096);
+         Last     : Natural;
+         Status   : E.Error_Info;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
+         Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
+         Model_Runner.CLI.Tool_Turns.Set_Base (Ada.Directories.Full_Name ("obj"));
+         Runner.Set_Base (Ada.Directories.Full_Name ("obj"));
+         Model_Runner.Tools.Runner.Run
+           (Runner, "write_file", "{""path"": ""served.txt"", ""content"": ""fine\nstill fine\n""}",
+            Answer, Last, Status);
+         Assert (E.Is_Ok (Status), "the write did not run");
+         Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "language server finds no problems") > 0,
+                 "a clean file was not said to be clean: " & Answer (1 .. Last));
+         Model_Runner.Tools.Runner.Run
+           (Runner, "write_file", "{""path"": ""served.txt"", ""content"": ""fine\nan ERROR here\n""}",
+            Answer, Last, Status);
+         Assert (E.Is_Ok (Status), "the second write did not run");
+         Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "line 2: error: ERROR is not allowed") > 0,
+                 "the server's problem was not put after the answer: " & Answer (1 .. Last));
+         Model_Runner.CLI.Language_Server.Stop;
+         Restore_Settings;
+         Assert (not Model_Runner.CLI.Language_Server.Configured, "a server was named where no setting names one");
+         Ada.Directories.Delete_File (Edited);
+         Ada.Directories.Delete_File (Own);
       end;
    end Own_Commands_And_Hooks_Run;
 

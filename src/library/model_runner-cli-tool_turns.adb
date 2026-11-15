@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Language_Server;
 with Hostkit.Shell;
 with Model_Runner.Processes;
 with Model_Runner.Config;
@@ -280,6 +281,16 @@ package body Model_Runner.CLI.Tool_Turns is
       Status    : out Model_Runner.Errors.Error_Info)
    is
       package Reg renames Model_Runner.Tools.Registry;
+      --  Words put after the tool's answer, as much as it has room for.
+      procedure Add (Words : String) is
+         Room : constant Natural := Result'Last - Last;
+      begin
+         if Room > 0 then
+            Result (Last + 1 .. Last + Natural'Min (Room, Words'Length)) :=
+              Words (Words'First .. Words'First + Natural'Min (Room, Words'Length) - 1);
+            Last := Last + Natural'Min (Room, Words'Length);
+         end if;
+      end Add;
    begin
       Model_Runner.Tools.Builtin.Run
         (Model_Runner.Tools.Builtin.Instance (Self), Named, Arguments, Result, Last, Outcome, Status);
@@ -295,15 +306,29 @@ package body Model_Runner.CLI.Tool_Turns is
                         (if Path = "" or else Path (Path'First) = '/' or else Length (Base) = 0 then Path
                          else To_String (Base) & "/" & Path),
                         Failed);
-            Added  : constant String := ASCII.LF & "[the user's hook after an edit"
-                                        & (if Failed then ", which failed" else "") & ": " & Said & "]";
-            Room   : constant Natural := Result'Last - Last;
          begin
-            --  As much as the answer has room for.
-            if Room > 0 then
-               Result (Last + 1 .. Last + Natural'Min (Room, Added'Length)) :=
-                 Added (Added'First .. Added'First + Natural'Min (Room, Added'Length) - 1);
-               Last := Last + Natural'Min (Room, Added'Length);
+            Add (ASCII.LF & "[the user's hook after an edit" & (if Failed then ", which failed" else "")
+                 & ": " & Said & "]");
+         end;
+      end if;
+      --  And the language server's word on the file, where one is named.
+      if Model_Runner.Errors.Is_Ok (Status)
+        and then Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Write_Files)
+        and then Model_Runner.CLI.Language_Server.Configured
+      then
+         declare
+            Path : constant String := Path_Of (Arguments);
+            Full : constant String :=
+              (if Path = "" then ""
+               elsif Path (Path'First) = '/' or else Length (Base) = 0 then Ada.Directories.Full_Name (Path)
+               else Ada.Directories.Full_Name (To_String (Base) & "/" & Path));
+            Said : constant String :=
+              (if Full = "" then "" else Model_Runner.CLI.Language_Server.Problems_In (Full));
+         begin
+            if Said = "(none)" then
+               Add (ASCII.LF & "[the language server finds no problems in it]");
+            elsif Said /= "" then
+               Add (ASCII.LF & "[the language server finds these problems in it:" & ASCII.LF & Said & "]");
             end if;
          end;
       end if;

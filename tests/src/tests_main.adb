@@ -2,6 +2,7 @@ with Model_Runner.Agent;
 with Model_Runner.CLI.Tool_Turns;
 with Hostkit.Parent_Watch;
 with Model_Runner.CLI.Execute;
+with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Model_Runner.CLI.Options;
@@ -2991,6 +2992,108 @@ begin
                Index := Index + 2;
             end loop;
          end;
+      end;
+
+   elsif Command = "fake-lsp" then
+      --  A stand-in language server on standard input and output: answers
+      --  initialize and shutdown, and on each opened or changed file says
+      --  there is an error on the first line holding ERROR, or none. What
+      --  the conversation's diagnostics after an edit are tested against,
+      --  as no real server need be installed.
+      declare
+         Input  : constant Ada.Text_IO.Text_Streams.Stream_Access :=
+           Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Input);
+         Output : constant Ada.Text_IO.Text_Streams.Stream_Access :=
+           Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output);
+
+         procedure Send (Json : String) is
+            Framed : constant String :=
+              "Content-Length:" & Natural'Image (Json'Length) & ASCII.CR & ASCII.LF & ASCII.CR & ASCII.LF & Json;
+         begin
+            String'Write (Output, Framed);
+            Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+         end Send;
+
+         --  The text after Key up to the next quote or delimiter.
+         function After (Message, Key : String; Stop : Character) return String is
+            At_Key : constant Natural := Ada.Strings.Fixed.Index (Message, Key);
+            Ending : Natural;
+         begin
+            if At_Key = 0 then
+               return "";
+            end if;
+            Ending := At_Key + Key'Length;
+            while Ending <= Message'Last and then Message (Ending) /= Stop loop
+               Ending := Ending + 1;
+            end loop;
+            return Message (At_Key + Key'Length .. Ending - 1);
+         end After;
+
+         function Image (Value : Natural) return String is
+           (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Left));
+
+         Size : Natural := 0;
+         Line : Ada.Strings.Unbounded.Unbounded_String;
+         Char : Character;
+      begin
+         loop
+            --  The header, a line at a time, to its empty line.
+            Size := 0;
+            loop
+               Line := Ada.Strings.Unbounded.Null_Unbounded_String;
+               loop
+                  Character'Read (Input, Char);
+                  exit when Char = ASCII.LF;
+                  if Char /= ASCII.CR then
+                     Ada.Strings.Unbounded.Append (Line, Char);
+                  end if;
+               end loop;
+               exit when Ada.Strings.Unbounded.Length (Line) = 0;
+               declare
+                  Header : constant String := Ada.Strings.Unbounded.To_String (Line);
+               begin
+                  if Ada.Strings.Fixed.Index (Header, "Content-Length:") = Header'First then
+                     Size := Natural'Value (Header (Header'First + 15 .. Header'Last));
+                  end if;
+               end;
+            end loop;
+            declare
+               Message : String (1 .. Size);
+            begin
+               String'Read (Input, Message);
+               declare
+                  Called : constant String := After (Message, """method"":""", '"');
+                  Id     : constant String := After (Message, """id"":", ',');
+               begin
+                  if Called = "initialize" or else Called = "shutdown" then
+                     Send ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":"
+                           & (if Called = "initialize" then "{""capabilities"":{}}" else "null") & "}");
+                  elsif Called = "exit" then
+                     exit;
+                  elsif Called = "textDocument/didOpen" or else Called = "textDocument/didChange" then
+                     declare
+                        URI    : constant String := After (Message, """uri"":""", '"');
+                        Flaw   : constant Natural := Ada.Strings.Fixed.Index (Message, "ERROR");
+                        Before : constant Natural :=
+                          (if Flaw = 0 then 0
+                           else Ada.Strings.Fixed.Count
+                                  (Message (Ada.Strings.Fixed.Index (Message, """text"":") .. Flaw), "\n"));
+                     begin
+                        Send ("{""jsonrpc"":""2.0"",""method"":""textDocument/publishDiagnostics"",""params"":"
+                              & "{""uri"":""" & URI & """,""diagnostics"":["
+                              & (if Flaw = 0 then ""
+                                 else "{""range"":{""start"":{""line"":" & Image (Before)
+                                      & ",""character"":0},""end"":{""line"":" & Image (Before)
+                                      & ",""character"":5}},""severity"":1,""message"":""ERROR is not allowed""}")
+                              & "]}}");
+                     end;
+                  end if;
+               end;
+            end;
+         end loop;
+      exception
+         when Ada.IO_Exceptions.End_Error =>
+            null;
       end;
 
    elsif Command = "schema" then

@@ -1,3 +1,4 @@
+with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.Sampling;
 with Model_Runner.Conversation.Rooms;
@@ -831,6 +832,8 @@ begin
             Status, Cancel'Unchecked_Access,
             Agent_Turn => Converse'Access);
          Model_Runner.Tools.Close (Talk_Tools);
+         --  The language server, where one was started, let go of.
+         Model_Runner.CLI.Language_Server.Stop;
       end;
       Cleanup;
       return;

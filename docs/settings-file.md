@@ -84,6 +84,21 @@ hook.after-edit = gnatpp $FILE
 hook.after-turn = alr build
 ```
 
+## A language server
+
+`lsp` names a language server, a command speaking the Language Server
+Protocol on standard input and output, started by the host's shell in the
+session's folder the first time a tool writes or edits a file. Each written
+or edited file is sent to it, and what it finds -- up to 20 problems, as
+`line N: error: MESSAGE` -- is put after the tool's answer, or that it finds
+none, so the model sees what its change broke. A server that says nothing of
+the file within 8 seconds is not waited for; one that will not start is not
+tried again in that conversation; it is stopped when the conversation ends.
+
+```
+lsp = ada_language_server
+```
+
 ## Your own commands
 
 A Markdown file `NAME.md` in `.model_runner/commands` under the session's
