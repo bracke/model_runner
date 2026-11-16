@@ -6522,7 +6522,11 @@ package body Model_Runner.Backend.Device is
                use type Products.Weight_Packing;
                use type Model_Runner.Numerics.Real;
 
-               Q8 : constant Boolean := Gate_P = Products.Packed_Q8_0;
+               --  An ungated feed-forward has no Gate_P to inspect. The
+               --  paired path is gated only, so leave its format predicates
+               --  unevaluated for Qwen-VL's single up projection.
+               Q8 : constant Boolean :=
+                 Gated and then Gate_P = Products.Packed_Q8_0;
 
                Gate_Bytes : constant Model_Runner.Bytes.Byte_Count :=
                  (if Q8
@@ -8320,6 +8324,89 @@ package body Model_Runner.Backend.Device is
             * Interfaces.Unsigned_64 (T.Row_Bytes (Weight)));
       end if;
    end Hold;
+
+   -----------------
+   -- Expert_Held --
+   -----------------
+
+   function Matrix_Held (Weight : T.View) return Boolean is
+      Packing : Products.Weight_Packing;
+      Known   : Boolean;
+   begin
+      Packing_Of (Weight.Format, Packing, Known);
+      return Known
+        and then Weight.Base /= System.Null_Address
+        and then Products.Holds
+                   (Engine, At_Offset (Weight.Base, Weight.Offset), Packing,
+                    Natural (Weight.Rows), Natural (Weight.Columns));
+   end Matrix_Held;
+
+   function Expert_Held
+     (Gate : T.View;
+      Up   : T.View;
+      Down : T.View) return Boolean
+   is
+   begin
+      return Matrix_Held (Gate)
+        and then Matrix_Held (Up)
+        and then Matrix_Held (Down);
+   end Expert_Held;
+
+   -----------------
+   -- Hold_Expert --
+   -----------------
+
+   procedure Hold_Expert
+     (Gate : T.View;
+      Up   : T.View;
+      Down : T.View;
+      Held : out Boolean)
+   is
+      Was_Gate : constant Boolean := Matrix_Held (Gate);
+      Was_Up   : constant Boolean := Matrix_Held (Up);
+      Was_Down : constant Boolean := Matrix_Held (Down);
+      Status   : E.Error_Info;
+
+      procedure Undo (Weight : T.View; Was_Held : Boolean) is
+      begin
+         if not Was_Held and then Matrix_Held (Weight) then
+            Give_Back (Weight);
+         end if;
+      end Undo;
+   begin
+      Held := False;
+
+      if not Was_Gate then
+         Hold (Gate, Status, Ahead => True);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+
+      if not Was_Up then
+         Hold (Up, Status, Ahead => True);
+         if E.Is_Error (Status) then
+            Undo (Gate, Was_Gate);
+            return;
+         end if;
+      end if;
+
+      if not Was_Down then
+         Hold (Down, Status, Ahead => True);
+         if E.Is_Error (Status) then
+            Undo (Up, Was_Up);
+            Undo (Gate, Was_Gate);
+            return;
+         end if;
+      end if;
+
+      Held := Expert_Held (Gate, Up, Down);
+      if not Held then
+         Undo (Down, Was_Down);
+         Undo (Up, Was_Up);
+         Undo (Gate, Was_Gate);
+      end if;
+   end Hold_Expert;
 
    ---------------
    -- Hold_Pair --

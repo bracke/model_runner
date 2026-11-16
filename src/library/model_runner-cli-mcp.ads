@@ -1,4 +1,5 @@
 with Ada.Strings.Unbounded;
+with Ada.Real_Time;
 with Model_Runner.Cancellation;
 
 --  A conversation's Model Context Protocol servers: programs of the user's
@@ -67,12 +68,15 @@ package Model_Runner.CLI.MCP is
    --  @param Cancel Stops the wait, and asks the server to stop; or null.
    --  @param Said What it answered, or why it did not.
    --  @param Ended How it ended.
+   --  @param Deadline Owning tool deadline; the fixed MCP limit is only a
+   --    ceiling. Time_Last means no earlier owning deadline.
    procedure Call
      (Named     : String;
       Arguments : String;
       Cancel    : Model_Runner.Cancellation.Token_Reference;
       Said      : out Ada.Strings.Unbounded.Unbounded_String;
-      Ended     : out Call_End);
+      Ended     : out Call_End;
+      Deadline  : Ada.Real_Time.Time := Ada.Real_Time.Time_Last);
 
    --  The servers, a line each: name, whether it runs, how many tools.
    --

@@ -48,6 +48,10 @@ package Model_Runner.GGUF.Containers.Reader is
    --    tensors as the first says. Every offset in the merged container is
    --    absolute in the shards read end to end, in the order given -- which
    --    is what Model_Runner.GGUF.Shards presents.
+   --  @param Auxiliary Explicit additional GGUF files. Their metadata is not
+   --    merged; their tensors are appended after the numbered model shards.
+   --    Tensor names must be unique, except that a file containing only
+   --    per_layer_token_embd.weight may replace that tensor in the model.
    procedure Parse
      (Item     : in out Container;
       Source   : in out Model_Runner.Byte_Sources.Source'Class;
@@ -57,6 +61,8 @@ package Model_Runner.GGUF.Containers.Reader is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Status   : out Model_Runner.Errors.Error_Info;
       More     : Model_Runner.Byte_Sources.Source_Array :=
+        Model_Runner.Byte_Sources.No_Sources;
+      Auxiliary : Model_Runner.Byte_Sources.Source_Array :=
         Model_Runner.Byte_Sources.No_Sources);
 
 end Model_Runner.GGUF.Containers.Reader;

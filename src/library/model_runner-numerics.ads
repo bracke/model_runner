@@ -34,6 +34,11 @@ package Model_Runner.Numerics is
    --  arithmetic type: values are converted to Real before any computation.
    type Half is new Interfaces.Unsigned_16;
 
+   --  Raw OCP E4M3FN bit pattern.  The format has four exponent bits,
+   --  three fraction bits, no infinities, and one NaN encoding at either
+   --  sign.  Like Half, this is storage rather than an arithmetic type.
+   type E4M3 is new Interfaces.Unsigned_8;
+
    --  Number of elements in a tensor or buffer. Wide enough that a tensor
    --  element count derived from a 64-bit GGUF dimension cannot silently wrap.
    type Element_Count is range 0 .. 2 ** 44;
@@ -97,6 +102,13 @@ package Model_Runner.Numerics is
    --  @param Item Single-precision value.
    --  @return Nearest half-precision bit pattern.
    function To_Half (Item : Real) return Half;
+
+   --  Decode and encode the finite-numbers OCP E4M3 format.  Encoding uses
+   --  round-to-nearest-even, keeps signed zero, saturates infinities and
+   --  finite overflow at 448, and preserves a NaN as the format's NaN.
+   function To_Real (Item : E4M3) return Real
+     with Inline;
+   function To_E4M3 (Item : Real) return E4M3;
 
    --  Reinterpret a value as its IEEE bit pattern.
    --

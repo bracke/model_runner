@@ -438,7 +438,8 @@ package body Tests.Grammar_Cases is
 
       Calc : constant String :=
         "{""type"": ""object"", ""properties"": {"
-        & """a"": {""type"": ""integer""}, "
+        & """a"": {""allOf"":[{""type"":""number""},"
+        & "{""type"":""integer""}]}, "
         & """op"": {""type"": ""string"", ""enum"": [""+"", ""-""]}, "
         & """note"": {""type"": ""string""}, "
         & """extra"": {""type"": ""object"", ""properties"": "
@@ -535,7 +536,8 @@ package body Tests.Grammar_Cases is
 
       Calc : constant String :=
         "{""type"": ""object"", ""properties"": {"
-        & """a"": {""type"": ""integer""}, "
+        & """a"": {""allOf"":[{""type"":""number""},"
+        & "{""type"":""integer""}]}, "
         & """op"": {""type"": ""string"", ""enum"": [""+"", ""-""]}, "
         & """note"": {""type"": ""string""}, "
         & """loud"": {""type"": ""boolean""}}, "
@@ -745,6 +747,24 @@ package body Tests.Grammar_Cases is
       Check ("{""type"":""integer""}", "0", True, "zero");
       Check ("{""type"":""number""}", "-0.25e10", True, "a number with all its parts");
       Check ("{""type"":""number""}", "01.5", False, "a number with a leading zero");
+
+      --  allOf intersects primitive types. Integer is the narrower part of
+      --  number, nesting does not change the result, and incompatible
+      --  primitive families are refused rather than approximated.
+      Check
+        ("{""allOf"":[{""type"":""number""},{""allOf"":"
+         & "[{""type"":""integer""}]}]}",
+         "-17", True, "nested allOf narrowing number to integer");
+      Check
+        ("{""allOf"":[{""type"":""number""},{""type"":""integer""}]}",
+         "1.5", False, "allOf's integer intersection refusing a fraction");
+      Refuses
+        ("{""allOf"":[{""type"":""string""},{""type"":""boolean""}]}",
+         "incompatible types");
+      Refuses
+        ("{""allOf"":[{""type"":""object"",""properties"":{"
+         & """a"":{""type"":""integer""}}}]}",
+         "non-plain schema");
 
       --  And whitespace bounded, as llama.cpp's converter bounds it: an
       --  indent of twenty, not of every token the model has left.

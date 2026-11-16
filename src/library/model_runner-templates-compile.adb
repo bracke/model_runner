@@ -827,13 +827,43 @@ is
                end if;
             end if;
 
-            if Result.Clause_Used >= Max_Clauses then
-               return;
-            end if;
-            Result.Clause_Used := Result.Clause_Used + 1;
-            Result.Clauses (Result.Clause_Used) := Current;
-            Result.Groups (Result.Group_Used).Count :=
-              Result.Groups (Result.Group_Used).Count + 1;
+            --  Jinja comparisons chain: a < b <= c means a < b and
+            --  b <= c. Keep each link as one clause in this conjunction;
+            --  the right operand becomes the next link's left operand.
+            --  A leading `not` is left to the existing parenthesised form,
+            --  because Python negates the whole chain rather than its first
+            --  link and representing that needs a sub-condition.
+            loop
+               if Result.Clause_Used >= Max_Clauses then
+                  return;
+               end if;
+               Result.Clause_Used := Result.Clause_Used + 1;
+               Result.Clauses (Result.Clause_Used) := Current;
+               Result.Groups (Result.Group_Used).Count :=
+                 Result.Groups (Result.Group_Used).Count + 1;
+
+               exit when Current.Negated
+                 or else Current.Operator not in
+                   Compare_Equal | Compare_Not_Equal
+                   | Compare_Less | Compare_Less_Or_Equal
+                   | Compare_Greater | Compare_Greater_Or_Equal
+                   | Compare_In_Text | Compare_Not_In_Text;
+
+               declare
+                  Following : Clause := (Left => Current.Right, others => <>);
+                  Before    : constant Natural := From;
+               begin
+                  Read_Test (Text, From, Following, Taken);
+                  if not Taken then
+                     return;
+                  end if;
+                  if Following.Operator = Compare_None then
+                     From := Before;
+                     exit;
+                  end if;
+                  Current := Following;
+               end;
+            end loop;
          end;
 
          declare

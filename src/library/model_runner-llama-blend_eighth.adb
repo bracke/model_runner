@@ -59,7 +59,26 @@ begin
          Usable   : Boolean;
       begin
          for Step in First .. Last loop
-            if Held = Fourth then
+            if Held = Float_Eighth then
+               declare
+                  Sum : N.Wide_Real := 0.0;
+                  Origin : constant B.Byte_Count :=
+                    B.Byte_Count (Keys'First)
+                    + B.Byte_Count (K_Base + Step * KV_Width
+                                    + Group * Head_Size);
+               begin
+                  for Offset in 0 .. Head_Size - 1 loop
+                     Sum := Sum
+                       + N.Wide_Real (Query (Q_Origin + Offset))
+                         * N.Wide_Real
+                             (N.To_Real
+                                (N.E4M3
+                                   (Interfaces.Unsigned_8
+                                      (Keys (Origin + B.Byte_Count (Offset))))));
+                  end loop;
+                  Scores (At_Score + Step) := Real (Sum) * Scale;
+               end;
+            elsif Held = Fourth then
                Scores (At_Score + Step) :=
                  K.Head_Dot_Fourth
                    (Left     => Query,
@@ -152,7 +171,30 @@ begin
                     Element_Count'Min (Run, Value_Size - At_Component);
                   Sums : Real_Array (0 .. Here - 1) := [others => 0.0];
                begin
-                  if V_Held = Fourth then
+                  if V_Held = Float_Eighth then
+                     for Step in First .. Last loop
+                        declare
+                           Weight : constant Real :=
+                             Scores (At_Score + Step);
+                           Origin : constant B.Byte_Count :=
+                             Values'First
+                             + B.Byte_Count
+                                 (V_Base + Step * V_Width
+                                  + Group * Value_Size + At_Component);
+                        begin
+                           for Component in 0 .. Here - 1 loop
+                              Sums (Component) := Sums (Component)
+                                + Weight
+                                  * N.To_Real
+                                      (N.E4M3
+                                         (Interfaces.Unsigned_8
+                                            (Values
+                                               (Origin
+                                                + B.Byte_Count (Component)))));
+                           end loop;
+                        end;
+                     end loop;
+                  elsif V_Held = Fourth then
                      K.Blend_Run_Fourth
                        (Sums      => Sums,
                         Weights   => Scores,

@@ -781,6 +781,8 @@ package body Speed_Run is
                      declare
                         Times : constant L.Phase_Times :=
                           L.Time_Spent (Session);
+                        Experts : constant L.Expert_Cache_Statistics :=
+                          L.Expert_Cache_Stats (Session);
                         Total : Duration := 0.0;
                      begin
                         for Phase in L.Phase loop
@@ -810,6 +812,35 @@ package body Speed_Run is
                           (IO.Standard_Error,
                            "    " & Pad ("ACCOUNTED FOR")
                            & T.Image (Long_Float (Total), 3) & " s");
+
+                        if Experts.Observations > 0 then
+                           IO.Put_Line
+                             (IO.Standard_Error,
+                              "    expert cache candidates:"
+                              & Interfaces.Unsigned_64'Image (Experts.Hits)
+                              & " hits of"
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Observations)
+                              & ","
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Promotions)
+                              & " promotions,"
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Evictions)
+                              & " evictions,"
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Admissions)
+                              & " admitted,"
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Device_Runs)
+                              & " device runs,"
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Resident_Bytes)
+                              & " of"
+                              & Interfaces.Unsigned_64'Image
+                                  (Experts.Reserve_Bytes)
+                              & " reserved bytes resident");
+                        end if;
                      end;
                   end if;
 

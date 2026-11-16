@@ -1,5 +1,6 @@
 with Ada.Directories;
 with Ada.Real_Time;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
@@ -8,6 +9,7 @@ with AUnit.Assertions;
 with AUnit.Test_Cases;
 
 with Hostkit.Fs;
+with Hostkit.Metadata;
 
 with Jsonlib.Documents;
 with Jsonlib.Errors;
@@ -1002,8 +1004,8 @@ package body Tests.Code_Health_Cases is
    is
       pragma Unreferenced (T);
       Root   : constant String := Ada.Directories.Full_Name ("obj/code-health-changes");
-      Before, After, Renamed, Deleted : Changes.Snapshot;
-      Found  : Changes.Change_Set;
+      Before, Binary_Changed, After, Renamed, Deleted : Changes.Snapshot;
+      Found, Rename_Found : Changes.Change_Set;
       Status : E.Error_Info;
    begin
       Fresh (Root);
@@ -1016,10 +1018,76 @@ package body Tests.Code_Health_Cases is
               and then Ada.Strings.Fixed.Index (Changes.Skipped_At (Before, 1), "binary") > 0,
               "a binary file was not reported as skipped");
 
+      declare
+         Available : Boolean;
+         Original  : constant Natural :=
+           Hostkit.Metadata.File_Permission_Bits (Root & "/src/a.adb", Available);
+         Changed_Mode : constant Natural :=
+           (if (Original / 8#100#) mod 2 = 0
+            then Original + 8#100# else Original - 8#100#);
+         Applied : Boolean;
+         Mode_Changed : Changes.Snapshot;
+      begin
+         if Available then
+            Applied := Hostkit.Metadata.Set_Permissions
+              (Root & "/src/a.adb", Changed_Mode);
+            if Applied then
+               Changes.Capture (Root, Mode_Changed, Status);
+               Changes.Reconcile
+                 (Before, Mode_Changed, Changes.External_Command, Found, Status);
+               Assert
+                 (E.Is_Ok (Status) and then Changes.Length (Found) = 1
+                  and then To_String (Changes.Element (Found, 1).Path) = "src/a.adb",
+                  "a permission-only source change did not change the snapshot");
+               Assert
+                 (Hostkit.Metadata.Set_Permissions (Root & "/src/a.adb", Original),
+                  "the source fixture's permissions could not be restored");
+            end if;
+         end if;
+      end;
+
+      Put (Root & "/binary.dat", "c" & ASCII.NUL & "d");
+      Changes.Capture (Root, Binary_Changed, Status);
+      Changes.Reconcile (Before, Binary_Changed, Changes.External_Command, Found, Status);
+      Assert
+        (E.Is_Ok (Status) and then Changes.Length (Found) = 1
+         and then To_String (Changes.Element (Found, 1).Path) = "binary.dat",
+         "a changed skipped file did not change the authoritative snapshot");
+
+      --  Oversized skipped files are represented by bounded samples from
+      --  both ends, so a trailing change remains authoritative without a
+      --  whole-file scan.
+      declare
+         package SIO renames Ada.Streams.Stream_IO;
+         File : SIO.File_Type;
+         Oversized_Before, Oversized_After : Changes.Snapshot;
+         Last_Position : constant SIO.Positive_Count :=
+           SIO.Positive_Count (2 * Model_Runner.Tools.Editing.Text_Most + 1);
+      begin
+         SIO.Create (File, SIO.Out_File, Root & "/oversized.dat");
+         SIO.Set_Index (File, Last_Position);
+         Character'Write (SIO.Stream (File), 'a');
+         SIO.Close (File);
+         Changes.Capture (Root, Oversized_Before, Status);
+         Assert (E.Is_Ok (Status), "an oversized skipped file could not be captured");
+         SIO.Open (File, SIO.Out_File, Root & "/oversized.dat");
+         SIO.Set_Index (File, Last_Position);
+         Character'Write (SIO.Stream (File), 'b');
+         SIO.Close (File);
+         Changes.Capture (Root, Oversized_After, Status);
+         Changes.Reconcile
+           (Oversized_Before, Oversized_After, Changes.External_Command, Found, Status);
+         Assert
+           (E.Is_Ok (Status) and then Changes.Length (Found) = 1
+            and then To_String (Changes.Element (Found, 1).Path) = "oversized.dat",
+            "a trailing change to an oversized skipped file was not captured");
+         Ada.Directories.Delete_File (Root & "/oversized.dat");
+      end;
+
       Put (Root & "/src/a.adb", "new");
       Put (Root & "/src/untracked.ads", "package Untracked is end Untracked;");
       Changes.Capture (Root, After, Status);
-      Changes.Reconcile (Before, After, Changes.External_Command, Found, Status);
+      Changes.Reconcile (Binary_Changed, After, Changes.External_Command, Found, Status);
       Assert (E.Is_Ok (Status) and then Changes.Length (Found) = 2,
               "modified and untracked files were not reconciled");
       Assert (Changes.Element (Found, 1).Kind = Changes.Modified
@@ -1028,14 +1096,15 @@ package body Tests.Code_Health_Cases is
               and then To_String (Changes.Element (Found, 2).Path) = "src/untracked.ads",
               "the reconciled paths or kinds were wrong");
 
-      Ada.Directories.Rename (Root & "/src/untracked.ads", Root & "/src/renamed.ads");
+      Ada.Directories.Rename (Root & "/src/untracked.ads", Root & "/src/renamed.txt");
       Changes.Capture (Root, Renamed, Status);
       Changes.Reconcile (After, Renamed, Changes.Reconciliation, Found, Status);
       Assert (E.Is_Ok (Status) and then Changes.Length (Found) = 1
               and then Changes.Element (Found, 1).Kind = Changes.Renamed
               and then To_String (Changes.Element (Found, 1).Old_Path) = "src/untracked.ads"
-              and then To_String (Changes.Element (Found, 1).Path) = "src/renamed.ads",
+              and then To_String (Changes.Element (Found, 1).Path) = "src/renamed.txt",
               "a content-preserving rename was not retained as a rename");
+      Rename_Found := Found;
 
       Ada.Directories.Delete_File (Root & "/src/a.adb");
       Changes.Capture (Root, Deleted, Status);
@@ -1043,6 +1112,51 @@ package body Tests.Code_Health_Cases is
       Assert (E.Is_Ok (Status) and then Changes.Length (Found) = 1
               and then Changes.Element (Found, 1).Kind = Changes.Deleted,
               "a deletion was not reconciled");
+      declare
+         Engine   : Health_Engine.Instance;
+         Checks   : P.Requested_Check_Lists.Vector;
+         Feedback : Unbounded_String;
+         Event    : constant Hooks.Change_Event :=
+           (Trigger   => H.Before_Agent_Answer,
+            Change_Id => To_Unbounded_String (Changes.Identifier (Found)),
+            others    => <>);
+      begin
+         Fake_Runner.Calls := 0;
+         Health_Engine.Initialize
+           (Engine, Root, Status, Runner => Fake_Runner'Access,
+            Configuration => "deleted-input-policy");
+         Checks.Append
+           (P.Requested_Check'
+              (Identifier        => To_Unbounded_String ("ada-project"),
+               Provider          => To_Unbounded_String ("ada"),
+               Required          => True,
+               Block_On          => H.Error,
+               Scope             => P.Dependency_Scope,
+               Timeout_Seconds   => 10,
+               Dependencies      => H.String_Lists.Empty_Vector,
+               Cacheable         => False,
+               Tool_Requirements => ["gprbuild"],
+               Output_Limit      => 8 * 1_024));
+         Health_Engine.Use_Checks (Engine, H.Focused, Checks);
+         Health_Engine.Dispatch
+           (Engine,
+            (Trigger   => H.Before_Agent_Answer,
+             Change_Id => To_Unbounded_String (Changes.Identifier (Rename_Found)),
+             others    => <>),
+            Rename_Found, Feedback, Status);
+         Assert
+           (E.Is_Ok (Status)
+            and then Ada.Strings.Fixed.Index
+              (To_String (Feedback), "CODE HEALTH: UNAVAILABLE") > 0,
+            "renaming an Ada input out of scope bypassed project validation: "
+            & To_String (Feedback));
+         Health_Engine.Dispatch (Engine, Event, Found, Feedback, Status);
+         Assert
+           (E.Is_Ok (Status)
+            and then Ada.Strings.Fixed.Index (To_String (Feedback), "CODE HEALTH: UNAVAILABLE") > 0,
+            "a deleted Ada input bypassed focused project validation: "
+            & To_String (Feedback));
+      end;
       Changes.Reconcile (Deleted, Deleted, Changes.Reconciliation, Found, Status);
       Assert (E.Is_Ok (Status) and then Changes.Length (Found) = 0,
               "an unchanged snapshot produced a change");
@@ -1056,7 +1170,8 @@ package body Tests.Code_Health_Cases is
       Root    : constant String := Ada.Directories.Full_Name ("obj/code-health-links");
       Outside : constant String := Ada.Directories.Full_Name ("obj/code-health-outside.adb");
       Link    : constant String := Root & "/escaped.adb";
-      Shot    : Changes.Snapshot;
+      Shot, Linked_A, Linked_B : Changes.Snapshot;
+      Found   : Changes.Change_Set;
       Status  : E.Error_Info;
    begin
       Fresh (Root);
@@ -1066,6 +1181,26 @@ package body Tests.Code_Health_Cases is
          Assert (Status.Code = E.Framework_Permission_Denied,
                  "a symbolic link outside the project was followed");
          Assert (Hostkit.Fs.Delete_Link (Link), "the test's symbolic link could not be removed");
+      end if;
+      Put (Root & "/one.adb", "procedure One is begin null; end One;");
+      Put (Root & "/two.adb", "procedure Two is begin null; end Two;");
+      if Hostkit.Fs.Create_Link (Root & "/one.adb", Root & "/selected.adb") then
+         Changes.Capture (Root, Linked_A, Status);
+         Assert (E.Is_Ok (Status), "an internal source link could not be captured");
+         Assert (Hostkit.Fs.Delete_Link (Root & "/selected.adb"),
+                 "the internal source link could not be retargeted");
+         Assert (Hostkit.Fs.Create_Link (Root & "/two.adb", Root & "/selected.adb"),
+                 "the internal source link could not be recreated");
+         Changes.Capture (Root, Linked_B, Status);
+         Changes.Reconcile (Linked_A, Linked_B, Changes.External_Command, Found, Status);
+         Assert
+           (E.Is_Ok (Status)
+            and then Changes.Identifier (Linked_A) /= Changes.Identifier (Linked_B)
+            and then Changes.Length (Found) = 1
+            and then To_String (Changes.Element (Found, 1).Path) = "selected.adb",
+            "retargeting an internal source link did not change the snapshot");
+         Assert (Hostkit.Fs.Delete_Link (Root & "/selected.adb"),
+                 "the internal source link could not be removed");
       end if;
       Ada.Directories.Delete_Tree (Root);
       Ada.Directories.Delete_File (Outside);
@@ -1538,6 +1673,37 @@ package body Tests.Code_Health_Cases is
               and then Provider.Supports ("alire.toml", H.Full)
               and then not Provider.Supports ("README.md", H.Fast),
               "the Ada provider's applicability is incorrect");
+
+      --  A removed project path selects project validation, but only a live
+      --  dependency may be handed to gprbuild.
+      Request.Level := H.Focused;
+      Request.Removed_Files.Append ("obsolete.gpr");
+      Request.Dependencies.Append ("model_runner.gpr");
+      Request.Checks.Append
+        (P.Requested_Check'
+           (Identifier        => To_Unbounded_String ("ada-project"),
+            Provider          => To_Unbounded_String ("ada"),
+            Required          => True,
+            Block_On          => H.Error,
+            Scope             => P.Dependency_Scope,
+            Timeout_Seconds   => 20,
+            Dependencies      => H.String_Lists.Empty_Vector,
+            Cacheable         => True,
+            Tool_Requirements => ["gprbuild"],
+            Output_Limit      => 2_048));
+      Provider.Analyze (Request, Result, Status);
+      Assert
+        (E.Is_Ok (Status)
+         and then Ada.Strings.Fixed.Index
+           (To_String (Fake_Runner.Last_Command), "gprbuild -P ""model_runner.gpr""") > 0
+         and then Ada.Strings.Fixed.Index
+           (To_String (Fake_Runner.Last_Command), "obsolete.gpr") = 0,
+         "a removed GPR file became a live project-validation target: "
+         & To_String (Fake_Runner.Last_Command));
+      Request.Checks.Clear;
+      Request.Dependencies.Clear;
+      Request.Removed_Files.Clear;
+      Request.Level := H.Fast;
 
       Select_File ("src/valid.adb");
       Provider.Analyze (Request, Result, Status);

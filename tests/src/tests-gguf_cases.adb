@@ -8609,6 +8609,53 @@ package body Tests.GGUF_Cases is
               "negative zero did not widen to negative zero");
    end Every_Half_Widens_To_Its_Value;
 
+   ----------------------------------------
+   -- Every_E4M3_Value_Round_Trips_To_It --
+   ----------------------------------------
+
+   procedure Every_E4M3_Value_Round_Trips_To_It
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      pragma Suppress (Validity_Check);
+      use type N.E4M3;
+   begin
+      for Pattern in Interfaces.Unsigned_8 loop
+         declare
+            Stored : constant N.E4M3 := N.E4M3 (Pattern);
+            Value  : constant N.Real := N.To_Real (Stored);
+         begin
+            if (Pattern and 16#7F#) = 16#7F# then
+               Assert (N.Is_NaN (Value),
+                       "the E4M3 NaN decoded as a number");
+            else
+               Assert (N.Is_Finite (Value),
+                       "a finite E4M3 pattern decoded non-finite");
+               Assert (N.To_E4M3 (Value) = Stored,
+                       "E4M3 did not round-trip pattern"
+                       & Interfaces.Unsigned_8'Image (Pattern));
+            end if;
+         end;
+      end loop;
+
+      Assert (N.To_Real (N.E4M3 (16#01#)) = 1.0 / 512.0,
+              "the smallest E4M3 subnormal is wrong");
+      Assert (N.To_Real (N.E4M3 (16#08#)) = 1.0 / 64.0,
+              "the smallest normal E4M3 value is wrong");
+      Assert (N.To_Real (N.E4M3 (16#38#)) = 1.0,
+              "E4M3 one is wrong");
+      Assert (N.To_Real (N.E4M3 (16#7E#)) = 448.0,
+              "the largest E4M3 value is wrong");
+      Assert (N.To_E4M3 (1.0625) = N.E4M3 (16#38#)
+              and then N.To_E4M3 (1.1875) = N.E4M3 (16#3A#),
+              "E4M3 ties did not round to even");
+      Assert (N.To_E4M3 (1.0 / 1024.0) = N.E4M3 (0)
+              and then N.To_E4M3 (3.0 / 1024.0) = N.E4M3 (2),
+              "E4M3 subnormal ties did not round to even");
+      Assert (N.To_E4M3 (N.From_Bits (16#7F80_0000#)) = N.E4M3 (16#7E#),
+              "positive infinity did not saturate to E4M3's maximum");
+   end Every_E4M3_Value_Round_Trips_To_It;
+
    --  Kernels.To_Halves, eight a step through the conversion instruction,
    --  writes what To_Half writes one at a time, to the bit: across the
    --  normal range, the subnormals, the values below the smallest
@@ -9863,6 +9910,168 @@ package body Tests.GGUF_Cases is
       end;
    end A_Model_In_Several_Files_Reads_As_One;
 
+   --  Explicit GGUF files contribute tensors without pretending to be
+   --  numbered pieces of the backbone. A PLE-only file has one deliberate
+   --  exception to the ordinary duplicate-name rule: it replaces the
+   --  backbone's per-layer embedding table.
+   procedure Auxiliary_GGUF_Shards_Are_Merged_Safely
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      package Shards renames Model_Runner.GGUF.Shards;
+
+      Main_Path : constant String := "obj/auxiliary-main.gguf";
+      PLE_Path  : constant String := "obj/auxiliary-ple.gguf";
+      More_Path : constant String := "obj/auxiliary-more.gguf";
+      Bad_Path  : constant String := "obj/auxiliary-bad.gguf";
+
+      Token : constant N.Real_Array := Fixtures.Sequence (6, 1);
+      Old_PLE : constant N.Real_Array := Fixtures.Sequence (8, 2);
+      New_PLE : constant N.Real_Array := Fixtures.Sequence (8, 20);
+      Norm : constant N.Real_Array := Fixtures.Sequence (4, 3);
+
+      procedure Put
+        (Path       : String;
+         First_Name : String;
+         First      : N.Real_Array;
+         Second_Name : String := "";
+         Second      : N.Real_Array := [1 => 0.0];
+         Split_Marks : Boolean := False)
+      is
+         Builder : Fixtures.Builder;
+         Image   : B.Byte_Array_Access;
+         Output  : Ada.Streams.Stream_IO.File_Type;
+      begin
+         Fixtures.Reset (Builder);
+         Fixtures.Add_String (Builder, "general.architecture", "gemma3n");
+         if Split_Marks then
+            --  Explicit auxiliaries are exact files. These keys are not a
+            --  request to discover or validate a numbered backbone set.
+            Fixtures.Add_U32
+              (Builder, Model_Runner.GGUF.Split_Index_Key, 7);
+            Fixtures.Add_U32
+              (Builder, Model_Runner.GGUF.Split_Count_Key, 19);
+         end if;
+         Fixtures.Add_Tensor
+           (Builder, First_Name, [G.U64 (First'Length)], G.Type_F32,
+            Fixtures.Encode_F32 (First));
+         if Second_Name /= "" then
+            Fixtures.Add_Tensor
+              (Builder, Second_Name, [G.U64 (Second'Length)], G.Type_F32,
+               Fixtures.Encode_F32 (Second));
+         end if;
+         Fixtures.Build (Builder, Image);
+         Ada.Streams.Stream_IO.Create
+           (Output, Ada.Streams.Stream_IO.Out_File, Path);
+         B.Byte_Array'Write
+           (Ada.Streams.Stream_IO.Stream (Output), Image.all);
+         Ada.Streams.Stream_IO.Close (Output);
+         B.Free (Image);
+      end Put;
+
+      procedure Same
+        (Held   : Containers.Container;
+         Source : in out Shards.Shard_Set;
+         Name   : String;
+         Wanted : N.Real_Array)
+      is
+         Index  : constant Natural := Containers.Find_Tensor (Held, Name);
+         Bytes  : constant B.Byte_Array := Fixtures.Encode_F32 (Wanted);
+         Got    : B.Byte_Array (1 .. Bytes'Length);
+         Status : E.Error_Info;
+      begin
+         Assert (Index /= 0, "the auxiliary merge lost " & Name);
+         Shards.Read
+           (Source, B.Byte_Count (Containers.Tensor_Offset (Held, Index)),
+            Got, Status);
+         Assert (E.Is_Ok (Status), "the merged bytes of " & Name & " did not read");
+         Assert (Got = Bytes, "the merged bytes of " & Name & " came from the wrong file");
+      end Same;
+
+      Status : E.Error_Info;
+   begin
+      Put
+        (Main_Path, "token_embd.weight", Token,
+         "per_layer_token_embd.weight", Old_PLE);
+      Put
+        (PLE_Path, "per_layer_token_embd.weight", New_PLE,
+         Split_Marks => True);
+      Put (More_Path, "output_norm.weight", Norm);
+
+      declare
+         Source : Shards.Shard_Set;
+         Held   : Containers.Container;
+         Extra  : constant Model_Runner.Text.Bounded_List :=
+           [Model_Runner.Text.To_Bounded (PLE_Path),
+            Model_Runner.Text.To_Bounded (More_Path)];
+      begin
+         Shards.Open_Model
+           (Source, Held, Main_Path, Extra, Status => Status);
+         Assert
+           (E.Is_Ok (Status),
+            "explicit GGUF shards would not open: "
+            & E.Error_Code'Image (Status.Code));
+         Assert
+           (Shards.Parts (Source) = 3,
+            "the backbone and two auxiliaries did not remain open");
+         Assert
+           (Containers.Tensor_Count (Held) = 3,
+            "the PLE replacement was appended instead of replacing");
+         Same (Held, Source, "token_embd.weight", Token);
+         Same (Held, Source, "per_layer_token_embd.weight", New_PLE);
+         Same (Held, Source, "output_norm.weight", Norm);
+         Shards.Close (Source);
+      end;
+
+      --  Precedence is not silently order-dependent: one external PLE may
+      --  replace the backbone, but two competing external PLE tables are a
+      --  duplicate rather than a last-one-wins policy.
+      declare
+         Source : Shards.Shard_Set;
+         Held   : Containers.Container;
+         Extra  : constant Model_Runner.Text.Bounded_List :=
+           [Model_Runner.Text.To_Bounded (PLE_Path),
+            Model_Runner.Text.To_Bounded (PLE_Path)];
+      begin
+         Shards.Open_Model
+           (Source, Held, Main_Path, Extra, Status => Status);
+         Assert
+           (Status.Code = E.GGUF_Duplicate_Tensor_Name,
+            "two external PLE tables were accepted with "
+            & E.Error_Code'Image (Status.Code));
+         Shards.Close (Source);
+      end;
+
+      --  No general duplicate-name escape: only the exact one-tensor PLE
+      --  file above may replace a backbone tensor.
+      Put (Bad_Path, "token_embd.weight", Token);
+      declare
+         Source : Shards.Shard_Set;
+         Held   : Containers.Container;
+         Extra  : constant Model_Runner.Text.Bounded_List :=
+           [1 => Model_Runner.Text.To_Bounded (Bad_Path)];
+      begin
+         Shards.Open_Model
+           (Source, Held, Main_Path, Extra, Status => Status);
+         Assert
+           (Status.Code = E.GGUF_Duplicate_Tensor_Name,
+            "a non-PLE duplicate auxiliary tensor was accepted with "
+            & E.Error_Code'Image (Status.Code));
+         Shards.Close (Source);
+      end;
+
+      for Path of
+        Model_Runner.Text.Bounded_List'
+          ([Model_Runner.Text.To_Bounded (Main_Path),
+            Model_Runner.Text.To_Bounded (PLE_Path),
+            Model_Runner.Text.To_Bounded (More_Path),
+            Model_Runner.Text.To_Bounded (Bad_Path)])
+      loop
+         Ada.Directories.Delete_File (Model_Runner.Text.To_String (Path));
+      end loop;
+   end Auxiliary_GGUF_Shards_Are_Merged_Safely;
+
    --  Three readings llama.cpp makes and this did not: a marker spelled
    --  again by a later ordinary piece is still the marker; a merged
    --  symbol the vocabulary lacks is spelled by its characters before it
@@ -10668,6 +10877,10 @@ package body Tests.GGUF_Cases is
          "every one of the 65536 half precision patterns widens to the "
          & "value the format defines");
       Register_Routine
+        (T, Every_E4M3_Value_Round_Trips_To_It'Access,
+         "every finite OCP E4M3 pattern round-trips, including ties and "
+         & "the format boundaries");
+      Register_Routine
         (T, Block_Kernels_Are_The_One_Query_Kernels'Access,
          "the block attention's kernels, four and eight queries at a time, "
          & "are the one-query kernels to the bit");
@@ -10704,6 +10917,10 @@ package body Tests.GGUF_Cases is
         (T, A_Model_In_Several_Files_Reads_As_One'Access,
          "a model split across files is read as the model it was split "
          & "from, and one of its files alone says that files are missing");
+      Register_Routine
+        (T, Auxiliary_GGUF_Shards_Are_Merged_Safely'Access,
+         "explicit auxiliary GGUF shards add unique tensors and a PLE-only "
+         & "shard replaces only the per-layer embedding tensor");
    end Register_Tests;
 
 end Tests.GGUF_Cases;

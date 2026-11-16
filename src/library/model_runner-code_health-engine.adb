@@ -77,10 +77,17 @@ package body Model_Runner.Code_Health.Engine is
             Applicable  : Boolean := False;
          begin
             One_Request.Changed_Files.Clear;
+            One_Request.Removed_Files.Clear;
             One_Request.Checks.Clear;
             for Path of Request.Changed_Files loop
                if P.Supports (Provider.all, Path, Request.Level) then
                   One_Request.Changed_Files.Append (Path);
+                  Applicable := True;
+               end if;
+            end loop;
+            for Path of Request.Removed_Files loop
+               if P.Supports (Provider.all, Path, Request.Level) then
+                  One_Request.Removed_Files.Append (Path);
                   Applicable := True;
                end if;
             end loop;
@@ -547,6 +554,9 @@ package body Model_Runner.Code_Health.Engine is
          for Path of Request.Changed_Files loop
             Items.Append ("changed:" & Path);
          end loop;
+         for Path of Request.Removed_Files loop
+            Items.Append ("removed:" & Path);
+         end loop;
          for Path of Request.Dependencies loop
             Items.Append ("dependency:" & Path);
          end loop;
@@ -633,8 +643,20 @@ package body Model_Runner.Code_Health.Engine is
             Item : constant Model_Runner.Code_Health.Changes.File_Change :=
               Model_Runner.Code_Health.Changes.Element (Changed, Index);
          begin
-            if Item.Kind /= Model_Runner.Code_Health.Changes.Deleted then
+            if Item.Kind = Model_Runner.Code_Health.Changes.Deleted then
+               Request.Removed_Files.Append (To_String (Item.Path));
+            else
                Request.Changed_Files.Append (To_String (Item.Path));
+               if Item.Kind = Model_Runner.Code_Health.Changes.Renamed
+                 and then Length (Item.Old_Path) > 0
+                 and then not Request.Removed_Files.Contains
+                   (To_String (Item.Old_Path))
+               then
+                  --  A rename is a creation at its new language boundary and
+                  --  a removal at its old one.  Providers must see both when
+                  --  an extension change moves the file out of their scope.
+                  Request.Removed_Files.Append (To_String (Item.Old_Path));
+               end if;
             end if;
             if Length (Item.Path) > 0 and then not Scope_Files.Contains (To_String (Item.Path)) then
                Scope_Files.Append (To_String (Item.Path));

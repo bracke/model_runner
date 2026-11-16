@@ -943,6 +943,21 @@ package body Tests.Template_Cases is
             "hi a! hi b?", "a macro with a default parameter");
       Same ("{% macro twice(t) %}{{ t }}{{ t }}{% endmacro %}"
             & "{{ twice('ab') | upper }}", "ABAB", "a macro's text filtered");
+      Same
+        ("{% macro four(a, b, c=0, d=0) %}{{ a }}{{ b }}{{ c }}{{ d }}"
+         & "{% endmacro %}{% set pair = [1, 2] %}"
+         & "{% set named = {'c': 3, 'd': 4} %}{{ four(*pair, **named) }}"
+         & "|{{ four(1, *[2], c=3, **{'d': 4}) }}"
+         & "|{{ four(*[], **{'a': 1, 'b': 2, 'c': 3, 'd': 4}) }}",
+         "1234|1234|1234", "positional and keyword arguments unpacked");
+      Same
+        ("{% macro one(a) %}{{ a }}{% endmacro %}{{ one(*{'a': 1}) }}",
+         "render: TEMPLATE_UNSUPPORTED_CONSTRUCT one",
+         "a mapping refused as positional arguments");
+      Same
+        ("{% macro one(a) %}{{ a }}{% endmacro %}{{ one(**[1]) }}",
+         "render: TEMPLATE_UNSUPPORTED_CONSTRUCT one",
+         "a list refused as keyword arguments");
       Same ("{% set p = 'outer' %}{% macro m(p) %}{{ p }}{% endmacro %}"
             & "{{ m('inner') }}{{ p }}", "innerouter",
             "a parameter given back after the call");
@@ -1439,6 +1454,12 @@ package body Tests.Template_Cases is
             & "{% if (1 == 1) == (2 == 3) %}n{% endif %}"
             & "{% if not (1 == 2) and (3 == 3) %}z{% endif %}", "yz",
             "two bracketed conditions compared");
+      Same
+        ("{% if 1 < 2 <= 2 < 3 %}a{% endif %}"
+         & "{% if 1 < 3 < 2 %}x{% else %}b{% endif %}"
+         & "{% if 1 != 2 == 2 %}c{% endif %}"
+         & "{% if 1 < 2 in [1, 2, 3] %}d{% endif %}",
+         "abcd", "comparisons chained as one conjunction");
 
       --  A choice written inside an expression, which is how Gemma's
       --  template puts a system message in front of the first turn only.

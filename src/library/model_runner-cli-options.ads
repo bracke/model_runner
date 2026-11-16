@@ -253,6 +253,10 @@ package Model_Runner.CLI.Options is
    type Adapter_List is
      array (1 .. Max_Adapters) of Model_Runner.Text.Bounded;
 
+   --  Explicit GGUF files carrying tensors beside the backbone, usually a
+   --  separately distributed PLE/engram table.
+   Max_Auxiliary_Shards : constant := 8;
+
    --  How many guardrail rules of each kind the agent's approver may carry.
    Max_Guards : constant := 32;
 
@@ -632,6 +636,11 @@ package Model_Runner.CLI.Options is
       Device_Memory     : Interfaces.Unsigned_64 := 0;
       Device_Memory_Set : Boolean := False;
 
+      --  Bytes withheld from a partially held mixture for individually
+      --  retained experts. Zero disables physical expert admission.
+      Expert_Cache     : Interfaces.Unsigned_64 := 0;
+      Expert_Cache_Set : Boolean := False;
+
       --  Zero bytes of the device's own memory, which means the weights are
       --  read where they lie rather than copied anywhere.
       Device_Share      : Boolean := False;
@@ -761,6 +770,10 @@ package Model_Runner.CLI.Options is
       --  whether there is an adapter at all should not have to count.
       Adapter_Path  : Model_Runner.Text.Bounded;
       Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
+
+      Auxiliary_Shards : Model_Runner.Text.Bounded_List
+        (1 .. Max_Auxiliary_Shards) := [others => Model_Runner.Text.Empty];
+      Auxiliary_Count : Natural := 0;
 
       --  A JSON schema, which becomes a grammar before anything is
       --  generated. Held apart from the grammar so that a caller naming both

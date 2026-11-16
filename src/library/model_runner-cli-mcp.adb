@@ -20,6 +20,7 @@ with Jsonlib.Serializers;
 with Model_Runner.Config;
 with Model_Runner.CLI.Process_Reaper;
 with Model_Runner.Errors;
+with Model_Runner.Platform.IO_Cancellation;
 with Model_Runner.Text;
 with Model_Runner.Tools;
 with Model_Runner.UTF8;
@@ -30,8 +31,11 @@ package body Model_Runner.CLI.MCP is
    use type Ada.Streams.Stream_Element;
    use type Ada.Streams.Stream_Element_Offset;
    use type Ada.Calendar.Time;
+   use type Ada.Real_Time.Time;
+   use type Ada.Real_Time.Time_Span;
    package D renames Hostkit.Descriptors;
    package Doc renames Jsonlib.Documents;
+   package IOC renames Model_Runner.Platform.IO_Cancellation;
    package T renames Model_Runner.Text;
    use type Doc.Value_Kind;
 
@@ -52,6 +56,7 @@ package body Model_Runner.CLI.MCP is
       To_It    : D.Descriptor := D.Invalid;
       From_It  : D.Descriptor := D.Invalid;
       Child    : Hostkit.Spawn.Process_Handle := Hostkit.Spawn.Invalid_Process;
+      Non_Blocking_Writes : Boolean := False;
       Next_Id  : Positive := 1;
       Pending  : Unbounded_String;   --  bytes read past the last line
       Tools    : Natural := 0;
@@ -160,41 +165,245 @@ package body Model_Runner.CLI.MCP is
       end loop;
    end Unique_Offered;
 
-   procedure Send (One : in out Server; Json : String) is
+   --  Give up an MCP server without waiting in the caller.  This is used when
+   --  its input pipe has applied backpressure past a tool deadline: a partial
+   --  JSON line makes the connection unusable, and ending the process tree is
+   --  what releases a blocking write on hosts without non-blocking pipes.
+   procedure Abandon (One : in out Server; Why : String) is
+      Sent : Boolean := False;
+   begin
+      if Hostkit.Spawn.Is_Valid (One.Child) then
+         declare
+            Group : constant Integer := Hostkit.Spawn.Group_Id (One.Child);
+         begin
+            if Group > 1 then
+               Sent := Hostkit.Signals.Send_To_Group
+                 (Group, Hostkit.Signals.Signal_Kill);
+            end if;
+         exception
+            when others =>
+               null;
+         end;
+         if not Sent then
+            Sent := Hostkit.Spawn.Supervision.Stop_Now (One.Child);
+         end if;
+      end if;
+      D.Close (One.To_It);
+      D.Close (One.From_It);
+      One.Running := False;
+      One.Why := To_Unbounded_String (Why);
+      if Hostkit.Spawn.Is_Valid (One.Child) then
+         Model_Runner.CLI.Process_Reaper.Adopt (One.Child);
+      end if;
+   exception
+      when others =>
+         D.Close (One.To_It);
+         D.Close (One.From_It);
+         One.Running := False;
+         One.Why := To_Unbounded_String (Why);
+         if Hostkit.Spawn.Is_Valid (One.Child) then
+            Model_Runner.CLI.Process_Reaper.Adopt (One.Child);
+         end if;
+   end Abandon;
+
+   function Send
+     (One      : in out Server;
+      Json     : String;
+      Deadline : Ada.Real_Time.Time := Ada.Real_Time.Time_Last;
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null)
+      return Boolean
+   is
       Line  : constant String := Json & ASCII.LF;
       Bytes : Ada.Streams.Stream_Element_Array (1 .. Line'Length);
-      Last  : Ada.Streams.Stream_Element_Offset;
-      First : Ada.Streams.Stream_Element_Offset := Bytes'First;
-      Outcome : D.Transfer_Outcome;
+      Target : constant D.Descriptor := One.To_It;
+
+      function Stopped return Boolean is
+        (Model_Runner.Cancellation.Is_Cancelled (Cancel)
+         or else (Deadline /= Ada.Real_Time.Time_Last
+                  and then Deadline <= Ada.Real_Time.Clock));
+
+      procedure Write_Blocking (Succeeded : out Boolean) is
+         Last    : Ada.Streams.Stream_Element_Offset;
+         First   : Ada.Streams.Stream_Element_Offset := Bytes'First;
+         Outcome : D.Transfer_Outcome;
+      begin
+         while First <= Bytes'Last loop
+            Outcome := D.Write (Target, Bytes (First .. Bytes'Last), Last);
+            if D."=" (Outcome, D.Transfer_Ok) and then Last >= First then
+               First := Last + 1;
+            elsif D."=" (Outcome, D.Transfer_Interrupted) then
+               null;
+            else
+               Succeeded := False;
+               return;
+            end if;
+         end loop;
+         Succeeded := True;
+      end Write_Blocking;
    begin
       for Index in Line'Range loop
          Bytes (Ada.Streams.Stream_Element_Offset (Index - Line'First + 1)) := Character'Pos (Line (Index));
       end loop;
-      while First <= Bytes'Last loop
-         Outcome := D.Write (One.To_It, Bytes (First .. Bytes'Last), Last);
-         if D."=" (Outcome, D.Transfer_Ok) and then Last >= First then
-            First := Last + 1;
-         elsif D."=" (Outcome, D.Transfer_Interrupted) then
-            null;
-         else
-            One.Running := False;
-            One.Why := To_Unbounded_String ("it stopped reading");
-            return;
-         end if;
-      end loop;
+      if Stopped then
+         return False;
+      end if;
+
+      if One.Non_Blocking_Writes then
+         declare
+            Last    : Ada.Streams.Stream_Element_Offset;
+            First   : Ada.Streams.Stream_Element_Offset := Bytes'First;
+            Outcome : D.Transfer_Outcome;
+         begin
+            while First <= Bytes'Last loop
+               if Stopped then
+                  Abandon (One, "its input stayed blocked past the call deadline");
+                  return False;
+               end if;
+               Outcome := D.Write (Target, Bytes (First .. Bytes'Last), Last);
+               if D."=" (Outcome, D.Transfer_Ok) and then Last >= First then
+                  First := Last + 1;
+               elsif D."=" (Outcome, D.Transfer_Interrupted) then
+                  null;
+               elsif D."=" (Outcome, D.Transfer_Would_Block) then
+                  delay 0.005;
+               else
+                  One.Running := False;
+                  One.Why := To_Unbounded_String ("it stopped reading");
+                  return False;
+               end if;
+            end loop;
+            return not Stopped;
+         end;
+      elsif Deadline = Ada.Real_Time.Time_Last
+        and then Model_Runner.Cancellation."=" (Cancel, null)
+      then
+         declare
+            Succeeded : Boolean;
+         begin
+            Write_Blocking (Succeeded);
+            if not Succeeded then
+               One.Running := False;
+               One.Why := To_Unbounded_String ("it stopped reading");
+            end if;
+            return Succeeded;
+         end;
+      else
+         --  Windows anonymous pipes cannot be made non-blocking.  Keep the
+         --  potentially blocking host call in a dependent task registered
+         --  for CancelSynchronousIo; process teardown alone is insufficient
+         --  when a descendant inherited the pipe's read handle.
+         declare
+            protected Completion is
+               procedure Finish (Value : Boolean);
+               entry Wait (Value : out Boolean);
+            private
+               Ready : Boolean := False;
+               Good  : Boolean := False;
+            end Completion;
+
+            protected body Completion is
+               procedure Finish (Value : Boolean) is
+               begin
+                  Good := Value;
+                  Ready := True;
+               end Finish;
+
+               entry Wait (Value : out Boolean) when Ready is
+               begin
+                  Value := Good;
+               end Wait;
+            end Completion;
+
+            Registration : IOC.Token;
+
+            task Writer is
+               entry Begin_Write (Registered : out Boolean);
+            end Writer;
+            task body Writer is
+               Good       : Boolean := False;
+               Can_Cancel : Boolean := False;
+            begin
+               IOC.Register_Current_Task (Registration, Can_Cancel);
+               accept Begin_Write (Registered : out Boolean) do
+                  Registered := Can_Cancel;
+               end Begin_Write;
+               if Can_Cancel then
+                  Write_Blocking (Good);
+               end if;
+               Completion.Finish (Good);
+            exception
+               when others =>
+                  Completion.Finish (False);
+            end Writer;
+
+            Finished  : Boolean := False;
+            Registered : Boolean := False;
+            Succeeded : Boolean := False;
+         begin
+            Writer.Begin_Write (Registered);
+            if not Registered then
+               Abandon (One, "the host could not register its blocking input pipe");
+               Completion.Wait (Succeeded);
+               IOC.Release (Registration);
+               return False;
+            end if;
+            loop
+               select
+                  Completion.Wait (Succeeded);
+                  Finished := True;
+               or
+                  delay 0.01;
+               end select;
+               exit when Finished or else Stopped;
+            end loop;
+            if not Finished then
+               declare
+                  Cancellation_Requested : constant Boolean :=
+                    IOC.Cancel (Registration);
+                  pragma Unreferenced (Cancellation_Requested);
+               begin
+                  null;
+               end;
+               Abandon (One, "its input stayed blocked past the call deadline");
+               --  A successful host cancellation makes the foreign call
+               --  return.  Keep even the handoff wait bounded in case the
+               --  write completed concurrently with the cancellation.
+               select
+                  Completion.Wait (Succeeded);
+               or
+                  delay 1.0;
+                  abort Writer;
+               end select;
+               IOC.Release (Registration);
+               return False;
+            elsif not Succeeded then
+               IOC.Release (Registration);
+               One.Running := False;
+               One.Why := To_Unbounded_String ("it stopped reading");
+               return False;
+            end if;
+            IOC.Release (Registration);
+            return not Stopped;
+         end;
+      end if;
    end Send;
 
    --  The next line it wrote, waited for until Deadline or a cancel; ""
    --  then, or where it has gone.
    function Next_Message
      (One      : in out Server;
-      Deadline : Ada.Calendar.Time;
+      Deadline : Ada.Real_Time.Time;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null) return String
    is
       Buffer : Ada.Streams.Stream_Element_Array (1 .. 65_536);
       Last   : Ada.Streams.Stream_Element_Offset;
    begin
       loop
+         if Deadline <= Ada.Real_Time.Clock
+           or else Model_Runner.Cancellation.Is_Cancelled (Cancel)
+         then
+            return "";
+         end if;
          declare
             Ends : constant Natural := Index (One.Pending, [1 => ASCII.LF]);
          begin
@@ -214,15 +423,20 @@ package body Model_Runner.CLI.MCP is
          end;
          loop
             declare
-               Left : constant Duration := Deadline - Ada.Calendar.Clock;
+               Left : constant Ada.Real_Time.Time_Span :=
+                 Deadline - Ada.Real_Time.Clock;
             begin
-               if Left <= 0.0
+               if Left <= Ada.Real_Time.Time_Span_Zero
                  or else (Model_Runner.Cancellation."/=" (Cancel, null)
                           and then Model_Runner.Cancellation.Is_Cancelled (Cancel))
                then
                   return "";
                end if;
-               exit when D.Wait_Readable (One.From_It, Integer (Duration'Min (Left, 0.2) * 1000.0));
+               exit when D.Wait_Readable
+                 (One.From_It,
+                  Integer
+                    (Duration'Min
+                       (Ada.Real_Time.To_Duration (Left), 0.2) * 1000.0));
             end;
          end loop;
          if D."/=" (D.Read (One.From_It, Buffer, Last), D.Transfer_Ok) or else Last < Buffer'First then
@@ -264,8 +478,15 @@ package body Model_Runner.CLI.MCP is
    --  A request the server made of us: a ping answered, anything else
    --  said to be unknown, so that it does not wait. A notification is let
    --  by.
-   procedure Answer_Request (One : in out Server; Document : Doc.Document) is
+   procedure Answer_Request
+     (One      : in out Server;
+      Document : Doc.Document;
+      Deadline : Ada.Real_Time.Time;
+      Cancel   : Model_Runner.Cancellation.Token_Reference)
+   is
       Root : constant Doc.Node := Doc.Root (Document);
+      Sent : Boolean;
+      pragma Unreferenced (Sent);
    begin
       if not Doc.Has_Member (Document, Root, "id") or else not Doc.Has_Member (Document, Root, "method") then
          return;
@@ -275,10 +496,14 @@ package body Model_Runner.CLI.MCP is
          Method : constant String := Doc.As_String (Document, Doc.Member (Document, Root, "method"));
       begin
          if Method = "ping" then
-            Send (One, "{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{}}");
+            Sent := Send
+              (One, "{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{}}",
+               Deadline, Cancel);
          else
-            Send (One, "{""jsonrpc"":""2.0"",""id"":" & Id
-                       & ",""error"":{""code"":-32601,""message"":""not offered by this client""}}");
+            Sent := Send
+              (One, "{""jsonrpc"":""2.0"",""id"":" & Id
+               & ",""error"":{""code"":-32601,""message"":""not offered by this client""}}",
+               Deadline, Cancel);
          end if;
       end;
    exception
@@ -293,14 +518,53 @@ package body Model_Runner.CLI.MCP is
       Method   : String;
       Params   : String;
       Wait     : Duration;
-      Cancel   : Model_Runner.Cancellation.Token_Reference := null) return String
+      Cancel   : Model_Runner.Cancellation.Token_Reference := null;
+      Absolute_Deadline : Ada.Real_Time.Time := Ada.Real_Time.Time_Last)
+      return String
    is
       Id       : constant Positive := One.Next_Id;
-      Deadline : constant Ada.Calendar.Time := Ada.Calendar.Clock + Wait;
+      Deadline : Ada.Real_Time.Time :=
+        Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Duration'Max (0.0, Wait));
+
+      procedure Cancel_Request is
+         Cleanup_Deadline : constant Ada.Real_Time.Time :=
+           Ada.Real_Time.Clock + Ada.Real_Time.Milliseconds (50);
+         Sent : Boolean;
+         pragma Unreferenced (Sent);
+      begin
+         if One.Running then
+            Sent := Send
+              (One, "{""jsonrpc"":""2.0"",""method"":""notifications/cancelled"",""params"":"
+               & "{""requestId"":" & Image (Id) & "}}",
+               Cleanup_Deadline);
+         end if;
+      end Cancel_Request;
    begin
+      if Absolute_Deadline /= Ada.Real_Time.Time_Last
+        and then Absolute_Deadline < Deadline
+      then
+         Deadline := Absolute_Deadline;
+      end if;
+      --  Params are built by the caller before Ask begins.  Recheck both
+      --  controls here, at the last boundary before a side-effecting request
+      --  is put on the wire.
+      if Deadline <= Ada.Real_Time.Clock
+        or else Model_Runner.Cancellation.Is_Cancelled (Cancel)
+      then
+         return "";
+      end if;
       One.Next_Id := One.Next_Id + 1;
-      Send (One, "{""jsonrpc"":""2.0"",""id"":" & Image (Id) & ",""method"":" & T.JSON_Quoted (Method)
-                 & ",""params"":" & Params & "}");
+      if not Send
+        (One, "{""jsonrpc"":""2.0"",""id"":" & Image (Id) & ",""method"":" & T.JSON_Quoted (Method)
+         & ",""params"":" & Params & "}", Deadline, Cancel)
+      then
+         --  A complete line may have crossed the boundary just as the write
+         --  finished.  A partial line retires the server inside Send; a live
+         --  server instead receives the same bounded cancellation as a
+         --  response wait that expired.
+         Cancel_Request;
+         return "";
+      end if;
       while One.Running loop
          declare
             Message  : constant String := Next_Message (One, Deadline, Cancel);
@@ -308,11 +572,9 @@ package body Model_Runner.CLI.MCP is
             Error    : Jsonlib.Errors.Error_Info;
          begin
             if Message = "" then
-               --  Given up on: the server asked to stop working on it.
-               if One.Running then
-                  Send (One, "{""jsonrpc"":""2.0"",""method"":""notifications/cancelled"",""params"":"
-                             & "{""requestId"":" & Image (Id) & "}}");
-               end if;
+               --  Given up on: ask it to stop, but bound even this cleanup so
+               --  a server that no longer reads cannot hold the caller.
+               Cancel_Request;
                return "";
             end if;
             Jsonlib.Parsers.Parse (Message, Document, Error);
@@ -322,11 +584,20 @@ package body Model_Runner.CLI.MCP is
                   Root : constant Doc.Node := Doc.Root (Document);
                begin
                   if Doc.Has_Member (Document, Root, "method") then
-                     Answer_Request (One, Document);
+                     Answer_Request (One, Document, Deadline, Cancel);
                   elsif Doc.Has_Member (Document, Root, "id")
                     and then Doc.Kind (Document, Doc.Member (Document, Root, "id")) = Doc.Integer_Value
                     and then Doc.As_Integer (Document, Doc.Member (Document, Root, "id")) = Long_Long_Integer (Id)
                   then
+                     --  Parsing and validating a bounded but hostile message
+                     --  still consumes time.  The owning boundary applies to
+                     --  the completed call, not merely to its last read.
+                     if Deadline <= Ada.Real_Time.Clock
+                       or else Model_Runner.Cancellation.Is_Cancelled (Cancel)
+                     then
+                        Cancel_Request;
+                        return "";
+                     end if;
                      return Message;
                   end if;
                end;
@@ -498,7 +769,13 @@ package body Model_Runner.CLI.MCP is
       One.From_It := From_Child.Read_End;
       To_Child.Write_End := D.Invalid;
       From_Child.Read_End := D.Invalid;
+      One.Non_Blocking_Writes := D.Set_Non_Blocking (One.To_It, True);
       One.Running := True;
+      if not One.Non_Blocking_Writes and then not IOC.Supported then
+         Abandon
+           (One, "the host cannot enforce deadlines on its input pipe");
+         return;
+      end if;
 
       declare
          Answer   : constant String :=
@@ -567,7 +844,22 @@ package body Model_Runner.CLI.MCP is
             return;
          end if;
       end;
-      Send (One, "{""jsonrpc"":""2.0"",""method"":""notifications/initialized""}");
+      declare
+         Sent : constant Boolean :=
+           Send
+             (One, "{""jsonrpc"":""2.0"",""method"":""notifications/initialized""}",
+              Ada.Real_Time.Clock
+              + Ada.Real_Time.To_Time_Span (Time_Left));
+      begin
+         if not Sent then
+            if One.Running then
+               One.Why := To_Unbounded_String
+                 ("discovery did not finish before the shared deadline");
+            end if;
+            Stop (One);
+            return;
+         end if;
+      end;
 
       --  Its tools, page by page.
       declare
@@ -923,12 +1215,58 @@ package body Model_Runner.CLI.MCP is
       Arguments : String;
       Cancel    : Model_Runner.Cancellation.Token_Reference;
       Said      : out Unbounded_String;
-      Ended     : out Call_End)
+      Ended     : out Call_End;
+      Deadline  : Ada.Real_Time.Time := Ada.Real_Time.Time_Last)
    is
       Which : Natural := 0;
+      Wait_For : Duration := Call_Wait;
+      Call_Deadline : Ada.Real_Time.Time :=
+        Ada.Real_Time.Clock + Ada.Real_Time.To_Time_Span (Call_Wait);
+
+      --  Parsing and rendering a response are part of the bounded call too.
+      --  All response exits pass this point so a cancellation or deadline
+      --  reached after Ask returned cannot be mistaken for a protocol error.
+      function Interrupted return Boolean is
+      begin
+         if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+            Said := To_Unbounded_String ("cancelled");
+            Ended := Cancelled;
+            return True;
+         elsif Ada.Real_Time.Clock >= Call_Deadline then
+            Said := To_Unbounded_String
+              ("the server did not answer within" & Duration'Image (Wait_For)
+               & " seconds");
+            Ended := Timed_Out;
+            return True;
+         end if;
+         return False;
+      end Interrupted;
    begin
       Said := Null_Unbounded_String;
       Ended := Failed;
+      --  A tool request may have side effects.  Observe a standing
+      --  cancellation before Ask has an opportunity to put it on the wire.
+      if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+         Said := To_Unbounded_String ("cancelled");
+         Ended := Cancelled;
+         return;
+      end if;
+      if Deadline /= Ada.Real_Time.Time_Last and then Deadline < Call_Deadline then
+         Call_Deadline := Deadline;
+      end if;
+      if Call_Deadline /= Ada.Real_Time.Time_Last then
+         declare
+            Now : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+         begin
+            if Call_Deadline <= Now then
+               Said := To_Unbounded_String ("the tool deadline expired before the server call");
+               Ended := Timed_Out;
+               return;
+            end if;
+            Wait_For := Duration'Min
+              (Call_Wait, Ada.Real_Time.To_Duration (Call_Deadline - Now));
+         end;
+      end if;
       for Index in 1 .. Natural (Tools.Length) loop
          if Tools (Index).Offered = Named then
             Which := Index;
@@ -952,18 +1290,16 @@ package body Model_Runner.CLI.MCP is
               Ask (Owner, "tools/call",
                    "{""name"":" & T.JSON_Quoted (To_String (Tools (Which).Own))
                    & ",""arguments"":" & (if Arguments = "" then "{}" else Arguments) & "}",
-                   Call_Wait, Cancel);
+                   Wait_For, Cancel, Absolute_Deadline => Call_Deadline);
             Document : Doc.Document;
             Error    : Jsonlib.Errors.Error_Info;
          begin
             if Answer = "" then
-               if Model_Runner.Cancellation."/=" (Cancel, null) and then Model_Runner.Cancellation.Is_Cancelled (Cancel)
-               then
-                  Ended := Cancelled;
-                  Said := To_Unbounded_String ("cancelled");
+               if Interrupted then
+                  null;
                elsif Owner.Running then
                   Ended := Timed_Out;
-                  Said := To_Unbounded_String ("the server did not answer within" & Duration'Image (Call_Wait)
+                  Said := To_Unbounded_String ("the server did not answer within" & Duration'Image (Wait_For)
                                                & " seconds");
                else
                   Said := To_Unbounded_String ("the server " & To_String (Owner.Name) & " ended");
@@ -971,6 +1307,9 @@ package body Model_Runner.CLI.MCP is
                return;
             end if;
             Jsonlib.Parsers.Parse (Answer, Document, Error);
+            if Interrupted then
+               return;
+            end if;
             if Jsonlib.Errors.Failed (Error) then
                Said := To_Unbounded_String ("the server's answer could not be read");
                return;
@@ -989,6 +1328,9 @@ package body Model_Runner.CLI.MCP is
                            then Doc.As_String (Document, Doc.Member (Document, Fault, "message"))
                            else Jsonlib.Serializers.To_String (Document, Fault)));
                   end;
+                  if Interrupted then
+                     return;
+                  end if;
                   return;
                end if;
                declare
@@ -1046,15 +1388,19 @@ package body Model_Runner.CLI.MCP is
                            & Image (Whole'Length - Kept'Length) & " more bytes left out]");
                      end;
                   end if;
-                  Ended := (if Erred then Failed else Answered);
+                  if not Interrupted then
+                     Ended := (if Erred then Failed else Answered);
+                  end if;
                end;
             end;
          end;
       end;
    exception
       when others =>
-         Said := To_Unbounded_String ("the server's answer could not be read");
-         Ended := Failed;
+         if not Interrupted then
+            Said := To_Unbounded_String ("the server's answer could not be read");
+            Ended := Failed;
+         end if;
    end Call;
 
    function Listing return String is

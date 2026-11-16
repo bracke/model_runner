@@ -2619,7 +2619,7 @@ begin
                   --  one wrote these positions' keys and values already.
                   if not Own_Cache then
                      null;
-                  elsif Item.Held in Eighth | Fourth then
+                  elsif Item.Held in Eighth | Fourth | Float_Eighth then
                      Pack_Row
                        (Keys.all (KV_At .. KV_At + Row_KV - 1),
                         Item'Unchecked_Access.Byte_Keys.all, Place, Row_KV,
@@ -2963,7 +2963,7 @@ begin
                              Slot (Which, Blend);
                            Usable : Boolean := True;
                         begin
-                           if Item.Held in Eighth | Fourth then
+                           if Item.Held in Eighth | Fourth | Float_Eighth then
                               Blend_Eighth
                                 (Item.Held, Item.Held_Values,
                                  Query.all (Q_At .. Q_At + Wide - 1),

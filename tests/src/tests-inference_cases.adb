@@ -4172,6 +4172,7 @@ package body Tests.Inference_Cases is
    is
       pragma Unreferenced (T);
       use type Model_Runner.Backend.Backend_Kind;
+      use type Interfaces.Unsigned_64;
 
       Length    : constant := 160;
       Room      : constant := 256;
@@ -4183,6 +4184,9 @@ package body Tests.Inference_Cases is
 
       --  The bytes the last model Logits_On prepared rewrote into panels.
       Last_Panels : Interfaces.Unsigned_64 := 0;
+
+      --  The adaptive expert cache's state before the last session closed.
+      Last_Expert_Cache : L.Expert_Cache_Statistics;
 
       --  The last position's logits from one backend, in one batch or in
       --  chunks. Zero means the backend refused, and says why.
@@ -4197,7 +4201,8 @@ package body Tests.Inference_Cases is
          Paged   : Boolean := False;
          Then_One : Boolean := False;
          Ones_After : Boolean := False;
-         Rewound : Boolean := False)
+         Rewound : Boolean := False;
+         Expert_Cache : Interfaces.Unsigned_64 := 0)
       is
          --  Then_One: every batch of Chunk followed by one position on its
          --  own, the road a generated token takes, so the two take turns.
@@ -4224,7 +4229,9 @@ package body Tests.Inference_Cases is
          Containers.Reader.Parse (Item, Source, Status => Status);
          Assert (E.Is_Ok (Status), "the fixture did not parse");
 
-         L.Prepare (Model, Item, Source, Backend => Backend, Status => Status);
+         L.Prepare
+           (Model, Item, Source, Backend => Backend, Status => Status,
+            Expert_Cache => Expert_Cache);
          if E.Is_Error (Status) then
             Refusal := Status.Code;
             Containers.Close (Item);
@@ -4291,7 +4298,25 @@ package body Tests.Inference_Cases is
             end;
          end loop;
 
+         Last_Expert_Cache := L.Expert_Cache_Stats (Session);
          L.Close (Session);
+         if Expert_Cache > 0 and then Last_Expert_Cache.Admissions > 0 then
+            L.Open
+              (Session, Model, Context => Room, Cache => Cache,
+               Workers => Team, Status => Status, Paged => Paged);
+            Assert (E.Is_Ok (Status),
+                    "a second cached-expert session did not open");
+            declare
+               Reopened : constant L.Expert_Cache_Statistics :=
+                 L.Expert_Cache_Stats (Session);
+            begin
+               Assert
+                 (Reopened.Resident_Bytes =
+                    Last_Expert_Cache.Resident_Bytes,
+                  "a new session did not account for retained experts");
+            end;
+            L.Close (Session);
+         end if;
          L.Close (Model, Status);
          Containers.Close (Item);
       end Logits_On;
@@ -4570,7 +4595,6 @@ package body Tests.Inference_Cases is
                Name    : constant String :=
                  Tiny_Model.Fixture_Architecture'Image (Kind)
                  & " split between the device and the processor";
-               use type Interfaces.Unsigned_64;
             begin
                Tiny_Model.Build
                  (Image, Tiny_Model.Q8_0, Room => Room, Kind => Kind,
@@ -4710,6 +4734,8 @@ package body Tests.Inference_Cases is
                         Budget =>
                           (if Arm = 9
                            then All_Of - Experts / 2 + Kept_Back
+                             + (if Tiny_Model."=" (Kind, Tiny_Model.Qwen3)
+                                then Experts / 20 else 0)
                            else All_Of - Experts / 4));
                      Assert (Awake, "the device did not reopen for " & Name);
                      Assert (Model_Runner.Backend.Device.Budget_Named,
@@ -4726,7 +4752,11 @@ package body Tests.Inference_Cases is
                         Chunk, Device, Why,
                         Team => Team'Unchecked_Access,
                         Paged => Arm >= 5, Then_One => Arm = 5,
-                        Ones_After => Arm = 7, Rewound => Arm = 8);
+                        Ones_After => Arm = 7, Rewound => Arm = 8,
+                        Expert_Cache =>
+                          (if Arm = 9
+                               and then Tiny_Model."=" (Kind, Tiny_Model.Qwen3)
+                           then Experts / 20 else 0));
                      L.Set_Stream_Least (L.Stream_Least_Default);
                      L.Set_Host_Depth_Most (L.Host_Depth_Most_Default);
                      Assert (Why = E.No_Error,
@@ -4761,6 +4791,18 @@ package body Tests.Inference_Cases is
                                 & " layers whole and"
                                 & Model_Runner.Backend.Device.Layers_Split'Image
                                 & " split, where it should run some of each");
+                        Assert
+                          (Last_Expert_Cache.Reserve_Bytes > 0
+                           and then Last_Expert_Cache.Admissions > 0
+                           and then Last_Expert_Cache.Device_Runs > 0
+                           and then Last_Expert_Cache.Resident_Bytes > 0,
+                           Name & " reserved an expert cache but admitted"
+                           & Interfaces.Unsigned_64'Image
+                               (Last_Expert_Cache.Admissions)
+                           & " experts and ran"
+                           & Interfaces.Unsigned_64'Image
+                               (Last_Expert_Cache.Device_Runs)
+                           & " on the device");
                      elsif Arm = 3 then
                         Assert (Model_Runner.Backend.Device.Layers_Whole > 0,
                                 "no layer of " & Name & " streamed its stacks,"
@@ -4826,7 +4868,6 @@ package body Tests.Inference_Cases is
                   Worst   : N.Real := 0.0;
                   All_Of  : Interfaces.Unsigned_64 := 0;
                   Experts : Interfaces.Unsigned_64 := 0;
-                  use type Interfaces.Unsigned_64;
                begin
                   Tiny_Model.Build
                     (Image, Format, Room => Room, Kind => Tiny_Model.Qwen3,
@@ -5109,6 +5150,182 @@ package body Tests.Inference_Cases is
 
       Model_Runner.Backend.Device.Close;
    end Two_Backends_Agree_On_A_Long_Prompt;
+
+   ---------------------------------------
+   -- An_E4M3_Cache_Holds_A_Conversation --
+   ---------------------------------------
+
+   procedure An_E4M3_Cache_Holds_A_Conversation
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Prompt : constant Vocab.Token_Array :=
+        [1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q8_0, Room => 32);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+
+         Exact, Batched, Stepped : Logit_Vector := [others => 0.0];
+         Continued, Restored : Logit_Vector := [others => 0.0];
+
+         procedure Run
+           (Cache  : L.Cache_Precision;
+            Batch  : Boolean;
+            Answer : out Logit_Vector)
+         is
+            Live : L.Session;
+         begin
+            L.Open (Live, Under.Ready, Context => 32, Cache => Cache,
+                    Status => Status);
+            Assert (E.Is_Ok (Status),
+                    "the " & L.Cache_Name (Cache)
+                    & " session did not open: "
+                    & E.Error_Code'Image (Status.Code));
+
+            if Batch then
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Prompt, Answer, Status => Status);
+            else
+               for Token of Prompt loop
+                  L.Evaluate
+                    (Live, Under.Ready, Token, Answer, Status => Status);
+                  exit when E.Is_Error (Status);
+               end loop;
+            end if;
+            Assert (E.Is_Ok (Status),
+                    "the " & L.Cache_Name (Cache)
+                    & " session did not evaluate: "
+                    & E.Error_Code'Image (Status.Code));
+            L.Close (Live);
+         end Run;
+
+         Worst : N.Real := 0.0;
+      begin
+         Start (Under);
+         Assert (L.Cache_Name (L.Float_Eighth) = "f8_e4m3",
+                 "the OCP cache has no stable public name");
+
+         declare
+            use type Interfaces.Unsigned_64;
+            Wide, Narrow : Model_Runner.Memory.Session_Plan;
+         begin
+            L.Plan_Session
+              (Under.Ready, 32, Wide, Status, Cache => L.Exact);
+            Assert (E.Is_Ok (Status), "the exact cache plan was refused");
+            L.Plan_Session
+              (Under.Ready, 32, Narrow, Status,
+               Cache => L.Float_Eighth);
+            Assert (E.Is_Ok (Status), "the E4M3 cache plan was refused");
+            Assert (Wide.KV_Cache_Bytes = 4 * Narrow.KV_Cache_Bytes,
+                    "the E4M3 cache did not plan one byte per element");
+         end;
+
+         Run (L.Exact, True, Exact);
+         Run (L.Float_Eighth, True, Batched);
+         Run (L.Float_Eighth, False, Stepped);
+
+         for Index in Exact'Range loop
+            Worst := N.Real'Max (Worst, abs (Exact (Index) - Batched (Index)));
+            Assert (abs (Batched (Index) - Stepped (Index)) <= 1.0e-5,
+                    "the E4M3 batch and token paths differ at"
+                    & N.Element_Count'Image (Index));
+         end loop;
+         Assert (Worst <= 0.25,
+                 "the E4M3 cache moved a logit by " & N.Real'Image (Worst));
+
+         declare
+            Awake, Able : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+            if Awake then
+               declare
+                  Over : Harness (Held'Access);
+                  Live : L.Session;
+                  On_Device : Logit_Vector;
+                  Device_Worst : N.Real := 0.0;
+                  use type Interfaces.Unsigned_64;
+               begin
+                  Start
+                    (Over, Model_Runner.Backend.Backend_Device, Able);
+                  Assert (Able, "the E4M3 device model did not prepare");
+                  L.Open
+                    (Live, Over.Ready, Context => 32,
+                     Cache => L.Float_Eighth, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the E4M3 device session did not open");
+                  L.Evaluate_Batch
+                    (Live, Over.Ready, Prompt, On_Device,
+                     Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the E4M3 device session did not evaluate");
+                  Assert (Model_Runner.Backend.Device.Cached_Bytes = 0,
+                          "E4M3 reserved a device cache without a kernel");
+                  for Index in Batched'Range loop
+                     Device_Worst := N.Real'Max
+                       (Device_Worst,
+                        abs (Batched (Index) - On_Device (Index)));
+                  end loop;
+                  Assert (Device_Worst <= 0.05,
+                          "E4M3 host attention behind device matrices moved "
+                          & "a logit by " & N.Real'Image (Device_Worst));
+                  L.Close (Live);
+                  L.Close (Over.Ready, Status);
+                  Containers.Close (Over.Parsed);
+               end;
+               Model_Runner.Backend.Device.Close;
+            end if;
+         exception
+            when others =>
+               Model_Runner.Backend.Device.Close;
+               raise;
+         end;
+
+         declare
+            Live : L.Session;
+            Saved : B.Byte_Array_Access;
+         begin
+            L.Open
+              (Live, Under.Ready, Context => 32, Cache => L.Float_Eighth,
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the saved E4M3 session did not open");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, Continued, Status => Status);
+            Assert (E.Is_Ok (Status), "the saved E4M3 prompt failed");
+            L.Shift (Live, Under.Ready, 1, 4, Status);
+            Assert (E.Is_Ok (Status), "the E4M3 context did not shift");
+            L.Snapshot (Live, Under.Ready, Saved, Status);
+            Assert (E.Is_Ok (Status), "the E4M3 context did not save");
+            L.Evaluate
+              (Live, Under.Ready, 15, Continued, Status => Status);
+            Assert (E.Is_Ok (Status), "the shifted E4M3 context did not continue");
+            L.Close (Live);
+
+            L.Open
+              (Live, Under.Ready, Context => 32, Cache => L.Float_Eighth,
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the restored E4M3 session did not open");
+            L.Adopt (Live, Under.Ready, Saved.all, Status);
+            Assert (E.Is_Ok (Status), "the E4M3 context did not restore");
+            L.Evaluate
+              (Live, Under.Ready, 15, Restored, Status => Status);
+            Assert (E.Is_Ok (Status), "the restored E4M3 context did not continue");
+            Assert (N."=" (Continued, Restored),
+                    "the restored E4M3 context changed its continuation");
+            L.Close (Live);
+            B.Free (Saved);
+         end;
+
+         L.Close (Under.Ready, Status);
+         Containers.Close (Under.Parsed);
+      end;
+      B.Free (Image);
+   end An_E4M3_Cache_Holds_A_Conversation;
 
    --  A model in any format the program reads loads on the device.
    --
@@ -17462,6 +17679,19 @@ package body Tests.Inference_Cases is
                        & E.Error_Code'Image (Status.Code));
             end loop;
 
+            declare
+               use type Interfaces.Unsigned_64;
+               Counts : constant L.Expert_Cache_Statistics :=
+                 L.Expert_Cache_Stats (Live);
+            begin
+               Assert (Counts.Observations > 0,
+                       "real mixture routing reached no cache observation");
+               Assert (Counts.Observations = Counts.Hits + Counts.Misses,
+                       "cache hits and misses do not cover its observations");
+               Assert (Counts.Promotions > 0,
+                       "real mixture routing admitted no hot expert");
+            end;
+
             L.Close (Live);
          end;
 
@@ -22505,6 +22735,10 @@ package body Tests.Inference_Cases is
         (T, Two_Backends_Agree_On_A_Long_Prompt'Access,
          "the processor and the device agree on a prompt long enough to "
          & "fill the tile, in one batch and across a seam");
+      Register_Routine
+        (T, An_E4M3_Cache_Holds_A_Conversation'Access,
+         "an OCP E4M3 KV cache evaluates batches and tokens consistently "
+         & "and remains close to the exact cache");
       Register_Routine
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "

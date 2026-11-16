@@ -23,6 +23,29 @@ package body Model_Runner.Llama is
    package Takes is new System.Atomic_Operations.Integer_Arithmetic
      (Take_Counter);
 
+   ------------------------
+   -- Expert_Cache_Stats --
+   ------------------------
+
+   function Expert_Cache_Stats
+     (Item : Session) return Expert_Cache_Statistics
+   is
+      Counts : constant Model_Runner.Expert_Cache.Statistics :=
+        Model_Runner.Expert_Cache.Current_Statistics (Item.Expert_Policy);
+   begin
+      return
+        (Observations => Counts.Observations,
+         Hits         => Counts.Hits,
+         Misses       => Counts.Misses,
+         Promotions   => Counts.Promotions,
+         Evictions    => Counts.Evictions,
+         Admissions   => Item.Expert_Cache_Admissions,
+         Device_Runs  => Item.Expert_Cache_Device_Runs,
+         Resident_Bytes => Item.Expert_Cache_Used,
+         Reserve_Bytes  =>
+           (if Item.Owner = null then 0 else Item.Owner.Expert_Cache_Room));
+   end Expert_Cache_Stats;
+
    --  See Set_Stream_Least.
    Stream_Least : Positive := Stream_Least_Default;
 
@@ -455,7 +478,8 @@ package body Model_Runner.Llama is
    --  for every thirty-two -- ten sixteenths.
    Cache_Element_Sixteenths :
      constant array (Cache_Precision) of Interfaces.Unsigned_64 :=
-       [Exact => 64, Halved => 32, Eighth => 16, Fourth => 10];
+       [Exact => 64, Halved => 32, Eighth => 16, Fourth => 10,
+        Float_Eighth => 16];
 
    --  The per-layer tensors jina-bert-v2's code variant carries and its text
    --  variant does not. Named here so that the loading below asks for
@@ -839,6 +863,61 @@ package body Model_Runner.Llama is
 
       return Room (1 .. Count);
    end Matrices;
+
+   --  One routed expert as the device sees it.  A split model's Expert
+   --  views may be processor panels, while the stack views deliberately
+   --  retain the source layout.
+   procedure Device_Expert_Views
+     (Current : Layer;
+      Which   : Natural;
+      Feed    : Element_Count;
+      Width   : Element_Count;
+      Gate    : out T.View;
+      Up      : out T.View;
+      Down    : out T.View;
+      Status  : out E.Error_Info)
+   is
+      procedure Rows_Of
+        (Whole  : T.View;
+         First  : Element_Count;
+         Rows   : Element_Count;
+         Result : out T.View) is
+      begin
+         T.Make
+           (Format  => Whole.Format,
+            Rows    => Rows,
+            Columns => Whole.Columns,
+            Base    => Whole.Base,
+            Span    => Whole.Span,
+            Offset  => Whole.Offset
+              + B.Byte_Count (First) * T.Row_Bytes (Whole),
+            Result  => Result,
+            Status  => Status);
+      end Rows_Of;
+   begin
+      Status := E.Success;
+      if T.Is_Present (Current.Fused_Stack) then
+         Rows_Of
+           (Current.Fused_Stack, Element_Count (Which) * 2 * Feed,
+            Feed, Gate);
+         if E.Is_Ok (Status) then
+            Rows_Of
+              (Current.Fused_Stack,
+               Element_Count (Which) * 2 * Feed + Feed, Feed, Up);
+         end if;
+      else
+         Rows_Of
+           (Current.Gate_Stack, Element_Count (Which) * Feed, Feed, Gate);
+         if E.Is_Ok (Status) then
+            Rows_Of
+              (Current.Up_Stack, Element_Count (Which) * Feed, Feed, Up);
+         end if;
+      end if;
+      if E.Is_Ok (Status) then
+         Rows_Of
+           (Current.Down_Stack, Element_Count (Which) * Width, Width, Down);
+      end if;
+   end Device_Expert_Views;
 
    --  Resolve one tensor by name and check its shape against the role it
    --  plays. Every required tensor is resolved during preparation; no name
@@ -1321,6 +1400,7 @@ package body Model_Runner.Llama is
       end Resolve_Bias;
 
    begin
+      Current.Number := Index;
       Resolve
         (Item, Source, Layer_Key (Index, "ffn_gate_inp.weight"),
          Count, Width, Current.Router, Status, Repack);
@@ -2818,7 +2898,8 @@ package body Model_Runner.Llama is
       Context  : Natural := 0;
       Cache    : Cache_Precision := Exact;
       Paged    : Boolean := True;
-      Beside   : Interfaces.Unsigned_64 := 0)
+      Beside   : Interfaces.Unsigned_64 := 0;
+      Expert_Cache : Interfaces.Unsigned_64 := 0)
    is separate;
 
    -----------
@@ -7079,7 +7160,7 @@ package body Model_Runner.Llama is
             --  Out of whichever storage the session keeps: a packed
             --  session's bytes and scales, whose row scales begin a row
             --  a position from the layer's first row.
-            if Item.Held in Eighth | Fourth then
+            if Item.Held in Eighth | Fourth | Float_Eighth then
                Blend_Eighth
                  (Item.Held, Item.Held_Values,
                   Query (Query'First + Q_At .. Query'First + Q_At
@@ -7159,6 +7240,17 @@ package body Model_Runner.Llama is
       At_Scale : constant Element_Count :=
         Scales'First + Scale_Of (Held, Origin, Width);
    begin
+      if Held = Float_Eighth then
+         Scales (At_Scale) := 1.0;
+         for Offset in 0 .. Element_Count (Source'Length) - 1 loop
+            Into (At_Byte + B.Byte_Count (Offset)) :=
+              B.Byte
+                (Interfaces.Unsigned_8
+                   (N.To_E4M3 (Source (Source'First + Offset))));
+         end loop;
+         return;
+      end if;
+
       if Held = Fourth then
          declare
             Offset : Element_Count := 0;
@@ -7241,7 +7333,11 @@ package body Model_Runner.Llama is
       Scale : constant Real := Scales (Scales'First + Scale_Of (Held, Element, Width));
       Held_Byte : constant B.Byte := From (Byte_Of (Held, Element, Width));
    begin
-      if Held = Fourth then
+      if Held = Float_Eighth then
+         return
+           N.To_Real
+             (N.E4M3 (Interfaces.Unsigned_8 (Held_Byte)));
+      elsif Held = Fourth then
          return Real (Integer (if (Element mod Width) mod 2 = 0
                                then Held_Byte and 15 else Held_Byte / 16)
                       - 8) * Scale;
@@ -8884,7 +8980,12 @@ package body Model_Runner.Llama is
                  then Front * 6 + (Plan.KV_Cache_Bytes + Sinks * 4) * 3 / 2
                  else Plan.KV_Cache_Bytes + (Tables + Sinks) * 4 + Widest * Row * 2),
               when Exact | Halved =>
-                Device_Copy_Bytes (Settings, Capacity, Held, Paged));
+                Device_Copy_Bytes (Settings, Capacity, Held, Paged),
+              when Float_Eighth =>
+                --  E4M3 attention is currently a host path.  The model's
+                --  matrices may remain on the device, but no device cache
+                --  is reserved for a format its kernels do not interpret.
+                0);
       end;
    end Device_Cache_Bytes;
 
@@ -9066,6 +9167,10 @@ package body Model_Runner.Llama is
       end if;
 
       Give_Back_Device_Cache (Item);
+      Model_Runner.Expert_Cache.Clear (Item.Expert_Policy);
+      Item.Expert_Cache_Used := 0;
+      Item.Expert_Cache_Admissions := 0;
+      Item.Expert_Cache_Device_Runs := 0;
 
       --  What its replies learned of drafting is this model's, and the next
       --  session opened in its place may be another's.
@@ -9752,6 +9857,16 @@ package body Model_Runner.Llama is
    begin
       Item.Skipped_Count := 0;
       Item.Next_Device_Upto := 0;
+
+      if Item.Owner /= null then
+         Model_Runner.Expert_Cache.Configure
+           (Item.Expert_Policy,
+            Layers   => Item.Owner.Settings.Layers,
+            Experts  => Item.Owner.Settings.Experts,
+            Capacity => Natural'Min
+              (Item.Owner.Settings.Experts,
+               2 * Item.Owner.Settings.Experts_Used));
+      end if;
 
       --  A context dropped is a context nothing will read, so the
       --  device owes the host nothing for it, nor the host the device.

@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 149) of Registry_Row :=
+   Registry : constant array (1 .. 152) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -112,6 +112,10 @@ package body Model_Runner.CLI.Options is
        Text ("lora")),
       (Text ("--lora-scale"), [Command_Run => True, others => False],
        Text ("lora_scale")),
+      (Text ("--shard"), [Command_Run => True, others => False],
+       Text ("shard")),
+      (Text ("--ple"), [Command_Run => True, others => False],
+       Text ("ple")),
       (Text ("--json-schema"), [Command_Run => True, others => False],
        Text ("json_schema")),
       (Text ("--json-schema-file"), [Command_Run => True, others => False],
@@ -270,6 +274,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--device-memory"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("device_memory")),
+      (Text ("--expert-cache"),
+       [Command_Run => True, others => False],
+       Text ("expert_cache")),
       (Text ("--device-patience"),
        [Command_Run | Command_Embed => True, others => False],
        Text ("device_patience")),
@@ -953,7 +960,8 @@ package body Model_Runner.CLI.Options is
          Flag_XTC_Probability, Flag_XTC_Threshold,
          Flag_DRY_Multiplier, Flag_DRY_Base, Flag_DRY_Allowed,
          Flag_Mirostat, Flag_Mirostat_Tau, Flag_Mirostat_Eta,
-         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Device_Patience,
+         Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Expert_Cache,
+         Flag_Device_Patience,
          Flag_Device_Index,
          Flag_Logprobs,
          Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE, Flag_Turbo,
@@ -1309,6 +1317,61 @@ package body Model_Runner.CLI.Options is
                      if not Good then
                         return;
                      end if;
+
+                  elsif Name = "--shard" or else Name = "--ple" then
+                     --  Both spellings are repeatable, and one occurrence
+                     --  may name several exact files a comma apart.
+                     Take_Value
+                       (Name, Value_Present, Value_First, Argument,
+                        Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+
+                     declare
+                        First : Positive := Held.all'First;
+                     begin
+                        for Place in Held.all'Range loop
+                           if Held.all (Place) = ',' then
+                              if Place = First
+                                or else Result.Auxiliary_Count
+                                  = Max_Auxiliary_Shards
+                              then
+                                 Fail
+                                   ((if Place = First
+                                     then E.CLI_Invalid_Option_Value
+                                     else E.CLI_Option_Out_Of_Range),
+                                    Name, Held.all);
+                                 Free_Text (Held);
+                                 return;
+                              end if;
+                              Result.Auxiliary_Count :=
+                                Result.Auxiliary_Count + 1;
+                              Result.Auxiliary_Shards
+                                (Result.Auxiliary_Count) :=
+                                  Kept
+                                    (Name, Held.all (First .. Place - 1));
+                              First := Place + 1;
+                           end if;
+                        end loop;
+
+                        if First > Held.all'Last
+                          or else Result.Auxiliary_Count
+                            = Max_Auxiliary_Shards
+                        then
+                           Fail
+                             ((if First > Held.all'Last
+                               then E.CLI_Invalid_Option_Value
+                               else E.CLI_Option_Out_Of_Range),
+                              Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                        Result.Auxiliary_Count := Result.Auxiliary_Count + 1;
+                        Result.Auxiliary_Shards (Result.Auxiliary_Count) :=
+                          Kept (Name, Held.all (First .. Held.all'Last));
+                     end;
+                     Free_Text (Held);
 
                   elsif Name = "--lora" then
                      --  Repeatable: adapters stack, in the order given.
@@ -2985,6 +3048,29 @@ package body Model_Runner.CLI.Options is
                         --  of that are measured in the README.
                         Result.Device_Share := Result.Device_Memory = 0;
                         Result.Device_Memory_Set := True;
+                        Free_Text (Held);
+                     end;
+
+                  elsif Name = "--expert-cache" then
+                     declare
+                        Parsed : Boolean;
+                     begin
+                        Mark (Flag_Expert_Cache, Name, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        Take_Value (Name, Value_Present, Value_First, Argument,
+                                    Held, Good);
+                        if not Good then
+                           return;
+                        end if;
+                        To_Bytes (Held.all, Result.Expert_Cache, Parsed);
+                        if not Parsed then
+                           Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                           Free_Text (Held);
+                           return;
+                        end if;
+                        Result.Expert_Cache_Set := True;
                         Free_Text (Held);
                      end;
 

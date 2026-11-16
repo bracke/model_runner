@@ -350,6 +350,153 @@ package body Model_Runner.Schema is
          end if;
       end Plain;
 
+      type Plain_Kind is
+        (No_Plain, String_Plain, Number_Plain, Integer_Plain,
+         Boolean_Plain, Null_Plain, Not_Plain);
+
+      function Word_Of (Kind : Plain_Kind) return String is
+        (case Kind is
+            when String_Plain  => "string",
+            when Number_Plain  => "number",
+            when Integer_Plain => "integer",
+            when Boolean_Plain => "boolean",
+            when Null_Plain    => "null",
+            when others        => "");
+
+      function Intersect (Left, Right : Plain_Kind) return Plain_Kind is
+        (if Left = No_Plain then Right
+         elsif Right = No_Plain then Left
+         elsif Left = Right then Left
+         elsif (Left = Number_Plain and then Right = Integer_Plain)
+           or else (Left = Integer_Plain and then Right = Number_Plain)
+         then Integer_Plain
+         else Not_Plain);
+
+      --  Reduce a primitive type and any nested allOf list to their exact
+      --  intersection. Object and array merging is deliberately not guessed:
+      --  combining their properties needs the whole JSON Schema algebra.
+      function Plain_Type (From : Natural; Depth : Natural) return Plain_Kind;
+
+      function Plain_Type (From : Natural; Depth : Natural) return Plain_Kind
+      is
+         Type_First, Type_Last : Natural;
+         At_All                : Natural;
+         Failed                : Boolean;
+         Result                : Plain_Kind := No_Plain;
+
+         function Has (Name : String) return Boolean is
+            At_Value : Natural;
+            Bad      : Boolean;
+         begin
+            Find_Member (Text, From, Name, At_Value, Bad);
+            return not Bad and then At_Value /= 0;
+         end Has;
+      begin
+         if Depth > Max_Depth then
+            Refuse ("nesting");
+            return Not_Plain;
+         end if;
+
+         Known_Keywords (From);
+         if Refused then
+            return Not_Plain;
+         end if;
+
+         --  These constraints make the member more than a primitive type.
+         --  They are supported by Shape on their own, but not silently
+         --  weakened while intersecting allOf members.
+         if Has ("properties") or else Has ("required") or else Has ("items")
+           or else Has ("enum") or else Has ("const")
+         then
+            Refuse ("allOf with a non-plain schema");
+            return Not_Plain;
+         end if;
+
+         Named_Type (From, Type_First, Type_Last);
+         if Type_Last >= Type_First then
+            declare
+               Word : constant String := Text (Type_First .. Type_Last);
+            begin
+               if Word = "string" then
+                  Result := String_Plain;
+               elsif Word = "number" then
+                  Result := Number_Plain;
+               elsif Word = "integer" then
+                  Result := Integer_Plain;
+               elsif Word = "boolean" then
+                  Result := Boolean_Plain;
+               elsif Word = "null" then
+                  Result := Null_Plain;
+               else
+                  Refuse ("allOf with a non-plain type");
+                  return Not_Plain;
+               end if;
+            end;
+         end if;
+
+         Find_Member (Text, From, "allOf", At_All, Failed);
+         if Failed or else At_All = 0 then
+            return Result;
+         end if;
+
+         declare
+            Item  : Reader := (At_Char => At_All, others => <>);
+            Count : Natural := 0;
+         begin
+            Skip_Blanks (Text, Item);
+            if Item.At_Char > Text'Last
+              or else Text (Item.At_Char) /= '['
+            then
+               Malformed := True;
+               return Not_Plain;
+            end if;
+            Item.At_Char := Item.At_Char + 1;
+
+            loop
+               Skip_Blanks (Text, Item);
+               exit when Item.At_Char > Text'Last;
+               exit when Text (Item.At_Char) = ']';
+
+               declare
+                  Value_First, Value_Last : Natural;
+                  Part : Plain_Kind;
+               begin
+                  Read_Value (Text, Item, Value_First, Value_Last);
+                  if Item.Failed
+                    or else Text (Value_First) /= '{'
+                  then
+                     Malformed := True;
+                     return Not_Plain;
+                  end if;
+
+                  Count := Count + 1;
+                  Part := Plain_Type (Value_First, Depth + 1);
+                  Result := Intersect (Result, Part);
+                  if Result = Not_Plain then
+                     if not Refused then
+                        Refuse ("allOf with incompatible types");
+                     end if;
+                     return Not_Plain;
+                  end if;
+
+                  Skip_Blanks (Text, Item);
+                  if Item.At_Char <= Text'Last
+                    and then Text (Item.At_Char) = ','
+                  then
+                     Item.At_Char := Item.At_Char + 1;
+                  end if;
+               end;
+            end loop;
+
+            if Count = 0 or else Result = No_Plain then
+               Refuse ("an empty allOf");
+               return Not_Plain;
+            end if;
+         end;
+
+         return Result;
+      end Plain_Type;
+
       --  Whether a name appears in the object's required list. A schema
       --  with no required list requires everything it names, which is not
       --  what JSON Schema says -- there, absent means optional -- but is
@@ -714,7 +861,7 @@ package body Model_Runner.Schema is
       --  string as text, a number or boolean as itself, and an object or
       --  an array as the JSON those families write for one.
       procedure Tag_Value (From : Natural) is
-         At_Enum, At_Const       : Natural;
+         At_Enum, At_Const, At_All : Natural;
          Failed                  : Boolean;
          Type_First, Type_Last   : Natural;
       begin
@@ -742,6 +889,18 @@ package body Model_Runner.Schema is
             else
                Raw_Choice (At_Enum);
             end if;
+            return;
+         end if;
+
+         Find_Member (Text, From, "allOf", At_All, Failed);
+         if not Failed and then At_All /= 0 then
+            declare
+               Kind : constant Plain_Kind := Plain_Type (From, 1);
+            begin
+               if Kind not in No_Plain | Not_Plain then
+                  Raw_Plain (Word_Of (Kind));
+               end if;
+            end;
             return;
          end if;
 
@@ -917,6 +1076,7 @@ package body Model_Runner.Schema is
                   if Word /= "type" and then Word /= "properties"
                     and then Word /= "required" and then Word /= "items"
                     and then Word /= "enum" and then Word /= "const"
+                    and then Word /= "allOf"
                     --  Documentary keywords say nothing about the shape.
                     and then Word /= "description" and then Word /= "title"
                     and then Word /= "$schema" and then Word /= "$id"
@@ -937,7 +1097,7 @@ package body Model_Runner.Schema is
       end Known_Keywords;
 
       procedure Shape (From : Natural; Depth : Natural) is
-         At_Enum, At_Const : Natural;
+         At_Enum, At_Const, At_All : Natural;
          Failed : Boolean;
 
          Type_First, Type_Last : Natural;
@@ -976,6 +1136,18 @@ package body Model_Runner.Schema is
          Find_Member (Text, From, "enum", At_Enum, Failed);
          if not Failed and then At_Enum /= 0 then
             Choice (At_Enum);
+            return;
+         end if;
+
+         Find_Member (Text, From, "allOf", At_All, Failed);
+         if not Failed and then At_All /= 0 then
+            declare
+               Kind : constant Plain_Kind := Plain_Type (From, Depth);
+            begin
+               if Kind not in No_Plain | Not_Plain then
+                  Plain (Word_Of (Kind));
+               end if;
+            end;
             return;
          end if;
 

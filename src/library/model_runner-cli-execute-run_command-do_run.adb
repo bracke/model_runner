@@ -15,6 +15,13 @@ is
    Prepared  : aliased L.Model;
    Session   : L.Session;
 
+   function Auxiliary_Key (Index : Positive) return String is
+     (if Index > Item.Auxiliary_Count then ""
+      else "|" & Model_Runner.Platform.Resolve_Model_Path
+                     (Resolve_Alias
+                        (T.To_String (Item.Auxiliary_Shards (Index))))
+           & Auxiliary_Key (Index + 1));
+
    --  The prefill cache: a run reuses and rewrites one file per model,
    --  so a repeated prompt prefix is not read again -- unless the caller
    --  opts out, manages a session by hand, or the run is interactive or
@@ -44,6 +51,7 @@ is
               & "|" & L.Arithmetic_Mode'Image (Item.Arithmetic)
               & "|" & Model_Runner.Backend.Backend_Kind'Image (Item.Backend)
               & "|" & L.Repack_Mode'Image (Item.Repack)
+              & Auxiliary_Key (1)
               --  And the build that saved it: see Program_Stamp.
               & "|" & Model_Runner.Platform.Program_Stamp)
       else "");
@@ -396,6 +404,13 @@ begin
                                          Model_Runner.Backend.Backend_Device)
    then
       Pres.Put_Note (Screen, "cli.note.device_memory_unused");
+   end if;
+
+   if Item.Expert_Cache_Set
+     and then Model_Runner.Backend."/=" (Item.Backend,
+                                         Model_Runner.Backend.Backend_Device)
+   then
+      Pres.Put_Note (Screen, "cli.note.expert_cache_unused");
    end if;
 
    --  Said for the same reason and in the same place: an option that

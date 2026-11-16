@@ -448,13 +448,23 @@ package body Model_Runner.CLI.Execute.Acquisition is
           (if Instead = "" then T.To_String (Item.Model_Path) else Instead);
       Path   : constant String :=
         Model_Runner.Platform.Resolve_Model_Path (Named);
+      Auxiliary : T.Bounded_List (1 .. Item.Auxiliary_Count);
 
       --  Where the weights written in panels are kept between loads, keyed
       --  by the file and what says it is unchanged -- its size and when it
       --  was last written -- unless the caller opted out of caches.
       function Panel_Path return String
-      is (Panel_Cache_For (Path, Item.No_Cache));
+      is (Panel_Cache_For
+            (Path, Item.No_Cache or else Item.Auxiliary_Count > 0));
    begin
+      for Index in Auxiliary'Range loop
+         Auxiliary (Index) :=
+           T.To_Bounded
+             (Model_Runner.Platform.Resolve_Model_Path
+                (Resolve_Alias
+                   (T.To_String (Item.Auxiliary_Shards (Index)))));
+      end loop;
+
       --  A model named for the Hugging Face hub and not on disk: the user
       --  is offered its download, and where they take it the fetched file
       --  is opened in its place. Only the model a run is for, not a draft
@@ -483,9 +493,15 @@ package body Model_Runner.CLI.Execute.Acquisition is
          Model_Runner.Progress.Load_Progress
            (Model_Runner.Progress.Opening_Model));
 
-      Shards.Open_Model
-        (Source, Container, Path, Item.Mapping, Bounds, Cancel, Observer,
-         Status);
+      if Instead = "" and then Item.Auxiliary_Count > 0 then
+         Shards.Open_Model
+           (Source, Container, Path, Auxiliary, Item.Mapping, Bounds, Cancel,
+            Observer, Status);
+      else
+         Shards.Open_Model
+           (Source, Container, Path, Item.Mapping, Bounds, Cancel, Observer,
+            Status);
+      end if;
       if E.Is_Error (Status) then
          return;
       end if;
@@ -537,7 +553,8 @@ package body Model_Runner.CLI.Execute.Acquisition is
             Beside       =>
               (if Instead = ""
                then Draft_Room (Model_Runner.Text.To_String (Item.Draft_Path))
-               else 0));
+               else 0),
+            Expert_Cache => Item.Expert_Cache);
 
          --  A chat format named on the command line replaces the model's
          --  own, and whatever Prepare chose. Nothing here guesses a format

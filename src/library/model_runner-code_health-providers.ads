@@ -77,6 +77,10 @@ package Model_Runner.Code_Health.Providers is
       Analysis_Root      : Ada.Strings.Unbounded.Unbounded_String;
       Change_Id          : Ada.Strings.Unbounded.Unbounded_String;
       Changed_Files      : String_Lists.Vector;
+      --  Relevant paths removed by this change.  They remain provider inputs
+      --  for applicability and dependency/test selection, but must not be
+      --  handed to source analyzers as readable current files.
+      Removed_Files      : String_Lists.Vector;
       Project_Files      : String_Lists.Vector;
       Dependencies       : String_Lists.Vector;
       Affected_Tests     : String_Lists.Vector;

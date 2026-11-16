@@ -17,6 +17,11 @@ is
 
    Wide   : constant Element_Count := Count * Width;
 
+   --  Experts opportunistically retained as individual slices.  A split
+   --  mixture may run these on the device while every other expert remains
+   --  on the processor; admission below never evicts an existing matrix.
+   Resident_Experts : Expert_Flags (0 .. Many - 1) := [others => False];
+
    --  Whether the device made the shared expert's answer for this one
    --  position after the layer's front half; asked once, and cleared.
    Given_Shared : constant Boolean :=
@@ -406,6 +411,93 @@ begin
    end loop;
 
    <<Chosen>>
+
+   --  A prompt is the best warm-up trace available: every selected expert
+   --  is recorded in position and rank order, before grouping rearranges
+   --  the work by expert below.
+   for Index in 0 .. Natural (Count) * Used - 1 loop
+      declare
+         Ignored : Model_Runner.Expert_Cache.Observation_Outcome;
+      begin
+         Model_Runner.Expert_Cache.Observe
+           (Item.Expert_Policy, Current.Number,
+            Item.Pick_Which.all (Index), Ignored);
+      end;
+   end loop;
+
+   --  A split mixture ordinarily leaves every expert on the processor.
+   --  Warm only policy candidates, only when all three products can run as
+   --  one device sequence, and only from genuinely unused device budget.
+   --  Hold_Expert rolls a partial admission back and never evicts another
+   --  matrix, so this cannot churn the attention weights that made the
+   --  split useful in the first place.
+   if On_Pool
+     and then Item.Host_Feed
+     and then Item.Owner.Expert_Cache_Room > 0
+     and then Model_Runner.Backend."="
+                (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_Device)
+     and then not Item.Owner.all.Stacked
+     and then not Current.Mixture_Held
+     and then Item.Seen = null
+     and then Current.Expert_Gate_Bias = null
+     and then Current.Expert_Up_Bias = null
+     and then Current.Expert_Down_Bias = null
+   then
+      for Which in Resident_Experts'Range loop
+         if Model_Runner.Expert_Cache.Is_Resident
+              (Item.Expert_Policy, Current.Number, Which)
+         then
+            declare
+               Gate, Up, Down : T.View;
+               Trouble        : E.Error_Info;
+               Bytes          : Interfaces.Unsigned_64;
+               Was_Held       : Boolean;
+            begin
+               Device_Expert_Views
+                 (Current, Which, Feed, Width, Gate, Up, Down, Trouble);
+               if E.Is_Error (Trouble) then
+                  Status := Trouble;
+                  return;
+               end if;
+
+               if Gate.Interleaved or else Up.Interleaved
+                 or else Down.Interleaved
+               then
+                  goto Next_Candidate;
+               end if;
+
+               Bytes :=
+                 Interfaces.Unsigned_64 (Gate.Rows)
+                   * Interfaces.Unsigned_64 (T.Row_Bytes (Gate))
+                 + Interfaces.Unsigned_64 (Up.Rows)
+                   * Interfaces.Unsigned_64 (T.Row_Bytes (Up))
+                 + Interfaces.Unsigned_64 (Down.Rows)
+                   * Interfaces.Unsigned_64 (T.Row_Bytes (Down));
+               Was_Held :=
+                 Model_Runner.Backend.Device.Expert_Held (Gate, Up, Down);
+
+               if Was_Held then
+                  Resident_Experts (Which) := True;
+               elsif Bytes <= Item.Owner.Expert_Cache_Room
+                              - Interfaces.Unsigned_64'Min
+                                  (Item.Expert_Cache_Used,
+                                   Item.Owner.Expert_Cache_Room)
+               then
+                  Model_Runner.Backend.Device.Hold_Expert
+                    (Gate, Up, Down, Resident_Experts (Which));
+                  if Resident_Experts (Which) then
+                     Item.Expert_Cache_Used :=
+                       Item.Expert_Cache_Used + Bytes;
+                     Item.Expert_Cache_Admissions :=
+                       Item.Expert_Cache_Admissions + 1;
+                  end if;
+               end if;
+               <<Next_Candidate>>
+               null;
+            end;
+         end if;
+      end loop;
+   end if;
 
    --  GraniteMoE's scalar on the weights, applied where the host choice
    --  and the device route rejoin, before the pool or the ranked sum
@@ -1000,7 +1092,9 @@ begin
             declare
                Done : Natural := 0;
             begin
-               while Done < Counts (Which) loop
+               while not Resident_Experts (Which)
+                 and then Done < Counts (Which)
+               loop
                   Chunk_Expert (Chunks) := Which;
                   Chunk_Start (Chunks) := Starts (Which) + Done;
                   Chunk_Count (Chunks) :=
@@ -1031,7 +1125,7 @@ begin
          end if;
 
          for Which in 0 .. Many - 1 loop
-            if Counts (Which) > 0 then
+            if Counts (Which) > 0 and then not Resident_Experts (Which) then
                if Supers (Current.Experts.all (Which).Gate)
                  or else Supers (Current.Experts.all (Which).Up)
                then
@@ -1086,60 +1180,62 @@ begin
 
          --  The experts by size, largest first, in the order the
          --  workers take them.
-         declare
-            Sorted : array (0 .. Chunks - 1) of Natural;
-         begin
-            for Which in Sorted'Range loop
-               Sorted (Which) := Which;
-            end loop;
+         if Chunks > 0 then
+            declare
+               Sorted : array (0 .. Chunks - 1) of Natural;
+            begin
+               for Which in Sorted'Range loop
+                  Sorted (Which) := Which;
+               end loop;
 
-            for Outer in 1 .. Chunks - 1 loop
-               declare
-                  Moving : constant Natural := Sorted (Outer);
-                  Inner  : Integer := Outer - 1;
-               begin
-                  while Inner >= 0
-                    and then Chunk_Count (Sorted (Inner))
-                             < Chunk_Count (Moving)
-                  loop
-                     Sorted (Inner + 1) := Sorted (Inner);
-                     Inner := Inner - 1;
-                  end loop;
-                  Sorted (Inner + 1) := Moving;
-               end;
-            end loop;
-
-            for Rank in Sorted'Range loop
-               Order (Rank) := Sorted (Rank);
-            end loop;
-
-            --  A split shared expert's gate and up halves first and its
-            --  down halves last, the experts between, so that nothing
-            --  takes a down half before both middles are taken.
-            if Shared_Split then
-               declare
-                  Placed : Natural := 0;
-               begin
-                  for Pass in 1 .. 3 loop
-                     for Rank in Sorted'Range loop
-                        if (Pass = 1
-                            and then Chunk_Expert (Sorted (Rank))
-                                     = Split_Gate_Up)
-                          or else (Pass = 2
-                                   and then Chunk_Expert (Sorted (Rank))
-                                            < Split_Gate_Up)
-                          or else (Pass = 3
-                                   and then Chunk_Expert (Sorted (Rank))
-                                            = Split_Down)
-                        then
-                           Order (Placed) := Sorted (Rank);
-                           Placed := Placed + 1;
-                        end if;
+               for Outer in 1 .. Chunks - 1 loop
+                  declare
+                     Moving : constant Natural := Sorted (Outer);
+                     Inner  : Integer := Outer - 1;
+                  begin
+                     while Inner >= 0
+                       and then Chunk_Count (Sorted (Inner))
+                                < Chunk_Count (Moving)
+                     loop
+                        Sorted (Inner + 1) := Sorted (Inner);
+                        Inner := Inner - 1;
                      end loop;
-                  end loop;
-               end;
-            end if;
-         end;
+                     Sorted (Inner + 1) := Moving;
+                  end;
+               end loop;
+
+               for Rank in Sorted'Range loop
+                  Order (Rank) := Sorted (Rank);
+               end loop;
+
+               --  A split shared expert's gate and up halves first and its
+               --  down halves last, the experts between, so that nothing
+               --  takes a down half before both middles are taken.
+               if Shared_Split then
+                  declare
+                     Placed : Natural := 0;
+                  begin
+                     for Pass in 1 .. 3 loop
+                        for Rank in Sorted'Range loop
+                           if (Pass = 1
+                               and then Chunk_Expert (Sorted (Rank))
+                                        = Split_Gate_Up)
+                             or else (Pass = 2
+                                      and then Chunk_Expert (Sorted (Rank))
+                                               < Split_Gate_Up)
+                             or else (Pass = 3
+                                      and then Chunk_Expert (Sorted (Rank))
+                                               = Split_Down)
+                           then
+                              Order (Placed) := Sorted (Rank);
+                              Placed := Placed + 1;
+                           end if;
+                        end loop;
+                     end loop;
+                  end;
+               end if;
+            end;
+         end if;
 
          if Chunks > 0 then
             Workers_CPU.Dispatch_Shares
@@ -1159,6 +1255,74 @@ begin
             Status := E.Make (E.Memory_Allocation_Failed);
             return;
          end if;
+
+         --  The experts admitted from spare device budget were omitted
+         --  from the pool's job.  Run each once over all positions that
+         --  chose it, using its individually resident slices rather than
+         --  uploading the layer's complete stacks.
+         for Which in Resident_Experts'Range loop
+            if Resident_Experts (Which) and then Counts (Which) > 0 then
+               declare
+                  Gate, Up, Down : T.View;
+                  Trouble        : E.Error_Info;
+                  Held           : constant Element_Count :=
+                    Element_Count (Counts (Which));
+               begin
+                  Device_Expert_Views
+                    (Current, Which, Feed, Width, Gate, Up, Down, Trouble);
+                  if E.Is_Error (Trouble) then
+                     Status := Trouble;
+                     return;
+                  end if;
+
+                  for Index in 0 .. Counts (Which) - 1 loop
+                     declare
+                        Pick : constant Natural :=
+                          Listed (Starts (Which) + Index);
+                        Where : constant Element_Count :=
+                          Element_Count (Pick / Used);
+                        From : constant Element_Count :=
+                          Rows.all'First + Where * Width;
+                        Into : constant Element_Count :=
+                          Item.Gather_In.all'First
+                          + Element_Count (Index) * Width;
+                     begin
+                        Item.Gather_In.all (Into .. Into + Width - 1) :=
+                          Rows.all (From .. From + Width - 1);
+                     end;
+                  end loop;
+
+                  Model_Runner.Backend.Device.Dispatch_Expert
+                    (Gate, Up, Down, Feed, Width, 0,
+                     Gate_Unit (Item.Owner.all),
+                     Item.Gather_In, Held, Item.Gather_Out, Status,
+                     Item.Stopping,
+                     Alpha => Settings.Gate_Alpha,
+                     Limit => Settings.Gate_Limit);
+                  if E.Is_Error (Status) then
+                     return;
+                  end if;
+                  Item.Expert_Cache_Device_Runs :=
+                    Item.Expert_Cache_Device_Runs + 1;
+
+                  for Index in 0 .. Counts (Which) - 1 loop
+                     declare
+                        Pick : constant Natural :=
+                          Listed (Starts (Which) + Index);
+                        From : constant Element_Count :=
+                          Item.Gather_Out.all'First
+                          + Element_Count (Index) * Width;
+                        Into : constant Element_Count :=
+                          Item.Ranked.all'First
+                          + Element_Count (Pick) * Width;
+                     begin
+                        Item.Ranked.all (Into .. Into + Width - 1) :=
+                          Item.Gather_Out.all (From .. From + Width - 1);
+                     end;
+                  end loop;
+               end;
+            end if;
+         end loop;
       end;
 
       goto Summed;

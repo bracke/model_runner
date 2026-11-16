@@ -431,7 +431,7 @@ is
          return;
       end if;
 
-      if Item.Held in Eighth | Fourth then
+      if Item.Held in Eighth | Fourth | Float_Eighth then
          Blend_Eighth
            (Item.Held, Item.Held_Values, Asked, Item.Byte_Keys.all,
             Item.Byte_Values.all,
@@ -1480,7 +1480,7 @@ begin
                   null;
                elsif Chaining then
                   Deferred (Index) := True;
-               elsif Item.Held in Eighth | Fourth then
+               elsif Item.Held in Eighth | Fourth | Float_Eighth then
                   Pack_Row
                     (Item.Key_Row.all (0 .. KV_Width - 1),
                      Item.Byte_Keys.all, Slot, KV_Width,
@@ -1724,7 +1724,7 @@ begin
             --  wrote this position's keys and values already.
             if not Own_Cache then
                null;
-            elsif Item.Held in Eighth | Fourth then
+            elsif Item.Held in Eighth | Fourth | Float_Eighth then
                Pack_Row
                  (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
                   Slot, KV_Width, Item.Key_Scales.all, Item.Held);

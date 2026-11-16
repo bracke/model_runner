@@ -483,7 +483,9 @@ package body Model_Runner.CLI.Tool_Turns is
             Said  : Unbounded_String;
             Ended : Model_Runner.CLI.MCP.Call_End;
          begin
-            Model_Runner.CLI.MCP.Call (Named, Arguments, Tr.Context_Of (Self).Cancel, Said, Ended);
+            Model_Runner.CLI.MCP.Call
+              (Named, Arguments, Tr.Context_Of (Self).Cancel, Said, Ended,
+               Tr.Context_Of (Self).Deadline);
             Last := Result'First - 1;
             Add (To_String (Said));
             Outcome := Tr.Done;

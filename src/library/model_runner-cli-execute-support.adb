@@ -8,6 +8,7 @@ with Hostkit.Metadata;
 with Model_Runner.Backend.Device;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Backend.Reference;
+with Model_Runner.Config;
 with Model_Runner.Quantization.Interleave;
 with Model_Runner.Quantization;
 with Model_Runner.Platform;
@@ -552,13 +553,41 @@ package body Model_Runner.CLI.Execute.Support is
    -- Resolved_Backend --
    ---------------------
 
+   function Model_Size
+     (Item : Opt.Command; Path : String) return Interfaces.Unsigned_64
+   is
+      Result : Interfaces.Unsigned_64 :=
+        Interfaces.Unsigned_64 (Shards.Total_Size (Path));
+   begin
+      for Index in 1 .. Item.Auxiliary_Count loop
+         declare
+            Named : constant String :=
+              T.To_String (Item.Auxiliary_Shards (Index));
+            More : constant Interfaces.Unsigned_64 :=
+              Interfaces.Unsigned_64
+                (Shards.Total_Size
+                   (Model_Runner.Platform.Resolve_Model_Path
+                      (if Model_Runner.Config.Has ("alias." & Named)
+                       then Model_Runner.Config.Value ("alias." & Named)
+                       else Named)));
+         begin
+            if Interfaces.Unsigned_64'Last - Result < More then
+               return Interfaces.Unsigned_64'Last;
+            end if;
+            Result := Result + More;
+         end;
+      end loop;
+      return Result;
+   end Model_Size;
+
    --  The backend a run takes when none is named: the device where one
    --  opens and the model's weights fit the device's budget, the processor
    --  otherwise. A device option named without --backend (--device-memory,
-   --  --device, --device-patience) says the caller wants the device, and
-   --  gets it. The device is left open when it is chosen, opened as the run
-   --  will ask for it, so the run's own Open finds it ready rather than
-   --  building its pipelines a second time; it is closed when it is not.
+   --  --expert-cache, --device, --device-patience) says the caller wants
+   --  the device, and gets it. The device is left open when it is chosen,
+   --  opened as the run will ask for it, so the run's own Open finds it
+   --  ready rather than building its pipelines a second time; it is closed
+   --  when it is not.
    --  A mixture of experts whose experts do not fit the device still
    --  goes there when the rest of it does: the device runs each layer's
    --  front half and the processor the experts. What the budget is weighed
@@ -706,6 +735,7 @@ package body Model_Runner.CLI.Execute.Support is
          and then Model_Runner.Backend."="
                     (Item.Backend, Model_Runner.Backend.Backend_Device))
         or else Item.Device_Memory_Set
+        or else Item.Expert_Cache_Set
         or else Item.Device_Index_Set
         or else Item.Device_Patience_Set;
    begin
@@ -737,13 +767,15 @@ package body Model_Runner.CLI.Execute.Support is
 
          --  Every shard's, where the model is in several files.
          Weights : constant Interfaces.Unsigned_64 :=
-           Interfaces.Unsigned_64 (Shards.Total_Size (Path));
+           Model_Size (Item, Path);
 
          Holds : constant Interfaces.Unsigned_64 :=
            Model_Runner.Backend.Device.Describe.Memory_Bytes;
 
          Seen : constant Measures :=
-           (if Weights > 0 and then Holds > 0 then Measure (Path)
+           (if Weights > 0 and then Holds > 0
+                 and then Item.Auxiliary_Count = 0
+            then Measure (Path)
             else (others => <>));
 
          --  An adapter is merged into binary32 weights, and those are what
@@ -894,7 +926,7 @@ package body Model_Runner.CLI.Execute.Support is
       Path   : constant String :=
         Model_Runner.Platform.Resolve_Model_Path (T.To_String (Item.Model_Path));
       Weights : constant Interfaces.Unsigned_64 :=
-        Interfaces.Unsigned_64 (Shards.Total_Size (Path));
+        Model_Size (Item, Path);
    begin
       if Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU)
         and then L."=" (Item.Repack, L.No_Repack)

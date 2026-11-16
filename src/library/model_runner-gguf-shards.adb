@@ -154,6 +154,7 @@ package body Model_Runner.GGUF.Shards is
       end if;
 
       Item.Held := 1;
+      Item.Primary := 1;
       Item.Spans (1) := (Start => 0, Length => F.Size (Item.Files (1).all));
       Item.Total := Item.Spans (1).Length;
    end Open;
@@ -172,6 +173,24 @@ package body Model_Runner.GGUF.Shards is
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Status   : out E.Error_Info)
+   is
+      None : constant Model_Runner.Text.Bounded_List (1 .. 0) := [others => <>];
+   begin
+      Open_Model
+        (Item, Held, Path, None, Policy, Bounds, Cancel, Observer, Status);
+   end Open_Model;
+
+   procedure Open_Model
+     (Item      : in out Shard_Set;
+      Held      : in out Model_Runner.GGUF.Containers.Container;
+      Path      : String;
+      Auxiliary : Model_Runner.Text.Bounded_List;
+      Policy    : F.Mapping_Policy := F.Mapping_Automatic;
+      Bounds    : Model_Runner.Limits.Model_Limits :=
+        Model_Runner.Limits.Default_Model_Limits;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Observer  : Model_Runner.Progress.Observer_Reference := null;
+      Status    : out E.Error_Info)
    is
       package Containers renames Model_Runner.GGUF.Containers;
    begin
@@ -194,22 +213,56 @@ package body Model_Runner.GGUF.Shards is
          return;
       end if;
 
-      if Containers.Shard_Count (Held) <= 1 then
+      if Containers.Shard_Count (Held) > 1 then
+         Open_Rest (Item, Containers.Shard_Count (Held), Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+      end if;
+
+      Item.Primary := Item.Held;
+
+      if Item.Held + Auxiliary'Length > Max_Shards then
+         Status := E.Make (E.GGUF_Shard_Count_Too_Large);
+         E.Add_Integer
+           (Status, "count",
+            Long_Long_Integer (Item.Held + Auxiliary'Length));
+         E.Add_Integer
+           (Status, "limit", Long_Long_Integer (Max_Shards));
          return;
       end if;
 
-      Open_Rest (Item, Containers.Shard_Count (Held), Status);
-      if E.Is_Error (Status) then
-         return;
-      end if;
+      for Path_Of of Auxiliary loop
+         declare
+            Index : constant Positive := Item.Held + 1;
+            Name  : constant String := Model_Runner.Text.To_String (Path_Of);
+         begin
+            Item.Files (Index) := new F.File_Source;
+            F.Open
+              (Item.Files (Index).all, Name, Item.Policy, Item.Bound, Status);
+            if E.Is_Error (Status) then
+               Free (Item.Files (Index));
+               E.Add_Text (Status, "shard", Name, E.Param_Path);
+               return;
+            end if;
+
+            Item.Spans (Index) :=
+              (Start => Item.Total,
+               Length => F.Size (Item.Files (Index).all));
+            Item.Total := Item.Total + Item.Spans (Index).Length;
+            Item.Held := Index;
+         end;
+      end loop;
 
       declare
          Others_Of : constant Model_Runner.Byte_Sources.Source_Array :=
            Rest (Item);
+         Auxiliary_Of : constant Model_Runner.Byte_Sources.Source_Array :=
+           Model_Runner.GGUF.Shards.Auxiliary (Item);
       begin
          Containers.Reader.Parse
            (Held, First (Item).all, Bounds, Cancel, Observer, Status,
-            More => Others_Of);
+            More => Others_Of, Auxiliary => Auxiliary_Of);
       end;
    end Open_Model;
 
@@ -281,6 +334,8 @@ package body Model_Runner.GGUF.Shards is
                Item.Held := Index;
             end;
          end loop;
+
+         Item.Primary := Item.Held;
       end;
    end Open_Rest;
 
@@ -300,6 +355,7 @@ package body Model_Runner.GGUF.Shards is
       Item.Files := [others => null];
       Item.Spans := [others => (0, 0)];
       Item.Held := 0;
+      Item.Primary := 0;
       Item.Total := 0;
    end Close;
 
@@ -328,7 +384,7 @@ package body Model_Runner.GGUF.Shards is
      (Item : in out Shard_Set) return Model_Runner.Byte_Sources.Source_Array
    is
       Result : Model_Runner.Byte_Sources.Source_Array
-        (1 .. Natural'Max (Item.Held - 1, 0));
+        (1 .. Natural'Max (Item.Primary - 1, 0));
    begin
       for Index in Result'Range loop
          Result (Index) :=
@@ -338,6 +394,25 @@ package body Model_Runner.GGUF.Shards is
 
       return Result;
    end Rest;
+
+   ---------------
+   -- Auxiliary --
+   ---------------
+
+   function Auxiliary
+     (Item : in out Shard_Set) return Model_Runner.Byte_Sources.Source_Array
+   is
+      Result : Model_Runner.Byte_Sources.Source_Array
+        (1 .. Natural'Max (Item.Held - Item.Primary, 0));
+   begin
+      for Index in Result'Range loop
+         Result (Index) :=
+           Model_Runner.Byte_Sources.Source_Reference
+             (Item.Files (Item.Primary + Index));
+      end loop;
+
+      return Result;
+   end Auxiliary;
 
    ----------
    -- Size --

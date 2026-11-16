@@ -489,28 +489,51 @@ begin
                         Key_First, Key_Last : Natural;
                         Equals : Natural;
                         Keyword : Boolean := False;
+                        Positional_Unpack : Boolean := False;
+                        Keyword_Unpack    : Boolean := False;
                      begin
-                        --  name=value: the name kept as an operand of
-                        --  its own, the value after it.
-                        Read_Word (Inside, Value_From, Key_First,
-                                   Key_Last);
-                        Equals := Skip_Spaces (Inside, Value_From);
-                        if Key_Last >= Key_First
-                          and then Is_Plain_Name
-                                     (Inside (Key_First .. Key_Last))
-                          and then Equals < Stop - 1
-                          and then Inside (Equals) = '='
-                          and then Inside (Equals + 1) /= '='
+                        if Value_From <= Inside'Last
+                          and then Inside (Value_From) = '*'
                         then
-                           Keyword := True;
-                           Value_From := Equals + 1;
-                        else
-                           Value_From := Cursor_At;
+                           if Value_From < Inside'Last
+                             and then Inside (Value_From + 1) = '*'
+                           then
+                              Keyword_Unpack := True;
+                              Value_From := Value_From + 2;
+                           else
+                              Positional_Unpack := True;
+                              Value_From := Value_From + 1;
+                           end if;
                         end if;
 
-                        if Given + (if Keyword then 2 else 1)
+                        --  name=value: the name kept as an operand of
+                        --  its own, the value after it.
+                        if not Positional_Unpack and then not Keyword_Unpack
+                        then
+                           Read_Word (Inside, Value_From, Key_First,
+                                      Key_Last);
+                           Equals := Skip_Spaces (Inside, Value_From);
+                           if Key_Last >= Key_First
+                             and then Is_Plain_Name
+                                        (Inside (Key_First .. Key_Last))
+                             and then Equals < Stop - 1
+                             and then Inside (Equals) = '='
+                             and then Inside (Equals + 1) /= '='
+                           then
+                              Keyword := True;
+                              Value_From := Equals + 1;
+                           else
+                              Value_From := Cursor_At;
+                           end if;
+                        end if;
+
+                        if Given
+                             + (if Keyword or else Positional_Unpack
+                                  or else Keyword_Unpack then 2 else 1)
                              > 2 * Max_Parameters
-                          or else Given + (if Keyword then 2 else 1)
+                          or else Given
+                            + (if Keyword or else Positional_Unpack
+                               or else Keyword_Unpack then 2 else 1)
                              > Max_Literal_Elements
                         then
                            Result := Refused (Text (First .. Shut));
@@ -518,17 +541,26 @@ begin
                            Ok := True;
                            return;
                         end if;
-                        if Keyword then
+                        if Keyword or else Positional_Unpack
+                          or else Keyword_Unpack
+                        then
                            declare
                               Key    : Term :=
-                                (Kind => Term_Keyword, others => <>);
+                                (Kind =>
+                                   (if Keyword then Term_Keyword
+                                    elsif Positional_Unpack
+                                    then Term_Positional_Unpack
+                                    else Term_Keyword_Unpack),
+                                 others => <>);
                               Stored : Boolean;
                            begin
-                              Store_Literal
-                                (Inside (Key_First .. Key_Last),
-                                 Key.Offset, Key.Length, Stored);
-                              if not Stored then
-                                 return;
+                              if Keyword then
+                                 Store_Literal
+                                   (Inside (Key_First .. Key_Last),
+                                    Key.Offset, Key.Length, Stored);
+                                 if not Stored then
+                                    return;
+                                 end if;
                               end if;
                               Given := Given + 1;
                               Held (Given) :=

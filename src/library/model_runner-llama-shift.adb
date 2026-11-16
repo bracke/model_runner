@@ -161,7 +161,7 @@ begin
                   V_Into : constant Element_Count := V_Base + Now * V_Width;
                begin
                   if not Absent then
-                     if Item.Held in Eighth | Fourth then
+                     if Item.Held in Eighth | Fourth | Float_Eighth then
                         for Offset in 0 .. KV_Width - 1 loop
                            Item.Key_Row.all (Offset) :=
                              Unpack (Item.Byte_Keys.all, From + Offset,
@@ -191,7 +191,7 @@ begin
                         Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
                         Settings.Pairing, Backwards => True);
 
-                     if Item.Held in Eighth | Fourth then
+                     if Item.Held in Eighth | Fourth | Float_Eighth then
                         --  Turned back and written again, which is a second
                         --  rounding of a row that was already rounded once.
                         --  A rolling context in this storage loses a little

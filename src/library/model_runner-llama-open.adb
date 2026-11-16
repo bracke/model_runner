@@ -28,6 +28,55 @@ begin
    Settings := Source.Settings;
    Capacity := (if Context = 0 then Settings.Context_Length else Context);
 
+   --  Twice the active route is deliberately small: enough to distinguish
+   --  repeated choices from one-offs without claiming that every expert
+   --  seen in a prompt should occupy device memory.
+   Model_Runner.Expert_Cache.Configure
+     (Item.Expert_Policy,
+      Layers   => Settings.Layers,
+      Experts  => Settings.Experts,
+      Capacity => Natural'Min (Settings.Experts, 2 * Settings.Experts_Used));
+   Item.Expert_Cache_Used := 0;
+   Item.Expert_Cache_Admissions := 0;
+   Item.Expert_Cache_Device_Runs := 0;
+   if Source.Expert_Cache_Room > 0 and then Source.Layers /= null then
+      for Current of Source.Layers.all loop
+         if Current.Experts /= null and then not Current.Mixture_Held then
+            for Which in Current.Experts.all'Range loop
+               declare
+                  Gate, Up, Down : T.View;
+                  Trouble        : E.Error_Info;
+               begin
+                  Device_Expert_Views
+                    (Current, Which,
+                     Element_Count (Settings.Expert_Feed),
+                     Element_Count (Settings.Embedding),
+                     Gate, Up, Down, Trouble);
+                  if E.Is_Error (Trouble) then
+                     Status := Trouble;
+                     return;
+                  end if;
+                  if Model_Runner.Backend.Device.Expert_Held
+                       (Gate, Up, Down)
+                  then
+                     Item.Expert_Cache_Used :=
+                       Item.Expert_Cache_Used
+                       + Interfaces.Unsigned_64 (Gate.Rows)
+                         * Interfaces.Unsigned_64 (T.Row_Bytes (Gate))
+                       + Interfaces.Unsigned_64 (Up.Rows)
+                         * Interfaces.Unsigned_64 (T.Row_Bytes (Up))
+                       + Interfaces.Unsigned_64 (Down.Rows)
+                         * Interfaces.Unsigned_64 (T.Row_Bytes (Down));
+                  end if;
+               end;
+            end loop;
+         end if;
+      end loop;
+      Item.Expert_Cache_Used :=
+        Interfaces.Unsigned_64'Min
+          (Item.Expert_Cache_Used, Source.Expert_Cache_Room);
+   end if;
+
    --  And no more than the device's room was counted for, where Prepare
    --  counted it: the context grows on the device beside the matrices, and
    --  one let grow past what was set aside for it ran the part out of
@@ -323,7 +372,7 @@ begin
                T.Allocate (Rows * KV_Out, Item.Half_Values);
             end if;
 
-         when Eighth | Fourth =>
+         when Eighth | Fourth | Float_Eighth =>
             --  The bytes, and the scales: one a row a position a layer
             --  for the byte cache, one a block of thirty-two for the
             --  nibble cache, for the keys and again for the values.
@@ -764,7 +813,7 @@ begin
         or else (Item.Held = Halved
                  and then (Item.Half_Keys = null
                            or else Item.Half_Values = null))
-        or else (Item.Held in Eighth | Fourth
+        or else (Item.Held in Eighth | Fourth | Float_Eighth
                  and then (Item.Byte_Keys = null
                            or else Item.Byte_Values = null
                            or else Item.Key_Scales = null

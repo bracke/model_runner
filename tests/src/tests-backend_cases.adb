@@ -24,6 +24,7 @@ with Model_Runner.Localization;
 with Model_Runner.Cancellation;
 with Model_Runner.Bytes;
 with Model_Runner.Errors;
+with Model_Runner.Expert_Cache;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
 with Model_Runner.Platform;
@@ -53,6 +54,7 @@ package body Tests.Backend_Cases is
    package B renames Model_Runner.Bytes;
    package CPU renames Model_Runner.Backend.CPU;
    package E renames Model_Runner.Errors;
+   package Expert_Cache renames Model_Runner.Expert_Cache;
    package G renames Model_Runner.GGUF;
    package N renames Model_Runner.Numerics;
    package T renames Model_Runner.Tensors;
@@ -9829,6 +9831,39 @@ package body Tests.Backend_Cases is
                  "an expert read from the paired region answers"
                  & N.Real'Image (Worst)
                  & " away from the host's own arithmetic on its slices");
+
+         --  The adaptive road holds exactly this expert's three slices,
+         --  not its complete stacks.  Once admitted, its fused sequence
+         --  copies no weight and answers as the same member gathered from
+         --  the resident stacks above.
+         declare
+            Held   : Boolean;
+            Copied : Natural;
+            Apart_Worst : N.Real := 0.0;
+         begin
+            Device.Hold_Expert (G_Slice, U_Slice, D_Slice, Held);
+            Assert (Held and then Device.Expert_Held
+                                      (G_Slice, U_Slice, D_Slice),
+                    "one expert's individual slices were not retained");
+            Copied := Device.Streamed_Copies;
+            Device.Dispatch_Expert
+              (G_Slice, U_Slice, D_Slice, Feed, Width, 0, 0,
+               Vector, 1, Apart, Status);
+            Assert (E.Is_Ok (Status),
+                    "an individually resident expert did not run");
+            Assert (Device.Streamed_Copies = Copied,
+                    "an individually resident expert copied weights again");
+            for Index in 0 .. Width - 1 loop
+               Apart_Worst := N.Real'Max
+                 (Apart_Worst,
+                  abs (Apart.all (Apart.all'First + Index)
+                       - Paired.all (Paired.all'First + Index)));
+            end loop;
+            Assert (Apart_Worst = 0.0,
+                    "an individually resident expert differs from its stack by "
+                    & N.Real'Image (Apart_Worst));
+         end;
+
          T.Free (G_Out);
          T.Free (U_Out);
          T.Free (D_Out);
@@ -15045,6 +15080,77 @@ package body Tests.Backend_Cases is
       CPU.Use_Integer_Activations (Was);
    end Packed_Rows_Multiply_As_The_Pool_Multiplies;
 
+   -----------------------------------------
+   -- Hot_Experts_Displace_Cold_Ones_Only --
+   -----------------------------------------
+
+   procedure Hot_Experts_Displace_Cold_Ones_Only
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+      use type Expert_Cache.Observation_Outcome;
+      use type Interfaces.Unsigned_64;
+
+      Policy  : Expert_Cache.Policy;
+      Outcome : Expert_Cache.Observation_Outcome;
+      Counts  : Expert_Cache.Statistics;
+   begin
+      Expert_Cache.Configure (Policy, Layers => 2, Experts => 4, Capacity => 2);
+      Assert (Expert_Cache.Layer_Count (Policy) = 2, "the policy lost its layers");
+      Assert (Expert_Cache.Expert_Count (Policy) = 4, "the policy lost its experts");
+      Assert
+        (Expert_Cache.Capacity_Per_Layer (Policy) = 2,
+         "the policy lost its per-layer capacity");
+
+      Expert_Cache.Observe (Policy, 0, 0, Outcome);
+      Assert (Outcome = Expert_Cache.Promote, "the first expert was not admitted");
+      Expert_Cache.Observe (Policy, 0, 1, Outcome);
+      Assert (Outcome = Expert_Cache.Promote, "the second expert was not admitted");
+
+      --  One sighting is no stronger than either resident entry, so it does
+      --  not churn the cache.  Its second sighting makes it materially more
+      --  frequent and displaces the older of the two tied residents.
+      Expert_Cache.Observe (Policy, 0, 2, Outcome);
+      Assert (Outcome = Expert_Cache.Cache_Miss, "a tied cold expert caused churn");
+      Expert_Cache.Observe (Policy, 0, 2, Outcome);
+      Assert (Outcome = Expert_Cache.Promote, "a repeatedly routed expert stayed cold");
+      Assert (not Expert_Cache.Is_Resident (Policy, 0, 0), "the cold victim stayed resident");
+      Assert (Expert_Cache.Is_Resident (Policy, 0, 1), "the newer tied resident was evicted");
+      Assert (Expert_Cache.Is_Resident (Policy, 0, 2), "the hot expert was not retained");
+
+      Expert_Cache.Observe (Policy, 0, 2, Outcome);
+      Assert (Outcome = Expert_Cache.Cache_Hit, "a retained expert missed");
+
+      --  Capacity belongs to each layer.  Filling another layer must not
+      --  evict a resident with the same expert number in this one.
+      Expert_Cache.Observe (Policy, 1, 3, Outcome);
+      Assert (Outcome = Expert_Cache.Promote, "the other layer had no independent capacity");
+      Assert (Expert_Cache.Is_Resident (Policy, 0, 2), "another layer evicted this layer's expert");
+
+      --  Malformed observations are counted as misses and are harmless;
+      --  model metadata must not turn cache telemetry into an exception.
+      Expert_Cache.Observe (Policy, 9, 0, Outcome);
+      Assert (Outcome = Expert_Cache.Cache_Miss, "an invalid layer was not a miss");
+
+      Counts := Expert_Cache.Current_Statistics (Policy);
+      Assert (Counts.Observations = 7, "the observation count is wrong");
+      Assert (Counts.Hits = 1, "the hit count is wrong");
+      Assert (Counts.Misses = 6, "the miss count is wrong");
+      Assert (Counts.Promotions = 4, "the promotion count is wrong");
+      Assert (Counts.Evictions = 1, "the eviction count is wrong");
+
+      Expert_Cache.Configure (Policy, Layers => 1, Experts => 3, Capacity => 0);
+      Expert_Cache.Observe (Policy, 0, 1, Outcome);
+      Assert (Outcome = Expert_Cache.Cache_Miss, "a disabled policy retained an expert");
+      Assert (not Expert_Cache.Is_Resident (Policy, 0, 1), "zero capacity has a resident");
+
+      Expert_Cache.Configure
+        (Policy, Layers => Natural'Last, Experts => 2, Capacity => 1);
+      Assert
+        (Expert_Cache.Layer_Count (Policy) = 0,
+         "an impossible policy size was retained or allocated");
+   end Hot_Experts_Displace_Cold_Ones_Only;
+
    --------------------
    -- Register_Tests --
    --------------------
@@ -15860,6 +15966,10 @@ package body Tests.Backend_Cases is
         (T, Device_Refuses_What_It_Must'Access,
          "the device backend refuses no device, a format it cannot read, "
          & "and shapes that are not products");
+      Register_Routine
+        (T, Hot_Experts_Displace_Cold_Ones_Only'Access,
+         "a routing-aware expert cache retains repeated choices without "
+         & "letting one-off or other-layer choices churn them");
 
       Register_Routine
         (T, Cores_Are_Not_Above_Processors'Access,

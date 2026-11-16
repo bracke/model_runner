@@ -1,6 +1,7 @@
 with System;
 private with Ada.Finalization;
 private with Model_Runner.Byte_Sources.Files;
+private with Model_Runner.Expert_Cache;
 private with Model_Runner.Panel_Cache;
 
 with Interfaces;
@@ -1040,7 +1041,13 @@ package Model_Runner.Llama is
    --  and rounds the way it rounds. Five bits an element with its scale,
    --  a sixth and a bit of the exact cache's bytes, and the coarsest thing
    --  this program does to a number it will read back.
-   type Cache_Precision is (Exact, Halved, Eighth, Fourth);
+   --  Float_Eighth stores each value directly as OCP E4M3FN.  It occupies
+   --  the same byte an element as Eighth, but carries no row-dependent
+   --  quantization: independently produced caches can name the format and
+   --  every value has the same interpretation.  It is appended so snapshot
+   --  precision codes written by earlier versions retain their meaning.
+   type Cache_Precision is
+     (Exact, Halved, Eighth, Fourth, Float_Eighth);
 
    --  How the values are stored where a caller asks for something other
    --  than the keys' storage: the keys', or one of the two packed storages.
@@ -1129,7 +1136,8 @@ package Model_Runner.Llama is
          when Exact  => "f32",
          when Halved => "f16",
          when Eighth => "q8",
-         when Fourth => "q4");
+         when Fourth => "q4",
+         when Float_Eighth => "f8_e4m3");
 
    --  How a matrix product multiplies.
    --
@@ -1423,6 +1431,9 @@ package Model_Runner.Llama is
    --  @param Beside Bytes of the device a model prepared after this one --
    --    a draft -- will take: a dense model's room on the device is that
    --    much less, so that the two fit together.
+   --  @param Expert_Cache Bytes explicitly reserved from a split mixture's
+   --    matrix room for individually retained experts. Zero, the default,
+   --    preserves the existing whole-layer placement.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1442,7 +1453,8 @@ package Model_Runner.Llama is
       Context  : Natural := 0;
       Cache    : Cache_Precision := Exact;
       Paged    : Boolean := True;
-      Beside   : Interfaces.Unsigned_64 := 0);
+      Beside   : Interfaces.Unsigned_64 := 0;
+      Expert_Cache : Interfaces.Unsigned_64 := 0);
 
    --  What a device's room is for a dense model's matrices, as Prepare
    --  counts it: the device's heaps -- or the host's budget for them,
@@ -1717,6 +1729,23 @@ package Model_Runner.Llama is
    --  Mutable evaluation state: the KV cache, the activation buffers and the
    --  committed position.
    type Session is tagged limited private;
+
+   --  What the routing-aware expert-cache policy has observed in this
+   --  session. A promotion means that an expert entered the candidate hot
+   --  set; moving its weights remains the backend's separate decision.
+   type Expert_Cache_Statistics is record
+      Observations : Interfaces.Unsigned_64 := 0;
+      Hits         : Interfaces.Unsigned_64 := 0;
+      Misses       : Interfaces.Unsigned_64 := 0;
+      Promotions   : Interfaces.Unsigned_64 := 0;
+      Evictions    : Interfaces.Unsigned_64 := 0;
+      Admissions   : Interfaces.Unsigned_64 := 0;
+      Device_Runs  : Interfaces.Unsigned_64 := 0;
+      Resident_Bytes : Interfaces.Unsigned_64 := 0;
+      Reserve_Bytes  : Interfaces.Unsigned_64 := 0;
+   end record;
+
+   function Expert_Cache_Stats (Item : Session) return Expert_Cache_Statistics;
 
    --  A session named rather than passed.
    type Session_Access is access all Session;
@@ -2919,6 +2948,10 @@ private
    type Expert_Array_Access is access Expert_Array;
 
    type Layer is record
+      --  Stable index in the model's layer array, used to keep equally
+      --  numbered experts in different layers distinct.
+      Number : Natural := 0;
+
       Attention_Norm : Model_Runner.Tensors.Real_Array_Access;
 
       --  Whether this dense layer's feed-forward is the processor's where
@@ -3537,6 +3570,10 @@ private
       Feed_Room    : Interfaces.Unsigned_64 := 0;
       Feed_Weights : Interfaces.Unsigned_64 := 0;
 
+      --  Room explicitly withheld from whole mixture layers for adaptive
+      --  individual expert slices. Zero keeps adaptive placement dormant.
+      Expert_Cache_Room : Interfaces.Unsigned_64 := 0;
+
       --  What the device was told of this model as it was prepared there:
       --  the first on it, or one beside it whose matrices the budget
       --  holds on top; see Backend.Device.Note_Model. Nought elsewhere.
@@ -3618,6 +3655,14 @@ private
       --  a memory report say where the memory went, and what lets a limit
       --  count the largest thing a session has.
       Accounting : Model_Runner.Memory.Account;
+
+      --  A deterministic simulation of the hot expert set. It is fed by
+      --  every router choice, both prompt batches and generated tokens, and
+      --  supplies evidence for mixed CPU/device expert execution.
+      Expert_Policy : Model_Runner.Expert_Cache.Policy;
+      Expert_Cache_Used : Interfaces.Unsigned_64 := 0;
+      Expert_Cache_Admissions : Interfaces.Unsigned_64 := 0;
+      Expert_Cache_Device_Runs : Interfaces.Unsigned_64 := 0;
 
       Current    : Session_State := Closed;
       Owner      : access Model'Class := null;
@@ -3757,10 +3802,11 @@ private
       --  or the positions move.
       Next_Device_Upto : Natural := 0;
 
-      --  And the third storage: one byte an element, with one scale for
-      --  every row. The bytes hold a signed value biased by 128, so that a
-      --  cache written by this build is bytes rather than a signed type the
-      --  file format would have to name.
+      --  And the third storage: bytes, with scales for the integer formats.
+      --  Q8 holds a signed value biased by 128 and a scale per row; Q4 has a
+      --  scale per block. Float_Eighth holds an OCP E4M3FN value directly;
+      --  its allocated scale slots are unused and keep the shared byte-cache
+      --  lifecycle simple.
       Byte_Keys    : Model_Runner.Bytes.Byte_Array_Access := null;
       Byte_Values  : Model_Runner.Bytes.Byte_Array_Access := null;
       Key_Scales   : Model_Runner.Tensors.Real_Array_Access := null;

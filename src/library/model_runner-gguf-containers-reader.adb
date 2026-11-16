@@ -1334,6 +1334,131 @@ package body Model_Runner.GGUF.Containers.Reader is
       end;
    end Merge_Shards;
 
+   --  Fold explicitly named auxiliary GGUF files into a parsed model.
+   --
+   --  These are not numbered pieces of the backbone.  Their split metadata,
+   --  if any, is deliberately ignored and only their tensor descriptors are
+   --  imported.  This is the shape used by models whose PLE/engram table is
+   --  distributed separately from the main GGUF.
+   procedure Merge_Auxiliary
+     (Item      : in out Container;
+      Auxiliary : Model_Runner.Byte_Sources.Source_Array;
+      Bounds    : Model_Runner.Limits.Model_Limits;
+      Cancel    : C.Token_Reference;
+      Observer  : P.Observer_Reference;
+      Status    : out E.Error_Info)
+   is
+      Start        : Interfaces.Unsigned_64 := Item.Total_Size;
+      PLE_Seen : Boolean := False;
+   begin
+      E.Clear (Status);
+
+      for Which in Auxiliary'Range loop
+         if C.Is_Cancelled (Cancel) then
+            Status := E.Make (E.Generation_Cancelled);
+            return;
+         end if;
+
+         declare
+            Beside   : Container;
+            PLE_Only : Boolean;
+         begin
+            P.Publish (Observer, P.Load_Progress (P.Reading_Header));
+            Parse
+              (Beside, Auxiliary (Which).all, Bounds, Cancel, null, Status);
+            if E.Is_Error (Status) then
+               E.Add_Text
+                 (Status, "shard", Auxiliary (Which).all.Name, E.Param_Path);
+               return;
+            end if;
+
+            PLE_Only :=
+              Tensor_Count (Beside) = 1
+              and then Tensor_Name (Beside, 1)
+                = "per_layer_token_embd.weight";
+
+            for Index in 1 .. Tensor_Count (Beside) loop
+               declare
+                  Name   : constant String := Tensor_Name (Beside, Index);
+                  Moved  : Tensor_Entry := Beside.Tensors (Index);
+                  Where  : Slice;
+                  Placed : constant A.Checked :=
+                    A.To_Checked (Start) + A.To_Checked (Moved.Absolute);
+               begin
+                  if not A.Is_Valid (Placed) then
+                     Status := E.Make (E.GGUF_Arithmetic_Overflow);
+                     E.Add_Text (Status, "tensor", Name, E.Param_Identifier);
+                     return;
+                  end if;
+
+                  Moved.Absolute := A.Value (Placed);
+
+                  if Item.Tensor_Map.Contains (Name) then
+                     if not PLE_Only or else PLE_Seen then
+                        Status := E.Make (E.GGUF_Duplicate_Tensor_Name);
+                        E.Add_Text
+                          (Status, "tensor", Name, E.Param_Identifier);
+                        E.Add_Text
+                          (Status, "shard", Auxiliary (Which).all.Name,
+                           E.Param_Path);
+                        return;
+                     end if;
+
+                     --  Keep the backbone's pooled name, but replace its
+                     --  shape, format and rebased bytes with the external
+                     --  PLE tensor.
+                     Moved.Name :=
+                       Item.Tensors (Item.Tensor_Map.Element (Name)).Name;
+                     Item.Tensors.Replace_Element
+                       (Item.Tensor_Map.Element (Name), Moved);
+                  else
+                     if Natural (Item.Tensors.Length) >= Bounds.Max_Tensors then
+                        Status := E.Make (E.GGUF_Tensor_Count_Too_Large);
+                        E.Add_Integer
+                          (Status, "limit",
+                           Long_Long_Integer (Bounds.Max_Tensors));
+                        return;
+                     end if;
+
+                     Append_Pool (Item, B.To_Bytes (Name), Where, Status);
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+
+                     Moved.Name := Where;
+                     Item.Tensors.Append (Moved);
+                     Item.Tensor_Map.Insert
+                       (Name, Natural (Item.Tensors.Length));
+                  end if;
+               end;
+            end loop;
+
+            if PLE_Only then
+               PLE_Seen := True;
+            end if;
+
+            Start := Start + Beside.Total_Size;
+         end;
+      end loop;
+
+      Item.Total_Size := Start;
+
+      declare
+         Highest : Interfaces.Unsigned_64 := Item.Data_Start;
+      begin
+         for Index in 1 .. Natural (Item.Tensors.Length) loop
+            declare
+               Ends : constant Interfaces.Unsigned_64 :=
+                 Item.Tensors (Index).Absolute + Item.Tensors (Index).Size;
+            begin
+               Highest := Interfaces.Unsigned_64'Max (Highest, Ends);
+            end;
+         end loop;
+
+         Item.Data_Bytes := Highest - Item.Data_Start;
+      end;
+   end Merge_Auxiliary;
+
    procedure Parse
      (Item     : in out Container;
       Source   : in out Model_Runner.Byte_Sources.Source'Class;
@@ -1343,6 +1468,8 @@ package body Model_Runner.GGUF.Containers.Reader is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Status   : out E.Error_Info;
       More     : Model_Runner.Byte_Sources.Source_Array :=
+        Model_Runner.Byte_Sources.No_Sources;
+      Auxiliary : Model_Runner.Byte_Sources.Source_Array :=
         Model_Runner.Byte_Sources.No_Sources)
    is
       Cursor         : State;
@@ -1548,6 +1675,15 @@ package body Model_Runner.GGUF.Containers.Reader is
       if More'Length > 0 then
          Merge_Shards
            (Item, Source.Name, More, Bounds, Cancel, Observer, Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+      end if;
+
+      if Auxiliary'Length > 0 then
+         Merge_Auxiliary
+           (Item, Auxiliary, Bounds, Cancel, Observer, Status);
          if E.Is_Error (Status) then
             Fail (Status);
             return;

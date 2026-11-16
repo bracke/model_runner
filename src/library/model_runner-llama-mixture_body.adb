@@ -190,6 +190,18 @@ begin
 
    <<Routed>>
 
+   --  Routing is the evidence an adaptive device cache needs. Recording it
+   --  here covers both host and device routing while leaving placement and
+   --  execution unchanged until the measured hit rate justifies them.
+   for Slot in Chosen'Range loop
+      declare
+         Ignored : Model_Runner.Expert_Cache.Observation_Outcome;
+      begin
+         Model_Runner.Expert_Cache.Observe
+           (Item.Expert_Policy, Current.Number, Chosen (Slot), Ignored);
+      end;
+   end loop;
+
    --  GraniteMoE multiplies the renormalized weights by a scalar it
    --  carries; every other mixture here leaves it at one. Applied where
    --  the host and the device gather rejoin, before the weights reach any

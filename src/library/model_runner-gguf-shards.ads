@@ -8,6 +8,7 @@ with Model_Runner.Errors;
 with Model_Runner.GGUF.Containers;
 with Model_Runner.Limits;
 with Model_Runner.Progress;
+with Model_Runner.Text;
 
 --  A model's bytes, in one file or in several.
 --
@@ -99,6 +100,26 @@ package Model_Runner.GGUF.Shards is
       Observer : Model_Runner.Progress.Observer_Reference := null;
       Status   : out Model_Runner.Errors.Error_Info);
 
+   --  Open a model and explicit auxiliary GGUF files whose tensors are read
+   --  beside it.  Unlike the numbered files found from split.count, these
+   --  paths are exact: their split numbering is not used to discover more
+   --  files.  This supports separately distributed PLE/engram weights.
+   --
+   --  @param Auxiliary Exact paths of additional GGUF files, in precedence
+   --    order. A PLE-only file may replace the backbone's PLE tensor.
+   procedure Open_Model
+     (Item      : in out Shard_Set;
+      Held      : in out Model_Runner.GGUF.Containers.Container;
+      Path      : String;
+      Auxiliary : Model_Runner.Text.Bounded_List;
+      Policy    : Model_Runner.Byte_Sources.Files.Mapping_Policy :=
+        Model_Runner.Byte_Sources.Files.Mapping_Automatic;
+      Bounds    : Model_Runner.Limits.Model_Limits :=
+        Model_Runner.Limits.Default_Model_Limits;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null;
+      Observer  : Model_Runner.Progress.Observer_Reference := null;
+      Status    : out Model_Runner.Errors.Error_Info);
+
    --  Open the other shards of a model whose first shard is already open.
    --
    --  Their names are derived from the first's, which is the only way the
@@ -148,6 +169,10 @@ package Model_Runner.GGUF.Shards is
    --  @param Item Set to read.
    --  @return References to parts two and up.
    function Rest
+     (Item : in out Shard_Set) return Model_Runner.Byte_Sources.Source_Array;
+
+   --  Explicit auxiliary files, excluding the numbered backbone shards.
+   function Auxiliary
      (Item : in out Shard_Set) return Model_Runner.Byte_Sources.Source_Array;
 
    --  The path of a shard of a set named by its first.
@@ -215,6 +240,7 @@ private
 
    type Shard_Set is limited new Model_Runner.Byte_Sources.Source with record
       Held   : Natural := 0;
+      Primary : Natural := 0;
       Files  : Part_Array := [others => null];
       Spans  : Span_Array := [others => (0, 0)];
       Total  : Model_Runner.Bytes.Byte_Count := 0;

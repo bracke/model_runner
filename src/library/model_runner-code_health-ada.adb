@@ -130,16 +130,40 @@ package body Model_Runner.Code_Health.Ada is
       return Result;
    end Files_For;
 
+   function Relevant_Files_For
+     (Request    : P.Analysis_Request;
+      Identifier : String) return String_Lists.Vector
+   is
+      Result : String_Lists.Vector := Files_For (Request, Identifier);
+   begin
+      --  A deleted path makes these checks applicable, but is deliberately
+      --  kept out of Files_For: only live paths may become compiler targets.
+      if Identifier in
+        "ada-project" | "ada-contracts" | "ada-affected-tests" | "ada-manifest"
+      then
+         for Path of Request.Removed_Files loop
+            if not Result.Contains (Path) then
+               Result.Append (Path);
+            end if;
+         end loop;
+      end if;
+      return Result;
+   end Relevant_Files_For;
+
    type File_Selection is (Ada_Source, Ada_Project, Ada_Manifest);
 
    function Files_Of
      (Request    : P.Analysis_Request;
       Identifier : String;
-      Kind       : File_Selection) return String_Lists.Vector
+      Kind       : File_Selection;
+      Relevant   : Boolean := False) return String_Lists.Vector
    is
       Result : String_Lists.Vector;
+      Files  : constant String_Lists.Vector :=
+        (if Relevant then Relevant_Files_For (Request, Identifier)
+         else Files_For (Request, Identifier));
    begin
-      for Path of Files_For (Request, Identifier) loop
+      for Path of Files loop
          if (case Kind is
                 when Ada_Source   => Is_Source (Path),
                 when Ada_Project  => Is_Project (Path),
@@ -459,9 +483,9 @@ package body Model_Runner.Code_Health.Ada is
       end Version_Of;
 
       function Applies (Check_Id : String) return Boolean is
-        (not Files_Of (Request, Check_Id, Ada_Source).Is_Empty
-         or else not Files_Of (Request, Check_Id, Ada_Project).Is_Empty
-         or else not Files_Of (Request, Check_Id, Ada_Manifest).Is_Empty);
+        (not Files_Of (Request, Check_Id, Ada_Source, Relevant => True).Is_Empty
+         or else not Files_Of (Request, Check_Id, Ada_Project, Relevant => True).Is_Empty
+         or else not Files_Of (Request, Check_Id, Ada_Manifest, Relevant => True).Is_Empty);
    begin
       Result := (others => <>);
       Status := E.Success;
@@ -515,7 +539,8 @@ package body Model_Runner.Code_Health.Ada is
       --  prerequisite fingerprint, so their assessments are never reused.
       if Request.Level /= Fast
         and then Requested (Request, "ada-affected-tests")
-        and then not Files_Of (Request, "ada-affected-tests", Ada_Source).Is_Empty
+        and then not Files_Of
+          (Request, "ada-affected-tests", Ada_Source, Relevant => True).Is_Empty
       then
          Applicable := True;
          Safe := False;
@@ -879,7 +904,11 @@ package body Model_Runner.Code_Health.Ada is
 
       if Requested ("ada-project") and then Request.Level /= Fast then
          if Files_Of (Request, "ada-project", Ada_Project).Is_Empty
-           and then not Files_Of (Request, "ada-project", Ada_Source).Is_Empty
+           and then
+             (not Files_Of
+                (Request, "ada-project", Ada_Source, Relevant => True).Is_Empty
+              or else not Files_Of
+                (Request, "ada-project", Ada_Project, Relevant => True).Is_Empty)
          then
             Add_Check
               (Result, "ada-project", P.Check_Unavailable,
@@ -888,7 +917,11 @@ package body Model_Runner.Code_Health.Ada is
       end if;
       if Requested ("ada-contracts") and then Request.Level /= Fast
         and then Files_Of (Request, "ada-contracts", Ada_Project).Is_Empty
-        and then not Files_Of (Request, "ada-contracts", Ada_Source).Is_Empty
+        and then
+          (not Files_Of
+             (Request, "ada-contracts", Ada_Source, Relevant => True).Is_Empty
+           or else not Files_Of
+             (Request, "ada-contracts", Ada_Project, Relevant => True).Is_Empty)
       then
          Add_Check
            (Result, "ada-contracts", P.Check_Unavailable,
@@ -964,10 +997,28 @@ package body Model_Runner.Code_Health.Ada is
       end if;
 
       if Requested ("ada-manifest") then
-         for Path of Files_Of (Request, "ada-manifest", Ada_Manifest) loop
-            Run_Check ("ada-manifest", "alr", "alr show", Path);
-            exit when not E.Is_Ok (Status);
-         end loop;
+         declare
+            Live : constant String_Lists.Vector :=
+              Files_Of (Request, "ada-manifest", Ada_Manifest);
+            Relevant : constant String_Lists.Vector :=
+              Files_Of
+                (Request, "ada-manifest", Ada_Manifest, Relevant => True);
+         begin
+            if Live.Is_Empty then
+               --  alr show validates the project rooted by the runner; the
+               --  deleted name is evidence, not a path supplied to alr.
+               if not Relevant.Is_Empty then
+                  Run_Check
+                    ("ada-manifest", "alr", "alr show",
+                     Relevant.First_Element);
+               end if;
+            else
+               for Path of Live loop
+                  Run_Check ("ada-manifest", "alr", "alr show", Path);
+                  exit when not E.Is_Ok (Status);
+               end loop;
+            end if;
+         end;
       end if;
       if not E.Is_Ok (Status) then
          return;
@@ -975,7 +1026,8 @@ package body Model_Runner.Code_Health.Ada is
 
       if Requested ("ada-affected-tests")
         and then Request.Level /= Fast
-        and then not Files_Of (Request, "ada-affected-tests", Ada_Source).Is_Empty
+        and then not Files_Of
+          (Request, "ada-affected-tests", Ada_Source, Relevant => True).Is_Empty
       then
          if not Request.Affected_Tests.Is_Empty then
             for Index in Request.Affected_Tests.First_Index .. Request.Affected_Tests.Last_Index loop

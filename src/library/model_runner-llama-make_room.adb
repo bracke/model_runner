@@ -203,7 +203,7 @@ begin
                                 .. Vals_Base + (From + Moved) * V_Width - 1);
                         end if;
 
-                     when Eighth | Fourth =>
+                     when Eighth | Fourth | Float_Eighth =>
                         --  Whole rows move, so the bytes and the
                         --  scales move by a row's worth of each.
                         declare

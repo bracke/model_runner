@@ -3013,6 +3013,7 @@ begin
            "Say the text back" & String'(1 .. 2_030 => 'x')
            & Character'Val (16#C3#) & Character'Val (16#A9#);
          Oversized_Chunk : constant String (1 .. 1_024) := [others => 'x'];
+         Tool_Calls : Natural := 0;
 
          --  The text after Key up to Stop.
          function After (Message, Key : String; Stop : Character) return String is
@@ -3102,7 +3103,15 @@ begin
                        & "{""name"":""missing_schema""},"
                        & "{""name"":""same.name"",""inputSchema"":{""type"":""object""}},"
                        & "{""name"":""same_name"",""inputSchema"":{""type"":""object""}}]}}");
+                  if Mode = "block-writes" then
+                     --  Discovery has completed, but no call input will be
+                     --  consumed before the client's short regression
+                     --  deadline. Its request is larger than an anonymous
+                     --  pipe, so a blocking writer would hang here.
+                     delay 10.0;
+                  end if;
                elsif Called = "tools/call" then
+                  Tool_Calls := Tool_Calls + 1;
                   --  A request of its own first, its answer read before going on.
                   Say ("{""jsonrpc"":""2.0"",""id"":""p1"",""method"":""ping""}");
                   declare
@@ -3112,7 +3121,11 @@ begin
                         Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""error"":{""code"":-1,"
                              & """message"":""the ping was not answered""}}");
                      elsif Ada.Strings.Fixed.Index (Message, """name"":""echo""") > 0 then
-                        if Text_Argument (Message) = "long-result" then
+                        if Text_Argument (Message) = "call-count" then
+                           Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                                & ",""result"":{""content"":[{""type"":""text"",""text"":""calls:"
+                                & Model_Runner.Text.Trim (Natural'Image (Tool_Calls)) & """}]}}");
+                        elsif Text_Argument (Message) = "long-result" then
                            Say ("{""jsonrpc"":""2.0"",""id"":" & Id
                                 & ",""result"":{""content"":[{""type"":""text"",""text"":"
                                 & Model_Runner.Text.JSON_Quoted

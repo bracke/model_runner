@@ -191,6 +191,8 @@ package body Tests.CLI_Cases is
       Item.Values (Item.Used) := Ada.Strings.Unbounded.To_Unbounded_String (Value);
    end Add;
 
+   procedure Ran (Source : Opt.Arguments'Class; Status : out Natural);
+
    Max_Captured : constant := 65_536;
 
    --  A sink that accumulates what generation writes, and can be told to
@@ -481,6 +483,10 @@ package body Tests.CLI_Cases is
       Add (Source, "0");
       Add (Source, "--seed");
       Add (Source, "42");
+      Add (Source, "--expert-cache=4096");
+      Add (Source, "--shard=weights-a.gguf,weights-b.gguf");
+      Add (Source, "--ple");
+      Add (Source, "model-ple.gguf");
       Add (Source, "--stop");
       Add (Source, "END");
       Add (Source, "--color=never");
@@ -505,6 +511,14 @@ package body Tests.CLI_Cases is
       end;
       Assert (Item.Sampling.Temperature = 0.0, "temperature not captured");
       Assert (Item.Has_Seed and then Item.Seed = 42, "seed not captured");
+      Assert (Item.Expert_Cache_Set and then Item.Expert_Cache = 4096,
+              "expert-cache reserve not captured");
+      Assert
+        (Item.Auxiliary_Count = 3
+         and then T.To_String (Item.Auxiliary_Shards (1)) = "weights-a.gguf"
+         and then T.To_String (Item.Auxiliary_Shards (2)) = "weights-b.gguf"
+         and then T.To_String (Item.Auxiliary_Shards (3)) = "model-ple.gguf",
+         "--shard/--ple did not preserve their auxiliary path order");
       Assert (Item.Stop_Count = 1
               and then T.To_String (Item.Stop_Strings (1)) = "END",
               "stop string not captured");
@@ -513,6 +527,71 @@ package body Tests.CLI_Cases is
 
       Opt.Release (Item);
    end Run_Command_Parses;
+
+   --  The parsed auxiliary paths reach acquisition, remain alive beside the
+   --  backbone, and do not turn a normal generation load into a shard-set
+   --  validation error.
+   procedure Run_Loads_An_Explicit_Auxiliary_GGUF
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      Main : constant String := "obj/cli-auxiliary-main.gguf";
+      More : constant String := "obj/cli-auxiliary-more.gguf";
+
+      procedure Write_Image (Path : String; Image : B.Byte_Array) is
+         File : Ada.Streams.Stream_IO.File_Type;
+         Data : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+           with Import, Address => Image'Address;
+      begin
+         Ada.Streams.Stream_IO.Create
+           (File, Ada.Streams.Stream_IO.Out_File, Path);
+         Ada.Streams.Stream_IO.Write (File, Data);
+         Ada.Streams.Stream_IO.Close (File);
+      end Write_Image;
+
+      Image   : B.Byte_Array_Access;
+      Extra   : B.Byte_Array_Access;
+      Builder : Fixtures.Builder;
+      Source  : Fixed_Arguments;
+      Status  : Natural;
+   begin
+      Tiny_Model.Build (Image, Room => 64);
+      Write_Image (Main, Image.all);
+      B.Free (Image);
+
+      Fixtures.Reset (Builder);
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_Tensor
+        (Builder, "auxiliary.test.weight", [1],
+         Model_Runner.GGUF.Type_F32,
+         Fixtures.Encode_F32 ([1 => 7.0]));
+      Fixtures.Build (Builder, Extra);
+      Write_Image (More, Extra.all);
+      B.Free (Extra);
+
+      Add (Source, "run");
+      Add (Source, Main);
+      Add (Source, "--ple");
+      Add (Source, More);
+      Add (Source, "--raw");
+      Add (Source, "--prompt");
+      Add (Source, "a");
+      Add (Source, "--max-tokens");
+      Add (Source, "0");
+      Add (Source, "--backend");
+      Add (Source, "cpu");
+      Add (Source, "--no-cache");
+      Ran (Source, Status);
+      Assert
+        (Status = 0,
+         "a run with an explicit auxiliary GGUF ended with"
+         & Natural'Image (Status));
+
+      Ada.Directories.Delete_File (Main);
+      Ada.Directories.Delete_File (More);
+   end Run_Loads_An_Explicit_Auxiliary_GGUF;
 
    --  Every backend this build has can be named on the command line.
    --
@@ -5254,6 +5333,9 @@ package body Tests.CLI_Cases is
          Require ("--stop-token");
          Require ("--memory-limit");
          Require ("--device-memory");
+         Require ("--expert-cache");
+         Require ("--shard");
+         Require ("--ple");
          Require ("--device-patience");
          Require ("--mmap");
          Require ("--no-mmap");
@@ -5947,6 +6029,11 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Option_Combination,
               "run m.gguf --prompt hi --chat-template chatml --chat-template-file f");
       Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --lora-scale 0.5");
+      Expect (E.CLI_Invalid_Option_Value, "run m.gguf --prompt hi --shard ,bad.gguf");
+      Expect (E.CLI_Invalid_Option_Value, "run m.gguf --prompt hi --ple bad.gguf,");
+      Expect
+        (E.CLI_Option_Out_Of_Range,
+         "run m.gguf --prompt hi --shard a,b,c,d,e,f,g,h,i");
       Expect (E.CLI_Raw_Mode_Conflict, "run m.gguf --prompt hi --raw --think");
       Expect (E.CLI_Option_Combination, "embed m.gguf --prompt a --prompt b");
       Expect (E.No_Error, "embed m.gguf --prompt a --no-mmap");
@@ -6105,6 +6192,7 @@ package body Tests.CLI_Cases is
       --  for the keys and no other, and only in one of the two packed
       --  storages.
       Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q8 --kv-values q4");
+      Expect (E.No_Error, "run m.gguf --prompt a --kv-cache f8_e4m3");
 
       --  A reranker's query pairs with the prompt on embed, and is not an
       --  option run takes.
@@ -8638,6 +8726,11 @@ package body Tests.CLI_Cases is
               "--kv-cache fit set a storage before the run chose one");
       Assert (not Read ("--kv-cache", "q8").Cache_Fit,
               "--kv-cache q8 asked the run to choose");
+      Assert
+        (Model_Runner.Llama."="
+           (Read ("--kv-cache", "f8_e4m3").Cache,
+            Model_Runner.Llama.Float_Eighth),
+         "--kv-cache f8_e4m3 did not reach the OCP FP8 storage");
       Assert (Read ("--batch-size", "7").Batch_Size = 7,
               "--batch-size did not reach the batch size");
       Assert (Read ("--threads", "3").Threads = 3,
@@ -17072,6 +17165,12 @@ package body Tests.CLI_Cases is
          if Ada.Directories.Exists (Graceful) then
             Ada.Directories.Delete_File (Graceful);
          end if;
+         --  A prior interrupted focused run may have stopped before the
+         --  cleanup below.  The fixture must not inherit editing history
+         --  from that run.
+         if Ada.Directories.Exists (Edited) then
+            Ada.Directories.Delete_File (Edited);
+         end if;
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
          Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp");
          Ada.Text_IO.Close (File);
@@ -17267,6 +17366,7 @@ package body Tests.CLI_Cases is
       declare
          Own      : constant String := Ada.Directories.Full_Name ("obj/mcp-settings");
          Fair     : constant String := Ada.Directories.Full_Name ("obj/mcp-fair-settings");
+         Blocked  : constant String := Ada.Directories.Full_Name ("obj/mcp-blocked-settings");
          Plain    : constant String := "bin/tests";
          Server   : constant String :=
            Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
@@ -17359,6 +17459,54 @@ package body Tests.CLI_Cases is
                  and then Answer (1 .. Last) = "echo: hello" & ASCII.LF & "[image, image/png, not shown]",
                  "a server's answer was not the tool's: [" & Answer (1 .. Last) & "]");
          declare
+            use type Model_Runner.Tools.Runner.Answer_Kind;
+            use type Ada.Real_Time.Time;
+            use type Ada.Real_Time.Time_Span;
+            Outcome : Model_Runner.Tools.Runner.Call_Outcome;
+            Began   : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+         begin
+            Model_Runner.Tools.Runner.Set_Context
+              (Runner,
+               (Cancel      => null,
+                Deadline    => Began - Ada.Real_Time.Milliseconds (1),
+                Tokens_Left => Natural'Last,
+                Depth       => 0));
+            Runner.Run
+              ("mcp__fake__echo", "{""text"":""past-deadline""}",
+               Answer, Last, Outcome, Status);
+            Assert
+              (E.Is_Ok (Status)
+               and then Outcome.Answer = Model_Runner.Tools.Runner.Timed_Out
+               and then Ada.Real_Time.Clock - Began < Ada.Real_Time.Seconds (1),
+               "an MCP call ignored its owning tool deadline");
+            Model_Runner.Tools.Runner.Set_Context
+              (Runner, Model_Runner.Tools.Runner.No_Context);
+         end;
+         declare
+            use type Model_Runner.CLI.MCP.Call_End;
+            Flag  : aliased Model_Runner.Cancellation.Token;
+            Said  : Ada.Strings.Unbounded.Unbounded_String;
+            Ended : Model_Runner.CLI.MCP.Call_End;
+         begin
+            Flag.Request;
+            Model_Runner.CLI.MCP.Call
+              ("mcp__fake__echo", "{""text"":""cancelled-before-send""}",
+               Flag'Unchecked_Access, Said, Ended);
+            Assert
+              (Ended = Model_Runner.CLI.MCP.Cancelled
+               and then Ada.Strings.Unbounded.To_String (Said) = "cancelled",
+               "a standing cancellation did not refuse an MCP call");
+            Model_Runner.CLI.MCP.Call
+              ("mcp__fake__echo", "{""text"":""call-count""}", null, Said, Ended);
+            Assert
+              (Ended = Model_Runner.CLI.MCP.Answered
+               --  The earlier successful "hello" and this observation are
+               --  the only calls the server should have received.
+               and then Ada.Strings.Unbounded.Index (Said, "calls:2") > 0,
+               "a cancelled MCP call was sent to the server: "
+               & Ada.Strings.Unbounded.To_String (Said));
+         end;
+         declare
             Outcome : Model_Runner.Tools.Runner.Call_Outcome;
          begin
             Runner.Run ("mcp__fake__fail", "{}", Answer, Last, Outcome, Status);
@@ -17409,6 +17557,39 @@ package body Tests.CLI_Cases is
          Model_Runner.CLI.MCP.Stop_All;
          Assert (not Model_Runner.CLI.MCP.Owns ("mcp__fake__echo"), "a stopped server's tools were still owned");
 
+         --  A server that stops reading must not hold a large request in a
+         --  blocking pipe past the owning tool deadline.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Blocked);
+         Ada.Text_IO.Put_Line
+           (File, "mcp.blocked = " & Server & " fake-mcp block-writes");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Blocked);
+         Model_Runner.CLI.MCP.Start_All (Notes);
+         Assert
+           (Model_Runner.CLI.MCP.Owns ("mcp__blocked__echo"),
+            "the backpressure fixture's tool was not discovered: "
+            & Ada.Strings.Unbounded.To_String (Notes));
+         declare
+            use type Ada.Real_Time.Time;
+            use type Ada.Real_Time.Time_Span;
+            use type Model_Runner.CLI.MCP.Call_End;
+            Began : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            Said  : Ada.Strings.Unbounded.Unbounded_String;
+            Ended : Model_Runner.CLI.MCP.Call_End;
+         begin
+            Model_Runner.CLI.MCP.Call
+              ("mcp__blocked__echo",
+               "{""text"":""" & String'(1 .. 128 * 1_024 => 'x') & """}",
+               null, Said, Ended,
+               Began + Ada.Real_Time.Milliseconds (200));
+            Assert
+              (Ended = Model_Runner.CLI.MCP.Timed_Out
+               and then Ada.Real_Time.Clock - Began < Ada.Real_Time.Seconds (2),
+               "MCP input backpressure escaped the owning deadline: "
+               & Ada.Strings.Unbounded.To_String (Said));
+         end;
+         Model_Runner.CLI.MCP.Stop_All;
+
          --  Discovery is concurrent: an early slow server gets the same
          --  deadline as a later healthy one, and neither can starve the other.
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Fair);
@@ -17441,6 +17622,7 @@ package body Tests.CLI_Cases is
          Assert (not Model_Runner.CLI.MCP.Configured, "a server was named where no setting names one");
          Ada.Directories.Delete_File (Own);
          Ada.Directories.Delete_File (Fair);
+         Ada.Directories.Delete_File (Blocked);
       end;
    end Own_Commands_And_Hooks_Run;
 
@@ -19934,6 +20116,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, Run_Command_Parses'Access,
          "a well-formed run command parses into the values it named");
+      Register_Routine
+        (T, Run_Loads_An_Explicit_Auxiliary_GGUF'Access,
+         "a run loads an explicitly named auxiliary GGUF beside its model");
       Register_Routine
         (T, Usage_Errors_Reported'Access,
          "each malformed command line reports the code that names it");

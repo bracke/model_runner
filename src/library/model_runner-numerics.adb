@@ -4,6 +4,7 @@ with Ada.Unchecked_Conversion;
 package body Model_Runner.Numerics is
 
    use type Interfaces.Unsigned_16;
+   use type Interfaces.Unsigned_8;
    use type Interfaces.Unsigned_32;
    use type Interfaces.Unsigned_64;
 
@@ -88,9 +89,13 @@ package body Model_Runner.Numerics is
    -- Is_NaN --
    ------------
 
-   function Is_NaN (Item : Real) return Boolean
-   is ((To_Bits (Item) and Exponent_Mask) = Exponent_Mask
-       and then (To_Bits (Item) and Mantissa_Mask) /= 0);
+   function Is_NaN (Item : Real) return Boolean is
+      pragma Suppress (Validity_Check);
+      Raw : constant Interfaces.Unsigned_32 := To_Bits (Item);
+   begin
+      return (Raw and Exponent_Mask) = Exponent_Mask
+        and then (Raw and Mantissa_Mask) /= 0;
+   end Is_NaN;
 
    -------------
    -- To_Real --
@@ -152,6 +157,7 @@ package body Model_Runner.Numerics is
    -------------
 
    function To_Half (Item : Real) return Half is
+      pragma Suppress (Validity_Check);
       Raw      : constant Interfaces.Unsigned_32 := To_Bits (Item);
       Sign     : constant Interfaces.Unsigned_16 :=
         Interfaces.Unsigned_16 (Interfaces.Shift_Right (Raw, 16) and 16#8000#);
@@ -239,6 +245,113 @@ package body Model_Runner.Numerics is
          end if;
       end;
    end To_Half;
+
+   ------------------
+   -- E4M3 To_Real --
+   ------------------
+
+   function To_Real (Item : E4M3) return Real is
+      pragma Suppress (Validity_Check);
+      Raw      : constant Interfaces.Unsigned_8 := Interfaces.Unsigned_8 (Item);
+      Negative : constant Boolean := (Raw and 16#80#) /= 0;
+      Exponent : constant Interfaces.Unsigned_8 :=
+        Interfaces.Shift_Right (Raw and 16#78#, 3);
+      Fraction : constant Interfaces.Unsigned_8 := Raw and 7;
+      Bits      : Interfaces.Unsigned_32;
+   begin
+      if Exponent = 0 then
+         if Fraction = 0 then
+            Bits := (if Negative then 16#8000_0000# else 0);
+         else
+            declare
+               Value : constant Real := Real (Fraction) / 512.0;
+            begin
+               Bits := Model_Runner.Numerics.Bits (Value);
+               if Negative then
+                  Bits := Bits or 16#8000_0000#;
+               end if;
+            end;
+         end if;
+      elsif Exponent = 15 and then Fraction = 7 then
+         Bits := 16#7FC0_0000#
+           or (if Negative then 16#8000_0000# else 0);
+      else
+         Bits :=
+           (if Negative then 16#8000_0000# else 0)
+           or Interfaces.Shift_Left
+                (Interfaces.Unsigned_32 (Exponent) + 120, 23)
+           or Interfaces.Shift_Left
+                (Interfaces.Unsigned_32 (Fraction), 20);
+      end if;
+      return From_Bits (Bits);
+   end To_Real;
+
+   -------------
+   -- To_E4M3 --
+   -------------
+
+   function To_E4M3 (Item : Real) return E4M3 is
+      pragma Suppress (Validity_Check);
+      Raw      : constant Interfaces.Unsigned_32 := To_Bits (Item);
+      Sign     : constant Interfaces.Unsigned_8 :=
+        (if (Raw and 16#8000_0000#) /= 0 then 16#80# else 0);
+      Exponent : constant Integer :=
+        Integer (Interfaces.Shift_Right (Raw, 23) and 16#FF#);
+      Mantissa : constant Interfaces.Unsigned_32 := Raw and Mantissa_Mask;
+
+      function Nearest_Even (Value : Real) return Integer is
+         Below : constant Real := Real'Floor (Value);
+         Whole : constant Integer := Integer (Below);
+         Part  : constant Real := Value - Below;
+      begin
+         if Part > 0.5 or else (Part = 0.5 and then Whole mod 2 /= 0) then
+            return Whole + 1;
+         else
+            return Whole;
+         end if;
+      end Nearest_Even;
+   begin
+      if Exponent = 16#FF# then
+         return E4M3 (Sign or (if Mantissa = 0 then 16#7E# else 16#7F#));
+      elsif Exponent = 0 and then Mantissa = 0 then
+         return E4M3 (Sign);
+      end if;
+
+      declare
+         Magnitude : constant Real :=
+           From_Bits (Raw and 16#7FFF_FFFF#);
+         Power     : constant Integer := Exponent - 127;
+         Quantized : Integer;
+         Encoded   : Interfaces.Unsigned_8;
+      begin
+         if Power < -6 then
+            Quantized := Nearest_Even (Magnitude * 512.0);
+            Encoded := Interfaces.Unsigned_8
+              (Integer'Min (8, Integer'Max (0, Quantized)));
+         elsif Power > 8 then
+            Encoded := 16#7E#;
+         else
+            Quantized := Nearest_Even
+              (Magnitude / (2.0 ** (Power - 3)));
+            if Quantized = 16 then
+               Quantized := 8;
+               if Power = 8 then
+                  Encoded := 16#7E#;
+               else
+                  Encoded := Interfaces.Unsigned_8
+                    ((Power + 8) * 8 + Quantized - 8);
+               end if;
+            elsif Power = 8 then
+               Encoded := Interfaces.Unsigned_8
+                 (Integer'Min (16#7E#, 15 * 8 + Quantized - 8));
+            else
+               Encoded := Interfaces.Unsigned_8
+                 ((Power + 7) * 8 + Quantized - 8);
+            end if;
+         end if;
+         return E4M3 (Sign or Encoded);
+      end;
+   end To_E4M3;
 
    ---------
    -- Exp --

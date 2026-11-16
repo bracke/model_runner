@@ -35,6 +35,69 @@ begin
            [others => False];
          Next_P : Positive := 1;
          Arg    : Natural := 0;
+
+         procedure Bind_Positional (Value : Held) is
+         begin
+            if Next_P <= M.Count then
+               Given (Next_P) := Value;
+               Set (Next_P) := True;
+            end if;
+            Next_P := Next_P + 1;
+         end Bind_Positional;
+
+         procedure Bind_Keyword (Key : String; Value : Held) is
+         begin
+            for P in 1 .. M.Count loop
+               declare
+                  Named : Variable_Name renames Item.Names (M.Slots (P));
+               begin
+                  if Item.Source.all
+                       (Named.Offset + 1 .. Named.Offset + Named.Length) = Key
+                  then
+                     Given (P) := Value;
+                     Set (P) := True;
+                  end if;
+               end;
+            end loop;
+         end Bind_Keyword;
+
+         procedure Expand_Positionals (Value : Held) is
+            Src    : constant String := Structure_Of (Value);
+            Cursor : Natural := Src'First + 1;
+            Piece  : Span;
+            Found  : Boolean;
+         begin
+            if not Is_JSON_List (Src) then
+               Refuse (M.Name.Offset, M.Name.Length,
+                       E.Template_Unsupported_Construct);
+               return;
+            end if;
+            loop
+               Next_Element (Src, Cursor, Piece, Found);
+               exit when not Found;
+               Bind_Positional (Read_Out (Src (Piece.First .. Piece.Last)));
+            end loop;
+         end Expand_Positionals;
+
+         procedure Expand_Keywords (Value : Held) is
+            Src    : constant String := Structure_Of (Value);
+            Cursor : Natural := Src'First + 1;
+            Key, Piece : Span;
+            Found  : Boolean;
+         begin
+            if not Is_JSON_Mapping (Src) then
+               Refuse (M.Name.Offset, M.Name.Length,
+                       E.Template_Unsupported_Construct);
+               return;
+            end if;
+            loop
+               Next_Member (Src, Cursor, Key, Piece, Found);
+               exit when not Found;
+               Bind_Keyword
+                 (Decoded (Src (Key.First .. Key.Last)),
+                  Read_Out (Src (Piece.First .. Piece.Last)));
+            end loop;
+         end Expand_Keywords;
       begin
          while Arg < Value.Length loop
             declare
@@ -42,40 +105,35 @@ begin
                  Item.Operands.all (Value.Index_At + Arg);
             begin
                if Given_Op.Count = 1
-                 and then Given_Op.Terms (1).Kind = Term_Keyword
+                 and then Given_Op.Terms (1).Kind in
+                   Term_Keyword | Term_Positional_Unpack | Term_Keyword_Unpack
                then
-                  declare
-                     Key : constant String :=
-                       Item.Source.all
-                         (Given_Op.Terms (1).Offset + 1
-                          .. Given_Op.Terms (1).Offset
-                             + Given_Op.Terms (1).Length);
-                  begin
-                     for P in 1 .. M.Count loop
-                        declare
-                           Named : Variable_Name renames
-                             Item.Names (M.Slots (P));
-                        begin
-                           if Item.Source.all
-                                (Named.Offset + 1
-                                 .. Named.Offset + Named.Length) = Key
-                             and then Arg + 1 < Value.Length
-                           then
-                              Given (P) := Held_Of
-                                (Item.Operands.all
-                                   (Value.Index_At + Arg + 1));
-                              Set (P) := True;
-                           end if;
-                        end;
-                     end loop;
-                  end;
+                  if Arg + 1 < Value.Length then
+                     declare
+                        Actual : constant Held :=
+                          Held_Of
+                            (Item.Operands.all (Value.Index_At + Arg + 1));
+                     begin
+                        case Given_Op.Terms (1).Kind is
+                           when Term_Keyword =>
+                              Bind_Keyword
+                                (Item.Source.all
+                                   (Given_Op.Terms (1).Offset + 1
+                                    .. Given_Op.Terms (1).Offset
+                                       + Given_Op.Terms (1).Length),
+                                 Actual);
+                           when Term_Positional_Unpack =>
+                              Expand_Positionals (Actual);
+                           when Term_Keyword_Unpack =>
+                              Expand_Keywords (Actual);
+                           when others =>
+                              null;
+                        end case;
+                     end;
+                  end if;
                   Arg := Arg + 2;
                else
-                  if Next_P <= M.Count then
-                     Given (Next_P) := Held_Of (Given_Op);
-                     Set (Next_P) := True;
-                  end if;
-                  Next_P := Next_P + 1;
+                  Bind_Positional (Held_Of (Given_Op));
                   Arg := Arg + 1;
                end if;
             end;

@@ -53,7 +53,9 @@ with Model_Runner.Tools;
 --    {% macro name(p, q='x') %} ... {% endmacro %}   and {{ name(a, b) }}
 --                            to call it: the body run where it is called,
 --                            its parameters bound by the call and given
---                            back after, so a macro may call itself
+--                            back after, so a macro may call itself. A call
+--                            may expand a list with *values and a mapping
+--                            with **values among its other arguments
 --
 --  Whitespace around a block. A tag is written on a line of its own to be
 --  read, and the line it stands on is the template's own shape rather than
@@ -125,7 +127,8 @@ with Model_Runner.Tools;
 --  'is none', 'is true', 'is false' or 'is string', or asking whether text
 --  occurs in text with "'x' in name" or whether a message carries a field
 --  with "'field' in message". Any of them may be negated with 'is not', and
---  'in' with 'not in'.
+--  'in' with 'not in'. Adjacent comparisons form one chain: a < b <= c is
+--  true only when both a < b and b <= c are true.
 --
 --  A bare operand is a condition too, and is true when it holds something
 --  other than nothing: the empty string, none and a name never assigned are
@@ -564,6 +567,11 @@ private
       --  name=value among a macro call's arguments: Offset and Length
       --  hold the name, and the operand kept after this one the value.
       Term_Keyword,
+
+      --  *sequence and **mapping among a macro call's arguments. Each is a
+      --  marker operand followed by the operand whose values are expanded.
+      Term_Positional_Unpack,
+      Term_Keyword_Unpack,
 
       --  A list written out: Index_At the first of its elements among the
       --  kept operands and Length how many. Its value is a JSON array made

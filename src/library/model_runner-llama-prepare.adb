@@ -18,7 +18,8 @@ procedure Prepare
    Context  : Natural := 0;
    Cache    : Cache_Precision := Exact;
    Paged    : Boolean := True;
-   Beside   : Interfaces.Unsigned_64 := 0)
+   Beside   : Interfaces.Unsigned_64 := 0;
+   Expert_Cache : Interfaces.Unsigned_64 := 0)
 is
    Ignored : E.Error_Info;
 
@@ -326,6 +327,7 @@ is
       Room : constant Interfaces.Unsigned_64 :=
         Interfaces.Unsigned_64'Min (Context_Room, Budget_Room (Budget));
       Base : Interfaces.Unsigned_64;
+      Limit : Interfaces.Unsigned_64;
    begin
       if Held_Bytes > 0 or else Item.Layers = null
         or else Feed = 0 or else Feed >= Total
@@ -333,9 +335,19 @@ is
          return;
       end if;
       Base := Total - Feed;
+
+      --  An adaptive cache owns only room explicitly withheld here.  The
+      --  rest of Room includes context and execution margins whose apparent
+      --  absence from the matrix keeper is not permission to consume them.
+      Item.Expert_Cache_Room :=
+        (if Room > Base
+         then Interfaces.Unsigned_64'Min (Expert_Cache, Room - Base)
+         else 0);
+      Limit := Room - Item.Expert_Cache_Room;
+
       for L of Item.Layers.all loop
          if L.Experts /= null and then Layer_Feed (L) > 0 then
-            exit when Base + Layer_Feed (L) > Room;
+            exit when Base + Layer_Feed (L) > Limit;
             L.Mixture_Held := True;
             Base := Base + Layer_Feed (L);
             Held_Bytes := Held_Bytes + Layer_Feed (L);
@@ -357,6 +369,7 @@ is
 begin
    Close (Item, Ignored);
    Status := E.Success;
+   Item.Expert_Cache_Room := 0;
 
    if not Containers.Is_Valid (Source) then
       Fail (E.Make (E.Lifecycle_Model_Not_Ready));

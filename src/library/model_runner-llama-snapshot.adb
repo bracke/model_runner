@@ -390,7 +390,7 @@ begin
             for Index in 0 .. Element_Count (Run_Of (Layer_Index) * KV_Width)
                                - 1
             loop
-               if Item.Held in Eighth | Fourth then
+               if Item.Held in Eighth | Fourth | Float_Eighth then
                   --  Written as the numbers it stands for rather than as
                   --  its bytes and scales: a saved context is read back by
                   --  a session that may hold a different precision, and
@@ -438,7 +438,7 @@ begin
                --  unpacked as the keys were: the byte cache's values
                --  went through the halved arm here, which holds nothing
                --  for it, and a byte session could not snapshot at all.
-               if Item.Held in Eighth | Fourth then
+               if Item.Held in Eighth | Fourth | Float_Eighth then
                   Put_Bits
                     (N.Bits
                        (Unpack

@@ -1,8 +1,12 @@
 with Ada.Directories;
 with Ada.Exceptions;
+with Ada.Streams;
+with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
 
+with CryptoLib.Hashes;
 with Hostkit.Fs;
+with Hostkit.Metadata;
 
 with Model_Runner.Framework.Permissions;
 with Model_Runner.Framework.Records;
@@ -42,6 +46,106 @@ package body Model_Runner.Code_Health.Changes is
       or else (Path'Length > Root'Length
                and then Path (Path'First .. Path'First + Root'Length - 1) = Root
                and then Path (Path'First + Root'Length) in '/' | '\'));
+
+   --  Binary and oversized files still take part in a snapshot.  Hash a
+   --  bounded sample: all of a small binary, or equal pieces from the start
+   --  and end of an oversized file.  Size and a reliable host change identity
+   --  cover its unsampled middle.  Without that identity, capture fails closed
+   --  instead of making work proportional to an arbitrary artifact's size.
+   function Raw_Revision
+     (Path     : String;
+      Reliable : out Boolean) return String
+   is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      use Ada.Streams;
+      use type Stream_IO.Count;
+      Raw_Most : constant Stream_IO.Count :=
+        Stream_IO.Count (Model_Runner.Tools.Editing.Text_Most);
+      Context : CryptoLib.Hashes.SHA256_Context;
+      File    : Stream_IO.File_Type;
+      Buffer  : Stream_Element_Array (1 .. 64 * 1_024);
+      Digest  : CryptoLib.Hashes.SHA256_Digest;
+      Hex     : constant String := "0123456789abcdef";
+      Result  : String (1 .. 64);
+
+      procedure Hash_Range
+        (First  : Stream_IO.Positive_Count;
+         Amount : Stream_IO.Count)
+      is
+         Remaining : Stream_IO.Count := Amount;
+         Last      : Stream_Element_Offset;
+      begin
+         if Remaining = 0 then
+            return;
+         end if;
+         Stream_IO.Set_Index (File, First);
+         while Remaining > 0 loop
+            declare
+               Want : constant Stream_Element_Offset :=
+                 Stream_Element_Offset'Min
+                   (Buffer'Length, Stream_Element_Offset (Remaining));
+            begin
+               Stream_IO.Read
+                 (File, Buffer (Buffer'First .. Buffer'First + Want - 1), Last);
+            end;
+            exit when Last < Buffer'First;
+            CryptoLib.Hashes.Update (Context, Buffer (Buffer'First .. Last));
+            Remaining := Remaining - Stream_IO.Count (Last - Buffer'First + 1);
+         end loop;
+      end Hash_Range;
+   begin
+      Reliable := False;
+      CryptoLib.Hashes.Initialize_SHA256 (Context);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=yes");
+      declare
+         Size : constant Stream_IO.Count := Stream_IO.Size (File);
+         Fine : Boolean;
+         Stamp : constant String := Hostkit.Metadata.Change_Stamp (Path, Fine);
+      begin
+         if Size > Raw_Most and then not Fine then
+            Stream_IO.Close (File);
+            Reliable := False;
+            return "metadata unavailable for oversized file";
+         elsif Size <= Raw_Most then
+            Hash_Range (1, Size);
+         else
+            Hash_Range (1, Raw_Most / 2);
+            Hash_Range
+              (Stream_IO.Positive_Count (Size - Raw_Most / 2 + 1),
+               Raw_Most / 2);
+         end if;
+         Stream_IO.Close (File);
+         Digest := CryptoLib.Hashes.Finalize (Context);
+         for Index in Digest'Range loop
+            Result (2 * Index - 1) := Hex (Natural (Digest (Index)) / 16 + 1);
+            Result (2 * Index) := Hex (Natural (Digest (Index)) mod 16 + 1);
+         end loop;
+         Reliable := True;
+         return Result & "|size:" & Stream_IO.Count'Image (Size)
+           & "|metadata:" & Stamp;
+      end;
+   exception
+      when others =>
+         if Stream_IO.Is_Open (File) then
+            begin
+               Stream_IO.Close (File);
+            exception
+               when others =>
+                  null;
+            end;
+         end if;
+         declare
+            Fine : Boolean;
+            Stamp : constant String := Hostkit.Metadata.Change_Stamp (Path, Fine);
+         begin
+            Reliable := Fine;
+            return "metadata:" & Stamp;
+         exception
+            when others =>
+               Reliable := False;
+               return "unreadable";
+         end;
+   end Raw_Revision;
 
    procedure Set_Id (Item : in out Change_Set) is
       Meaning : R.Item := R.Create ("code_health.change_set", 1, "CHANGE", 1);
@@ -218,12 +322,15 @@ package body Model_Runner.Code_Health.Changes is
       package File_Sorting is new File_State_Lists.Generic_Sorting (File_Less);
 
       procedure Add_File (Full, Relative : String) is
+         Linked : constant Boolean := Hostkit.Fs.Is_Link (Full);
          Actual : constant String :=
-           (if Hostkit.Fs.Is_Link (Full) then Hostkit.Fs.Real_Path (Full) else Full);
+           (if Linked then Hostkit.Fs.Real_Path (Full) else Full);
          Actual_Relative : constant String :=
            Model_Runner.Framework.Repository.Relative_Path (Root_Path, Actual);
          Text : Unbounded_String;
          Read : E.Error_Info;
+         Raw  : Unbounded_String;
+         Reliable : Boolean := True;
       begin
          if Actual = "" or else not Is_Within (Actual, Root_Path) then
             Status := E.Make (E.Framework_Permission_Denied);
@@ -238,16 +345,65 @@ package body Model_Runner.Code_Health.Changes is
                & (if Read.Code = E.IO_File_Too_Large then "file is too large"
                   elsif Read.Code = E.IO_Read_Failed then "binary or unreadable file"
                   else "file could not be read"));
-            return;
+            Raw := To_Unbounded_String (Raw_Revision (Actual, Reliable));
+            if not Reliable then
+               Status := E.Make (E.IO_Read_Failed);
+               E.Add_Text (Status, "path", Relative, E.Param_Path);
+               E.Add_Text
+                 (Status, "detail",
+                  "the file could neither be read nor identified by reliable metadata");
+               return;
+            end if;
          end if;
-         Result.Files.Append
-           (File_State'(Path => To_Unbounded_String (Normal (Actual_Relative)),
-             Hash => To_Unbounded_String (Model_Runner.Tools.Editing.Revision (To_String (Text)))));
+         declare
+            Identity : R.Item := R.Create ("code_health.file", 1, "FILE", 1);
+            Metadata : constant Hostkit.Metadata.Entry_Revision :=
+              Hostkit.Metadata.Entry_Revision_Of (Actual);
+         begin
+            R.Set
+              (Identity, "content",
+               (if E.Is_Ok (Read)
+                then Model_Runner.Tools.Editing.Revision (To_String (Text))
+                else To_String (Raw)));
+            R.Set
+              (Identity, "link_target",
+               (if Linked then Normal (Actual_Relative) else ""));
+            R.Set
+              (Identity, "mode",
+               (if Metadata.Available
+                then Hostkit.Metadata.Identity_Field'Image (Metadata.Mode)
+                else "unavailable"));
+            Result.Files.Append
+              (File_State'
+                 (Path => To_Unbounded_String (Normal (Relative)),
+                  Hash => To_Unbounded_String (R.Fingerprint_Of (Identity))));
+         end;
       exception
          when Failure : others =>
             Result.Skipped.Append
               (Normal (Relative) & ": " & Ada.Exceptions.Exception_Name (Failure));
+            Status := E.Make (E.IO_Read_Failed);
+            E.Add_Text (Status, "path", Relative, E.Param_Path);
+            E.Add_Text
+              (Status, "detail",
+               "the file could not be represented in an authoritative snapshot");
       end Add_File;
+
+      procedure Add_Directory_Link
+        (Relative : String;
+         Actual   : String)
+      is
+         Identity : R.Item := R.Create ("code_health.file", 1, "FILE", 1);
+      begin
+         R.Set (Identity, "content", "directory-link");
+         R.Set
+           (Identity, "link_target",
+            Normal (Model_Runner.Framework.Repository.Relative_Path (Root_Path, Actual)));
+         Result.Files.Append
+           (File_State'
+              (Path => To_Unbounded_String (Normal (Relative)),
+               Hash => To_Unbounded_String (R.Fingerprint_Of (Identity))));
+      end Add_Directory_Link;
 
       procedure Walk (Directory, Prefix : String) is
          Search : Dirs.Search_Type;
@@ -285,6 +441,7 @@ package body Model_Runner.Code_Health.Changes is
                            return;
                         elsif Hostkit.Fs.Kind_Of (Actual) = Hostkit.Fs.Directory_Entry then
                            Result.Skipped.Append (Normal (Relative) & ": directory symbolic link not followed");
+                           Add_Directory_Link (Relative, Actual);
                         else
                            Add_File (Full, Relative);
                         end if;
@@ -326,20 +483,6 @@ package body Model_Runner.Code_Health.Changes is
       end if;
 
       File_Sorting.Sort (Result.Files);
-
-      --  Internal links can name the same resolved file.  Keep it once.
-      declare
-         Deduplicated : File_State_Lists.Vector;
-      begin
-         for File of Result.Files loop
-            if Deduplicated.Is_Empty
-              or else To_String (Deduplicated.Last_Element.Path) /= To_String (File.Path)
-            then
-               Deduplicated.Append (File);
-            end if;
-         end loop;
-         Result.Files := Deduplicated;
-      end;
 
       declare
          Meaning : R.Item := R.Create ("code_health.snapshot", 1, "SNAPSHOT", 1);

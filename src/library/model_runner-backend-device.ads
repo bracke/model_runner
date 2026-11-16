@@ -2658,6 +2658,24 @@ package Model_Runner.Backend.Device is
       Status : out Model_Runner.Errors.Error_Info;
       Ahead  : Boolean := False);
 
+   --  Whether all three matrices of one expert are already resident under
+   --  their individual slice identities.  This is deliberately distinct
+   --  from a resident stack: a split mixture keeps only selected experts.
+   function Expert_Held
+     (Gate : Model_Runner.Tensors.View;
+      Up   : Model_Runner.Tensors.View;
+      Down : Model_Runner.Tensors.View) return Boolean;
+
+   --  Opportunistically retain one expert without evicting any matrix.
+   --  Admission is all or nothing: if free device budget cannot hold every
+   --  missing arm, any arm admitted by this call is given back.  Existing
+   --  arms are left alone.
+   procedure Hold_Expert
+     (Gate : Model_Runner.Tensors.View;
+      Up   : Model_Runner.Tensors.View;
+      Down : Model_Runner.Tensors.View;
+      Held : out Boolean);
+
    --  Hold a mixture's gate and up stacks, as Hold holds one: where the
    --  two lie as one region the gated gather reads, the region, which is
    --  what every step reading either then names; otherwise each.
