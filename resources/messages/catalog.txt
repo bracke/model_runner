@@ -386,8 +386,9 @@ en.cli.interactive.help.paste = /paste         show the model the picture on the
 en.cli.interactive.help.mcp = /mcp           the MCP servers the settings file names, and how many tools each gives
 en.cli.interactive.mcp_none = no MCP server is named: `mcp.NAME = COMMAND` in the settings file names one
 en.cli.interactive.mcp_list = MCP servers:\n{detail}
-en.cli.interactive.mcp_failed = an MCP server is not used -- {detail}
+en.cli.interactive.mcp_failed = some MCP tools are not used -- {detail}
 en.cli.interactive.paste_none = the clipboard holds no picture (wl-paste or xclip reads it)
+en.cli.interactive.session_files_failed = the session's passing-file folder could not be made
 en.cli.interactive.undone = put back as they were: {detail}
 en.cli.interactive.nothing_to_undo = no turn of the model's changed a file there is to put back; what a shell command changed is not kept
 en.cli.interactive.nothing_to_compact = the conversation is too short to make a summary of
@@ -2101,8 +2102,9 @@ da.cli.interactive.help.paste = /paste         vis modellen billedet på udklips
 da.cli.interactive.help.mcp = /mcp           MCP-serverne indstillingsfilen nævner, og hvor mange værktøjer hver giver
 da.cli.interactive.mcp_none = ingen MCP-server er nævnt: `mcp.NAVN = KOMMANDO` i indstillingsfilen nævner en
 da.cli.interactive.mcp_list = MCP-servere:\n{detail}
-da.cli.interactive.mcp_failed = en MCP-server bruges ikke -- {detail}
+da.cli.interactive.mcp_failed = nogle MCP-værktøjer bruges ikke -- {detail}
 da.cli.interactive.paste_none = udklipsholderen har intet billede (wl-paste eller xclip læser det)
+da.cli.interactive.session_files_failed = mappen til sessionens midlertidige filer kunne ikke oprettes
 da.cli.interactive.undone = lagt tilbage som de var: {detail}
 da.cli.interactive.nothing_to_undo = ingen af modellens ture ændrede en fil der kan lægges tilbage; hvad en skalkommando ændrede gemmes ikke
 da.cli.interactive.nothing_to_compact = samtalen er for kort til at lave et resumé af
@@ -3517,8 +3519,9 @@ qps.cli.interactive.help.paste = ⟦/paste         ßhóẃ ŧhé ḿóðéĺ ŧ
 qps.cli.interactive.help.mcp = ⟦/mcp           ŧhé ḾÇṔ ßéŕvéŕß ŧhé ßéŧŧíñgß fíĺé ñáḿéß, áñð hóẃ ḿáñý ŧóóĺß éáçh gívéß⟧
 qps.cli.interactive.mcp_none = ⟦ñó ḾÇṔ ßéŕvéŕ íß ñáḿéð: `mcp.NAME = COMMAND` íñ ŧhé ßéŧŧíñgß fíĺé ñáḿéß óñé⟧
 qps.cli.interactive.mcp_list = ⟦ḾÇṔ ßéŕvéŕß:\n{detail}⟧
-qps.cli.interactive.mcp_failed = ⟦áñ ḾÇṔ ßéŕvéŕ íß ñóŧ úßéð -- {detail}⟧
+qps.cli.interactive.mcp_failed = ⟦ßóḿé ḾÇṔ ŧóóĺß áŕé ñóŧ úßéð -- {detail}⟧
 qps.cli.interactive.paste_none = ⟦ŧhé çĺíṕbóáŕð hóĺðß ñó ṕíçŧúŕé (wl-paste óŕ xclip ŕéáðß íŧ)⟧
+qps.cli.interactive.session_files_failed = ⟦ŧhé ßéßßíóñ'ß ṕáßßíñg-ƒíĺé ƒóĺðéŕ çóúĺð ñóŧ bé ḿáðé⟧
 qps.cli.interactive.undone = ⟦ṕúŧ báçκ áß ŧhéý ẃéŕé: {detail}⟧
 qps.cli.interactive.nothing_to_undo = ⟦ñó ŧúŕñ óƒ ŧhé ḿóðéĺ'ß çháñgéð á ƒíĺé ŧhéŕé íß ŧó ṕúŧ báçκ; ẃháŧ á ßhéĺĺ çóḿḿáñð çháñgéð íß ñóŧ κéṕŧ⟧
 qps.cli.interactive.nothing_to_compact = ⟦ŧhé çóñvéŕßáŧíóñ íß ŧóó ßhóŕŧ ŧó ḿáκé á ßúḿḿáŕý óƒ⟧

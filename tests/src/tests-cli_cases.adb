@@ -2,6 +2,7 @@ with Model_Runner.Processes;
 with Model_Runner.Tools.Runner;
 with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.MCP;
+with Model_Runner.CLI.Conversations;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
@@ -20,8 +21,11 @@ with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
 
 with Hostkit.Descriptors;
+with Hostkit.Host;
 with Hostkit.Locks;
 with Hostkit.Pty;
+with Hostkit.Process;
+with Hostkit.Shell;
 with Hostkit.Spawn;
 with Hostkit;
 with Interfaces;
@@ -2856,6 +2860,11 @@ package body Tests.CLI_Cases is
                  "a shipped template left a kind of task with nothing to verify it");
          Assert (Ada.Strings.Fixed.Index (Resolved, "scalar.profile_capability.analysis") > 0,
                  "a shipped Ada template gave the harness no static analysis to run");
+         Assert
+           (Ada.Strings.Fixed.Index (Resolved, "scalar.code_health.enabled") > 0
+            and then Ada.Strings.Fixed.Index (Resolved, "profile.code_health.full") > 0
+            and then Ada.Strings.Fixed.Index (Resolved, "code_health") > 0,
+            "a generated Ada project did not enable its native Code Health completion gate");
       end;
 
       Assert (Init ("ada-cli", "project_name=demo") = 2,
@@ -16015,6 +16024,7 @@ package body Tests.CLI_Cases is
    is
       pragma Unreferenced (T);
       use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Host.Kind;
       use type Hostkit.Spawn.Spawn_Outcome;
       use type Ada.Streams.Stream_Element_Offset;
       package U renames Ada.Strings.Unbounded;
@@ -16036,11 +16046,17 @@ package body Tests.CLI_Cases is
       Drawn   : U.Unbounded_String;
       Words   : Hostkit.String_Vectors.Vector;
       Catalog : Model_Runner.Localization.Catalog;
+      Reused_Session : U.Unbounded_String;
+      Old_Picture    : U.Unbounded_String;
 
       procedure Keep_Variable (Name, Value : String) is
       begin
          if Name /= "TERM" then
-            Options.Environment.Append (U.To_Unbounded_String (Name & "=" & Value));
+            Options.Environment.Append
+              (U.To_Unbounded_String
+                 (Name & "="
+                  & (if Name = "PATH" and then Hostkit.Host.Current /= Hostkit.Host.Windows
+                     then Project & "/bin:" & Value else Value)));
          end if;
       end Keep_Variable;
 
@@ -16083,6 +16099,19 @@ package body Tests.CLI_Cases is
          Ada.Directories.Delete_Tree (Project);
       end if;
       Ada.Directories.Create_Path (Project);
+      if Hostkit.Host.Current /= Hostkit.Host.Windows then
+         Ada.Directories.Create_Path (Project & "/bin");
+         declare
+            Fake_Clipboard : Ada.Text_IO.File_Type;
+            Path           : constant String := Project & "/bin/wl-paste";
+         begin
+            Ada.Text_IO.Create (Fake_Clipboard, Ada.Text_IO.Out_File, Path);
+            Ada.Text_IO.Put_Line (Fake_Clipboard, "#!/bin/sh");
+            Ada.Text_IO.Put_Line (Fake_Clipboard, "printf picture");
+            Ada.Text_IO.Close (Fake_Clipboard);
+            GNAT.OS_Lib.Set_Executable (Path);
+         end;
+      end if;
       Ada.Environment_Variables.Iterate (Keep_Variable'Access);
       Options.Environment.Append (U.To_Unbounded_String ("TERM=xterm"));
       Options.Replace_Environment := True;
@@ -16095,14 +16124,45 @@ package body Tests.CLI_Cases is
       Words.Append (U.To_Unbounded_String ("cpu"));
       Words.Append (U.To_Unbounded_String ("--max-tokens"));
       Words.Append (U.To_Unbounded_String ("1"));
+      if Hostkit.Host.Current /= Hostkit.Host.Windows then
+         --  /paste only needs the projector to be named until a pictured
+         --  message is submitted; this case checks its passing-file names.
+         Words.Append (U.To_Unbounded_String ("--mmproj"));
+         Words.Append (U.To_Unbounded_String (Project & "/unused-mmproj.gguf"));
+      end if;
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the session did not start");
+      Reused_Session := U.To_Unbounded_String
+        (Ada.Directories.Containing_Directory (Model_Runner.Platform.Cache_Directory)
+         & "/session/"
+         & Model_Runner.Text.Trim (Integer'Image (Hostkit.Spawn.Process_Id (Child))));
+      Old_Picture := U.To_Unbounded_String
+        (U.To_String (Reused_Session) & "/pasted-1.png");
+      if Ada.Directories.Exists (U.To_String (Reused_Session)) then
+         Ada.Directories.Delete_Tree (U.To_String (Reused_Session));
+      end if;
+      Ada.Directories.Create_Path (U.To_String (Reused_Session));
+      declare
+         Old : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Old, Ada.Text_IO.Out_File, U.To_String (Old_Picture));
+         Ada.Text_IO.Put (Old, "picture from an earlier process");
+         Ada.Text_IO.Close (Old);
+      end;
       Hostkit.Pty.Close_Device (Pair);
       Take (5000);
       Send ("hi" & ASCII.CR);
       Take (5000);
+      if Hostkit.Host.Current /= Hostkit.Host.Windows then
+         Send ("/paste" & ASCII.CR);
+         Take (3000);
+      end if;
       Send ("/model " & Second_Model & ASCII.CR);
       Take (8000);
+      if Hostkit.Host.Current /= Hostkit.Host.Windows then
+         Send ("/paste" & ASCII.CR);
+         Take (3000);
+      end if;
       Send ("/model " & Project & "/no-such-model.gguf" & ASCII.CR);
       Take (8000);
       Send ("/save " & Saved & ASCII.CR);
@@ -16121,8 +16181,26 @@ package body Tests.CLI_Cases is
          Assert (Ada.Strings.Fixed.Index
                    (Whole, Said ("cli.interactive.model_switch_failed", "switch-second.gguf")) > 0,
                  "a model that would not load did not give the conversation back: " & Whole);
+         if Hostkit.Host.Current /= Hostkit.Host.Windows then
+            Assert (Ada.Strings.Fixed.Index (Whole, "/pasted-1.png") > 0
+                    and then Ada.Strings.Fixed.Index (Whole, "/pasted-2.png") > 0,
+                    "a model switch reused the first pasted picture's file: " & Whole);
+         end if;
       end;
       Model_Runner.Localization.Close (Catalog);
+
+      declare
+         Old : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open (Old, Ada.Text_IO.In_File, U.To_String (Old_Picture));
+         declare
+            Kept : constant String := Ada.Text_IO.Get_Line (Old);
+         begin
+            Ada.Text_IO.Close (Old);
+            Assert (Kept = "picture from an earlier process",
+                    "a reused process id overwrote an earlier conversation's picture");
+         end;
+      end;
 
       --  What was said before the switches is in the conversation after
       --  them: carried twice, once to the second model and once back.
@@ -16148,6 +16226,7 @@ package body Tests.CLI_Cases is
    is
       pragma Unreferenced (T);
       use type Hostkit.Descriptors.Descriptor;
+      use type Hostkit.Host.Kind;
       use type Hostkit.Spawn.Spawn_Outcome;
       use type Ada.Streams.Stream_Element_Offset;
       package U renames Ada.Strings.Unbounded;
@@ -16166,6 +16245,18 @@ package body Tests.CLI_Cases is
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
       Drawn   : U.Unbounded_String;
+      Long_Job_File : U.Unbounded_String;
+      Detached_PID_File : constant String := Ada.Directories.Full_Name ("obj/background-descendant.pid");
+      Detached_Script   : constant String := Ada.Directories.Full_Name ("obj/background-descendant.ps1");
+      Input_Command : constant String :=
+        (if Hostkit.Host.Current = Hostkit.Host.Windows
+         then "set /p stolen= & echo background-input-closed"
+         else "read stolen; echo background-input-closed");
+      Short_Command : constant String :=
+        (if Hostkit.Host.Current = Hostkit.Host.Windows
+         then "ping -n 2 127.0.0.1 >nul & echo background-marker-7"
+         else "sleep 1; echo background-marker-7");
+      Long_Marker : U.Unbounded_String;
       Words   : Hostkit.String_Vectors.Vector;
       Catalog : Model_Runner.Localization.Catalog;
 
@@ -16199,6 +16290,83 @@ package body Tests.CLI_Cases is
                    (Hostkit.Descriptors.Write (Pair.To_Child, Keys, Last), Hostkit.Descriptors.Transfer_Ok),
                  "a key was not sent");
       end Send;
+
+      --  Find this child's passing file by what it contains. The session
+      --  directory is an atomic reservation and may be PID, PID-2, and so on
+      --  when an earlier process with the same id left assets to preserve.
+      function Find_Long_Job_File return String is
+         Root : constant String :=
+           Ada.Directories.Containing_Directory (Model_Runner.Platform.Cache_Directory)
+           & "/session";
+         Pid : constant String :=
+           Model_Runner.Text.Trim (Integer'Image (Hostkit.Spawn.Process_Id (Child)));
+         Search  : Ada.Directories.Search_Type;
+         Found   : Ada.Directories.Directory_Entry_Type;
+         Result  : U.Unbounded_String;
+         Started : Boolean := False;
+
+         function First_Line (Path : String) return String is
+            File : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Open (File, Ada.Text_IO.In_File, Path, Form => "shared=yes");
+            declare
+               Line : constant String :=
+                 (if Ada.Text_IO.End_Of_File (File) then "" else Ada.Text_IO.Get_Line (File));
+            begin
+               Ada.Text_IO.Close (File);
+               return Line;
+            end;
+         exception
+            when others =>
+               if Ada.Text_IO.Is_Open (File) then
+                  Ada.Text_IO.Close (File);
+               end if;
+               return "";
+         end First_Line;
+      begin
+         if not Ada.Directories.Exists (Root) then
+            return "";
+         end if;
+         Ada.Directories.Start_Search
+           (Search, Root, Pid & "*",
+            [Ada.Directories.Directory => True, others => False]);
+         Started := True;
+         while Ada.Directories.More_Entries (Search)
+           and then U.Length (Result) = 0
+         loop
+            Ada.Directories.Get_Next_Entry (Search, Found);
+            declare
+               Name : constant String := Ada.Directories.Simple_Name (Found);
+               Path : constant String := Ada.Directories.Full_Name (Found) & "/job-4.txt";
+               Is_This_Pid : constant Boolean :=
+                 Name = Pid
+                 or else
+                   (Name'Length > Pid'Length
+                    and then Name (Name'First .. Name'First + Pid'Length) = Pid & "-");
+            begin
+               if Is_This_Pid
+                 and then Ada.Directories.Exists (Path)
+                 and then Ada.Strings.Fixed.Trim
+                   (First_Line (Path), Ada.Strings.Both) = U.To_String (Long_Marker)
+               then
+                  Result := U.To_Unbounded_String (Path);
+               end if;
+            end;
+         end loop;
+         Ada.Directories.End_Search (Search);
+         return U.To_String (Result);
+      exception
+         when others =>
+            if Started then
+               begin
+                  Ada.Directories.End_Search (Search);
+               exception
+                  when others =>
+                     null;
+               end;
+            end if;
+            return "";
+      end Find_Long_Job_File;
 
    begin
       if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair)
@@ -16235,10 +16403,16 @@ package body Tests.CLI_Cases is
       Take (3000);
       Send ("!exit 3" & ASCII.CR);
       Take (3000);
+      --  A background command has null input: it sees EOF instead of
+      --  competing with the line editor for the next keys typed.
+      Send ("!&" & Input_Command & ASCII.CR);
+      Take (3000);
+      Assert (U.Index (Drawn, "job 1 ended with status 0") > 0,
+              "a background command waited on the prompt's input: " & U.To_String (Drawn));
       --  And one in the background: ended by the time /jobs is asked, and
       --  what it wrote with the next message as well.
       --  It ends while the prompt waits, and is said then, nothing typed.
-      Send ("!&sleep 1; echo background-marker-7" & ASCII.CR);
+      Send ("!&" & Short_Command & ASCII.CR);
       Take (3000);
       Assert (U.Index (Drawn, "job 1 ended with status 0") > 0,
               "a job's end was not said while the prompt waited: " & U.To_String (Drawn));
@@ -16248,10 +16422,81 @@ package body Tests.CLI_Cases is
       Take (5000);
       Send ("/save " & Saved & ASCII.CR);
       Take (3000);
+      --  The shell may finish before a command it put in its background.
+      --  Its process group must still be ended before the shell's handle is
+      --  released and its group id forgotten. Kept after the content was
+      --  saved so this extra command does not consume the tiny model's room.
+      if Ada.Directories.Exists (Detached_PID_File) then
+         Ada.Directories.Delete_File (Detached_PID_File);
+      end if;
+      if Hostkit.Host.Current = Hostkit.Host.Windows then
+         declare
+            Script : Ada.Text_IO.File_Type;
+         begin
+            Ada.Text_IO.Create (Script, Ada.Text_IO.Out_File, Detached_Script);
+            Ada.Text_IO.Put_Line
+              (Script,
+               "$child = Start-Process -PassThru powershell -ArgumentList "
+               & "'-NoProfile','-Command','Start-Sleep -Seconds 30'");
+            Ada.Text_IO.Put_Line
+              (Script,
+               "Set-Content -NoNewline -Path '" & Detached_PID_File & "' -Value $child.Id");
+            Ada.Text_IO.Close (Script);
+         end;
+         Send ("!&powershell -NoProfile -File " & Hostkit.Shell.Quote (Detached_Script) & ASCII.CR);
+      else
+         Send ("!&sleep 30 & echo $! > " & Hostkit.Shell.Quote (Detached_PID_File) & ASCII.CR);
+      end if;
+      Take (3000);
+      declare
+         Pid_File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Open (Pid_File, Ada.Text_IO.In_File, Detached_PID_File);
+         declare
+            Pid : constant Integer := Integer'Value (Ada.Text_IO.Get_Line (Pid_File));
+         begin
+            Ada.Text_IO.Close (Pid_File);
+            Assert (Hostkit.Process."=" (Hostkit.Process.Presence_Of (Pid), Hostkit.Process.Absent),
+                    "a command outlived its finished background shell");
+         end;
+         Ada.Directories.Delete_File (Detached_PID_File);
+      end;
+      if Ada.Directories.Exists (Detached_Script) then
+         Ada.Directories.Delete_File (Detached_Script);
+      end if;
+      --  A job still running when the conversation leaves is stopped and
+      --  its passing file removed, rather than abandoned for a later /model
+      --  session to reuse as job 1.
+      declare
+         Now : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         Marker : constant String :=
+           "long-background-"
+           & Model_Runner.Text.Trim (Integer'Image (Hostkit.Host.Own_Process_Id)) & "-"
+           & Model_Runner.Text.Trim (Integer'Image (Hostkit.Spawn.Process_Id (Child))) & "-"
+           & Model_Runner.Text.Trim (Integer'Image (Ada.Calendar.Year (Now))) & "-"
+           & Model_Runner.Text.Trim (Integer'Image (Ada.Calendar.Month (Now))) & "-"
+           & Model_Runner.Text.Trim (Integer'Image (Ada.Calendar.Day (Now))) & "-"
+           & Model_Runner.Text.Trim
+             (Ada.Calendar.Day_Duration'Image (Ada.Calendar.Seconds (Now)));
+         Command : constant String :=
+           (if Hostkit.Host.Current = Hostkit.Host.Windows
+            then "echo " & Marker & " & ping -n 31 127.0.0.1 >nul"
+            else "echo " & Marker & "; trap '' TERM; sleep 30");
+      begin
+         Long_Marker := U.To_Unbounded_String (Marker);
+         Send ("!&" & Command & ASCII.CR);
+      end;
+      Take (1000);
+      Long_Job_File := U.To_Unbounded_String (Find_Long_Job_File);
+      Assert (U.Length (Long_Job_File) > 0
+              and then Ada.Directories.Exists (U.To_String (Long_Job_File)),
+              "the long background job did not start");
       Send ("/exit" & ASCII.CR);
       Take (3000);
       Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
       Hostkit.Pty.Close (Pair);
+      Assert (not Ada.Directories.Exists (U.To_String (Long_Job_File)),
+              "a background job's output was left behind after the conversation ended");
 
       Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
       declare
@@ -16417,6 +16662,42 @@ package body Tests.CLI_Cases is
       end if;
       Ada.Directories.Create_Path (Project);
       Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+
+      --  A second conversation begun in the same clock second, even on the
+      --  same model, has a file of its own.
+      declare
+         Had : constant Boolean := Ada.Environment_Variables.Exists ("MODEL_RUNNER_CONVERSATIONS");
+         Was : constant String :=
+           (if Had then Ada.Environment_Variables.Value ("MODEL_RUNNER_CONVERSATIONS") else "");
+
+         procedure Restore is
+         begin
+            if Had then
+               Ada.Environment_Variables.Set ("MODEL_RUNNER_CONVERSATIONS", Was);
+            else
+               Ada.Environment_Variables.Clear ("MODEL_RUNNER_CONVERSATIONS");
+            end if;
+         end Restore;
+      begin
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONVERSATIONS", Kept);
+         declare
+            First_Path  : constant String := Model_Runner.CLI.Conversations.New_Path (Model);
+            Second_Path : constant String := Model_Runner.CLI.Conversations.New_Path (Model);
+         begin
+            Assert (First_Path /= Second_Path,
+                    "two conversations begun together were given one file: " & First_Path);
+            Assert (not Ada.Directories.Exists (First_Path)
+                    and then not Ada.Directories.Exists (Second_Path),
+                    "an empty reservation was exposed as a conversation");
+            Model_Runner.CLI.Conversations.Release_Reservation (First_Path);
+            Model_Runner.CLI.Conversations.Release_Reservation (Second_Path);
+         end;
+         Restore;
+      exception
+         when others =>
+            Restore;
+            raise;
+      end;
 
       First_Words.Append (U.To_Unbounded_String (Model));
       First_Words.Append (U.To_Unbounded_String ("--backend"));
@@ -16698,6 +16979,7 @@ package body Tests.CLI_Cases is
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
       pragma Unreferenced (T);
+      use type Hostkit.Host.Kind;
       package Cc renames Model_Runner.CLI.Custom_Commands;
       Settings : constant String := Model_Runner.Platform.Config_File;
       Folder   : constant String := Ada.Directories.Containing_Directory (Settings) & "/commands";
@@ -16766,7 +17048,19 @@ package body Tests.CLI_Cases is
       --  program's stand-in, which sees an error on a line holding ERROR.
       declare
          Own      : constant String := Ada.Directories.Full_Name ("obj/lsp-settings");
+         Oversized : constant String := Ada.Directories.Full_Name ("obj/lsp-oversized-settings");
+         Rejected : constant String := Ada.Directories.Full_Name ("obj/lsp-rejected-settings");
+         Stale    : constant String := Ada.Directories.Full_Name ("obj/lsp-stale-settings");
+         Stale_Unversioned : constant String :=
+           Ada.Directories.Full_Name ("obj/lsp-stale-unversioned-settings");
+         Header_Variation : constant String :=
+           Ada.Directories.Full_Name ("obj/lsp-header-variation-settings");
+         Windows_URI : constant String :=
+           Ada.Directories.Full_Name ("obj/lsp-windows-uri-settings");
+         Posix_URI : constant String :=
+           Ada.Directories.Full_Name ("obj/lsp-posix-uri-settings");
          Edited   : constant String := Ada.Directories.Full_Name ("obj/served.txt");
+         Graceful : constant String := Ada.Directories.Full_Name ("obj/lsp-graceful");
          Plain    : constant String := "bin/tests";
          Server   : constant String :=
            Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
@@ -16775,6 +17069,9 @@ package body Tests.CLI_Cases is
          Last     : Natural;
          Status   : E.Error_Info;
       begin
+         if Ada.Directories.Exists (Graceful) then
+            Ada.Directories.Delete_File (Graceful);
+         end if;
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
          Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp");
          Ada.Text_IO.Close (File);
@@ -16794,10 +17091,172 @@ package body Tests.CLI_Cases is
          Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "line 2: error: ERROR is not allowed") > 0,
                  "the server's problem was not put after the answer: " & Answer (1 .. Last));
          Model_Runner.CLI.Language_Server.Stop;
+         Assert (Ada.Directories.Exists (Graceful),
+                 "the language server did not receive exit after answering shutdown");
+
+         --  Header names follow HTTP semantics: case-insensitive and found as
+         --  fields, not as a substring of an unrelated extension header.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Header_Variation);
+         Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp header-variation");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Header_Variation);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 1.0);
+         begin
+            Assert (Ada.Strings.Fixed.Index (Said, "line 2: error: ERROR is not allowed") > 0,
+                    "a valid LSP header variation was refused: " & Said);
+         end;
+         Model_Runner.CLI.Language_Server.Stop;
+
+         --  Drive paths are URI paths, not authorities, and use forward
+         --  slashes even when the native path uses Windows separators.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Windows_URI);
+         Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp windows-uri");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Windows_URI);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In ("C:\work\a.adb", Wait => 1.0);
+         begin
+            Assert (Said = "(none)", "a Windows path was not sent as a file URI: " & Said);
+         end;
+         Model_Runner.CLI.Language_Server.Stop;
+
+         --  A backslash in a POSIX path is a filename byte, not a separator.
+         --  It is percent-encoded even though drive and UNC separators are
+         --  normalized for Windows file URIs.
+         if Hostkit.Host.Current /= Hostkit.Host.Windows then
+            Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Posix_URI);
+            Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp posix-backslash-uri");
+            Ada.Text_IO.Close (File);
+            Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Posix_URI);
+            declare
+               Said : constant String :=
+                 Model_Runner.CLI.Language_Server.Problems_In ("/tmp/a\b.adb", Wait => 1.0);
+            begin
+               Assert (Said = "(none)", "a POSIX backslash was changed into a separator: " & Said);
+            end;
+            declare
+               Said : constant String :=
+                 Model_Runner.CLI.Language_Server.Problems_In ("//tmp/a\b.adb", Wait => 1.0);
+            begin
+               Assert (Said = "(none)", "a POSIX double-slash path was treated as UNC: " & Said);
+            end;
+            declare
+               Said : constant String :=
+                 Model_Runner.CLI.Language_Server.Problems_In ("\\tmp\a.adb", Wait => 1.0);
+            begin
+               Assert
+                 (Said = "(none)",
+                  "a POSIX path beginning in backslashes was treated as UNC: " & Said);
+            end;
+            Model_Runner.CLI.Language_Server.Stop;
+         end if;
+
+         --  A diagnostic which arrives after one wait expired belongs to that
+         --  document version, not to the change sent by the next call.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Stale);
+         Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp stale-version");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Stale);
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Edited);
+         Ada.Text_IO.Put_Line (File, "old ERROR");
+         Ada.Text_IO.Close (File);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 0.05);
+         begin
+            Assert (Said = "", "a deliberately delayed diagnostic arrived in time: " & Said);
+         end;
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Edited);
+         Ada.Text_IO.Put_Line (File, "now fine");
+         Ada.Text_IO.Close (File);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 1.0);
+         begin
+            Assert (Said = "(none)", "a stale diagnostic was used for the newer file: " & Said);
+         end;
+         Model_Runner.CLI.Language_Server.Stop;
+
+         --  The version field is optional. Keep a versionless diagnostic only
+         --  long enough for a newer publication caused by this edit to replace
+         --  a delayed publication for the preceding contents.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Stale_Unversioned);
+         Ada.Text_IO.Put_Line
+           (File, "lsp = " & Server & " fake-lsp stale-versionless");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Stale_Unversioned);
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Edited);
+         Ada.Text_IO.Put_Line (File, "old ERROR");
+         Ada.Text_IO.Close (File);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 0.05);
+         begin
+            Assert (Said = "", "a delayed unversioned diagnostic arrived in time: " & Said);
+         end;
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Edited);
+         Ada.Text_IO.Put_Line (File, "now fine");
+         Ada.Text_IO.Close (File);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 1.0);
+         begin
+            Assert
+              (Said = "(none)",
+               "an unversioned stale diagnostic was used for the newer file: " & Said);
+         end;
+         Model_Runner.CLI.Language_Server.Stop;
+
+         --  Framing from the server is bounded independently of the wait: an
+         --  oversized Content-Length is rejected from the header instead of
+         --  retaining input until initialize's thirty-second deadline.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Oversized);
+         Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp oversized-message");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Oversized);
+         declare
+            use type Ada.Calendar.Time;
+            Started_At : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+            Said       : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 1.0);
+            Elapsed    : constant Duration := Ada.Calendar.Clock - Started_At;
+         begin
+            Assert (Said = "", "an oversized LSP message was accepted: " & Said);
+            Assert (Elapsed < 5.0,
+                    "an oversized LSP message was held until the initialize deadline");
+         end;
+         Model_Runner.CLI.Language_Server.Stop;
+
+         --  A response with the initialize request's id but an error is a
+         --  rejection, not a successfully initialized language server.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Rejected);
+         Ada.Text_IO.Put_Line (File, "lsp = " & Server & " fake-lsp initialize-error");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Rejected);
+         declare
+            Said : constant String :=
+              Model_Runner.CLI.Language_Server.Problems_In (Edited, Wait => 1.0);
+         begin
+            Assert (Said = "", "a rejected language server was used: " & Said);
+         end;
+         Model_Runner.CLI.Language_Server.Stop;
          Restore_Settings;
          Assert (not Model_Runner.CLI.Language_Server.Configured, "a server was named where no setting names one");
          Ada.Directories.Delete_File (Edited);
+         Ada.Directories.Delete_File (Graceful);
          Ada.Directories.Delete_File (Own);
+         Ada.Directories.Delete_File (Oversized);
+         Ada.Directories.Delete_File (Rejected);
+         Ada.Directories.Delete_File (Stale);
+         Ada.Directories.Delete_File (Stale_Unversioned);
+         Ada.Directories.Delete_File (Header_Variation);
+         Ada.Directories.Delete_File (Windows_URI);
+         if Ada.Directories.Exists (Posix_URI) then
+            Ada.Directories.Delete_File (Posix_URI);
+         end if;
       end;
 
       --  MCP servers: each named one started and its tools, over pages,
@@ -16807,6 +17266,7 @@ package body Tests.CLI_Cases is
       --  and every one let go of after.
       declare
          Own      : constant String := Ada.Directories.Full_Name ("obj/mcp-settings");
+         Fair     : constant String := Ada.Directories.Full_Name ("obj/mcp-fair-settings");
          Plain    : constant String := "bin/tests";
          Server   : constant String :=
            Ada.Directories.Full_Name (if Ada.Directories.Exists (Plain) then Plain else Plain & ".exe");
@@ -16818,34 +17278,81 @@ package body Tests.CLI_Cases is
       begin
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
          Ada.Text_IO.Put_Line (File, "mcp.fake = " & Server & " fake-mcp");
+         Ada.Text_IO.Put_Line (File, "mcp.repeat = " & Server & " fake-mcp repeat-cursor");
+         Ada.Text_IO.Put_Line (File, "mcp.many = " & Server & " fake-mcp many-tools");
+         Ada.Text_IO.Put_Line (File, "mcp.huge = " & Server & " fake-mcp oversized-message");
+         Ada.Text_IO.Put_Line (File, "mcp.rejected = " & Server & " fake-mcp initialize-error");
+         Ada.Text_IO.Put_Line (File, "mcp.capless = " & Server & " fake-mcp no-tools");
          Ada.Text_IO.Put_Line (File, "mcp.broken = exit 1");
+         for Index in 1 .. 10 loop
+            Ada.Text_IO.Put_Line
+              (File, "mcp.extra" & Model_Runner.Text.Trim (Integer'Image (Index)) & " = exit 1");
+         end loop;
          Ada.Text_IO.Close (File);
          Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
          Assert (Model_Runner.CLI.MCP.Configured, "named servers were not seen");
          Model_Runner.CLI.MCP.Start_All (Notes);
          Assert (Ada.Strings.Unbounded.Index (Notes, "broken: ") > 0
-                 and then Ada.Strings.Unbounded.Index (Notes, "fake") = 0,
+                 and then Ada.Strings.Unbounded.Index (Notes, "repeat: it repeated a tools/list cursor") > 0
+                 and then Ada.Strings.Unbounded.Index (Notes, "many: 20 tools were") > 0
+                 and then Ada.Strings.Unbounded.Index
+                   (Notes, "huge: it wrote a message larger than 1 MiB") > 0
+                 and then Ada.Strings.Unbounded.Index
+                   (Notes, "rejected: it refused initialize") > 0
+                 and then Ada.Strings.Unbounded.Index
+                   (Notes, "capless: it offers no tools capability") > 0
+                 and then Ada.Strings.Unbounded.Index
+                   (Notes, "fake: 2 tools were invalid, too large, or past the limit and omitted") > 0
+                 and then Ada.Strings.Unbounded.Index
+                   (Notes, "1 configured server was omitted after the limit of 16") > 0,
                  "the servers' failures were not said as they are: " & Ada.Strings.Unbounded.To_String (Notes));
          declare
             Offered : constant String := Model_Runner.CLI.MCP.Definitions;
          begin
             Assert (Ada.Strings.Fixed.Index (Offered, """mcp__fake__echo""") > 0
                     and then Ada.Strings.Fixed.Index (Offered, """mcp__fake__fail""") > 0
+                    and then Ada.Strings.Fixed.Index (Offered, """mcp__fake__same_name""") > 0
+                    and then Ada.Strings.Fixed.Index (Offered, """mcp__fake__same_name__2""") > 0
                     and then Ada.Strings.Fixed.Index (Offered, "Say the text back") > 0
-                    and then Ada.Strings.Fixed.Index (Offered, """required"":[""text""]") > 0,
+                    and then Ada.Strings.Fixed.Index (Offered, """required"": [""text""]") > 0,
                     "a server's tools, both pages, were not offered as it said them: " & Offered);
             declare
                Read  : E.Error_Info;
                Tools : Model_Runner.Tools.Definitions;
             begin
                Model_Runner.Tools.Read (Tools, "[" & Offered & "]", Read);
-               Assert (E.Is_Ok (Read) and then Model_Runner.Tools.Count (Tools) = 2,
+               Assert (E.Is_Ok (Read)
+                       and then Model_Runner.Tools.Count (Tools) = Model_Runner.Tools.Max_Definitions,
                        "the servers' tools were not read as tool definitions");
                Model_Runner.Tools.Close (Tools);
             end;
+            declare
+               Selected : Ada.Strings.Unbounded.Unbounded_String;
+               Count, Bytes, Omitted : Natural;
+               Read  : E.Error_Info;
+               Tools : Model_Runner.Tools.Definitions;
+            begin
+               Model_Runner.CLI.MCP.Bounded_Definitions
+                 (Max_Count => 2, Max_Bytes => Model_Runner.Tools.Max_Definition_Bytes,
+                  Result => Selected, Count => Count, Bytes => Bytes, Omitted => Omitted);
+               Model_Runner.Tools.Read
+                 (Tools, "[" & Ada.Strings.Unbounded.To_String (Selected) & "]", Read);
+               Assert (Count = 2 and then Bytes > 0
+                       and then Omitted = Model_Runner.Tools.Max_Definitions - 2
+                       and then E.Is_Ok (Read) and then Model_Runner.Tools.Count (Tools) = 2,
+                       "MCP tools were not kept within the conversation's definition bounds");
+               Model_Runner.Tools.Close (Tools);
+            end;
          end;
-         Assert (Ada.Strings.Fixed.Index (Model_Runner.CLI.MCP.Listing, "fake: running, 2 tools") > 0,
+         Assert (Ada.Strings.Fixed.Index (Model_Runner.CLI.MCP.Listing, "fake: running, 4 tools") > 0,
                  "/mcp's listing was: " & Model_Runner.CLI.MCP.Listing);
+         Assert (Ada.Strings.Fixed.Index (Model_Runner.CLI.MCP.Listing, "many: running, 60 tools") > 0
+                 and then Ada.Strings.Fixed.Index
+                   (Model_Runner.CLI.MCP.Listing, "repeat: not running -- it repeated a tools/list cursor") > 0
+                 and then Ada.Strings.Fixed.Index
+                   (Model_Runner.CLI.MCP.Listing, "1 configured server omitted -- limit 16") > 0,
+                 "bounded or repeated MCP inventories were not reported: "
+                 & Model_Runner.CLI.MCP.Listing);
          Model_Runner.Tools.Runner.Run
            (Runner, "mcp__fake__echo", "{""text"": ""hello""}", Answer, Last, Status);
          Assert (E.Is_Ok (Status)
@@ -16859,11 +17366,81 @@ package body Tests.CLI_Cases is
                     and then Answer (1 .. Last) = "it failed on purpose",
                     "a server's error was not a failed call: " & Answer (1 .. Last));
          end;
+         declare
+            use type Model_Runner.CLI.MCP.Call_End;
+            Said  : Ada.Strings.Unbounded.Unbounded_String;
+            Ended : Model_Runner.CLI.MCP.Call_End;
+         begin
+            Model_Runner.CLI.MCP.Call
+              ("mcp__fake__echo", "{""text"":""long-result""}", null, Said, Ended);
+            Assert (Ended = Model_Runner.CLI.MCP.Answered
+                    and then Model_Runner.UTF8.Is_Valid (Ada.Strings.Unbounded.To_String (Said))
+                    and then Ada.Strings.Unbounded.Index (Said, "[2 more bytes left out]") > 0,
+                    "an MCP answer was cut within a UTF-8 character");
+         end;
+         declare
+            use type Model_Runner.CLI.MCP.Call_End;
+            Said  : Ada.Strings.Unbounded.Unbounded_String;
+            Ended : Model_Runner.CLI.MCP.Call_End;
+         begin
+            Model_Runner.CLI.MCP.Call
+              ("mcp__fake__echo", "{""text"":""structured-only""}", null, Said, Ended);
+            Assert (Ended = Model_Runner.CLI.MCP.Answered
+                    and then Ada.Strings.Unbounded.Index (Said, """answer""") > 0
+                    and then Ada.Strings.Unbounded.Index (Said, "42") > 0,
+                    "structured MCP content behind an empty content list was lost: "
+                    & Ada.Strings.Unbounded.To_String (Said));
+         end;
+         declare
+            use type Model_Runner.CLI.MCP.Call_End;
+            Said  : Ada.Strings.Unbounded.Unbounded_String;
+            Ended : Model_Runner.CLI.MCP.Call_End;
+         begin
+            Model_Runner.CLI.MCP.Call
+              ("mcp__fake__echo", "{""text"":""structured-mixed""}", null, Said, Ended);
+            Assert
+              (Ended = Model_Runner.CLI.MCP.Answered
+               and then Ada.Strings.Unbounded.Index (Said, "created") > 0
+               and then Ada.Strings.Unbounded.Index (Said, """id""") > 0
+               and then Ada.Strings.Unbounded.Index (Said, "17") > 0,
+               "structured MCP content beside text was lost: "
+               & Ada.Strings.Unbounded.To_String (Said));
+         end;
          Model_Runner.CLI.MCP.Stop_All;
          Assert (not Model_Runner.CLI.MCP.Owns ("mcp__fake__echo"), "a stopped server's tools were still owned");
+
+         --  Discovery is concurrent: an early slow server gets the same
+         --  deadline as a later healthy one, and neither can starve the other.
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Fair);
+         Ada.Text_IO.Put_Line
+           (File, "mcp.a_slow = " & Server & " fake-mcp slow-initialize");
+         for Index in 1 .. 14 loop
+            Ada.Text_IO.Put_Line
+              (File, "mcp.m" & Model_Runner.Text.Trim (Integer'Image (Index)) & " = exit 1");
+         end loop;
+         Ada.Text_IO.Put_Line
+           (File, "mcp.z_healthy = " & Server & " fake-mcp");
+         Ada.Text_IO.Close (File);
+         Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Fair);
+         declare
+            use type Ada.Calendar.Time;
+            Started_At : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+         begin
+            Model_Runner.CLI.MCP.Start_All (Notes);
+            Assert
+              (Model_Runner.CLI.MCP.Owns ("mcp__a_slow__echo")
+               and then Model_Runner.CLI.MCP.Owns ("mcp__z_healthy__echo"),
+               "concurrent MCP discovery lost a slow or later healthy server: "
+               & Ada.Strings.Unbounded.To_String (Notes));
+            Assert
+              (Ada.Calendar.Clock - Started_At < 30.0,
+               "concurrent MCP discovery exceeded the global deadline");
+         end;
+         Model_Runner.CLI.MCP.Stop_All;
          Restore_Settings;
          Assert (not Model_Runner.CLI.MCP.Configured, "a server was named where no setting names one");
          Ada.Directories.Delete_File (Own);
+         Ada.Directories.Delete_File (Fair);
       end;
    end Own_Commands_And_Hooks_Run;
 

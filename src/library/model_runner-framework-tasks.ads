@@ -470,7 +470,8 @@ package Model_Runner.Framework.Tasks is
    --  The gates a task of a kind must pass to complete: the configuration's
    --  set task.gates.KIND, else set task.gates, else verification,
    --  children, no_blocking_issue and integration. Beside those four a
-   --  project may name implementation_present (its work changed a file),
+   --  project may name code_health (current full native assessment evidence),
+   --  implementation_present (its work changed a file),
    --  traceability_sufficient (each requirement it serves reaches what
    --  implements or tests it), documentation_current (source changed goes
    --  with documentation changed), and any NAME for which scalar gate.NAME

@@ -350,7 +350,8 @@ package Model_Runner.Framework.Verification is
 
    --  A task's completion gates: the configuration's set task.gates, by
    --  default verification, children, no_blocking_issue and integration --
-   --  no workspace of its work left untaken.
+   --  no workspace of its work left untaken. A configured code_health gate
+   --  requires current full assessment evidence for this task generation.
    --
    --  @param Item The store.
    --  @param Task_Id The task.

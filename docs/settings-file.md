@@ -84,6 +84,45 @@ hook.after-edit = gnatpp $FILE
 hook.after-turn = alr build
 ```
 
+## Code Health
+
+Native Code Health can check files changed by an agent in an ordinary
+conversation. It is disabled by default; generated spec-driven Ada projects
+carry their own authoritative project policy instead.
+
+| key | default | meaning |
+|-----|---------|---------|
+| `code-health.enabled` | `false` | enable native Code Health for the conversation |
+| `code-health.on-edit` | `true` | return an immediate assessment after filesystem changes |
+| `code-health.fast-profile` | `ada-fast` | profile named on immediate assessments |
+| `code-health.focused-profile` | `ada-focused` | focused profile name |
+| `code-health.focused-test` | empty | reliable root-directory test command for focused checks |
+| `code-health.max-stagnant` | `3` | repair assessments without material progress |
+| `code-health.max-assessments` | `12` | total assessments in one remediation sequence |
+| `code-health.feedback-limit` | `8192` | most model-facing feedback, in bytes |
+| `code-health.fast-deadline` | `10` | fast assessment deadline, in seconds |
+| `code-health.focused-deadline` | `120` | focused assessment deadline, in seconds |
+
+The limits are validated before the conversation starts. An unknown
+`code-health.*` key, malformed value, zero deadline, or stagnant limit greater
+than the assessment limit is an error rather than a silent change in
+enforcement. A mandatory check that cannot run is reported as unavailable and
+does not pass completion.
+
+Setting `code-health.on-edit = false` suppresses immediate post-edit checks;
+it does not disable the completion gate. The final-answer boundary reconciles
+the actual tree against the task baseline and runs the focused assessment.
+
+Enabling interactive Code Health authorizes its built-in Ada profiles to run
+`gnatmake`, `gprbuild`, `alr` and `gnatprove` directly, without a shell, under
+the configured deadlines. A nonempty `focused-test` must likewise be a direct
+command using one of those programs. Project-task execution instead remains
+bounded by the project's `execution.*` policy.
+
+See [Code Health](code-health.md) for project configuration, evidence and
+security semantics. The hook settings above remain independent and their
+output is not trusted Code Health evidence.
+
 ## Rules for the tools
 
 Two keys decide, for a conversation, which tool calls run without asking:

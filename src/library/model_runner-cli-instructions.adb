@@ -83,7 +83,7 @@ package body Model_Runner.CLI.Instructions is
    end Read_Whole;
 
    function Enabled return Boolean
-   is (Model_Runner.Platform.Environment_Value ("MODEL_RUNNER_INSTRUCTIONS") /= "off");
+   is (Model_Runner.Platform.Standing_Instructions_Enabled);
 
    function Gathered (Directory : String) return String is
       Paths  : Path_List;

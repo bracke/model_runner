@@ -33,15 +33,22 @@ package Model_Runner.Code_Health.Feedback is
       New_Warnings  : Natural := 0;
       Existing      : Natural := 0;
       Resolved      : Natural := 0;
+      Unknown       : Natural := 0;
       Findings      : Diagnostics.Diagnostic_List;
       Completion    : Gate_Decision := Allow_Completion;
       Next_Action   : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
+   --  @param Item Assessment to render.
+   --  @param Limits Validated output bounds.
+   --  @return Structured code-health/1 JSON.
    function Render_JSON
      (Item   : Assessment;
       Limits : Render_Limits := Default_Limits) return String;
 
+   --  @param Item Assessment to render.
+   --  @param Limits Validated output bounds.
+   --  @return Compact trusted model-facing text.
    function Render_Model
      (Item   : Assessment;
       Limits : Render_Limits := Default_Limits) return String;

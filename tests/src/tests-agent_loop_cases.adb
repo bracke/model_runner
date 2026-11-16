@@ -184,6 +184,37 @@ package body Tests.Agent_Loop_Cases is
       return (if Self.Halt_At > 0 and then Self.Asked = Self.Halt_At then Ag.Halt else Ag.Allow);
    end Consider;
 
+   type Completion_Mode is (Repair_Then_Accept, Always_Refuse);
+
+   type Completion_Check is new Ag.Answer_Gate with record
+      Mode       : Completion_Mode := Repair_Then_Accept;
+      Asked      : Natural := 0;
+      Saw_Empty  : Boolean := False;
+   end record;
+
+   overriding procedure Evaluate
+     (Self     : in out Completion_Check;
+      Answer   : String;
+      Decision : out Ag.Answer_Decision;
+      Feedback : out Unbounded_String;
+      Status   : out E.Error_Info)
+   is
+   begin
+      Self.Asked := Self.Asked + 1;
+      Self.Saw_Empty := Self.Saw_Empty or else Answer = "";
+      Feedback := Null_Unbounded_String;
+      Status := E.Success;
+      if Self.Mode = Always_Refuse then
+         Decision := Ag.Refuse_Answer;
+         Feedback := To_Unbounded_String ("mandatory checks remain unresolved");
+      elsif Self.Asked = 1 then
+         Decision := Ag.Continue_After_Feedback;
+         Feedback := To_Unbounded_String ("repair and recheck");
+      else
+         Decision := Ag.Accept_Answer;
+      end if;
+   end Evaluate;
+
    --  The tiny model, prepared, and what it borrows.
    type Harness (Image : access constant Model_Runner.Bytes.Byte_Array) is limited record
       Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Image);
@@ -238,6 +269,7 @@ package body Tests.Agent_Loop_Cases is
       Ended    : out Ag.Outcome;
       Carry    : Ag.Memory_Reference := null;
       Approver : Ag.Approver_Reference := null;
+      Completion : Ag.Answer_Gate_Reference := null;
       Budget   : Natural := 0;
       Shown    : Model_Runner.Output.Sink_Reference := null;
       Reply    : Positive := 64;
@@ -307,6 +339,7 @@ package body Tests.Agent_Loop_Cases is
          Compact    => Compact,
          Watch      => Seen'Unchecked_Access,
          Approve    => Approver,
+         Gate       => Completion,
          Script     => Replies'Unchecked_Access,
          Carry      => Carry,
          Max_Seconds => Seconds,
@@ -1992,6 +2025,10 @@ package body Tests.Agent_Loop_Cases is
               and then Turns.Matches ("src/*.adb", "src/a.adb") and then not Turns.Matches ("src/*.adb", "src/a.ads")
               and then Turns.Matches ("a*b*c", "aXbYbZc") and then not Turns.Matches ("git push*", "git status"),
               "a rule's pattern did not match as * says");
+      Assert (Turns.Path_Of ("{""other"":{""path"":""wrong.txt""},""path"":""right.txt""}")
+                = "right.txt"
+              and then Turns.Path_Of ("{""path"":""odd\u0020name.txt""}") = "odd name.txt",
+              "a tool path was scanned from JSON instead of decoded from its root member");
       declare
          Own      : constant String := Ada.Directories.Full_Name (Dir & "/rule-settings");
          Was      : constant String :=
@@ -2083,6 +2120,50 @@ package body Tests.Agent_Loop_Cases is
       Model_Runner.Localization.Close (Catalog);
    end A_Conversation_Turn_Asks_Then_Writes_Then_Undoes;
 
+   procedure Completion_Is_A_Harness_Decision
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+   begin
+      if not Ada.Directories.Exists (Dir) then
+         Ada.Directories.Create_Path (Dir);
+      end if;
+      if Image = null then
+         Tiny_Model.Build (Image);
+      end if;
+
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Gate    : aliased Completion_Check;
+      begin
+         Replies.Replies.Append ("");
+         Replies.Replies.Append ("fixed");
+         Run (Replies, Seen, Ended, Completion => Gate'Unchecked_Access);
+         Assert
+           (Ended.Reason = Ag.Answered
+            and then Ended.Steps = 2
+            and then Gate.Asked = 2
+            and then Gate.Saw_Empty,
+            "an empty completion candidate bypassed its repair and recheck gate");
+      end;
+
+      declare
+         Replies : Script;
+         Seen    : Recorder;
+         Ended   : Ag.Outcome;
+         Gate    : aliased Completion_Check := (Mode => Always_Refuse, others => <>);
+      begin
+         Replies.Replies.Append ("all tests pass");
+         Run (Replies, Seen, Ended, Completion => Gate'Unchecked_Access);
+         Assert
+           (Ended.Reason = Ag.Completion_Blocked
+            and then To_String (Ended.Completion_Feedback) = "mandatory checks remain unresolved",
+            "the harness accepted a completion claim its mandatory gate refused");
+      end;
+   end Completion_Is_A_Harness_Decision;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -2101,6 +2182,9 @@ package body Tests.Agent_Loop_Cases is
       Register_Routine
         (T, A_Pace_Is_The_Works_Not_Each_Runs'Access,
          "a pace kept across runs bounds them together");
+      Register_Routine
+        (T, Completion_Is_A_Harness_Decision'Access,
+         "completion, including an empty answer, is accepted only by the harness gate");
    end Register_Tests;
 
 end Tests.Agent_Loop_Cases;

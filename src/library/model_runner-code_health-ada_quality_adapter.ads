@@ -1,3 +1,6 @@
+with Ada.Real_Time;
+
+with Model_Runner.Cancellation;
 with Model_Runner.Code_Health.Ada;
 with Model_Runner.Errors;
 
@@ -14,6 +17,8 @@ package Model_Runner.Code_Health.Ada_Quality_Adapter is
       Changed       : String_Lists.Vector;
       Configuration : String;
       Snapshot      : String;
+      Deadline      : Standard.Ada.Real_Time.Time;
+      Cancel        : Model_Runner.Cancellation.Token_Reference;
       Result        : out Model_Runner.Code_Health.Ada.Source_Analysis;
       Status        : out Model_Runner.Errors.Error_Info);
 

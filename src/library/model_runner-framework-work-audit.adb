@@ -6,6 +6,7 @@ function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector 
    Call    : Records.Item;
    Plan    : Records.Item;
    Proof   : Records.Item;
+   Health  : Records.Item;
    Status  : E.Error_Info;
 
    procedure Say (Question, Answer : String) is
@@ -51,6 +52,66 @@ function Audit (Item : Stores.Store; Task_Id : String) return Name_Lists.Vector 
       end loop;
       return To_String (Text);
    end Fields_With;
+
+   function Code_Health_Summary return String is
+      Passed, Failed : Natural := 0;
+      New_Findings, Changed_Findings, Existing, Resolved, Unknown : Natural := 0;
+
+      procedure Read_Embedded (Field : String; Value : out Records.Item; Good : out Boolean) is
+         Read : E.Error_Info;
+      begin
+         Records.Parse (Records.Get (Health, Field), Field, Value, Read);
+         Good := E.Is_Ok (Read);
+      end Read_Embedded;
+   begin
+      if Records.Get (Health, "profile") = "" then
+         return Records.Get (State, "current_code_health");
+      end if;
+      for Index in 1 .. Records.Field_Count (Health) loop
+         declare
+            Field : constant String := Records.Field_Name (Health, Index);
+            Value : Records.Item;
+            Good  : Boolean;
+         begin
+            if Field'Length > 18
+              and then Field (Field'First .. Field'First + 17) = "code_health.check."
+            then
+               Read_Embedded (Field, Value, Good);
+               if Good and then Records.Get (Value, "status") in "passed" | "findings" then
+                  Passed := Passed + 1;
+               elsif Good then
+                  Failed := Failed + 1;
+               end if;
+            elsif Field'Length > 27
+              and then Field (Field'First .. Field'First + 26) = "code_health.classification."
+            then
+               Read_Embedded (Field, Value, Good);
+               if Good then
+                  if Records.Get (Value, "state") = "new" then
+                     New_Findings := New_Findings + 1;
+                  elsif Records.Get (Value, "state") = "changed" then
+                     Changed_Findings := Changed_Findings + 1;
+                  elsif Records.Get (Value, "state") = "existing" then
+                     Existing := Existing + 1;
+                  elsif Records.Get (Value, "state") = "resolved" then
+                     Resolved := Resolved + 1;
+                  else
+                     Unknown := Unknown + 1;
+                  end if;
+               end if;
+            end if;
+         end;
+      end loop;
+      return Records.Get (State, "current_code_health")
+        & ", profile " & Records.Get (Health, "profile")
+        & ", " & Records.Get (Health, "code_health.state")
+        & ", checks" & Natural'Image (Passed) & " passed/" & Natural'Image (Failed) & " failed"
+        & ", findings" & Natural'Image (New_Findings) & " new/"
+        & Natural'Image (Changed_Findings) & " changed/"
+        & Natural'Image (Existing) & " existing/"
+        & Natural'Image (Resolved) & " resolved/"
+        & Natural'Image (Unknown) & " unknown";
+   end Code_Health_Summary;
 
    --  The last invocation made for the task.
    function Last_Call return String is
@@ -101,6 +162,11 @@ begin
       Stores.Read (Item, Verification_Area, Records.Get (State, "current_verification"),
                    Proof, Status);
       Unless_Read ("its verification, " & Records.Get (State, "current_verification"));
+   end if;
+   if Records.Get (State, "current_code_health") /= "" then
+      Stores.Read (Item, Verification_Area, Records.Get (State, "current_code_health"),
+                   Health, Status);
+      Unless_Read ("its Code Health assessment, " & Records.Get (State, "current_code_health"));
    end if;
 
    --  The revisions its context read, or, never worked, the one it was
@@ -300,6 +366,7 @@ begin
         & (if Records.Get (Proof, "profile") = "" then ""
            else ", profile " & Records.Get (Proof, "profile")
                 & (if Records.Get (Proof, "passed") = "true" then ", passed" else ", failed")));
+   Say ("Code Health", Code_Health_Summary);
    Say ("tool versions", Fields_With (Proof, "tool."));
    --  Checks run for it on the way -- by its agent, or by hand -- each
    --  with how it came out.

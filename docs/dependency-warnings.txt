@@ -30,7 +30,7 @@ httpclient 0
 ssllib 0
 cryptolib 0
 truststores 0
-hostkit 0
+hostkit 1
 zlib 0
 jpeglib 0
 jsonlib 0
@@ -40,3 +40,4 @@ awklib 0
 regexp 0
 project_tools 0
 tarlib 0
+database 13

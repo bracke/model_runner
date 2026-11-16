@@ -2,7 +2,7 @@
 template = ada
 name = Ada
 description = The Ada language, 2022 edition.
-version = 1
+version = 2
 category = language
 standalone = false
 language = Ada
@@ -12,6 +12,19 @@ set source.extensions = .ads
 set source.extensions = .adb
 adapter language = ada
 directory src
+
+# Native change-oriented checks use the compiler and the shared ada_quality
+# source indicators.  The including project decides which formal profile is
+# its full completion boundary.
+set code_health.providers = ada
+set code_health.fast_checks = syntax
+set code_health.fast_checks = formatting
+set code_health.fast_checks = hygiene
+set code_health.fast_checks = security
+set code_health.focused_checks = build
+set code_health.focused_checks = affected_tests
+set execution.allowed = gnatmake
+set execution.allowed = gprbuild
 
 # What Ada work is held to where nothing the project says speaks to it.
 baseline language.ada.contracts = state what a subprogram needs and gives as Pre and Post where they can be checked, not only in comments

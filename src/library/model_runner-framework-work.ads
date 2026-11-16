@@ -531,6 +531,25 @@ package Model_Runner.Framework.Work is
    --  @return Its store.
    function Store_Of (Host : Child_Host) return not null access Stores.Store;
 
+   --  Code Health provenance for the agent currently hosted.
+   --
+   --  @param Host The host.
+   --  @return Current task identity.
+   function Task_Id_Of (Host : Child_Host) return String;
+
+   --  @param Host The host.
+   --  @return Current task execution generation.
+   function Generation_Of (Host : Child_Host) return Natural;
+
+   --  @param Host The host.
+   --  @return Current isolated workspace identity, or empty in-project.
+   function Workspace_Of (Host : Child_Host) return String;
+
+   --  The current agent's most recent invocation.
+   --  @param Host Active work host.
+   --  @return Invocation identity, or empty before the first invocation.
+   function Invocation_Of (Host : Child_Host) return String;
+
    --  Whether the agent now working may run a verification profile: run_build
    --  for a profile whose name says build, run_static_analysis for one that
    --  says analysis or lint, run_tests for any other -- each within its

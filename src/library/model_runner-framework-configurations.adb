@@ -133,6 +133,45 @@ package body Model_Runner.Framework.Configurations is
       return Records.Fingerprint_Of (Meaning);
    end Verification_Fingerprint;
 
+   -----------------------------
+   -- Code_Health_Fingerprint --
+   -----------------------------
+
+   function Code_Health_Fingerprint (Value : Records.Item) return String is
+      Bearing : constant Name_Lists.Vector :=
+        ["scalar.code_health.", "set.code_health.", "profile.code_health.",
+         "set.repository.", "set.source", "set.directories", "map.component.",
+         "set.components", "set.execution.", "scalar.execution.", "input.project_name"];
+      Not_Bearing : constant Name_Lists.Vector :=
+        ["scalar.code_health.feedback_limit", "scalar.execution.output_limit",
+         "scalar.execution.process_slots"];
+      Meaning : Records.Item := Records.Create (Current_Entity, 1, "", 1);
+      function Begins (Name, Prefix : String) return Boolean is
+        (Name'Length >= Prefix'Length
+         and then Name (Name'First .. Name'First + Prefix'Length - 1) = Prefix);
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Name : constant String := Records.Field_Name (Value, Index);
+         begin
+            if not Not_Bearing.Contains (Name)
+              and then (for some Prefix of Bearing => Begins (Name, Prefix))
+            then
+               Records.Set (Meaning, Name, Records.Get (Value, Name));
+            end if;
+         end;
+      end loop;
+      declare
+         Full : constant String := Records.Get (Value, "profile.code_health.full");
+      begin
+         if Full /= "" then
+            Records.Set
+              (Meaning, "code_health.full_definition", Records.Get (Value, "profile." & Full));
+         end if;
+      end;
+      return Records.Fingerprint_Of (Meaning);
+   end Code_Health_Fingerprint;
+
    function Legacy_Verification_Fingerprint (Value : Records.Item) return String is
       --  As it was computed before the execution limits were read by their
       --  own names: the shell and environment, the network, and names that
@@ -1481,7 +1520,7 @@ package body Model_Runner.Framework.Configurations is
    --  The settings the harness reads, by their whole names: where a name
    --  is given without its kind and the configuration holds none of it
    --  yet, the one of these it is.
-   Known_Settings : constant array (1 .. 55) of access constant String :=
+   Known_Settings : constant array (1 .. 64) of access constant String :=
      [new String'("list.automation.rules"),
       new String'("list.verification.full"),
       new String'("scalar.agents.child_retries"),
@@ -1495,6 +1534,11 @@ package body Model_Runner.Framework.Configurations is
       new String'("scalar.agents.on_child_failure"),
       new String'("scalar.agents.token_budget"),
       new String'("scalar.bootstrap.import"),
+      new String'("scalar.code_health.block_on"),
+      new String'("scalar.code_health.enabled"),
+      new String'("scalar.code_health.feedback_limit"),
+      new String'("scalar.code_health.max_assessments"),
+      new String'("scalar.code_health.max_stagnant"),
       new String'("scalar.context.rules"),
       new String'("scalar.execution.max_cpu_seconds"),
       new String'("scalar.execution.max_file_mb"),
@@ -1530,13 +1574,17 @@ package body Model_Runner.Framework.Configurations is
       new String'("set.bootstrap.propose"),
       new String'("set.bootstrap.sources"),
       new String'("set.components"),
+      new String'("set.code_health.fast_checks"),
+      new String'("set.code_health.focused_checks"),
+      new String'("set.code_health.providers"),
       new String'("set.execution.allowed"),
       new String'("set.execution.environment"),
       new String'("set.requirement.transitions"),
       new String'("set.task.auto_accept"),
       new String'("set.task.forbidden"),
       new String'("set.task.gates"),
-      new String'("set.task.transitions")];
+      new String'("set.task.transitions"),
+      new String'("profile.code_health.full")];
 
    -----------------
    -- Default_Of --
@@ -1650,7 +1698,12 @@ package body Model_Runner.Framework.Configurations is
    --  What a change to a field reaches.
    function Reach (Name : String) return String is
    begin
-      if Starts (Name, "profile.") or else Starts (Name, "scalar.verification.")
+      if Starts (Name, "scalar.code_health.")
+        or else Starts (Name, "set.code_health.")
+        or else Starts (Name, "profile.code_health.")
+      then
+         return "code health: which continuous checks govern task completion from now on";
+      elsif Starts (Name, "profile.") or else Starts (Name, "scalar.verification.")
         or else Starts (Name, "scalar.task.profile.") or else Starts (Name, "set.execution.")
         or else Starts (Name, "list.verification.")
       then
@@ -1880,6 +1933,17 @@ package body Model_Runner.Framework.Configurations is
       function Among (Field : String; Words : String) return Boolean
       is (Records.Get (Config, Field) = ""
           or else Choices_Of (Words).Contains (Records.Get (Config, Field)));
+
+      function Every (Field : String; Words : String) return Boolean is
+         Allowed : constant Name_Lists.Vector := Choices_Of (Words);
+      begin
+         for Value of Lines_Of (Records.Get (Config, Field)) loop
+            if not Allowed.Contains (Value) then
+               return False;
+            end if;
+         end loop;
+         return True;
+      end Every;
    begin
       --  A mapping to a profile there is not, as any other setting naming one.
       if Inference_Policy.Configuration_Problem (Config) /= "" then
@@ -2068,6 +2132,11 @@ package body Model_Runner.Framework.Configurations is
       begin
          if Off ("scalar.bootstrap.import", "candidate, accepted") then
             return Said ("scalar.bootstrap.import", "candidate, accepted");
+         elsif Off ("scalar.code_health.enabled", "true, false") then
+            return Said ("scalar.code_health.enabled", "true, false");
+         elsif Off ("scalar.code_health.block_on", "information, warning, error, critical") then
+            return Said
+              ("scalar.code_health.block_on", "information, warning, error, critical");
          elsif Off ("scalar.execution.network", "allowed, denied") then
             return Said ("scalar.execution.network", "allowed, denied");
          elsif Off ("scalar.execution.shell", "allowed, denied") then
@@ -2269,9 +2338,21 @@ package body Model_Runner.Framework.Configurations is
                  & " -- a lease of nothing is out as it is taken, and the project could be taken back from"
                  & " a run as it starts";
             end if;
+            if Name in "scalar.code_health.feedback_limit"
+                         | "scalar.code_health.max_assessments"
+                         | "scalar.code_health.max_stagnant"
+              and then Value'Length in 1 .. 9
+              and then (for all C of Value => C = '0')
+            then
+               return Name & " is 1 or more, not " & Value;
+            end if;
             if (Starts (Name, "scalar.agents.max_") or else Starts (Name, "scalar.execution.max_")
                 or else Starts (Name, "scalar.retention.")
-                or else Name in "scalar.agents.token_budget" | "scalar.execution.output_limit"
+                or else Name in "scalar.agents.token_budget"
+                                  | "scalar.code_health.feedback_limit"
+                                  | "scalar.code_health.max_assessments"
+                                  | "scalar.code_health.max_stagnant"
+                                  | "scalar.execution.output_limit"
                               | "scalar.execution.process_slots" | "scalar.execution.timeout"
                               | "scalar.work.lease" | "scalar.work.max_workspaces" | "scalar.work.steps")
               and then not (Name = "scalar.agents.max_seconds" and then Value = "model")
@@ -2285,12 +2366,74 @@ package body Model_Runner.Framework.Configurations is
                     elsif Name = "scalar.execution.output_limit" then " of bytes" else "")
                  --  As the check of 0 below has it: 1 or more where 0 is refused.
                  & (if Name in "scalar.agents.max_steps" | "scalar.agents.token_budget" | "scalar.work.lease"
+                             | "scalar.code_health.feedback_limit"
+                             | "scalar.code_health.max_assessments"
+                             | "scalar.code_health.max_stagnant"
                              | "scalar.agents.max_seconds" | "scalar.agents.max_active" | "scalar.work.max_workspaces"
                              | "scalar.work.steps"
                     then ", 1 or more" else ", 0 or more")
                  & " in digits"
                  & (if Name = "scalar.agents.max_seconds" then ", or model for the model's pace" else "")
                  & ", not " & Value;
+            end if;
+            if Name in "scalar.code_health.max_assessments" | "scalar.code_health.max_stagnant"
+              and then Natural'Value (Value) > 1_000
+            then
+               return Name & " is at most 1000, not " & Value;
+            elsif Name = "scalar.code_health.feedback_limit"
+              and then Natural'Value (Value) not in 1_024 .. 1_048_576
+            then
+               return Name & " is from 1024 through 1048576 bytes, not " & Value;
+            end if;
+         end;
+      end loop;
+      if Records.Get (Config, "scalar.code_health.max_stagnant") /= ""
+        and then Records.Get (Config, "scalar.code_health.max_assessments") /= ""
+        and then Natural'Value (Records.Get (Config, "scalar.code_health.max_stagnant"))
+          > Natural'Value (Records.Get (Config, "scalar.code_health.max_assessments"))
+      then
+         return "scalar.code_health.max_stagnant exceeds scalar.code_health.max_assessments";
+      end if;
+      if Records.Get (Config, "scalar.code_health.enabled") = "true" then
+         if Records.Get (Config, "profile.code_health.full") = "" then
+            return "profile.code_health.full names the mandatory completion profile when Code Health is enabled";
+         elsif not Has ("profile." & Records.Get (Config, "profile.code_health.full")) then
+            return "profile.code_health.full names a verification profile that is not there";
+         elsif Records.Get (Config, "set.code_health.providers") = "" then
+            return "set.code_health.providers names at least one provider when Code Health is enabled";
+         elsif not Every ("set.code_health.providers", "ada") then
+            return "set.code_health.providers names an unavailable provider";
+         elsif Records.Get (Config, "set.code_health.fast_checks") = "" then
+            return "set.code_health.fast_checks names at least one check when Code Health is enabled";
+         elsif not Every
+           ("set.code_health.fast_checks",
+            "syntax, formatting, hygiene, security, complexity, language_server, language-server, lsp,"
+            & " build, project, manifest, dependencies, ada-syntax, ada-quality-source,"
+            & " ada-language-server, ada-project, ada-manifest")
+         then
+            return "set.code_health.fast_checks names an unknown Ada check";
+         elsif Records.Get (Config, "set.code_health.focused_checks") = "" then
+            return "set.code_health.focused_checks names at least one check when Code Health is enabled";
+         elsif not Every
+           ("set.code_health.focused_checks",
+            "syntax, formatting, hygiene, security, complexity, language_server, language-server, lsp,"
+            & " build, project, contracts, proof, gnatprove, affected_tests, affected-tests, tests,"
+            & " manifest, dependencies,"
+            & " ada-syntax, ada-quality-source, ada-language-server, ada-project,"
+            & " ada-contracts, ada-affected-tests, ada-manifest")
+         then
+            return "set.code_health.focused_checks names an unknown Ada check";
+         end if;
+      end if;
+      for Index in 1 .. Records.Field_Count (Config) loop
+         declare
+            Name : constant String := Records.Field_Name (Config, Index);
+         begin
+            if Starts (Name, "set.task.gates")
+              and then Lines_Of (Records.Get (Config, Name)).Contains ("code_health")
+              and then Records.Get (Config, "scalar.code_health.enabled") /= "true"
+            then
+               return Name & " names code_health, but scalar.code_health.enabled is not true";
             end if;
          end;
       end loop;
@@ -2354,6 +2497,24 @@ package body Model_Runner.Framework.Configurations is
            & " reevaluate_requirements and verify";
       elsif Name = "list.verification.full" then
          return "the profiles /check full runs, in order";
+      elsif Name = "scalar.code_health.enabled" then
+         return "whether this project requires native Code Health assessments: true or false";
+      elsif Name = "scalar.code_health.block_on" then
+         return "the least diagnostic severity that blocks Code Health completion";
+      elsif Name = "scalar.code_health.max_stagnant" then
+         return "how many repair assessments without progress Code Health permits: a positive count";
+      elsif Name = "scalar.code_health.max_assessments" then
+         return "how many assessments one repair sequence permits: a positive count";
+      elsif Name = "scalar.code_health.feedback_limit" then
+         return "the most Code Health feedback returned to an agent, in bytes";
+      elsif Name = "set.code_health.providers" then
+         return "the deterministic analysis providers enabled for this project";
+      elsif Name = "set.code_health.fast_checks" then
+         return "the checks run after project source changes";
+      elsif Name = "set.code_health.focused_checks" then
+         return "the checks run at a coherent work boundary";
+      elsif Name = "profile.code_health.full" then
+         return "the Code Health profile whose current full assessment the completion gate requires";
       elsif Name = "scalar.agents.child_retries" then
          return "how often a helper that failed is run again: a count";
       elsif Name = "scalar.agents.max_active" then
@@ -2714,7 +2875,9 @@ package body Model_Runner.Framework.Configurations is
               or else Field = "list.verification.full")
              and then Lines_Of (Value).Contains (Profile));
       begin
-         if Profile = "" or else Records.Has (Result.Before, Name) then
+         if Profile = "" or else Starts (Name, "profile.code_health.")
+           or else Records.Has (Result.Before, Name)
+         then
             return "";
          end if;
          for Index in 1 .. Records.Field_Count (Result.Before) loop

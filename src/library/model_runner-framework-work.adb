@@ -12,6 +12,7 @@ with Hostkit.Fs;
 with Hostkit.Process;
 
 with Model_Runner.Clocks;
+with Model_Runner.Code_Health.Lifecycle;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Consistency;
 with Model_Runner.Framework.Derivations;
@@ -1734,6 +1735,23 @@ package body Model_Runner.Framework.Work is
    ------------------
 
    function Store_Of (Host : Child_Host) return not null access Stores.Store is (Host.Item.all'Unchecked_Access);
+
+   function Task_Id_Of (Host : Child_Host) return String is
+     (To_String (Host.Task_Id));
+
+   function Generation_Of (Host : Child_Host) return Natural is
+      Said : constant String := Generation_Of (Host.Item.all, To_String (Host.Task_Id));
+   begin
+      return
+        (if Said /= "" and then (for all Letter of Said => Letter in '0' .. '9')
+         then Natural'Value (Said) else 0);
+   end Generation_Of;
+
+   function Workspace_Of (Host : Child_Host) return String is
+     (if Host.Apart then Workspaces.Active_For (Host.Item.all, To_String (Host.Task_Id)) else "");
+
+   function Invocation_Of (Host : Child_Host) return String is
+     (if Host.Calls.Is_Empty then "" else Host.Calls.Last_Element);
 
    function Task_Profile (Host : Child_Host) return String
    is (if Host.Profile_Frozen then To_String (Host.Profile)

@@ -104,6 +104,45 @@ package body Model_Runner.Code_Health.Profiles is
       return From.Items.Element (Position).Checks.Element (Index);
    end Check_At;
 
+   procedure Select_Checks
+     (From    : Profile_Set;
+      Profile : String;
+      Level   : Check_Level;
+      Result  : out P.Requested_Check_Lists.Vector;
+      Status  : out E.Error_Info)
+   is
+      Position : constant Natural := Find_Profile (From, Profile);
+   begin
+      Result.Clear;
+      if Position = 0 then
+         Refuse (Status, "profile", Profile, "unknown profile identifier");
+         return;
+      end if;
+      for Check of From.Items.Element (Position).Checks loop
+         if Check.Level = Level then
+            Result.Append
+              (P.Requested_Check'
+                 (Identifier        => Check.Identifier,
+                  Provider          => Check.Provider,
+                  Required          => Check.Required,
+                  Block_On          => Check.Block_On,
+                  Scope             => Check.Scope,
+                  Timeout_Seconds   => Check.Timeout_Seconds,
+                  Dependencies      => Check.Dependencies,
+                  Cacheable         => Check.Cache = Exact_Inputs,
+                  Tool_Requirements => Check.Tool_Requirements,
+                  Output_Limit      => Check.Output_Limit));
+         end if;
+      end loop;
+      if Result.Is_Empty then
+         Refuse
+           (Status, "profile", Profile,
+            "profile contains no " & Word (Level) & " checks");
+      else
+         Status := E.Success;
+      end if;
+   end Select_Checks;
+
    procedure Validate
      (Item      : Profile_Set;
       Providers : P.Registry;

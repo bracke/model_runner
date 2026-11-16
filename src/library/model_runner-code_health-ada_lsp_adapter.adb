@@ -2,7 +2,6 @@ with Ada.Characters.Handling;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
-with Model_Runner.CLI.Language_Server;
 with Model_Runner.Code_Health.Diagnostics;
 with Model_Runner.Code_Health.Providers;
 
@@ -22,6 +21,13 @@ package body Model_Runner.Code_Health.Ada_LSP_Adapter is
 
    function Lower (Text : String) return String is
      (Standard.Ada.Characters.Handling.To_Lower (Text));
+
+   procedure Use_Source
+     (Self   : in out Instance;
+      Source : Problem_Source) is
+   begin
+      Self.Source := Source;
+   end Use_Source;
 
    overriding function Version (Self : Instance) return String is
    begin
@@ -88,6 +94,7 @@ package body Model_Runner.Code_Health.Ada_LSP_Adapter is
                            declare
                               Finding : constant D.Diagnostic :=
                                 (Provider    => To_Unbounded_String ("ada"),
+                                 Check_Id    => To_Unbounded_String ("ada-language-server"),
                                  Rule_Id     => To_Unbounded_String ("LSP-DIAGNOSTIC"),
                                  Severity    =>
                                    (if Level = "error" then Code_Health.Error
@@ -136,24 +143,48 @@ package body Model_Runner.Code_Health.Ada_LSP_Adapter is
       Changed       : String_Lists.Vector;
       Configuration : String;
       Snapshot      : String;
+      Deadline      : Standard.Ada.Real_Time.Time;
+      Cancel        : Model_Runner.Cancellation.Token_Reference;
       Result        : out Model_Runner.Code_Health.Ada.Source_Analysis;
       Status        : out E.Error_Info)
    is
-      pragma Unreferenced (Self, Configuration);
+      pragma Unreferenced (Configuration);
       Any_Unavailable : Boolean := False;
       Any_Failed      : Boolean := False;
+      Any_Cancelled   : Boolean := False;
+      Any_Timed_Out   : Boolean := False;
+      use type Standard.Ada.Real_Time.Time;
    begin
       Result := (others => <>);
       Result.Check :=
         (Identifier => To_Unbounded_String ("ada-language-server"),
          Required   => False,
          others     => <>);
+      if Self.Source = null then
+         Result.Check.Status := P.Check_Unavailable;
+         Result.Check.Detail := To_Unbounded_String ("no language-server diagnostic source is configured");
+         Result.Toolchain_Fingerprint.Append ("lsp-adapter:" & Adapter_Version);
+         Status := E.Success;
+         return;
+      end if;
       for Path of Changed loop
          declare
             One : Model_Runner.Code_Health.Ada.Source_Analysis;
+            Now : constant Standard.Ada.Real_Time.Time := Standard.Ada.Real_Time.Clock;
+            Left : constant Duration :=
+              (if Deadline = Standard.Ada.Real_Time.Time_Last then 8.0
+               elsif Deadline <= Now then 0.0
+               else Duration'Min (8.0, Standard.Ada.Real_Time.To_Duration (Deadline - Now)));
          begin
+            if Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+               Any_Cancelled := True;
+               exit;
+            elsif Left <= 0.0 then
+               Any_Timed_Out := True;
+               exit;
+            end if;
             Normalize_Problems
-              (Path, Model_Runner.CLI.Language_Server.Problems_In (Project_Root & "/" & Path),
+              (Path, Self.Source (Project_Root & "/" & Path, Left),
                Snapshot, One, Status);
             if not E.Is_Ok (Status) then
                return;
@@ -176,7 +207,9 @@ package body Model_Runner.Code_Health.Ada_LSP_Adapter is
          end;
       end loop;
       Result.Check.Status :=
-        (if Any_Unavailable then P.Check_Unavailable
+        (if Any_Cancelled then P.Check_Cancelled
+         elsif Any_Timed_Out then P.Check_Timed_Out
+         elsif Any_Unavailable then P.Check_Unavailable
          elsif Any_Failed then P.Check_Failed
          elsif D.Length (Result.Diagnostics) > 0 then P.Check_Findings
          else P.Check_Passed);

@@ -188,6 +188,12 @@ package body Model_Runner.Code_Health.Changes is
       Changes := Normalized;
    end Normalize;
 
+   procedure Clear (Changes : in out Change_Set) is
+   begin
+      Changes.Items.Clear;
+      Changes.Id := Null_Unbounded_String;
+   end Clear;
+
    function Length (From : Change_Set) return Natural is
      (Natural (From.Items.Length));
 
@@ -359,6 +365,12 @@ package body Model_Runner.Code_Health.Changes is
 
    function Root (From : Snapshot) return String is
      (To_String (From.Project_Root));
+
+   function File_Count (From : Snapshot) return Natural is
+     (Natural (From.Files.Length));
+
+   function File_At (From : Snapshot; Index : Positive) return String is
+     (To_String (From.Files.Element (Index).Path));
 
    function Skipped_Count (From : Snapshot) return Natural is
      (Natural (From.Skipped.Length));

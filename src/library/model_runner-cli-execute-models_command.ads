@@ -12,6 +12,8 @@ private package Model_Runner.CLI.Execute.Models_Command is
    --  @param Screen Where the list goes.
    --  @param Path The chosen model's file.
    --  @param Picked Whether one was chosen.
+   --  @param Title Localization key for the selector heading.
+   --  @param Offer_Downloads Whether downloadable models are included.
    procedure Choose_Model
      (Screen : in out Pres.Console;
       Path   : out Model_Runner.Text.Bounded;

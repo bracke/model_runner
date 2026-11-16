@@ -16,6 +16,8 @@
 package Model_Runner.CLI.Language_Server is
 
    --  Whether the settings file names a language server.
+   --
+   --  @return True when a language server is configured.
    function Configured return Boolean;
 
    --  The problems the server finds in a file, as it now is: a line each,

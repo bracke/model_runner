@@ -526,6 +526,7 @@ package body Model_Runner.CLI.Tool_Turns is
       --  And the language server's word on the file, where one is named.
       if Model_Runner.Errors.Is_Ok (Status)
         and then Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Write_Files)
+        and then not Model_Runner.Code_Health.Hooks.Enabled (Self.Health)
         and then Model_Runner.CLI.Language_Server.Configured
       then
          declare

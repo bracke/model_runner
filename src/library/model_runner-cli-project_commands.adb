@@ -21,11 +21,18 @@ with Model_Runner.CLI.Choosers;
 with Model_Runner.Platform.Signals;
 with Model_Runner.CLI.Init;
 with Model_Runner.CLI.Intents;
+with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.Project_Requests;
 with Model_Runner.CLI.Repo;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.CLI.Work;
 with Model_Runner.Clocks;
+with Model_Runner.Code_Health.Ada_Profiles;
+with Model_Runner.Code_Health.Engine;
+with Model_Runner.Code_Health.Hooks;
+with Model_Runner.Code_Health.Profiles;
+with Model_Runner.Code_Health.Providers;
+with Model_Runner.Code_Health.Remediation;
 with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Framework.Agents;
@@ -624,6 +631,13 @@ package body Model_Runner.CLI.Project_Commands is
       --  The files' versions its checks failed on: a change back to one
       --  is told what failed there.
       Tried         : Model_Runner.Agent.Recall.Failed_Versions;
+
+      --  Native post-change checks share the same runner for the root and
+      --  each delegated boundary in this agent loop.
+      Health_Engine : aliased Model_Runner.Code_Health.Engine.Instance;
+      Health        : Model_Runner.Code_Health.Hooks.Context;
+      Health_Gate   : aliased Model_Runner.Code_Health.Remediation.Completion_Gate;
+      Health_Gate_Ready : Boolean := False;
    end record;
 
    --  Those, in a line; Now is when the line is written.
@@ -749,6 +763,125 @@ package body Model_Runner.CLI.Project_Commands is
            (if Milliseconds > Model_Runner.Clocks.Nanoseconds (Natural'Last)
             then Natural'Last else Natural (Milliseconds));
       end Milliseconds_Of;
+
+      procedure Open_Code_Health is
+         Settings : Model_Runner.Framework.Records.Item;
+         Threshold : Model_Runner.Code_Health.Diagnostic_Severity := Model_Runner.Code_Health.Error;
+         Limit     : Positive := 8 * 1024;
+         Seconds   : Positive := 10;
+         Stagnant  : Positive := 3;
+         Assessments : Positive := 12;
+         Said      : Unbounded_String;
+         Fast_Checks : Model_Runner.Code_Health.Providers.Requested_Check_Lists.Vector;
+         Focused_Checks : Model_Runner.Code_Health.Providers.Requested_Check_Lists.Vector;
+      begin
+         if Host = null then
+            return;
+         end if;
+         Settings := Model_Runner.Framework.Configurations.Required (Wk.Store_Of (Host.all).all);
+         if R.Get (Settings, "scalar.code_health.enabled") /= "true" then
+            return;
+         end if;
+         if R.Get (Settings, "scalar.code_health.block_on") /= "" then
+            Model_Runner.Code_Health.Profiles.Severity_Of
+              (R.Get (Settings, "scalar.code_health.block_on"), Threshold, Status);
+            if E.Is_Error (Status) then
+               return;
+            end if;
+         end if;
+         Said := To_Unbounded_String (R.Get (Settings, "scalar.code_health.feedback_limit"));
+         if Length (Said) > 0 then
+            Limit := Positive'Value (To_String (Said));
+         end if;
+         if R.Get (Settings, "scalar.code_health.max_stagnant") /= "" then
+            Stagnant := Positive'Value (R.Get (Settings, "scalar.code_health.max_stagnant"));
+         end if;
+         if R.Get (Settings, "scalar.code_health.max_assessments") /= "" then
+            Assessments := Positive'Value (R.Get (Settings, "scalar.code_health.max_assessments"));
+         end if;
+         if Wk.Checks_Time (Host.all) > 0 then
+            Seconds := Positive'Min (10, Positive (Wk.Checks_Time (Host.all)));
+         end if;
+         Model_Runner.Code_Health.Ada_Profiles.Resolve
+           (R.Get (Settings, "set.code_health.fast_checks"), Model_Runner.Code_Health.Fast,
+            Fast_Checks, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Model_Runner.Code_Health.Ada_Profiles.Resolve
+           (R.Get (Settings, "set.code_health.focused_checks"), Model_Runner.Code_Health.Focused,
+            Focused_Checks, Status);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Model_Runner.Code_Health.Engine.Initialize
+           (Runner.Health_Engine, Tree, Status,
+            Store          => Wk.Store_Of (Host.all),
+            Cancel         => Self.Cancel,
+            Agent_Id       => Wk.Current (Host.all),
+            Invocation_Id  => Wk.Invocation_Of (Host.all),
+            Profile        => "ada-fast",
+            Focused_Profile => "ada-focused",
+            Configuration  => Model_Runner.Framework.Configurations.Code_Health_Fingerprint (Settings),
+            Block_On       => Threshold,
+            Deadline       => Seconds,
+            Focused_Deadline =>
+              (if Wk.Checks_Time (Host.all) > 0
+               then Positive (Wk.Checks_Time (Host.all)) else 120),
+            Feedback_Limit => Limit);
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Model_Runner.Code_Health.Engine.Use_Checks
+           (Runner.Health_Engine, Model_Runner.Code_Health.Fast, Fast_Checks);
+         Model_Runner.Code_Health.Engine.Use_Checks
+           (Runner.Health_Engine, Model_Runner.Code_Health.Focused, Focused_Checks);
+         declare
+            Full   : constant String := R.Get (Settings, "profile.code_health.full");
+            Checks : constant Model_Runner.Framework.Verification.Check_List :=
+              Model_Runner.Framework.Verification.Parse_Profile
+                (R.Get (Settings, "profile." & Full));
+         begin
+            for Index in 1 .. Model_Runner.Framework.Verification.Length (Checks) loop
+               declare
+                  Check : constant Model_Runner.Framework.Verification.Check :=
+                    Model_Runner.Framework.Verification.Element (Checks, Index);
+               begin
+                  Model_Runner.Code_Health.Engine.Add_Focused_Test
+                    (Runner.Health_Engine, To_String (Check.Command), To_String (Check.Directory));
+               end;
+            end loop;
+         end;
+         if Model_Runner.CLI.Language_Server.Configured then
+            Model_Runner.Code_Health.Engine.Use_Language_Server
+              (Runner.Health_Engine, Model_Runner.CLI.Language_Server.Problems_In'Access);
+         end if;
+         Model_Runner.Code_Health.Engine.Capture_Baseline
+           (Runner.Health_Engine, Status,
+            Task_Id    => Wk.Task_Id_Of (Host.all),
+            Generation => Wk.Generation_Of (Host.all),
+            Workspace  => Wk.Workspace_Of (Host.all));
+         if E.Is_Error (Status) then
+            return;
+         end if;
+         Model_Runner.Code_Health.Hooks.Initialize
+           (Runner.Health, Tree, Runner.Health_Engine'Unchecked_Access, Status,
+            Workspace  => Wk.Workspace_Of (Host.all),
+            Task_Id    => Wk.Task_Id_Of (Host.all),
+            Generation => Wk.Generation_Of (Host.all));
+         if E.Is_Ok (Status) then
+            Model_Runner.Code_Health.Remediation.Initialize
+              (Runner.Health_Gate, Runner.Health_Engine'Unchecked_Access,
+               (Max_Stagnant    => Stagnant,
+                Max_Assessments => Assessments,
+                Threshold       => Threshold,
+                Feedback_Limit  => Limit));
+            Runner.Health_Gate_Ready := True;
+         end if;
+      exception
+         when Failure : others =>
+            Status := E.Unexpected (Failure, "enabling Code Health for task work");
+      end Open_Code_Health;
    begin
       Model_Runner.Stops.Copy (Self.Stop_Set.all, Work_Stops);
       if Model_Runner.Tools."=" (Written, Model_Runner.Tools.Tool_Call_JSON) then
@@ -762,6 +895,19 @@ package body Model_Runner.CLI.Project_Commands is
       --  The tools work in the tree the work is done in, named, not in
       --  whatever directory the process is in.
       Runner.Set_Base (Tree);
+      Answer := Null_Unbounded_String;
+      Tokens := 0;
+      Spent_All := 0;
+      Prompt_Tokens := 0;
+      Prompt_Read_Tokens := 0;
+      Prompt_Reused_Tokens := 0;
+      Prompt_Milliseconds := 0;
+      First_Cache_Event := Model_Runner.Generation.No_Cache_Event;
+      Last_Cache_Event := Model_Runner.Generation.No_Cache_Event;
+      Open_Code_Health;
+      if E.Is_Error (Status) then
+         return;
+      end if;
       --  The files its context showed it, as seen at the revisions shown: a
       --  write over one changed since -- an editor, a build, another
       --  session -- is refused until it is read again, not made from a
@@ -896,6 +1042,9 @@ package body Model_Runner.CLI.Project_Commands is
             --  The task's, its root's and its helpers' together.
             Pace        => (if Host /= null then Wk.Pace_Of (Host.all) else Rounds_Pace'Unchecked_Access),
             Call_First  => Must_Call,
+            Gate        =>
+              (if Runner.Health_Gate_Ready
+               then Runner.Health_Gate'Unchecked_Access else null),
             Result      => Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran
@@ -1178,6 +1327,20 @@ package body Model_Runner.CLI.Project_Commands is
             --  A call that may change state, kept from running because its
             --  start could not be put in the state: that failure is why.
             Status := Watcher.Unrecorded;
+         elsif Outcome.Reason = Model_Runner.Agent.Completion_Blocked then
+            --  A harness gate rejected the model's completion claim. This
+            --  is an incomplete task, never a model-generation failure.
+            if E.Is_Error (Outcome.Error) then
+               Status := Outcome.Error;
+            else
+               Status := E.Make (E.Framework_Task_Not_Ready);
+               E.Add_Text (Status, "name", "code health");
+               E.Add_Text
+                 (Status, "detail",
+                  (if Outcome.Completion_Feedback = Null_Unbounded_String
+                   then "mandatory completion checks remain unresolved"
+                   else To_String (Outcome.Completion_Feedback)));
+            end if;
          elsif Outcome.Reason = Model_Runner.Agent.Repeating then
             --  Going round wants another way, not a request that was wrong.
             Status := E.Make (E.Framework_Limit_Exceeded);
@@ -1624,8 +1787,47 @@ package body Model_Runner.CLI.Project_Commands is
             Last := Last + Said'Length;
          end if;
       end Tell_Failed;
+
+      procedure Run_Code_Health is
+         package Ch renames Model_Runner.Code_Health;
+         package Reg renames Model_Runner.Tools.Registry;
+         Said    : Unbounded_String;
+         Checked : E.Error_Info;
+         Trigger : constant Ch.Trigger_Kind :=
+           (if Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Write_Files)
+            then Ch.After_File_Change
+            elsif Reg.Known (Named) and then Reg."=" (Reg.Needs (Named), Reg.Delegation)
+            then Ch.After_Delegation
+            else Ch.After_Command);
+
+         procedure Add (Text : String) is
+            First : constant Natural := (if Last < Result'First then Result'First else Last + 1);
+            Room  : constant Natural :=
+              (if First > Result'Last then 0 else Result'Last - First + 1);
+            Kept  : constant Natural := Natural'Min (Room, Text'Length);
+         begin
+            if Kept > 0 then
+               Result (First .. First + Kept - 1) := Text (Text'First .. Text'First + Kept - 1);
+               Last := First + Kept - 1;
+            end if;
+         end Add;
+      begin
+         Model_Runner.Code_Health.Hooks.After_Call
+           (Self.Health, Named,
+            Model_Runner.Tools.Builtin.Kind (Model_Runner.Tools.Builtin.Instance (Self), Named),
+            Model_Runner.Tools.Builtin.Touches (Model_Runner.Tools.Builtin.Instance (Self), Named),
+            Outcome, Trigger, Said, Checked);
+         if E.Is_Error (Checked) then
+            Add (ASCII.LF & "[trusted Code Health metadata: assessment unavailable]");
+         elsif Length (Said) > 0 then
+            Add (ASCII.LF & "[trusted Code Health metadata:" & ASCII.LF & To_String (Said) & "]");
+         end if;
+      end Run_Code_Health;
    begin
       Run_Call (Self, Named, Arguments, Result, Last, Outcome, Status);
+      if E.Is_Ok (Status) then
+         Run_Code_Health;
+      end if;
       Count;
       if Named = "run_checks" and then Outcome.Answer = Model_Runner.Tools.Runner.Answered then
          Self.Tried.Checked (Result (Result'First .. Last));

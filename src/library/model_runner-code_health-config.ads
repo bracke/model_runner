@@ -13,6 +13,7 @@ package Model_Runner.Code_Health.Config is
       On_Edit          : Boolean := True;
       Fast_Profile     : Ada.Strings.Unbounded.Unbounded_String;
       Focused_Profile  : Ada.Strings.Unbounded.Unbounded_String;
+      Focused_Test     : Ada.Strings.Unbounded.Unbounded_String;
       Maximum_Stagnant : Natural := 3;
       Maximum_Assessments : Natural := 12;
       Feedback_Limit   : Natural := 8 * 1024;
@@ -24,12 +25,26 @@ package Model_Runner.Code_Health.Config is
 
    --  Apply one key from the global settings file.  Unknown code-health
    --  keys are refused, as are malformed booleans and numeric values.
+   --  @param Item Settings to update.
+   --  @param Name Full code-health key.
+   --  @param Value Text value.
+   --  @param Status Success or schema violation.
    procedure Set
      (Item   : in out Settings;
       Name   : String;
       Value  : String;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  @param Item Settings whose scalar bounds are checked.
+   --  @param Status Success or schema violation.
+   procedure Validate
+     (Item   : Settings;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  @param Item Settings to validate.
+   --  @param Defined Available profiles.
+   --  @param Providers Registered providers.
+   --  @param Status Success or schema violation.
    procedure Validate
      (Item      : Settings;
       Defined   : Model_Runner.Code_Health.Profiles.Profile_Set;
@@ -37,6 +52,9 @@ package Model_Runner.Code_Health.Config is
       Status    : out Model_Runner.Errors.Error_Info);
 
    --  Sixteen hexadecimal digits covering settings and profile semantics.
+   --  @param Item Validated settings.
+   --  @param Defined Profile definitions whose semantics are included.
+   --  @return Stable policy fingerprint.
    function Fingerprint
      (Item     : Settings;
       Defined  : Model_Runner.Code_Health.Profiles.Profile_Set) return String;
@@ -48,6 +66,7 @@ private
       On_Edit             => True,
       Fast_Profile        => Ada.Strings.Unbounded.To_Unbounded_String ("ada-fast"),
       Focused_Profile     => Ada.Strings.Unbounded.To_Unbounded_String ("ada-focused"),
+      Focused_Test        => Ada.Strings.Unbounded.Null_Unbounded_String,
       Maximum_Stagnant    => 3,
       Maximum_Assessments => 12,
       Feedback_Limit      => 8 * 1024,

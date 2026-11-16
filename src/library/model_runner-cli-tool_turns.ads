@@ -78,6 +78,7 @@ package Model_Runner.CLI.Tool_Turns is
    procedure Set_Planning (On : Boolean);
 
    --  Whether plan mode is on.
+   --  @return Whether calls that change state are refused as plans.
    function Planning return Boolean;
 
    --  Let a tool run unasked for the rest of the session, as "yes, and
@@ -124,6 +125,13 @@ package Model_Runner.CLI.Tool_Turns is
 
    --  Enable native Code Health for this runner.  Handler is invoked
    --  synchronously after actual successful filesystem changes.
+   --  @param Self Tool runner to configure.
+   --  @param Handler Synchronous assessment dispatcher.
+   --  @param Project Project or workspace root.
+   --  @param Status Success or initial snapshot failure.
+   --  @param Workspace Workspace provenance.
+   --  @param Task_Id Task provenance.
+   --  @param Generation Execution generation.
    procedure Enable_Code_Health
      (Self       : in out Hooked_Instance;
       Handler    : not null Model_Runner.Code_Health.Hooks.Dispatcher_Reference;
@@ -133,6 +141,7 @@ package Model_Runner.CLI.Tool_Turns is
       Task_Id    : String := "";
       Generation : Natural := 0);
 
+   --  @param Self Tool runner whose Code Health context is disabled.
    procedure Disable_Code_Health (Self : in out Hooked_Instance);
 
    overriding procedure Run

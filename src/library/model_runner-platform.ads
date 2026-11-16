@@ -69,6 +69,12 @@ package Model_Runner.Platform is
    --  @return Locale identifier, or an empty string when none is set.
    function Host_Locale return String;
 
+   --  Whether standing instruction files are enabled. The
+   --  MODEL_RUNNER_INSTRUCTIONS value "off" disables them.
+   --
+   --  @return False only when the environment explicitly disables them.
+   function Standing_Instructions_Enabled return Boolean;
+
    --  Directory containing the running executable.
    --
    --  @return Absolute directory path, or an empty string when it cannot be

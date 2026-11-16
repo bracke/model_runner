@@ -89,13 +89,6 @@ package body Unreached_Codes is
          --  fixture written for it would be testing the arithmetic's
          --  overflow rather than the refusal.
             | E.Tensor_Non_Finite_Value
-
-         --  Another content stored under a result's identifier. The
-         --  identifier is the fingerprint of the content, so reaching this
-         --  takes two contents with one FNV-1a hash, and a stored result
-         --  edited in place fails its own fingerprint first.
-            | E.Framework_Result_Conflict
-
          =>
             return True;
 

@@ -252,6 +252,21 @@ package Model_Runner.CLI.Interactive is
    --  and in less they crowd the conversation out.
    Tools_Least_Context : constant := 4096;
 
+   --  Hold a conversation until the user leaves or input ends.
+   --
+   --  @param Item Typed command supplying sampling and stop settings.
+   --  @param Screen Console for prompts, diagnostics and statistics.
+   --  @param Prepared Prepared model.
+   --  @param Session Open session on that model.
+   --  @param Rules Grammar each reply must obey, or null.
+   --  @param Tools Tool definitions offered to the model, or null.
+   --  @param Status Process exit status.
+   --  @param Cancel Cancellation token for the reply or work, or null.
+   --  @param Agent_Turn Tool-capable turn procedure, or null.
+   --  @param Messages Conversation passed to Agent_Turn.
+   --  @param Request Generation request passed to Agent_Turn.
+   --  @param Stop_Set Stop sequences passed to Agent_Turn.
+   --  @param Reason Agent_Turn's resulting stop reason.
    procedure Run
      (Item     : Model_Runner.CLI.Options.Command;
       Screen   : in out Model_Runner.Presentation.Console;
@@ -261,10 +276,6 @@ package Model_Runner.CLI.Interactive is
       Tools    : access constant Model_Runner.Tools.Definitions := null;
       Status   : out Natural;
       Cancel   : Model_Runner.Cancellation.Token_Reference := null;
-      --  A turn with the built-in tools: the message is in Messages, and
-      --  the model may read, write and run things -- each that changes
-      --  something asked of the user first -- until it answers. Null where
-      --  the run gives none; then the model only talks.
       Agent_Turn : access procedure
         (Messages : in out Model_Runner.Conversation.History;
          Request  : Model_Runner.Generation.Request;

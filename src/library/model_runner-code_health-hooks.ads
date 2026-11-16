@@ -22,6 +22,11 @@ package Model_Runner.Code_Health.Hooks is
    type Dispatcher is limited interface;
    type Dispatcher_Reference is access all Dispatcher'Class;
 
+   --  @param Self Dispatcher receiving the event.
+   --  @param Event Immutable event provenance.
+   --  @param Changed Normalized actual changes.
+   --  @param Feedback Bounded trusted model feedback.
+   --  @param Status Success or dispatch failure.
    procedure Dispatch
      (Self     : in out Dispatcher;
       Event    : Change_Event;
@@ -31,6 +36,13 @@ package Model_Runner.Code_Health.Hooks is
 
    type Context is private;
 
+   --  @param Item Context to initialize.
+   --  @param Project Project or workspace root to reconcile.
+   --  @param Handler Synchronous assessment dispatcher.
+   --  @param Status Success or snapshot failure.
+   --  @param Workspace Workspace provenance.
+   --  @param Task_Id Task provenance.
+   --  @param Generation Execution generation.
    procedure Initialize
      (Item       : in out Context;
       Project    : String;
@@ -40,9 +52,21 @@ package Model_Runner.Code_Health.Hooks is
       Task_Id    : String := "";
       Generation : Natural := 0);
 
+   --  @param Item Context to disable.
    procedure Disable (Item : in out Context);
+
+   --  @param Item Context to inspect.
+   --  @return Whether synchronous dispatch is enabled.
    function Enabled (Item : Context) return Boolean;
 
+   --  @param Item Context retaining the prior tree snapshot.
+   --  @param Named Tool name for provenance.
+   --  @param Kind Tool mutation classification.
+   --  @param Touches Resource classification.
+   --  @param Outcome Authoritative tool outcome.
+   --  @param Trigger Lifecycle boundary.
+   --  @param Feedback Bounded trusted model feedback.
+   --  @param Status Success or reconciliation/dispatch failure.
    procedure After_Call
      (Item      : in out Context;
       Named     : String;

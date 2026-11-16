@@ -98,6 +98,15 @@ package Model_Runner.Framework.Configurations is
    --  @return Sixteen hexadecimal digits.
    function Verification_Fingerprint (Value : Records.Item) return String;
 
+   --  The project policy that gives Code Health evidence its meaning.
+   --  Agent preferences and presentation limits are not included; check
+   --  selection, blocking policy, execution confinement and source scope
+   --  are. A change to any of them invalidates completion evidence.
+   --
+   --  @param Value The configuration record.
+   --  @return Sixteen hexadecimal digits.
+   function Code_Health_Fingerprint (Value : Records.Item) return String;
+
    --  The same, as it was computed before the execution limits counted:
    --  what evidence taken then was held to, so that it is not stale for
    --  that alone, while a change since to what it covered still makes it

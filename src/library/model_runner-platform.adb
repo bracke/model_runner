@@ -155,6 +155,13 @@ package body Model_Runner.Platform is
          return "";
    end Host_Locale;
 
+   -----------------------------------
+   -- Standing_Instructions_Enabled --
+   -----------------------------------
+
+   function Standing_Instructions_Enabled return Boolean
+   is (Environment_Value ("MODEL_RUNNER_INSTRUCTIONS") /= "off");
+
    ---------------
    -- Host_Name --
    ---------------

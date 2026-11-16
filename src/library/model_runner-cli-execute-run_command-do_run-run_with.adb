@@ -1,6 +1,14 @@
 with Model_Runner.CLI.MCP;
 with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.Tool_Turns;
+with Model_Runner.Code_Health.Ada;
+with Model_Runner.Code_Health.Ada_Profiles;
+with Model_Runner.Code_Health.Config;
+with Model_Runner.Code_Health.Engine;
+with Model_Runner.Code_Health.Profiles;
+with Model_Runner.Code_Health.Providers;
+with Model_Runner.Code_Health.Remediation;
+with Model_Runner.Config;
 with Model_Runner.Sampling;
 with Model_Runner.Conversation.Rooms;
 
@@ -744,6 +752,9 @@ begin
          --  loop on the conversation's own history, each call shown as it
          --  is made, one that changes something asked of the user first.
          Talk_Runner  : aliased Model_Runner.CLI.Tool_Turns.Hooked_Instance;
+         Talk_Health  : aliased Model_Runner.Code_Health.Engine.Instance;
+         Talk_Gate    : aliased Model_Runner.Code_Health.Remediation.Completion_Gate;
+         Talk_Gate_Ready : Boolean := False;
          Talk_Asker   : aliased Console_Inquirer (Screen'Unchecked_Access);
          Talk_Approve : aliased Model_Runner.CLI.Tool_Turns.Conversation_Approver (Screen'Unchecked_Access);
          Talk_Watch   : aliased Agent_Watch (Screen'Unchecked_Access, Trace => False, Log => null);
@@ -799,6 +810,82 @@ begin
             end if;
          end Close_Helper;
 
+         procedure Configure_Code_Health (Condition : out E.Error_Info) is
+            package Health_Config renames Model_Runner.Code_Health.Config;
+            Settings : Health_Config.Settings := Health_Config.Defaults;
+            Registry : Model_Runner.Code_Health.Providers.Registry;
+            Profiles : Model_Runner.Code_Health.Profiles.Profile_Set;
+            Native   : aliased Model_Runner.Code_Health.Ada.Instance;
+            Policy   : Model_Runner.Framework.Execution.Policy;
+         begin
+            for Index in 1 .. Model_Runner.Config.Count loop
+               declare
+                  Key : constant String := Model_Runner.Config.Key_At (Index);
+               begin
+                  if Key'Length >= 12 and then Key (Key'First .. Key'First + 11) = "code-health." then
+                     Health_Config.Set
+                       (Settings, Key, Model_Runner.Config.Value_At (Index), Condition);
+                     if E.Is_Error (Condition) then
+                        return;
+                     end if;
+                  end if;
+               end;
+            end loop;
+            Model_Runner.Code_Health.Providers.Register
+              (Registry, Native'Unchecked_Access, Condition);
+            if E.Is_Error (Condition) then
+               return;
+            end if;
+            Model_Runner.Code_Health.Ada_Profiles.Add_Defaults (Profiles);
+            Health_Config.Validate (Settings, Profiles, Registry, Condition);
+            if E.Is_Error (Condition) or else not Settings.Enabled then
+               return;
+            end if;
+            Policy.Allowed.Append ("gnatmake");
+            Policy.Allowed.Append ("gprbuild");
+            Policy.Allowed.Append ("alr");
+            Policy.Allowed.Append ("gnatprove");
+            Policy.Timeout := Positive (Settings.Focused_Deadline);
+            Policy.Output_Limit := Positive (Settings.Feedback_Limit);
+            Policy.Network := True;
+            Model_Runner.Code_Health.Engine.Initialize
+              (Talk_Health, Ada.Directories.Current_Directory, Condition,
+               Execution_Policy => Policy,
+               Cancel         => Cancel'Unchecked_Access,
+               Profile        => Ada.Strings.Unbounded.To_String (Settings.Fast_Profile),
+               Focused_Profile => Ada.Strings.Unbounded.To_String (Settings.Focused_Profile),
+               Configuration  => Health_Config.Fingerprint (Settings, Profiles),
+               Deadline       => Positive (Settings.Fast_Deadline),
+               Focused_Deadline => Positive (Settings.Focused_Deadline),
+               Fallback_Test  => Ada.Strings.Unbounded.To_String (Settings.Focused_Test),
+               Feedback_Limit => Positive (Settings.Feedback_Limit));
+            if E.Is_Ok (Condition) then
+               Model_Runner.Code_Health.Engine.Use_Profiles
+                 (Talk_Health, Profiles, Condition);
+            end if;
+            if E.Is_Ok (Condition) and then Model_Runner.CLI.Language_Server.Configured then
+               Model_Runner.Code_Health.Engine.Use_Language_Server
+                 (Talk_Health, Model_Runner.CLI.Language_Server.Problems_In'Access);
+            end if;
+            if E.Is_Ok (Condition) then
+               Model_Runner.Code_Health.Engine.Capture_Baseline (Talk_Health, Condition);
+            end if;
+            if E.Is_Ok (Condition) and then Settings.On_Edit then
+               Model_Runner.CLI.Tool_Turns.Enable_Code_Health
+                 (Talk_Runner, Talk_Health'Unchecked_Access,
+                  Ada.Directories.Current_Directory, Condition);
+            end if;
+            if E.Is_Ok (Condition) then
+               Model_Runner.Code_Health.Remediation.Initialize
+                 (Talk_Gate, Talk_Health'Unchecked_Access,
+                  (Max_Stagnant    => Positive (Settings.Maximum_Stagnant),
+                   Max_Assessments => Positive (Settings.Maximum_Assessments),
+                   Threshold       => Model_Runner.Code_Health.Error,
+                   Feedback_Limit  => Positive (Settings.Feedback_Limit)));
+               Talk_Gate_Ready := True;
+            end if;
+         end Configure_Code_Health;
+
          procedure Converse
            (Messages : in out Conv.History;
             Request  : Gen.Request;
@@ -828,8 +915,12 @@ begin
                --  conversation itself is. A model offered a fact table
                --  answered the capital of France from it.
                declare
-                  Can  : Model_Runner.Tools.Definitions;
-                  Kept : Ada.Strings.Unbounded.Unbounded_String;
+                  Can         : Model_Runner.Tools.Definitions;
+                  Kept        : Ada.Strings.Unbounded.Unbounded_String;
+                  Builtins    : Ada.Strings.Unbounded.Unbounded_String;
+                  Notes       : Ada.Strings.Unbounded.Unbounded_String;
+                  Built_Count : Natural := 0;
+                  Built_Bytes : Natural := 0;
                begin
                   Model_Runner.Tools.Read (Can, Talk_Runner.Offered_Text, Read);
                   for Index in 1 .. Model_Runner.Tools.Count (Can) loop
@@ -837,34 +928,73 @@ begin
                         Named : constant String := Model_Runner.Tools.Tool_Name (Can, Index);
                      begin
                         if not Model_Runner.CLI.Tool_Turns.Left_Out_Of_Talk (Named) then
-                           Ada.Strings.Unbounded.Append
-                             (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
-                                    & Model_Runner.Tools.Definition (Can, Index));
+                           declare
+                              Defined : constant String := Model_Runner.Tools.Definition (Can, Index);
+                           begin
+                              Ada.Strings.Unbounded.Append
+                                (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
+                                       & Defined);
+                              Built_Count := Built_Count + 1;
+                              Built_Bytes := Built_Bytes + Defined'Length + Named'Length;
+                           end;
                         end if;
                      end;
                   end loop;
                   Model_Runner.Tools.Close (Can);
+                  Builtins := Kept;
                   --  And the tools of the user's servers, those started: one
-                  --  that would not start said, and the rest go on.
+                  --  that would not start said, and the rest go on. They are
+                  --  admitted only while the common definition pool has room:
+                  --  one large server cannot make the reader discard every
+                  --  built-in tool.
                   if Model_Runner.CLI.MCP.Configured then
                      declare
-                        Notes   : Ada.Strings.Unbounded.Unbounded_String;
+                        Added         : Ada.Strings.Unbounded.Unbounded_String;
+                        Added_Count   : Natural;
+                        Added_Bytes   : Natural;
+                        Omitted       : Natural;
                      begin
                         Model_Runner.CLI.MCP.Start_All (Notes);
-                        if Ada.Strings.Unbounded.Length (Notes) > 0 then
-                           Pres.Put_Note
-                             (Screen, "cli.interactive.mcp_failed",
-                              [Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Notes))]);
-                        end if;
-                        if Model_Runner.CLI.MCP.Definitions /= "" then
+                        Model_Runner.CLI.MCP.Bounded_Definitions
+                          (Max_Count => Model_Runner.Tools.Max_Definitions - Built_Count,
+                           Max_Bytes => Model_Runner.Tools.Max_Definition_Bytes - Built_Bytes,
+                           Result    => Added,
+                           Count     => Added_Count,
+                           Bytes     => Added_Bytes,
+                           Omitted   => Omitted);
+                        if Omitted > 0 then
                            Ada.Strings.Unbounded.Append
-                             (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", ")
-                                    & Model_Runner.CLI.MCP.Definitions);
+                             (Notes, (if Ada.Strings.Unbounded.Length (Notes) = 0 then "" else [1 => ASCII.LF])
+                              & T.Image (Long_Long_Integer (Omitted))
+                              & (if Omitted = 1 then " tool does" else " tools do")
+                              & " not fit in the conversation's tool limit and were omitted");
+                        end if;
+                        if Ada.Strings.Unbounded.Length (Added) > 0 then
+                           Ada.Strings.Unbounded.Append
+                             (Kept, (if Ada.Strings.Unbounded.Length (Kept) = 0 then "" else ", "));
+                           Ada.Strings.Unbounded.Append (Kept, Added);
                         end if;
                      end;
                   end if;
                   Model_Runner.Tools.Read
                     (Talk_Tools, "[" & Ada.Strings.Unbounded.To_String (Kept) & "]", Read);
+                  if E.Is_Error (Read)
+                    and then Ada.Strings.Unbounded.Length (Kept) > Ada.Strings.Unbounded.Length (Builtins)
+                  then
+                     --  The bounds and canonical spellings above make this a
+                     --  last-resort guard. Keep the built-ins usable even if
+                     --  a server definition still surprises the reader.
+                     Model_Runner.Tools.Read
+                       (Talk_Tools, "[" & Ada.Strings.Unbounded.To_String (Builtins) & "]", Read);
+                     Ada.Strings.Unbounded.Append
+                       (Notes, (if Ada.Strings.Unbounded.Length (Notes) = 0 then "" else [1 => ASCII.LF])
+                        & "the server tool definitions could not be combined and were omitted");
+                  end if;
+                  if Ada.Strings.Unbounded.Length (Notes) > 0 then
+                     Pres.Put_Note
+                       (Screen, "cli.interactive.mcp_failed",
+                        [Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Notes))]);
+                  end if;
                end;
                Talk_Ready := True;
             end if;
@@ -892,6 +1022,8 @@ begin
                Tool_Syntax =>
                  Model_Runner.Templates.Reading_Syntax (L.Template_Format (Prepared)),
                Compact    => True,
+               Gate       =>
+                 (if Talk_Gate_Ready then Talk_Gate'Unchecked_Access else null),
                Result     => Loop_Out);
             Close_Helper;
             Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
@@ -901,12 +1033,21 @@ begin
             Reason := Loop_Out.Reason;
          end Converse;
       begin
-         Model_Runner.CLI.Interactive.Run
-           (Item, Screen, Prepared, Session,
-            (if Rules_Ready then Rules'Unchecked_Access else null),
-            (if Tools_Ready then Offered'Unchecked_Access else null),
-            Status, Cancel'Unchecked_Access,
-            Agent_Turn => Converse'Access);
+         declare
+            Health_Status : E.Error_Info;
+         begin
+            Configure_Code_Health (Health_Status);
+            if E.Is_Error (Health_Status) then
+               Fail (Health_Status);
+            else
+               Model_Runner.CLI.Interactive.Run
+                 (Item, Screen, Prepared, Session,
+                  (if Rules_Ready then Rules'Unchecked_Access else null),
+                  (if Tools_Ready then Offered'Unchecked_Access else null),
+                  Status, Cancel'Unchecked_Access,
+                  Agent_Turn => Converse'Access);
+            end if;
+         end;
          Model_Runner.Tools.Close (Talk_Tools);
          --  The language server and the user's servers, where started,
          --  let go of.
@@ -1094,6 +1235,7 @@ begin
                        | Model_Runner.Agent.Timed_Out
                        | Model_Runner.Agent.Token_Limit
                        | Model_Runner.Agent.Repeating
+                       | Model_Runner.Agent.Completion_Blocked
                        | Model_Runner.Agent.Declined =>
                       Pres.Stopped_Short,
                     when others => Pres.Failed));
@@ -1109,6 +1251,23 @@ begin
                --  not: the table's status for a cancelled generation.
                Pres.Report (Screen, E.Make (E.Generation_Cancelled));
                Status := E.Exit_Status (E.Make (E.Generation_Cancelled));
+            elsif Loop_Out.Reason = Model_Runner.Agent.Completion_Blocked then
+               declare
+                  Blocked : E.Error_Info :=
+                    (if E.Is_Error (Loop_Out.Error)
+                     then Loop_Out.Error else E.Make (E.Framework_Task_Not_Ready));
+               begin
+                  if E.Is_Ok (Loop_Out.Error) then
+                     E.Add_Text (Blocked, "name", "code health");
+                     E.Add_Text
+                       (Blocked, "detail",
+                        (if US.Length (Loop_Out.Completion_Feedback) = 0
+                         then "mandatory completion checks remain unresolved"
+                         else US.To_String (Loop_Out.Completion_Feedback)));
+                  end if;
+                  Pres.Report (Screen, Blocked);
+                  Status := E.Exit_Status (Blocked);
+               end;
             end if;
 
             --  Write the run's trace, if one was asked for: the calls

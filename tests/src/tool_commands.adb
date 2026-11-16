@@ -40,6 +40,9 @@ package body Tool_Commands is
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
    Name_Probe          : aliased constant String := "probe";
+   Name_Approve_Probe  : aliased constant String := "approve-probe";
+   Name_Fake_MCP       : aliased constant String := "fake-mcp";
+   Name_Fake_LSP       : aliased constant String := "fake-lsp";
    Name_Knowledge      : aliased constant String := "knowledge-bench";
    Name_Retrieval      : aliased constant String := "retrieval-bench";
 
@@ -143,6 +146,8 @@ package body Tool_Commands is
    Takes_Slow      : aliased constant String := "[NAME]";
    Takes_Bench     : aliased constant String := "[--formats] [--rounds N] [--tiles] [--vectors N]";
    Takes_Probe     : aliased constant String := "leave-signals | processors | hold-screen";
+   Takes_Approve   : aliased constant String := "NAME ARGUMENTS [NAME ARGUMENTS ...]";
+   Takes_Fake      : aliased constant String := "[MODE]";
    Takes_Knowledge : aliased constant String := "[--tasks N] [--files N] [--observations N]";
 
    Says_Retrieval : aliased constant String :=
@@ -153,6 +158,12 @@ package body Tool_Commands is
      "a process for the suite to watch from outside: one that ends with its"
      & " interrupt handling still installed, or one that says how many"
      & " processors and cores it would take";
+   Says_Approve : aliased constant String :=
+     "drive the interactive tool approver through a pseudo-terminal";
+   Says_Fake_MCP : aliased constant String :=
+     "serve deterministic Model Context Protocol replies for integration tests";
+   Says_Fake_LSP : aliased constant String :=
+     "serve deterministic language-server diagnostics for integration tests";
 
    Says_Outside : aliased constant String :=
      "run somebody else's measuring tool through this repository's load"
@@ -327,7 +338,7 @@ package body Tool_Commands is
    Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N] [--device]";
    Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads --device ";
 
-   Held : constant array (1 .. 40) of Command :=
+   Held : constant array (1 .. 43) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -400,6 +411,12 @@ package body Tool_Commands is
       (Name_Agent_Trial'Access, Takes_Trial'Access,
        Says_Trial'Access, Opts_Trial'Access),
       (Name_Probe'Access, Takes_Probe'Access, Says_Probe'Access,
+       Opts_None'Access),
+      (Name_Approve_Probe'Access, Takes_Approve'Access, Says_Approve'Access,
+       Opts_None'Access),
+      (Name_Fake_MCP'Access, Takes_Fake'Access, Says_Fake_MCP'Access,
+       Opts_None'Access),
+      (Name_Fake_LSP'Access, Takes_Fake'Access, Says_Fake_LSP'Access,
        Opts_None'Access),
       (Name_Knowledge'Access, Takes_Knowledge'Access, Says_Knowledge'Access,
        Opts_Knowledge'Access),

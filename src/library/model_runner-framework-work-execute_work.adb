@@ -2432,6 +2432,7 @@ begin
                                Own_Profile => To_String (Frozen.Verification_Profile));
       Profile : constant String := To_String (Chosen.Profile);
       Passed  : Boolean := False;
+      Health_Evidence : Unbounded_String;
    begin
       Result.Scope := Chosen.Scope;
       Result.Scope_Reason := Chosen.Reason;
@@ -2444,6 +2445,12 @@ begin
          Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
          Definition => Frozen_Definition (Profile),
          Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
+      if E.Is_Ok (Status) then
+         Model_Runner.Code_Health.Lifecycle.Record_Full_Verification
+           (Item, Change, Task_Id, To_String (Result.Agent_Id),
+            To_String (Result.Invocation_Id), To_String (Result.Evidence_Id),
+            Passed, Health_Evidence, Status);
+      end if;
       if E.Is_Error (Status) then
          Held := Status;
          Status := E.Success;
@@ -2456,6 +2463,11 @@ begin
       end if;
       Annotate (Item, Change, Task_Id, "current_verification",
                 To_String (Result.Evidence_Id));
+      if Health_Evidence /= Null_Unbounded_String then
+         Annotate
+           (Item, Change, Task_Id, "current_code_health",
+            To_String (Health_Evidence));
+      end if;
       Stores.Commit (Item, Change, Status);
       if E.Is_Error (Status) then
          return;

@@ -258,6 +258,29 @@ package body Library_Surface is
       --  asks before encoding with it.
       new String'("Can_Encode"),
 
+      --  Code Health is a library subsystem wider than the current Ada
+      --  command-line integration. These operations expose deterministic
+      --  profiles, evidence, rendering and comparison to other providers
+      --  and harnesses; the suite exercises them directly.
+      new String'("Has_Regression"),
+      new String'("Progress_Of"),
+      new String'("Stop_Of"),
+      new String'("Render_JSON"),
+      new String'("Disable_Code_Health"),
+      new String'("Skipped_At"),
+      new String'("Cache_Key_Of"),
+      new String'("Add_Provider"),
+      new String'("Select_Providers"),
+      new String'("Last_Summary"),
+      new String'("Profile_Count"),
+
+      --  These answer paths or layout state to callers outside the command
+      --  that owns their implementation. Conversations uses the platform
+      --  path internally and presentation uses Row_Full internally, which
+      --  the surface scanner deliberately does not count as external calls.
+      new String'("Conversations_Directory"),
+      new String'("Row_Full"),
+
       --  Whether a denoiser's panels came from the panel cache. The command
       --  runs the same either way; a caller timing an open, or a test,
       --  asks which it was.

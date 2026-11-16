@@ -24,6 +24,8 @@ package Model_Runner.CLI.Custom_Commands is
 
    --  The commands there are, each "/NAME" once, the session's folder's
    --  first.
+   --
+   --  @return The available command names.
    function Names return Model_Runner.Framework.Name_Lists.Vector;
 
    --  What a command does, as its file says in its first line that holds

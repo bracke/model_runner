@@ -6,7 +6,6 @@ with Ada_Quality.Checks;
 with Ada_Quality.Indicators;
 with Ada_Quality.Policy;
 with Ada_Quality.Types;
-with Project_Tools.Files;
 
 with Model_Runner.Code_Health.Diagnostics;
 with Model_Runner.Code_Health.Providers;
@@ -52,6 +51,8 @@ package body Model_Runner.Code_Health.Ada_Quality_Adapter is
          return "Handle expected exceptions explicitly or document an audited exception boundary";
       elsif Indicator = "SRC-06" then
          return "Split the source file or add an authorized, specific size waiver";
+      elsif Indicator = "DOC-01" then
+         return "Document the public package or declaration for GNATdoc";
       elsif Indicator = "SEC-01" then
          return "Remove the embedded credential and load the value from an approved secret source";
       elsif Indicator = "SEC-02" then
@@ -67,27 +68,67 @@ package body Model_Runner.Code_Health.Ada_Quality_Adapter is
       Changed       : String_Lists.Vector;
       Configuration : String;
       Snapshot      : String;
+      Deadline      : Standard.Ada.Real_Time.Time;
+      Cancel        : Model_Runner.Cancellation.Token_Reference;
       Result        : out Model_Runner.Code_Health.Ada.Source_Analysis;
       Status        : out E.Error_Info)
    is
       pragma Unreferenced (Self, Configuration);
+      use type Standard.Ada.Real_Time.Time;
       Policy  : constant Q.Policy.Quality_Policy := Q.Policy.Default;
-      Paths   : Project_Tools.Files.Path_List (1 .. Natural (Changed.Length));
       Metrics : Q.Checks.Source_Analysis;
       Registry : constant Q.Indicators.Descriptor_Array := Q.Indicators.Registry;
    begin
       Result := (others => <>);
-      if Changed.Is_Empty then
+      if Deadline /= Standard.Ada.Real_Time.Time_Last
+        and then Deadline <= Standard.Ada.Real_Time.Clock
+      then
+         Result.Check :=
+           (Identifier => To_Unbounded_String ("ada-quality-source"),
+            Status     => P.Check_Timed_Out,
+            Required   => True,
+            Detail     => To_Unbounded_String ("source analysis deadline expired"),
+            Evidence   => Null_Unbounded_String);
+         Status := E.Success;
+         return;
+      elsif Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+         Result.Check :=
+           (Identifier => To_Unbounded_String ("ada-quality-source"),
+            Status     => P.Check_Cancelled,
+            Required   => True,
+            Detail     => To_Unbounded_String ("source analysis was cancelled"),
+            Evidence   => Null_Unbounded_String);
+         Status := E.Success;
+         return;
+      elsif Changed.Is_Empty then
          Status := E.Make (E.Framework_Schema_Violation);
          E.Add_Text (Status, "name", "ada_quality.changed");
          E.Add_Text (Status, "detail", "change-scoped source analysis requires at least one source");
          return;
       end if;
-      for Index in Paths'Range loop
-         Paths (Index) := To_Unbounded_String (Changed.Element (Index));
-      end loop;
-
-      Metrics := Q.Checks.Analyze_Changed_Sources (Project_Root, Paths, Policy);
+      Metrics := Q.Checks.Analyze_Changed_Sources
+        (Project_Root, [for Path of Changed => To_Unbounded_String (Path)], Policy);
+      if Deadline /= Standard.Ada.Real_Time.Time_Last
+        and then Deadline <= Standard.Ada.Real_Time.Clock
+      then
+         Result.Check :=
+           (Identifier => To_Unbounded_String ("ada-quality-source"),
+            Status     => P.Check_Timed_Out,
+            Required   => True,
+            Detail     => To_Unbounded_String ("source analysis exceeded its deadline"),
+            Evidence   => Null_Unbounded_String);
+         Status := E.Success;
+         return;
+      elsif Model_Runner.Cancellation.Is_Cancelled (Cancel) then
+         Result.Check :=
+           (Identifier => To_Unbounded_String ("ada-quality-source"),
+            Status     => P.Check_Cancelled,
+            Required   => True,
+            Detail     => To_Unbounded_String ("source analysis was cancelled"),
+            Evidence   => Null_Unbounded_String);
+         Status := E.Success;
+         return;
+      end if;
       for Finding of Metrics.Findings loop
          declare
             Indicator : constant String := QT.Image (Finding.Indicator);
@@ -95,6 +136,7 @@ package body Model_Runner.Code_Health.Ada_Quality_Adapter is
             Version   : constant Positive := Registry (Finding.Indicator).Version;
             Item      : constant D.Diagnostic :=
               (Provider    => To_Unbounded_String ("ada"),
+               Check_Id    => To_Unbounded_String ("ada-quality-source"),
                Rule_Id     => To_Unbounded_String (Indicator & "/" & Rule),
                Severity    => Severity_Of (Finding.Level),
                Path        => Finding.Relative_Path,

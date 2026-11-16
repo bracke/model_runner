@@ -5791,9 +5791,24 @@ package body Tests.Framework_Cases is
               and then Refused ("scalar.execution.network", "sometimes")
               and then Refused ("scalar.execution.timeout", "long")
               and then Refused ("scalar.agents.max_steps", "-1")
+              and then Refused ("scalar.code_health.max_stagnant", "1001")
+              and then Refused ("scalar.code_health.max_assessments", "1001")
+              and then Refused ("scalar.code_health.feedback_limit", "1023")
+              and then Refused ("scalar.code_health.feedback_limit", "1048577")
               and then not Refused ("scalar.execution.network", "denied")
-              and then not Refused ("scalar.execution.timeout", "30"),
+              and then not Refused ("scalar.execution.timeout", "30")
+              and then not Refused ("scalar.code_health.feedback_limit", "8192"),
               "a setting's value was not held to what the harness reads it as");
+      declare
+         Limits : Model_Runner.Framework.Configurations.Value_Maps.Map;
+         Got    : E.Error_Info;
+      begin
+         Limits.Include ("scalar.code_health.max_assessments", "2");
+         Limits.Include ("scalar.code_health.max_stagnant", "3");
+         Model_Runner.Framework.Configurations.Plan_Change (Store, Limits, Planned, Got);
+         Assert (E.Is_Error (Got),
+                 "a Code Health stagnation limit above its assessment limit was taken");
+      end;
 
       --  A kind's own field has a schema, and its values are held to it.
       Assert (Refused ("task_kind.review", "verdict?"),
@@ -10277,6 +10292,11 @@ package body Tests.Framework_Cases is
       Told : constant String := Read_Whole (Prompt_Path);
    begin
       Knowing_Told := Ada.Strings.Fixed.Index (Told, Knowing_Finding) > 0;
+      Assert
+        (Wk.Task_Id_Of (Children) /= ""
+         and then Wk.Generation_Of (Children) > 0
+         and then (for all Character of Wk.Workspace_Of (Children) => Character /= ASCII.NUL),
+         "the child host did not expose Code Health task provenance");
       if not Knowing_Told then
          Knowing_Looks := Knowing_Looks + 4;
          declare

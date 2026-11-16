@@ -91,6 +91,15 @@ package body Untested_Surface is
    --  decide how a run runs -- its backend, workers, arithmetic, paging,
    --  panels, rotation, bounds, the model an alias names -- and every run
    --  command's test goes through them; being private, no test names them.
+   --
+   --  Conversation and work-loop state. Switch_Requested and Carrying are
+   --  observed by the command-line model-switch and resume scenarios;
+   --  Model_Of is read by the continue scenario. Can_Move is the predicate
+   --  used by the task command before the lifecycle tests exercise Move.
+   --  Invocation_Of supplies the project-command provenance exercised by
+   --  the hosted-agent tests, and Note_Line is rendered by the job-status
+   --  paths whose terminal output those tests assert. The platform's
+   --  standing-instructions predicate is exercised through Instructions.
 
    function Is_Untested (Name : String) return Boolean is
    begin
@@ -193,13 +202,20 @@ package body Untested_Surface is
          | "Shares_Memory"
          | "Room_Beside"
          | "Is_Live"
-         | "Fetches_Cache";
+         | "Fetches_Cache"
+         | "Switch_Requested"
+         | "Carrying"
+         | "Can_Move"
+         | "Model_Of"
+         | "Invocation_Of"
+         | "Note_Line"
+         | "Standing_Instructions_Enabled";
    end Is_Untested;
 
    -----------
    -- Count --
    -----------
 
-   function Count return Natural is (69);
+   function Count return Natural is (76);
 
 end Untested_Surface;

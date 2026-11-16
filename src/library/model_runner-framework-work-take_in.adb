@@ -381,7 +381,8 @@ begin
    --  the harness ran goes: failed when the checks failed, blocked when
    --  they could not run or its gates did not hold, never left waiting.
    declare
-      Chosen : constant Verification.Choice := Verification.Choose (Item, Task_Id, Taken);
+      Chosen          : constant Verification.Choice := Verification.Choose (Item, Task_Id, Taken);
+      Health_Evidence : Unbounded_String;
 
       procedure Leave (Next, Why : String) is
          Moved : E.Error_Info;
@@ -408,12 +409,22 @@ begin
            (Item, Change, To_String (Chosen.Profile), Task_Id, Result.Evidence_Id, Passed, Held,
             Given => Chosen.Given, Stands_For => To_String (Chosen.Stands_For),
             Selection => To_String (Chosen.Selection), Derived => Chosen.Derived);
+         if E.Is_Ok (Held) then
+            Model_Runner.Code_Health.Lifecycle.Record_Full_Verification
+              (Item, Change, Task_Id, "", "", To_String (Result.Evidence_Id),
+               Passed, Health_Evidence, Held);
+         end if;
          if E.Is_Error (Held) then
             Leave ("blocked", (if Interrupted (Held) then "its verification was cancelled"
                                  else "its verification could not run: " & Why_Of (Held)));
          else
             Annotate (Item, Change, Task_Id, "current_verification",
                       To_String (Result.Evidence_Id));
+            if Health_Evidence /= Null_Unbounded_String then
+               Annotate
+                 (Item, Change, Task_Id, "current_code_health",
+                  To_String (Health_Evidence));
+            end if;
             Stores.Commit (Item, Change, Status);
             --  Its evidence not kept, nothing is judged by it.
             if E.Is_Error (Status) then

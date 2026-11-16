@@ -91,6 +91,9 @@ package body Model_Runner.Code_Health.Config is
       elsif Name = "code-health.focused-profile" then
          Item.Focused_Profile := To_Unbounded_String (Value);
          Status := E.Success;
+      elsif Name = "code-health.focused-test" then
+         Item.Focused_Test := To_Unbounded_String (Value);
+         Status := E.Success;
       elsif Name in "code-health.max-stagnant" | "code-health.max-assessments"
                   | "code-health.feedback-limit" | "code-health.fast-deadline"
                   | "code-health.focused-deadline"
@@ -115,10 +118,8 @@ package body Model_Runner.Code_Health.Config is
    end Set;
 
    procedure Validate
-     (Item      : Settings;
-      Defined   : Model_Runner.Code_Health.Profiles.Profile_Set;
-      Providers : Model_Runner.Code_Health.Providers.Registry;
-      Status    : out E.Error_Info) is
+     (Item   : Settings;
+      Status : out E.Error_Info) is
    begin
       if Item.Maximum_Stagnant = 0 or else Item.Maximum_Stagnant > Maximum_Attempts then
          Refuse (Status, "code-health.max-stagnant", Image (Item.Maximum_Stagnant), "limit is out of range");
@@ -136,6 +137,23 @@ package body Model_Runner.Code_Health.Config is
       elsif Item.Fast_Deadline > Item.Focused_Deadline then
          Refuse (Status, "code-health.fast-deadline", Image (Item.Fast_Deadline),
                  "fast deadline exceeds focused deadline");
+      elsif Length (Item.Focused_Test) > 4 * 1024 then
+         Refuse (Status, "code-health.focused-test", To_String (Item.Focused_Test),
+                 "command is too long");
+      else
+         Status := E.Success;
+      end if;
+   end Validate;
+
+   procedure Validate
+     (Item      : Settings;
+      Defined   : Model_Runner.Code_Health.Profiles.Profile_Set;
+      Providers : Model_Runner.Code_Health.Providers.Registry;
+      Status    : out E.Error_Info) is
+   begin
+      Validate (Item, Status);
+      if E.Is_Error (Status) then
+         return;
       elsif Item.Enabled
         and then Model_Runner.Code_Health.Profiles.Check_Count (Defined, To_String (Item.Fast_Profile)) = 0
       then
@@ -160,6 +178,7 @@ package body Model_Runner.Code_Health.Config is
       R.Set (Meaning, "on_edit", Word (Item.On_Edit));
       R.Set (Meaning, "fast_profile", To_String (Item.Fast_Profile));
       R.Set (Meaning, "focused_profile", To_String (Item.Focused_Profile));
+      R.Set (Meaning, "focused_test", To_String (Item.Focused_Test));
       R.Set (Meaning, "maximum_stagnant", Image (Item.Maximum_Stagnant));
       R.Set (Meaning, "maximum_assessments", Image (Item.Maximum_Assessments));
       R.Set (Meaning, "feedback_limit", Image (Item.Feedback_Limit));

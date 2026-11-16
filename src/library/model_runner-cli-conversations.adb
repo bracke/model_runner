@@ -6,6 +6,9 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
+with Hostkit.Descriptors;
+with Hostkit.Host;
+
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.Conversation;
@@ -17,7 +20,37 @@ package body Model_Runner.CLI.Conversations is
 
    use Ada.Strings.Unbounded;
 
+   --  More than one conversation may begin in the same second, in this
+   --  process or another. The process and this process's sequence keep their
+   --  names apart without obscuring the time and model in the selector.
+   protected New_Conversations is
+      procedure Next (Number : out Natural);
+   private
+      Count : Natural := 0;
+   end New_Conversations;
+
+   protected body New_Conversations is
+      procedure Next (Number : out Natural) is
+      begin
+         Count := Count + 1;
+         Number := Count;
+      end Next;
+   end New_Conversations;
+
    function Directory return String is (Model_Runner.Platform.Conversations_Directory);
+
+   function Reservation_Path (Path : String) return String is (Path & ".reserve");
+
+   procedure Release_Reservation (Path : String) is
+      Reserved : constant String := Reservation_Path (Path);
+   begin
+      if Path /= "" and then Ada.Directories.Exists (Reserved) then
+         Ada.Directories.Delete_File (Reserved);
+      end if;
+   exception
+      when others =>
+         null;
+   end Release_Reservation;
 
    --  A time as a person reads it, in this machine's zone.
    function Local_Image (At_Time : Ada.Calendar.Time) return String is
@@ -45,6 +78,7 @@ package body Model_Runner.CLI.Conversations is
 
    function New_Path (Model : String) return String is
       Dir : constant String := Directory;
+      Number : Natural;
    begin
       if Dir = "" then
          return "";
@@ -68,7 +102,37 @@ package body Model_Runner.CLI.Conversations is
                C := '_';
             end if;
          end loop;
-         return Dir & "/" & Stamp & "--" & Name & ".txt";
+         --  Reserve the name, rather than only making one that is likely to
+         --  be unique. A process id can be reused, and a later process in the
+         --  same second starts its counter at one again. The marker is not the
+         --  conversation's .txt: a crash or failed first checkpoint must not
+         --  leave an empty conversation in the selector.
+         loop
+            declare
+               package D renames Hostkit.Descriptors;
+               Reservation : D.Descriptor := D.Invalid;
+            begin
+               New_Conversations.Next (Number);
+               declare
+                  Path : constant String :=
+                    Dir & "/" & Stamp & "--" & Name & "--"
+                    & Model_Runner.Text.Trim (Integer'Image (Hostkit.Host.Own_Process_Id))
+                    & "-" & Model_Runner.Text.Trim (Natural'Image (Number)) & ".txt";
+                  Reserved : constant String := Reservation_Path (Path);
+               begin
+                  if D.Open_File (Reserved, D.Open_Write_Exclusive, Reservation) then
+                     D.Close (Reservation);
+                     if Ada.Directories.Exists (Path) then
+                        Release_Reservation (Path);
+                     else
+                        return Path;
+                     end if;
+                  elsif not Ada.Directories.Exists (Reserved) then
+                     return "";
+                  end if;
+               end;
+            end;
+         end loop;
       end;
    exception
       when others =>

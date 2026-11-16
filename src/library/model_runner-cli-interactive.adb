@@ -4,12 +4,18 @@ with Ada.Streams.Stream_IO;
 with Model_Runner.Tools.Todo;
 with Model_Runner.CLI.Custom_Commands;
 with Model_Runner.CLI.Mentions;
+with Model_Runner.CLI.Process_Reaper;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.CLI.Instructions;
 with Model_Runner.CLI.Conversations;
 with Ada.Streams;
+with Hostkit.Fs;
 with Hostkit.Spawn;
+with Hostkit.Host;
+with Hostkit.Process;
+with Hostkit.Signals;
 with Hostkit.Shell;
+with Hostkit.Spawn.Supervision;
 with Ada.Directories;
 with Ada.Finalization;
 with Ada.Calendar;
@@ -385,6 +391,87 @@ package body Model_Runner.CLI.Interactive is
    --  /load.
    Kept_In : Ada.Strings.Unbounded.Unbounded_String;
 
+   --  A slot number is reused as jobs finish, but an output path must not be:
+   --  a child handed to the reaper may still have the old path open while a
+   --  later /model session starts another job in slot one.
+   protected Background_Outputs is
+      procedure Next (Number : out Natural);
+   private
+      Count : Natural := 0;
+   end Background_Outputs;
+
+   --  /model starts Run again in the same process. Picture names must keep
+   --  advancing across those runs, because the carried conversation still
+   --  refers to every picture pasted before the model changed.
+   protected Pasted_Files is
+      procedure Next (Number : out Natural);
+   private
+      Count : Natural := 0;
+   end Pasted_Files;
+
+   protected body Pasted_Files is
+      procedure Next (Number : out Natural) is
+      begin
+         Count := Count + 1;
+         Number := Count;
+      end Next;
+   end Pasted_Files;
+
+   protected body Background_Outputs is
+      procedure Next (Number : out Natural) is
+      begin
+         Count := Count + 1;
+         Number := Count;
+      end Next;
+   end Background_Outputs;
+
+   type Session_Path_Action is (Path_Ready, Make_Path, Wait_For_Path);
+
+   --  Directory creation is done outside the protected object, but only one
+   --  caller claims it. Other callers wait for the chosen path. The directory
+   --  itself is the cross-process reservation: Create_Directory is atomic.
+   protected Session_Path is
+      procedure Claim
+        (Action  : out Session_Path_Action;
+         Current : out Ada.Strings.Unbounded.Unbounded_String);
+      entry Await (Current : out Ada.Strings.Unbounded.Unbounded_String);
+      procedure Publish (Current : String);
+   private
+      Current_Path : Ada.Strings.Unbounded.Unbounded_String;
+      Initializing : Boolean := False;
+   end Session_Path;
+
+   protected body Session_Path is
+      procedure Claim
+        (Action  : out Session_Path_Action;
+         Current : out Ada.Strings.Unbounded.Unbounded_String)
+      is
+      begin
+         Current := Current_Path;
+         if Ada.Strings.Unbounded.Length (Current_Path) > 0 then
+            Action := Path_Ready;
+         elsif Initializing then
+            Action := Wait_For_Path;
+         else
+            Initializing := True;
+            Action := Make_Path;
+         end if;
+      end Claim;
+
+      entry Await (Current : out Ada.Strings.Unbounded.Unbounded_String)
+        when not Initializing
+      is
+      begin
+         Current := Current_Path;
+      end Await;
+
+      procedure Publish (Current : String) is
+      begin
+         Current_Path := Ada.Strings.Unbounded.To_Unbounded_String (Current);
+         Initializing := False;
+      end Publish;
+   end Session_Path;
+
    --  A model as a person names it: its file's name, or a reference's
    --  last part.
    function Model_Name (Path : String) return String is
@@ -398,16 +485,68 @@ package body Model_Runner.CLI.Interactive is
    --  writes: beside the prefill cache, not in it.
    function Session_Files return String is
       Cache : constant String := Model_Runner.Platform.Cache_Directory;
+      Action : Session_Path_Action := Path_Ready;
+      Current : Ada.Strings.Unbounded.Unbounded_String;
+
+      function Reserve return String is
+         Root : constant String :=
+           Ada.Directories.Containing_Directory (Cache) & "/session";
+         Pid  : constant String :=
+           T.Trim (Integer'Image (Hostkit.Host.Own_Process_Id));
+         Number : Natural := 1;
+      begin
+         Ada.Directories.Create_Path (Root);
+         loop
+            declare
+               Candidate : constant String :=
+                 Root & "/" & Pid
+                 & (if Number = 1 then "" else "-" & T.Image (Long_Long_Integer (Number)));
+            begin
+               begin
+                  Ada.Directories.Create_Directory (Candidate);
+                  return Candidate;
+               exception
+                  when others =>
+                     if not Ada.Directories.Exists (Candidate) then
+                        return "";
+                     end if;
+               end;
+            end;
+            if Number = Natural'Last then
+               return "";
+            end if;
+            Number := Number + 1;
+         end loop;
+      exception
+         when others =>
+            return "";
+      end Reserve;
    begin
-      return (if Cache = "" then "" else Ada.Directories.Containing_Directory (Cache) & "/session");
+      if Cache = "" then
+         return "";
+      end if;
+      Session_Path.Claim (Action, Current);
+      case Action is
+         when Path_Ready =>
+            return Ada.Strings.Unbounded.To_String (Current);
+         when Wait_For_Path =>
+            Session_Path.Await (Current);
+            return Ada.Strings.Unbounded.To_String (Current);
+         when Make_Path =>
+            declare
+               Reserved : constant String := Reserve;
+            begin
+               Session_Path.Publish (Reserved);
+               return Reserved;
+            end;
+      end case;
    exception
       when others =>
+         if Action = Make_Path then
+            Session_Path.Publish ("");
+         end if;
          return "";
    end Session_Files;
-
-   --  Where a conversation waits while the model is changed.
-   function Carry_Path return String
-   is (Session_Files & "/conversation-carried.txt");
 
    procedure Set_Model_Picker (Picker : Model_Picker) is
    begin
@@ -563,9 +702,6 @@ package body Model_Runner.CLI.Interactive is
 
       --  Whether the turn being taken carries a picture.
       With_Picture : Boolean := False;
-
-      --  Pictures pasted this session, each a file of its own.
-      Pasted_Count : Natural := 0;
 
       --  A message one of the user's own commands made, to send once the
       --  command is done.
@@ -1658,20 +1794,28 @@ package body Model_Runner.CLI.Interactive is
                                     [Loc.Named ("model", Model_Name (Here))]);
                   elsif Picked then
                      declare
-                        Wrote : E.Error_Info;
+                        Folder : constant String := Session_Files;
                      begin
-                        Ada.Directories.Create_Path (Session_Files);
-                        Model_Runner.CLI.Checkpoint.Save (Carry_Path, Messages, Wrote);
-                        if E.Is_Error (Wrote) then
-                           Pres.Report (Screen, Wrote);
+                        if Folder = "" then
+                           Pres.Put_Note (Screen, "cli.interactive.session_files_failed");
                         else
-                           Carried := Ada.Strings.Unbounded.To_Unbounded_String (Carry_Path);
-                           Switch_To := Ada.Strings.Unbounded.To_Unbounded_String (T.To_String (Chosen));
-                           Pres.Put_Note
-                             (Screen, "cli.interactive.model_switching",
-                              [Loc.Named ("model", Model_Name (T.To_String (Chosen)))]);
-                           Stop_Warming;
-                           Leaving := True;
+                           declare
+                              Path  : constant String := Folder & "/conversation-carried.txt";
+                              Wrote : E.Error_Info;
+                           begin
+                              Model_Runner.CLI.Checkpoint.Save (Path, Messages, Wrote);
+                              if E.Is_Error (Wrote) then
+                                 Pres.Report (Screen, Wrote);
+                              else
+                                 Carried := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+                                 Switch_To := Ada.Strings.Unbounded.To_Unbounded_String (T.To_String (Chosen));
+                                 Pres.Put_Note
+                                   (Screen, "cli.interactive.model_switching",
+                                    [Loc.Named ("model", Model_Name (T.To_String (Chosen)))]);
+                                 Stop_Warming;
+                                 Leaving := True;
+                              end if;
+                           end;
                         end if;
                      end;
                   elsif Path_Missing and then Picker_Given /= null then
@@ -1715,38 +1859,46 @@ package body Model_Runner.CLI.Interactive is
             if T.Is_Empty (Item.Projector_Path) then
                Pres.Put_Note (Screen, "cli.interactive.no_projector");
             else
-               Pasted_Count := Pasted_Count + 1;
                declare
-                  Path : constant String :=
-                    Session_Files & "/pasted-"
-                    & T.Image (Long_Long_Integer (Pasted_Count)) & ".png";
-                  Quoted : constant String := Hostkit.Shell.Quote (Path);
-                  Asked_For : Model_Runner.Processes.Request;
-                  Ran : Model_Runner.Processes.Result;
+                  Folder       : constant String := Session_Files;
+                  Pasted_Count : Natural;
                begin
-                  Ada.Directories.Create_Path (Session_Files);
-                  Asked_For.Program := Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Executable);
-                  Asked_For.Arguments.Append
-                    (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
-                  --  Wayland's clipboard, else X's.
-                  Asked_For.Arguments.Append
-                    (Ada.Strings.Unbounded.To_Unbounded_String
-                       ("wl-paste --type image/png > " & Quoted & " 2>/dev/null"
-                        & " || xclip -selection clipboard -t image/png -o > " & Quoted & " 2>/dev/null"));
-                  Asked_For.Limit := 10.0;
-                  Ran := Model_Runner.Processes.Run (Asked_For);
-                  if not Model_Runner.Processes.Succeeded (Ran)
-                    or else not Ada.Directories.Exists (Path)
-                    or else Ada.Directories."=" (Ada.Directories.Size (Path), 0)
-                  then
-                     Pres.Put_Note (Screen, "cli.interactive.paste_none");
+                  if Folder = "" then
+                     Pres.Put_Note (Screen, "cli.interactive.session_files_failed");
                   else
-                     Free_Text (Next_Picture);
-                     Picture_Kept := Pending (Typing) /= "";
-                     Next_Picture := new String'(Path);
-                     Next_Is_Video := False;
-                     Pres.Put_Note (Screen, "cli.interactive.picture_pending",
-                                    [Loc.Named ("detail", Next_Picture.all)]);
+                     Pasted_Files.Next (Pasted_Count);
+                     declare
+                        Path : constant String :=
+                          Folder & "/pasted-"
+                          & T.Image (Long_Long_Integer (Pasted_Count)) & ".png";
+                        Quoted : constant String := Hostkit.Shell.Quote (Path);
+                        Asked_For : Model_Runner.Processes.Request;
+                        Ran : Model_Runner.Processes.Result;
+                     begin
+                        Asked_For.Program := Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Executable);
+                        Asked_For.Arguments.Append
+                          (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
+                        --  Wayland's clipboard, else X's.
+                        Asked_For.Arguments.Append
+                          (Ada.Strings.Unbounded.To_Unbounded_String
+                             ("wl-paste --type image/png > " & Quoted & " 2>/dev/null"
+                              & " || xclip -selection clipboard -t image/png -o > " & Quoted & " 2>/dev/null"));
+                        Asked_For.Limit := 10.0;
+                        Ran := Model_Runner.Processes.Run (Asked_For);
+                        if not Model_Runner.Processes.Succeeded (Ran)
+                          or else not Ada.Directories.Exists (Path)
+                          or else Ada.Directories."=" (Ada.Directories.Size (Path), 0)
+                        then
+                           Pres.Put_Note (Screen, "cli.interactive.paste_none");
+                        else
+                           Free_Text (Next_Picture);
+                           Picture_Kept := Pending (Typing) /= "";
+                           Next_Picture := new String'(Path);
+                           Next_Is_Video := False;
+                           Pres.Put_Note (Screen, "cli.interactive.picture_pending",
+                                          [Loc.Named ("detail", Next_Picture.all)]);
+                        end if;
+                     end;
                   end if;
                end;
             end if;
@@ -2476,15 +2628,21 @@ package body Model_Runner.CLI.Interactive is
       procedure Keep_Conversation is
          Wrote : E.Error_Info;
          Model : constant String := T.To_String (Item.Model_Path);
+         Newly_Reserved : Boolean := False;
       begin
          if Ada.Strings.Unbounded.Length (Kept_In) = 0 then
             Kept_In := Ada.Strings.Unbounded.To_Unbounded_String
               (Model_Runner.CLI.Conversations.New_Path (Model));
+            Newly_Reserved := Ada.Strings.Unbounded.Length (Kept_In) > 0;
          end if;
          if Ada.Strings.Unbounded.Length (Kept_In) = 0 then
             return;
          end if;
          Model_Runner.CLI.Checkpoint.Save (Ada.Strings.Unbounded.To_String (Kept_In), Messages, Wrote);
+         if Newly_Reserved then
+            Model_Runner.CLI.Conversations.Release_Reservation
+              (Ada.Strings.Unbounded.To_String (Kept_In));
+         end if;
          if E.Is_Ok (Wrote) then
             Model_Runner.CLI.Conversations.Note_Model
               (Ada.Strings.Unbounded.To_String (Kept_In),
@@ -2493,6 +2651,10 @@ package body Model_Runner.CLI.Interactive is
          end if;
       exception
          when others =>
+            if Newly_Reserved then
+               Model_Runner.CLI.Conversations.Release_Reservation
+                 (Ada.Strings.Unbounded.To_String (Kept_In));
+            end if;
             null;
       end Keep_Conversation;
 
@@ -2500,10 +2662,13 @@ package body Model_Runner.CLI.Interactive is
       --  its words go to, and its line; checked between lines, and what one
       --  that ended said goes with the next message as a command's does.
       type Job is record
-         Child   : Hostkit.Spawn.Process_Handle;
+         Child   : Hostkit.Spawn.Process_Handle := Hostkit.Spawn.Invalid_Process;
          Output  : Ada.Strings.Unbounded.Unbounded_String;
          Command : Ada.Strings.Unbounded.Unbounded_String;
          Running : Boolean := False;
+         Ended   : Boolean := False;
+         Status  : Hostkit.Spawn.Status;
+         Output_Tries : Natural := 0;
       end record;
       Jobs_Most : constant := 16;
       Jobs : array (1 .. Jobs_Most) of Job;
@@ -2512,9 +2677,23 @@ package body Model_Runner.CLI.Interactive is
          package D renames Hostkit.Descriptors;
          use type Hostkit.Spawn.Spawn_Outcome;
          Slot    : Natural := 0;
-         Written : D.Descriptor;
+         Written : D.Descriptor := D.Invalid;
+         Input   : D.Descriptor := D.Invalid;
          Options : Hostkit.Spawn.Options;
          Words   : Hostkit.String_Vectors.Vector;
+         Output_Number : Natural;
+         Output_Path : Ada.Strings.Unbounded.Unbounded_String;
+         Spawned : Boolean := False;
+
+         procedure Remove_Failed_Output (Path : String) is
+         begin
+            if Path /= "" and then Ada.Directories.Exists (Path) then
+               Ada.Directories.Delete_File (Path);
+            end if;
+         exception
+            when others =>
+               Model_Runner.CLI.Process_Reaper.Remove_When_Free (Path);
+         end Remove_Failed_Output;
       begin
          for Index in Jobs'Range loop
             if not Jobs (Index).Running then
@@ -2527,40 +2706,189 @@ package body Model_Runner.CLI.Interactive is
             return;
          end if;
          declare
-            Path : constant String :=
-              Session_Files & "/job-" & T.Image (Long_Long_Integer (Slot)) & ".txt";
+            Folder : constant String := Session_Files;
          begin
-            Ada.Directories.Create_Path (Session_Files);
-            if not D.Open_File (Path, D.Open_Write_Truncate, Written)
-              or else not D.Set_Inheritable (Written, True)
-            then
-               D.Close (Written);
-               Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+            if Folder = "" then
+               Pres.Put_Note (Screen, "cli.interactive.session_files_failed");
                return;
             end if;
-            Options.Output := Written;
-            Options.Error_Output := Written;
-            Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
-            Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Command));
-            if Hostkit.Spawn.Start (Hostkit.Shell.Executable, Words, Options, Jobs (Slot).Child)
-               /= Hostkit.Spawn.Spawn_Ok
-            then
+            Background_Outputs.Next (Output_Number);
+            declare
+               Path : constant String :=
+                 Folder & "/job-" & T.Image (Long_Long_Integer (Output_Number)) & ".txt";
+            begin
+               Output_Path := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+               if not D.Open_File (Path, D.Open_Write_Truncate, Written)
+                 or else not D.Set_Inheritable (Written, True)
+                 or else Hostkit.Fs.Null_Device = ""
+                 or else not D.Open_File (Hostkit.Fs.Null_Device, D.Open_Read, Input)
+                 or else not D.Set_Inheritable (Input, True)
+               then
+                  D.Close (Written);
+                  D.Close (Input);
+                  Remove_Failed_Output (Path);
+                  Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+                  return;
+               end if;
+               --  A background command is not another reader of the prompt.
+               --  Its own group also lets cleanup stop everything it started,
+               --  rather than only the shell at the front of a pipeline.
+               Options.Input := Input;
+               Options.Output := Written;
+               Options.Error_Output := Written;
+               Options.Group := Hostkit.Spawn.Group_New;
+               Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Hostkit.Shell.Command_Option));
+               Words.Append (Ada.Strings.Unbounded.To_Unbounded_String (Command));
+               Jobs (Slot).Output := Ada.Strings.Unbounded.To_Unbounded_String (Path);
+               Jobs (Slot).Command := Ada.Strings.Unbounded.To_Unbounded_String (Command);
+               Jobs (Slot).Ended := False;
+               if Hostkit.Spawn.Start (Hostkit.Shell.Executable, Words, Options, Jobs (Slot).Child)
+                  /= Hostkit.Spawn.Spawn_Ok
+               then
+                  D.Close (Written);
+                  D.Close (Input);
+                  Remove_Failed_Output (Path);
+                  Jobs (Slot).Output := Ada.Strings.Unbounded.Null_Unbounded_String;
+                  Jobs (Slot).Command := Ada.Strings.Unbounded.Null_Unbounded_String;
+                  Pres.Put_Note (Screen, "cli.interactive.shell_failed");
+                  return;
+               end if;
+               Spawned := True;
+               Jobs (Slot).Running := True;
                D.Close (Written);
-               Pres.Put_Note (Screen, "cli.interactive.shell_failed");
-               return;
-            end if;
-            D.Close (Written);
-            Jobs (Slot).Output := Ada.Strings.Unbounded.To_Unbounded_String (Path);
-            Jobs (Slot).Command := Ada.Strings.Unbounded.To_Unbounded_String (Command);
-            Jobs (Slot).Running := True;
-            Pres.Put_Note (Screen, "cli.interactive.job_started",
-                           [Loc.Named ("value", T.Image (Long_Long_Integer (Slot))),
-                            Loc.Named ("detail", Command)]);
+               D.Close (Input);
+               Pres.Put_Note (Screen, "cli.interactive.job_started",
+                              [Loc.Named ("value", T.Image (Long_Long_Integer (Slot))),
+                               Loc.Named ("detail", Command)]);
+            end;
          end;
       exception
          when others =>
+            D.Close (Written);
+            D.Close (Input);
+            if not Spawned then
+               Remove_Failed_Output
+                 (Ada.Strings.Unbounded.To_String (Output_Path));
+            end if;
             Pres.Put_Note (Screen, "cli.interactive.shell_failed");
       end Start_Job;
+
+      --  The shell is the group's leader, not necessarily its last member:
+      --  `command &` lets the shell leave while command still runs. End those
+      --  remaining members before Release forgets the group's id.
+      procedure Stop_Remaining_Group (Child : Hostkit.Spawn.Process_Handle) is
+         Group : constant Integer := Hostkit.Spawn.Group_Id (Child);
+         Sent  : Boolean;
+      begin
+         if Group > 1 then
+            Sent := Hostkit.Signals.Send_To_Group
+              (Group, Hostkit.Signals.Signal_Terminate);
+            if Sent then
+               delay 0.05;
+               Sent := Hostkit.Signals.Send_To_Group
+                 (Group, Hostkit.Signals.Signal_Kill);
+            end if;
+         end if;
+      exception
+         when others =>
+            null;
+      end Stop_Remaining_Group;
+
+      --  Whether a child has ended and has now been collected. Wait may also
+      --  report a stop or continuation; those are not an end.
+      function Collect_Job (One : in out Job) return Boolean is
+         Result : Hostkit.Spawn.Status;
+      begin
+         if not Hostkit.Spawn.Is_Valid (One.Child) then
+            return True;
+         elsif Hostkit.Spawn.Supervision.Has_Ended (One.Child, Result)
+         then
+            Stop_Remaining_Group (One.Child);
+            Hostkit.Spawn.Release (One.Child);
+            return True;
+         end if;
+         return False;
+      exception
+         when others =>
+            return False;
+      end Collect_Job;
+
+      --  No background command outlives the conversation that owns its slot
+      --  and output file. This runs on /exit and on /model, where a new Run
+      --  would otherwise reuse job-1.txt while the old job still wrote it.
+      procedure Stop_Jobs is
+         procedure Remove_Output (Path : String) is
+         begin
+            if Path /= "" and then Ada.Directories.Exists (Path) then
+               Ada.Directories.Delete_File (Path);
+            end if;
+         exception
+            when others =>
+               --  On Windows, releasing an ended group leader requests that
+               --  its Job Object's descendants terminate but can return while
+               --  one still holds the passing file. Keep retrying after this
+               --  conversation has otherwise finished cleaning up.
+               Model_Runner.CLI.Process_Reaper.Remove_When_Free (Path);
+         end Remove_Output;
+
+         procedure Wait_After_Force (One : in out Job) is
+         begin
+            for Try in 1 .. 20 loop
+               exit when Collect_Job (One);
+               delay 0.05;
+            end loop;
+         end Wait_After_Force;
+      begin
+         for One of Jobs loop
+            declare
+               Reaped_Later : Boolean := False;
+               Path : constant String := Ada.Strings.Unbounded.To_String (One.Output);
+            begin
+               if Hostkit.Spawn.Is_Valid (One.Child) and then not Collect_Job (One) then
+                  declare
+                     Group : constant Integer := Hostkit.Spawn.Group_Id (One.Child);
+                     Pid   : constant Integer := Hostkit.Spawn.Process_Id (One.Child);
+                     Sent  : Boolean := False;
+                  begin
+                     if Group > 1 then
+                        Sent := Hostkit.Signals.Send_To_Group
+                          (Group, Hostkit.Signals.Signal_Terminate);
+                     end if;
+                     if not Sent then
+                        Sent := Hostkit.Process.Request_Stop (Pid);
+                     end if;
+                     for Try in 1 .. 20 loop
+                        exit when Collect_Job (One);
+                        delay 0.05;
+                     end loop;
+                     if Hostkit.Spawn.Is_Valid (One.Child) then
+                        Sent := False;
+                        if Group > 1 then
+                           Sent := Hostkit.Signals.Send_To_Group
+                             (Group, Hostkit.Signals.Signal_Kill);
+                        end if;
+                        if not Sent then
+                           Sent := Hostkit.Spawn.Supervision.Stop_Now (One.Child);
+                        end if;
+                        Wait_After_Force (One);
+                        if Hostkit.Spawn.Is_Valid (One.Child) then
+                           Model_Runner.CLI.Process_Reaper.Adopt (One.Child, Path);
+                           Reaped_Later := True;
+                        end if;
+                     end if;
+                  end;
+               end if;
+               One.Running := False;
+               One.Ended := False;
+               if not Reaped_Later then
+                  Remove_Output (Path);
+               end if;
+            exception
+               when others =>
+                  null;
+            end;
+         end loop;
+      end Stop_Jobs;
 
       --  Job notes drawn while a line waited, for the editor to put above it.
       Job_Notes : Ada.Strings.Unbounded.Unbounded_String;
@@ -2570,63 +2898,151 @@ package body Model_Runner.CLI.Interactive is
       --  for the next message.
       procedure Check_Jobs (Quietly : Boolean := False) is
          use type Hostkit.Spawn.Wait_State;
+
+         procedure Take_Output
+           (Path  : String;
+            Tries : in out Natural;
+            Words : out Ada.Strings.Unbounded.Unbounded_String;
+            Size  : out Natural;
+            Ready : out Boolean)
+         is
+            File : Ada.Streams.Stream_IO.File_Type;
+
+            procedure Give_Up is
+            begin
+               Words := Ada.Strings.Unbounded.To_Unbounded_String
+                 ("[background output could not be read]");
+               Size := Ada.Strings.Unbounded.Length (Words);
+               Ready := True;
+               Model_Runner.CLI.Process_Reaper.Remove_When_Free (Path);
+            end Give_Up;
+         begin
+            Words := Ada.Strings.Unbounded.Null_Unbounded_String;
+            Size := 0;
+            Ready := False;
+            if not Ada.Directories.Exists (Path) then
+               Tries := 0;
+               Ready := True;
+               return;
+            end if;
+
+            --  Opening is the readiness test on Windows. Try only once per
+            --  editor poll: sleeping here freezes typing. A bounded number of
+            --  failed polls eventually releases the job slot as well.
+            begin
+               Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
+            exception
+               when others =>
+                  Tries := Tries + 1;
+                  if Tries >= 20 then
+                     Give_Up;
+                  end if;
+                  return;
+            end;
+
+            Size := Natural (Ada.Directories.Size (Path));
+            declare
+               Kept : constant Natural := Natural'Min (Size, Shell_Kept_Most);
+               Text : String (1 .. Kept);
+            begin
+               if Kept > 0 then
+                  String'Read (Ada.Streams.Stream_IO.Stream (File), Text);
+                  Ada.Strings.Unbounded.Append (Words, Text);
+               end if;
+            end;
+            Ada.Streams.Stream_IO.Close (File);
+            Tries := 0;
+            Ready := True;
+            begin
+               Ada.Directories.Delete_File (Path);
+            exception
+               when others =>
+                  --  The result is already safely read. A cleanup failure
+                  --  must not discard it or keep its job slot occupied.
+                  Model_Runner.CLI.Process_Reaper.Remove_When_Free (Path);
+            end;
+         exception
+            when others =>
+               if Ada.Streams.Stream_IO.Is_Open (File) then
+                  Ada.Streams.Stream_IO.Close (File);
+               end if;
+               Tries := Tries + 1;
+               if Tries >= 20 then
+                  Give_Up;
+               end if;
+         end Take_Output;
       begin
          for Index in Jobs'Range loop
             if Jobs (Index).Running then
                declare
-                  Result : Hostkit.Spawn.Status;
+                  Result : Hostkit.Spawn.Status renames Jobs (Index).Status;
                begin
-                  if Hostkit.Spawn.Wait (Jobs (Index).Child, Hostkit.Spawn.Wait_Poll, Result)
-                    and then Result.State in Hostkit.Spawn.Wait_Exited | Hostkit.Spawn.Wait_Signalled
+                  if not Jobs (Index).Ended
+                    and then Hostkit.Spawn.Supervision.Has_Ended
+                      (Jobs (Index).Child, Result)
                   then
-                     Jobs (Index).Running := False;
+                     Jobs (Index).Ended := True;
+                     Stop_Remaining_Group (Jobs (Index).Child);
+                     --  On Windows Release terminates descendants in the Job
+                     --  Object. Do that before opening the inherited output
+                     --  handle; otherwise a descendant can keep the file from
+                     --  being read exclusively or deleted.
+                     Hostkit.Spawn.Release (Jobs (Index).Child);
+                  end if;
+                  if Jobs (Index).Ended then
                      declare
                         Path   : constant String := Ada.Strings.Unbounded.To_String (Jobs (Index).Output);
-                        Size   : constant Natural :=
-                          (if Ada.Directories.Exists (Path) then Natural (Ada.Directories.Size (Path)) else 0);
-                        Kept   : constant Natural := Natural'Min (Size, Shell_Kept_Most);
-                        Words  : String (1 .. Kept);
-                        File   : Ada.Streams.Stream_IO.File_Type;
+                        Size   : Natural;
+                        Words  : Ada.Strings.Unbounded.Unbounded_String;
+                        Ready  : Boolean;
                         Status_Image : constant String :=
                           (if Result.State = Hostkit.Spawn.Wait_Exited
                            then T.Image (Long_Long_Integer (Result.Exit_Code)) else "stopped");
                      begin
-                        if Kept > 0 then
-                           Ada.Streams.Stream_IO.Open (File, Ada.Streams.Stream_IO.In_File, Path);
-                           String'Read (Ada.Streams.Stream_IO.Stream (File), Words);
-                           Ada.Streams.Stream_IO.Close (File);
+                        Take_Output
+                          (Path, Jobs (Index).Output_Tries, Words, Size, Ready);
+                        if Ready then
+                           Ada.Strings.Unbounded.Append
+                             (Shell_Said,
+                              "$ " & Ada.Strings.Unbounded.To_String (Jobs (Index).Command)
+                              & "   (in the background)"
+                              & ASCII.LF & Ada.Strings.Unbounded.To_String (Words)
+                              & (if Ada.Strings.Unbounded.Length (Words) > 0
+                                   and then Ada.Strings.Unbounded.Element
+                                     (Words, Ada.Strings.Unbounded.Length (Words)) /= ASCII.LF
+                                 then [1 => ASCII.LF] else "")
+                              & (if Size > Ada.Strings.Unbounded.Length (Words)
+                                 then "[" & T.Image
+                                   (Long_Long_Integer (Size - Ada.Strings.Unbounded.Length (Words)))
+                                                    & " more bytes left out]" & ASCII.LF else "")
+                              & "[exit status " & Status_Image & "]" & ASCII.LF);
+                           Jobs (Index).Running := False;
+                           Jobs (Index).Ended := False;
+                           Jobs (Index).Output_Tries := 0;
+                           declare
+                              Said : constant Loc.Argument_List :=
+                                [Loc.Named ("value", T.Image (Long_Long_Integer (Index))),
+                                 Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Jobs (Index).Command)),
+                                 Loc.Named ("state", Status_Image)];
+                           begin
+                              if Quietly then
+                                 Ada.Strings.Unbounded.Append
+                                   (Job_Notes,
+                                    (if Ada.Strings.Unbounded.Length (Job_Notes) = 0
+                                     then "" else [1 => ASCII.LF])
+                                    & Pres.Note_Line (Screen, "cli.interactive.job_done", Said));
+                              else
+                                 Pres.Put_Note (Screen, "cli.interactive.job_done", Said);
+                              end if;
+                           end;
                         end if;
-                        if Ada.Directories.Exists (Path) then
-                           Ada.Directories.Delete_File (Path);
-                        end if;
-                        Ada.Strings.Unbounded.Append
-                          (Shell_Said,
-                           "$ " & Ada.Strings.Unbounded.To_String (Jobs (Index).Command) & "   (in the background)"
-                           & ASCII.LF & Words
-                           & (if Kept > 0 and then Words (Words'Last) /= ASCII.LF then [1 => ASCII.LF] else "")
-                           & (if Size > Kept then "[" & T.Image (Long_Long_Integer (Size - Kept))
-                                                 & " more bytes left out]" & ASCII.LF else "")
-                           & "[exit status " & Status_Image & "]" & ASCII.LF);
-                        declare
-                           Said : constant Loc.Argument_List :=
-                             [Loc.Named ("value", T.Image (Long_Long_Integer (Index))),
-                              Loc.Named ("detail", Ada.Strings.Unbounded.To_String (Jobs (Index).Command)),
-                              Loc.Named ("state", Status_Image)];
-                        begin
-                           if Quietly then
-                              Ada.Strings.Unbounded.Append
-                                (Job_Notes,
-                                 (if Ada.Strings.Unbounded.Length (Job_Notes) = 0 then "" else [1 => ASCII.LF])
-                                 & Pres.Note_Line (Screen, "cli.interactive.job_done", Said));
-                           else
-                              Pres.Put_Note (Screen, "cli.interactive.job_done", Said);
-                           end if;
-                        end;
                      end;
                   end if;
                exception
                   when others =>
-                     Jobs (Index).Running := False;
+                     --  An ended job whose output is not ready remains in its
+                     --  slot and is tried again on the next poll.
+                     null;
                end;
             end if;
          end loop;
@@ -3354,6 +3770,7 @@ package body Model_Runner.CLI.Interactive is
       end if;
 
       Gen.Release (Last_Result);
+      Stop_Jobs;
       Model_Runner.Stops.Close (Stop_Set);
       Conv.Close (Messages);
       Close (Typing);
@@ -3361,6 +3778,7 @@ package body Model_Runner.CLI.Interactive is
    exception
       when Failure : others =>
          Gen.Release (Last_Result);
+         Stop_Jobs;
          Model_Runner.Stops.Close (Stop_Set);
          Conv.Close (Messages);
          Close (Typing);

@@ -13,14 +13,24 @@ with Model_Runner.Text;
 package Model_Runner.CLI.Conversations is
 
    --  Where conversations are kept, or "" where no home is known.
+   --
+   --  @return The conversations directory, or an empty string.
    function Directory return String;
 
    --  A new conversation's file: the folder made, the name the time it
-   --  began and the model's name. "" where there is no folder.
+   --  began and the model's name, and an exclusively reserved suffix. ""
+   --  where there is no folder or no name can be reserved.
    --
    --  @param Model The model's path or name.
    --  @return The path to write it to.
    function New_Path (Model : String) return String;
+
+   --  Let go of the exclusive marker made by New_Path. The marker is kept
+   --  beside, not at, the returned path so an interrupted first save is not
+   --  mistaken for a conversation.
+   --
+   --  @param Path A path returned by New_Path.
+   procedure Release_Reservation (Path : String);
 
    --  Note the model a conversation was last spoken with, beside it.
    --
@@ -35,6 +45,8 @@ package Model_Runner.CLI.Conversations is
    function Model_Of (Conversation : String) return String;
 
    --  The conversation written last, or "" where there is none.
+   --
+   --  @return The latest conversation's path, or an empty string.
    function Latest return String;
 
    --  The conversations kept, newest first, in the shared selector: when

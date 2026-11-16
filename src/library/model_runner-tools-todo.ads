@@ -17,10 +17,14 @@ package Model_Runner.Tools.Todo is
 
    --  The list, one item a line, each "[ ] " or "[x] " before it; "" where
    --  none was kept.
+   --
+   --  @return The current marked list, or an empty string.
    function Items return String;
 
    --  Whether the list changed since this was last asked, and so is to be
    --  shown again.
+   --
+   --  @return True once after each change.
    function Changed return Boolean;
 
    --  The list forgotten: a conversation started over.

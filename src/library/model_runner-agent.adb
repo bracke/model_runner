@@ -155,6 +155,7 @@ package body Model_Runner.Agent is
       Pace        : Pace_Reference := null;
       Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
       Call_First  : Boolean := False;
+      Gate        : Answer_Gate_Reference := null;
       Result     : out Outcome)
    is
       --  The shape the model's calls are read in: the caller's, unless it
@@ -504,6 +505,56 @@ package body Model_Runner.Agent is
             Result.Error := E.Make (E.Generation_No_Answer);
          end if;
       end No_Answer;
+
+      --  Ask the harness whether a candidate answer may end the run. A
+      --  rejected answer either becomes one more trusted user turn, while
+      --  the run still has room, or an explicit incomplete outcome.
+      procedure Check_Completion
+        (Answer   : String;
+         Accepted : out Boolean;
+         Resume   : out Boolean)
+      is
+         Decision : Answer_Decision;
+         Feedback : U.Unbounded_String;
+         Checked  : E.Error_Info;
+         Told     : E.Error_Info;
+      begin
+         Accepted := True;
+         Resume := False;
+         if Gate = null then
+            return;
+         end if;
+
+         Gate.Evaluate (Answer, Decision, Feedback, Checked);
+         Result.Completion_Feedback := Feedback;
+         if E.Is_Error (Checked) then
+            Accepted := False;
+            Result.Reason := Completion_Blocked;
+            Result.Error := Checked;
+         elsif Decision = Accept_Answer then
+            null;
+         elsif Decision = Continue_After_Feedback
+           and then Result.Steps < Max_Steps
+           and then (Max_Total_Tokens = 0 or else Spent < Max_Total_Tokens)
+           and then not Model_Runner.Cancellation.Is_Cancelled (Cancel)
+           and then (not Timing
+                     or else Model_Runner.Clocks.Read (Time) - Started <= Budget_Ns)
+           and then U.Length (Feedback) > 0
+         then
+            Conv.Append (Messages, Conv.User_Role, U.To_String (Feedback), Told);
+            if E.Is_Ok (Told) then
+               Accepted := False;
+               Resume := True;
+            else
+               Accepted := False;
+               Result.Reason := Completion_Blocked;
+               Result.Error := Told;
+            end if;
+         else
+            Accepted := False;
+            Result.Reason := Completion_Blocked;
+         end if;
+      end Check_Completion;
 
       --  Whether the step's prompt opened a thought for the reply.
       Prompt_Thought : Boolean := False;
@@ -1281,6 +1332,23 @@ package body Model_Runner.Agent is
                   No_Answer;
                   exit Step_Loop;
                end if;
+               if Gate /= null then
+                  declare
+                     Accepted : Boolean;
+                     Resume   : Boolean;
+                  begin
+                     --  The ordinary answer path counts its generated turn
+                     --  before consulting the gate. Do the same here so an
+                     --  empty candidate cannot obtain unbounded retries.
+                     Result.Steps := Result.Steps + 1;
+                     Check_Completion ("", Accepted, Resume);
+                     if Resume then
+                        goto Next_Iteration;
+                     elsif not Accepted then
+                        exit Step_Loop;
+                     end if;
+                  end;
+               end if;
                Result.Reason := Answered;
                exit Step_Loop;
             end if;
@@ -1516,6 +1584,29 @@ package body Model_Runner.Agent is
                end if;
                No_Answer;
                exit Step_Loop;
+            end if;
+
+            --  A final answer is only a candidate until the harness's
+            --  completion gate accepts it. The gate may synchronously run
+            --  required checks and return trusted repair feedback. Going on
+            --  remains subject to this run's own step, token, time and
+            --  cancellation limits.
+            if Asked = 0
+              and then Gate /= null
+              and then Last_Result.Reason not in Gen.Maximum_Tokens | Gen.Context_Full
+              and then E.Is_Ok (Reading)
+            then
+               declare
+                  Accepted : Boolean;
+                  Resume   : Boolean;
+               begin
+                  Check_Completion (Answer_Of (Turn_Text), Accepted, Resume);
+                  if Resume then
+                     goto Next_Iteration;
+                  elsif not Accepted then
+                     exit Step_Loop;
+                  end if;
+               end;
             end if;
 
             --  Nothing left to run: the model has answered -- unless the

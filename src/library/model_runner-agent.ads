@@ -55,6 +55,7 @@ package Model_Runner.Agent is
       Grammar_Failed,     --  the tool grammar would not compile
       Generation_Failed,  --  a generation ended in a runtime error
       History_Failed,     --  a turn would not fit the history
+      Completion_Blocked, --  a harness completion gate refused the answer
       Cancelled,          --  the caller cancelled a generation
       Declined);          --  an approver stopped the run before a call ran
 
@@ -85,7 +86,7 @@ package Model_Runner.Agent is
          when Step_Limit | Token_Limit | Timed_Out =>
            (Exhausted => True, others => False),
          when Generation_Failed => (Retryable => True, others => False),
-         when Repeating | Render_Failed | Grammar_Failed | History_Failed =>
+         when Repeating | Render_Failed | Grammar_Failed | History_Failed | Completion_Blocked =>
            (Needs_Change => True, others => False),
          when Cancelled | Declined => (Needs_User => True, others => False));
 
@@ -168,7 +169,31 @@ package Model_Runner.Agent is
       --  conversation carries, for the caller to show; empty when no call
       --  ran.
       Work_Record : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Trusted feedback from a completion gate when it refused the last
+      --  answer. It is distinct from a generation or tool failure.
+      Completion_Feedback : Ada.Strings.Unbounded.Unbounded_String;
    end record;
+
+   type Answer_Decision is (Accept_Answer, Continue_After_Feedback, Refuse_Answer);
+
+   --  A harness-owned final-answer gate. It may accept the answer, return
+   --  trusted feedback and ask the model loop to continue, or refuse
+   --  completion. The loop, not the gate, enforces its remaining budgets.
+   type Answer_Gate is limited interface;
+   type Answer_Gate_Reference is access all Answer_Gate'Class;
+
+   --  @param Self Harness-owned completion gate.
+   --  @param Answer Candidate final answer.
+   --  @param Decision Accept, continue with feedback, or refuse.
+   --  @param Feedback Trusted bounded feedback.
+   --  @param Status Success or gate failure.
+   procedure Evaluate
+     (Self     : in out Answer_Gate;
+      Answer   : String;
+      Decision : out Answer_Decision;
+      Feedback : out Ada.Strings.Unbounded.Unbounded_String;
+      Status   : out Model_Runner.Errors.Error_Info) is abstract;
 
    --  Somewhere for the loop to report what it does as it does it.
    --
@@ -510,6 +535,7 @@ package Model_Runner.Agent is
    --    nothing else, held by the call grammar where the call syntax has a
    --    tight one (Tools.Constraint, Call_Required) -- the JSON envelope
    --    included, though its later replies are read in the open form.
+   --  @param Gate Harness-owned final-answer gate, or null for none.
    --  @param Watch Where the loop reports each call and each tool result as
    --    they happen, or null for none.
    --  @param Approve The gate asked before each fresh call runs, or null to
@@ -593,6 +619,7 @@ package Model_Runner.Agent is
       Pace        : Pace_Reference := null;
       Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
       Call_First  : Boolean := False;
+      Gate        : Answer_Gate_Reference := null;
       Result     : out Outcome);
 
    --  gpt-oss's rule (harmony), at high effort: a line come an eighth time

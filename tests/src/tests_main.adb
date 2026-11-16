@@ -77,6 +77,7 @@ with Model_Runner.Video;
 with Model_Runner.Vision;
 with Model_Runner.Tensors;
 with Hostkit.Descriptors;
+with Hostkit.Host;
 with Hostkit.Terminal_Control;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
@@ -111,6 +112,7 @@ with Tiny_Model;
 procedure Tests_Main is
    package E renames Model_Runner.Errors;
    use type AUnit.Status;
+   use type Hostkit.Host.Kind;
 
    function Run_Suite is
      new AUnit.Run.Test_Runner_With_Status (Tests.Suite.Suite);
@@ -2996,11 +2998,22 @@ begin
 
    elsif Command = "fake-mcp" then
       --  A stand-in MCP server, a JSON-RPC message a line on standard input
-      --  and output: it answers initialize, lists two tools over two pages
-      --  -- echo, which says its text back, and fail, which answers as an
-      --  error -- and before answering a call asks the client a ping, as a
-      --  server may. What the conversation's MCP client is tested against.
+      --  and output: it answers initialize, lists tools over two pages --
+      --  echo, which says its text back, fail, which answers as an error, and
+      --  two whose names normalize alike -- and before answering a call asks
+      --  the client a ping, as a server may. What the conversation's MCP
+      --  client is tested against.
       declare
+         Mode : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 2
+            then Ada.Command_Line.Argument (2) else "normal");
+         --  Its last character straddles the client's old 2,048-byte cut:
+         --  a byte slice there made the whole definition invalid UTF-8.
+         Long_Description : constant String :=
+           "Say the text back" & String'(1 .. 2_030 => 'x')
+           & Character'Val (16#C3#) & Character'Val (16#A9#);
+         Oversized_Chunk : constant String (1 .. 1_024) := [others => 'x'];
+
          --  The text after Key up to Stop.
          function After (Message, Key : String; Stop : Character) return String is
             At_Key : constant Natural := Ada.Strings.Fixed.Index (Message, Key);
@@ -3039,17 +3052,56 @@ begin
                Called  : constant String := After (Message, """method"":""", '"');
                Id      : constant String := After (Message, """id"":", ',');
             begin
-               if Called = "initialize" then
+               if Called = "initialize" and then Mode = "initialize-error" then
+                  Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                       & ",""error"":{""code"":-32602,""message"":""unsupported""}}");
+               elsif Called = "initialize" then
+                  if Mode = "slow-initialize" then
+                     delay 3.0;
+                  end if;
                   Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""protocolVersion"":""2025-06-18"","
-                       & """capabilities"":{""tools"":{}},""serverInfo"":{""name"":""fake"",""version"":""1""}}}");
+                       & """capabilities"":"
+                       & (if Mode = "no-tools" then "{}" else "{""tools"":{}}")
+                       & ",""serverInfo"":{""name"":""fake"",""version"":""1""}}}");
+               elsif Called = "tools/list" and then Mode = "oversized-message" then
+                  --  No single incoming MCP message may grow without bound.
+                  for Part in 1 .. 1_025 loop
+                     Ada.Text_IO.Put (Oversized_Chunk);
+                  end loop;
+                  Ada.Text_IO.New_Line;
+                  Ada.Text_IO.Flush;
+               elsif Called = "tools/list" and then Mode = "repeat-cursor" then
+                  Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                       & ",""result"":{""tools"":[{""name"":""ghost"",""inputSchema"":"
+                       & "{""type"":""object""}}],""nextCursor"":""loop""}}");
+               elsif Called = "tools/list" and then Mode = "many-tools" then
+                  declare
+                     Listed : Ada.Strings.Unbounded.Unbounded_String :=
+                       Ada.Strings.Unbounded.To_Unbounded_String
+                         ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""tools"":[");
+                  begin
+                     for Index in 1 .. 80 loop
+                        Ada.Strings.Unbounded.Append
+                          (Listed, (if Index = 1 then "" else ",")
+                           & "{""name"":""many_" & Model_Runner.Text.Trim (Integer'Image (Index))
+                           & """,""inputSchema"":{""type"":""object""}}");
+                     end loop;
+                     Ada.Strings.Unbounded.Append (Listed, "]}}");
+                     Say (Ada.Strings.Unbounded.To_String (Listed));
+                  end;
                elsif Called = "tools/list" and then Ada.Strings.Fixed.Index (Message, "cursor") = 0 then
                   Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""tools"":[{""name"":""echo"","
-                       & """description"":""Say the text back"",""inputSchema"":{""type"":""object"","
-                       & """properties"":{""text"":{""type"":""string""}},""required"":[""text""]}}],"
+                       & """description"":" & Model_Runner.Text.JSON_Quoted (Long_Description)
+                       & ",""inputSchema"":{""type"":""object"",""properties"":"
+                       & "{""text"":{""type"":""string""}},""required"":[""text""]}}],"
                        & """nextCursor"":""page-2""}}");
                elsif Called = "tools/list" then
                   Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""tools"":[{""name"":""fail"","
-                       & """description"":""Always fails"",""inputSchema"":{""type"":""object""}}]}}");
+                       & """description"":""Always fails"",""inputSchema"":{""type"":""object""}},"
+                       & "{""name"":17,""inputSchema"":{""type"":""object""}},"
+                       & "{""name"":""missing_schema""},"
+                       & "{""name"":""same.name"",""inputSchema"":{""type"":""object""}},"
+                       & "{""name"":""same_name"",""inputSchema"":{""type"":""object""}}]}}");
                elsif Called = "tools/call" then
                   --  A request of its own first, its answer read before going on.
                   Say ("{""jsonrpc"":""2.0"",""id"":""p1"",""method"":""ping""}");
@@ -3060,9 +3112,29 @@ begin
                         Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""error"":{""code"":-1,"
                              & """message"":""the ping was not answered""}}");
                      elsif Ada.Strings.Fixed.Index (Message, """name"":""echo""") > 0 then
-                        Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""content"":[{""type"":""text"","
-                             & """text"":""echo: " & Text_Argument (Message) & """},"
-                             & "{""type"":""image"",""data"":""AA=="",""mimeType"":""image/png""}]}}");
+                        if Text_Argument (Message) = "long-result" then
+                           Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                                & ",""result"":{""content"":[{""type"":""text"",""text"":"
+                                & Model_Runner.Text.JSON_Quoted
+                                    (String'(1 .. 65_535 => 'x')
+                                     & Character'Val (16#C3#) & Character'Val (16#A9#))
+                                & "}]}}");
+                        elsif Text_Argument (Message) = "structured-only" then
+                           Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                                & ",""result"":{""content"":[],""structuredContent"":"
+                                & "{""answer"":42}}}");
+                        elsif Text_Argument (Message) = "structured-mixed" then
+                           Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                                & ",""result"":{""content"":[{""type"":""text"","
+                                & """text"":""created""}],""structuredContent"":"
+                                & "{""id"":17,""state"":""ready""}}}");
+                        else
+                           Say ("{""jsonrpc"":""2.0"",""id"":" & Id
+                                & ",""result"":{""content"":[{""type"":""text"","
+                                & """text"":""echo: " & Text_Argument (Message) & """},"
+                                & "{""type"":""image"",""data"":""AA=="","
+                                & """mimeType"":""image/png""}]}}");
+                        end if;
                      else
                         Say ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":{""content"":[{""type"":""text"","
                              & """text"":""it failed on purpose""}],""isError"":true}}");
@@ -3083,14 +3155,22 @@ begin
       --  the conversation's diagnostics after an edit are tested against,
       --  as no real server need be installed.
       declare
+         Mode : constant String :=
+           (if Ada.Command_Line.Argument_Count >= 2
+            then Ada.Command_Line.Argument (2) else "normal");
          Input  : constant Ada.Text_IO.Text_Streams.Stream_Access :=
            Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Input);
          Output : constant Ada.Text_IO.Text_Streams.Stream_Access :=
            Ada.Text_IO.Text_Streams.Stream (Ada.Text_IO.Standard_Output);
+         URI_Count : Natural := 0;
 
          procedure Send (Json : String) is
             Framed : constant String :=
-              "Content-Length:" & Natural'Image (Json'Length) & ASCII.CR & ASCII.LF & ASCII.CR & ASCII.LF & Json;
+              (if Mode = "header-variation"
+               then "X-Trace: Content-Length: 1" & ASCII.CR & ASCII.LF
+                    & "content-length:" & Natural'Image (Json'Length)
+               else "Content-Length:" & Natural'Image (Json'Length))
+              & ASCII.CR & ASCII.LF & ASCII.CR & ASCII.LF & Json;
          begin
             String'Write (Output, Framed);
             Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
@@ -3147,10 +3227,49 @@ begin
                   Called : constant String := After (Message, """method"":""", '"');
                   Id     : constant String := After (Message, """id"":", ',');
                begin
-                  if Called = "initialize" or else Called = "shutdown" then
-                     Send ("{""jsonrpc"":""2.0"",""id"":" & Id & ",""result"":"
-                           & (if Called = "initialize" then "{""capabilities"":{}}" else "null") & "}");
+                  if Called = "initialize" and then Mode = "oversized-message" then
+                     --  Advertise a body just past the client's bound, then
+                     --  wait for it to close the pipe. It must reject the
+                     --  frame from its header rather than wait 30 seconds for
+                     --  bytes that will never come.
+                     String'Write
+                       (Output,
+                        "Content-Length: 1048577" & ASCII.CR & ASCII.LF
+                        & ASCII.CR & ASCII.LF);
+                     Ada.Text_IO.Flush (Ada.Text_IO.Standard_Output);
+                  elsif Called = "initialize" and then Mode = "initialize-error" then
+                     Send ("{""jsonrpc"":""2.0"",""id"":" & Id
+                           & ",""error"":{""code"":-32002,""message"":""not ready""}}");
+                  elsif Called = "initialize" or else Called = "shutdown" then
+                     --  Whitespace before the colon is legal JSON. The client
+                     --  identifies a response by its parsed id, not its bytes.
+                     if Called = "shutdown" then
+                        delay 0.2;
+                     end if;
+                     if Called = "initialize"
+                       and then Mode in "stale-version" | "stale-versionless"
+                       and then Ada.Strings.Fixed.Index (Message, """versionSupport"":true") = 0
+                     then
+                        Send ("{""jsonrpc"":""2.0"",""id"":" & Id
+                              & ",""error"":{""code"":-32602,""message"":""no version support""}}");
+                     elsif Called = "initialize"
+                       and then Hostkit.Host.Current = Hostkit.Host.Windows
+                       and then Ada.Strings.Fixed.Index (Message, """rootUri"":""file:///") = 0
+                     then
+                        Send ("{""jsonrpc"":""2.0"",""id"":" & Id
+                              & ",""error"":{""code"":-32002,""message"":""bad Windows file URI""}}");
+                     else
+                        Send ("{""jsonrpc"":""2.0"",""id"" "
+                              & (if Called = "initialize" then ": " else ":") & Id & ",""result"":"
+                              & (if Called = "initialize" then "{""capabilities"":{}}" else "null") & "}");
+                     end if;
                   elsif Called = "exit" then
+                     declare
+                        Marker : Ada.Text_IO.File_Type;
+                     begin
+                        Ada.Text_IO.Create (Marker, Ada.Text_IO.Out_File, "obj/lsp-graceful");
+                        Ada.Text_IO.Close (Marker);
+                     end;
                      exit;
                   elsif Called = "textDocument/didOpen" or else Called = "textDocument/didChange" then
                      declare
@@ -3161,13 +3280,46 @@ begin
                            else Ada.Strings.Fixed.Count
                                   (Message (Ada.Strings.Fixed.Index (Message, """text"":") .. Flaw), "\n"));
                      begin
-                        Send ("{""jsonrpc"":""2.0"",""method"":""textDocument/publishDiagnostics"",""params"":"
-                              & "{""uri"":""" & URI & """,""diagnostics"":["
-                              & (if Flaw = 0 then ""
-                                 else "{""range"":{""start"":{""line"":" & Image (Before)
-                                      & ",""character"":0},""end"":{""line"":" & Image (Before)
-                                      & ",""character"":5}},""severity"":1,""message"":""ERROR is not allowed""}")
-                              & "]}}");
+                        URI_Count := URI_Count + 1;
+                        if Mode in "stale-version" | "stale-versionless"
+                          and then URI_Count = 1
+                        then
+                           delay 0.2;
+                        end if;
+                        if Mode = "windows-uri"
+                          and then Ada.Strings.Fixed.Index
+                            (Message, """uri"":""file:///C:/work/a.adb""") = 0
+                        then
+                           Send ("{""jsonrpc"":""2.0"",""method"":""textDocument/publishDiagnostics"","
+                                 & """params"":{""uri"":""file:///wrong"",""diagnostics"":[]}}");
+                        elsif Mode = "posix-backslash-uri"
+                          and then
+                            ((URI_Count = 1
+                              and then Ada.Strings.Fixed.Index
+                                (Message, """uri"":""file:///tmp/a%5Cb.adb""") = 0)
+                             or else
+                               (URI_Count = 2
+                                and then Ada.Strings.Fixed.Index
+                                  (Message, """uri"":""file:////tmp/a%5Cb.adb""") = 0)
+                             or else
+                               (URI_Count = 3
+                                and then Ada.Strings.Fixed.Index
+                                  (Message, """uri"":""file://%5C%5Ctmp%5Ca.adb""") = 0))
+                        then
+                           Send ("{""jsonrpc"":""2.0"",""method"":""textDocument/publishDiagnostics"","
+                                 & """params"":{""uri"":""file:///wrong"",""diagnostics"":[]}}");
+                        else
+                           Send ("{""jsonrpc"":""2.0"",""method"":""textDocument/publishDiagnostics"",""params"":"
+                                 & "{""uri"":""" & URI & ""","
+                                 & (if Mode = "stale-version"
+                                    then """version"":" & Image (URI_Count) & "," else "")
+                                 & """diagnostics"":["
+                                 & (if Flaw = 0 then ""
+                                    else "{""range"":{""start"":{""line"":" & Image (Before)
+                                         & ",""character"":0},""end"":{""line"":" & Image (Before)
+                                         & ",""character"":5}},""severity"":1,""message"":""ERROR is not allowed""}")
+                                 & "]}}");
+                        end if;
                      end;
                   end if;
                end;

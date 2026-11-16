@@ -9,6 +9,7 @@ with Ada.Strings.Hash;
 with Hostkit.Fs;
 with Hostkit.Process;
 
+with Model_Runner.Code_Health.Lifecycle;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Events;
 with Model_Runner.Framework.Execution;
@@ -2133,7 +2134,8 @@ package body Model_Runner.Framework.Verification is
             --  an older pass taken in its place.
             if E.Is_Error (Status) then
                return To_String (One.Name);
-            elsif Records.Get (Value, "task") = Task_Id
+            elsif Records.Get (Value, "code_health.kind") = ""
+              and then Records.Get (Value, "task") = Task_Id
               and then (Records.Get (Value, "profile") = Profile
                         or else Records.Get (Value, "stands_for") = Profile)
             then
@@ -2332,6 +2334,13 @@ package body Model_Runner.Framework.Verification is
                      end;
                   end if;
                end if;
+            end;
+         elsif Name = "code_health" then
+            declare
+               Health : constant Model_Runner.Code_Health.Lifecycle.Gate_Report :=
+                 Model_Runner.Code_Health.Lifecycle.Judge (Item, Task_Id);
+            begin
+               Judge (Name, Health.Passed, To_String (Health.Reason));
             end;
          elsif Name = "children" then
             declare
@@ -2881,6 +2890,7 @@ package body Model_Runner.Framework.Verification is
                   --  or run with no tests picked out -- task verify and a
                   --  requirement's check among them.
                   if E.Is_Ok (Read)
+                    and then Records.Get (Value, "code_health.kind") = ""
                     and then (Records.Get (Value, "task") = ""
                               or else Records.Get (Value, "given.scope") = "full_suite"
                               or else Records.Get (Value, "given.tests") = "")
@@ -3295,7 +3305,9 @@ package body Model_Runner.Framework.Verification is
          begin
             if Id > Evidence then
                Stores.Read (Item, Verification_Area, Id, Value, Read);
-               if E.Is_Ok (Read) and then Records.Get (Value, "passed") = "true"
+               if E.Is_Ok (Read)
+                 and then Records.Get (Value, "code_health.kind") = ""
+                 and then Records.Get (Value, "passed") = "true"
                  and then Records.Get (Value, "workspace") = ""
                  and then (Records.Get (Value, "task") = ""
                            or else Records.Get (Value, "given.scope") = "full_suite"
