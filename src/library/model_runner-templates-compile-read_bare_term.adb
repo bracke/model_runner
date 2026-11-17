@@ -605,6 +605,14 @@ begin
             end;
          end if;
 
+         if Macro_Named (Word) /= 0 then
+            Result.Kind := Term_Macro_Reference;
+            Result.Offset := Macro_Named (Word);
+            From := Tail;
+            Ok := True;
+            return;
+         end if;
+
          --  The two functions a template calls: strftime_now for the
          --  date and raise_exception to refuse. Each takes one quoted
          --  argument, kept as a literal; anything else in the

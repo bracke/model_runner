@@ -25,6 +25,8 @@
 --  Task safety: a run uses one task.
 with Model_Runner.Backend;
 with Model_Runner.Llama;
+with Model_Runner.Text;
+with Interfaces;
 
 package External_Model is
 
@@ -121,6 +123,12 @@ package External_Model is
    --    only a model of a useful size answers, and this is where somebody
    --    with one can ask it. Given a mode, the model is run again without
    --    repacking and the two texts are compared.
+   --  @param Auxiliary Explicit GGUF tensor sources, in precedence order.
+   --    This is the real-artifact path for separately distributed PLE and
+   --    engram weights; numbered backbone shards remain auto-discovered.
+   --  @param Cache KV storage precision, including the E4M3FN byte format.
+   --  @param Expert_Cache Device bytes reserved for adaptive MoE experts.
+   --  @param Panel_Cache Combined-model panel cache file, or empty for none.
    --  @param Result What the run found.
    procedure Run
      (Path    : String;
@@ -134,6 +142,11 @@ package External_Model is
       Draft_Tokens : Positive := 4;
       Repack  : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
+      Auxiliary : Model_Runner.Text.Bounded_List := [1 .. 0 => <>];
+      Cache : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Panel_Cache : String := "";
       Result  : out Report);
 
    --  Human-readable detail from a run.

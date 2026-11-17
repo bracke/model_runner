@@ -2868,9 +2868,53 @@ begin
             return Model_Runner.Llama.No_Repack;
          end Mode_Of;
 
+         function Cache_Of
+           (Word : String) return Model_Runner.Llama.Cache_Precision
+         is
+         begin
+            for Mode in Model_Runner.Llama.Cache_Precision loop
+               if Model_Runner.Llama.Cache_Name (Mode) = Word then
+                  return Mode;
+               end if;
+            end loop;
+            return Model_Runner.Llama.Exact;
+         end Cache_Of;
+
+         function Bytes (Name : String) return Interfaces.Unsigned_64 is
+         begin
+            return Interfaces.Unsigned_64'Value (Option (Name, "0"));
+         exception
+            when others =>
+               return 0;
+         end Bytes;
+
+         function Auxiliary_Count return Natural is
+            Count : Natural := 0;
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) in "--shard" | "--ple"
+               then
+                  Count := Count + 1;
+               end if;
+            end loop;
+            return Count;
+         end Auxiliary_Count;
+
          Path   : constant String := Option ("--model", "");
          Result : External_Model.Report;
+         Count  : constant Natural := Auxiliary_Count;
+         Auxiliary : Model_Runner.Text.Bounded_List (1 .. Count);
+         Added  : Natural := 0;
       begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+            if Ada.Command_Line.Argument (Index) in "--shard" | "--ple"
+            then
+               Added := Added + 1;
+               Auxiliary (Added) := Model_Runner.Text.To_Bounded
+                 (Ada.Command_Line.Argument (Index + 1));
+            end if;
+         end loop;
+
          External_Model.Run
            (Path    => Path,
             Prompt  => Option ("--prompt", "Hello"),
@@ -2881,6 +2925,10 @@ begin
             Draft   => Option ("--draft-model", ""),
             Draft_Tokens => Number ("--draft-tokens", 4),
             Repack  => Mode_Of (Option ("--repack", "none")),
+            Auxiliary => Auxiliary,
+            Cache => Cache_Of (Option ("--kv-cache", "f32")),
+            Expert_Cache => Bytes ("--expert-cache"),
+            Panel_Cache => Option ("--panel-cache", ""),
             Result  => Result);
 
          Ada.Text_IO.Put_Line

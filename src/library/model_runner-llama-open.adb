@@ -123,7 +123,8 @@ begin
    On_Device := Model_Runner.Backend."="
                   (Source.Able.Kind, Model_Runner.Backend.Backend_Device);
    Will_Page := Paged and then On_Device
-                and then Cache in Exact | Halved | Eighth | Fourth;
+                and then Cache in Exact | Halved | Eighth | Fourth
+                                      | Float_Eighth;
    Host_Cache := (if On_Device and then Cache in Exact | Halved
                   then (if Cache = Halved and then Will_Page then Halved else Exact)
                   else Cache);
@@ -257,7 +258,7 @@ begin
         and then Model_Runner.Backend."="
                    (Source.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
-        and then Cache in Exact | Halved | Eighth | Fourth
+        and then Cache in Exact | Halved | Eighth | Fourth | Float_Eighth
       then
          Item.Paged := True;
          Item.Page_First :=

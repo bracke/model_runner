@@ -1140,6 +1140,11 @@ package Model_Runner.Backend.Device is
    --  step reads the packed kernel rather than the exact one.
    subtype Packed_Cache is Model_Runner.Platform.Device.Products.Packed_Cache;
 
+   --  The Packed_Cache and Packing_Shape code for unscaled OCP E4M3FN
+   --  bytes, distinct from scaled q8's eight.
+   E4M3_Cache_Code : constant Positive :=
+     Model_Runner.Platform.Device.Products.E4M3_Cache_Code;
+
    --  A cache the exact kernels read.
    Not_Packed : constant Packed_Cache :=
      Model_Runner.Platform.Device.Products.Not_Packed;
@@ -2661,6 +2666,11 @@ package Model_Runner.Backend.Device is
    --  Whether all three matrices of one expert are already resident under
    --  their individual slice identities.  This is deliberately distinct
    --  from a resident stack: a split mixture keeps only selected experts.
+   --
+   --  @param Gate Expert gate matrix.
+   --  @param Up Expert up-projection matrix.
+   --  @param Down Expert down-projection matrix.
+   --  @return True when every matrix is resident.
    function Expert_Held
      (Gate : Model_Runner.Tensors.View;
       Up   : Model_Runner.Tensors.View;
@@ -2670,6 +2680,11 @@ package Model_Runner.Backend.Device is
    --  Admission is all or nothing: if free device budget cannot hold every
    --  missing arm, any arm admitted by this call is given back.  Existing
    --  arms are left alone.
+   --
+   --  @param Gate Expert gate matrix.
+   --  @param Up Expert up-projection matrix.
+   --  @param Down Expert down-projection matrix.
+   --  @param Held True when the whole expert is resident on return.
    procedure Hold_Expert
      (Gate : Model_Runner.Tensors.View;
       Up   : Model_Runner.Tensors.View;

@@ -1,4 +1,5 @@
 with Model_Runner.CLI.Conversations;
+with Model_Runner.CLI.Options.Rooms;
 with Ada.Strings.Fixed;
 with Model_Runner.CLI.Interactive;
 with Ada.Directories;
@@ -125,12 +126,21 @@ package body Model_Runner.CLI.Execute is
       --  the conversation back to the one before.
       procedure Run_Switching (First : Opt.Command) is
          package Talk renames Model_Runner.CLI.Interactive;
-         Current  : Opt.Command := First;
+         Current_Room : Model_Runner.CLI.Options.Rooms.Holder;
+         Current      : Opt.Command renames Current_Room.Data.all;
+         Running_Room : Model_Runner.CLI.Options.Rooms.Holder;
+         Running      : Opt.Command renames Running_Room.Data.all;
          Previous : Model_Runner.Text.Bounded;
          Falling  : Boolean := False;
       begin
+         Current := First;
          loop
-            Do_Run (With_Panels (Resolved_Backend (Current, Screen)), Screen, Catalog, Status);
+            --  Keep the two large function results out of one expression:
+            --  a Command carries fixed room for every bounded option, and
+            --  nested returns otherwise put three copies in this frame.
+            Running := Resolved_Backend (Current, Screen);
+            Running := With_Panels (Running);
+            Do_Run (Running, Screen, Catalog, Status);
             if Talk.Switch_Requested /= "" then
                Previous := Current.Model_Path;
                Current.Model_Path := T.To_Bounded (Talk.Switch_Requested);

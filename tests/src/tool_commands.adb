@@ -77,7 +77,8 @@ package body Tool_Commands is
    Opts_Outside   : aliased constant String := " --anyway --wait -- ";
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
-     & " --draft-model --draft-tokens ";
+     & " --draft-model --draft-tokens --shard --ple --kv-cache"
+     & " --expert-cache --panel-cache ";
    Opts_Tokenize  : aliased constant String := " --model --prompt --special ";
    Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
@@ -121,7 +122,9 @@ package body Tool_Commands is
    Takes_External  : aliased constant String :=
      "--model PATH [--prompt TEXT] [--max-tokens N] [--threads N]"
      & " [--expect TEXT] [--repack MODE] [--backend NAME]"
-     & " [--draft-model PATH] [--draft-tokens N]";
+     & " [--draft-model PATH] [--draft-tokens N]"
+     & " [--shard PATH] [--ple PATH] [--kv-cache MODE]"
+     & " [--expert-cache BYTES] [--panel-cache PATH]";
    Takes_Tokenize  : aliased constant String :=
      "--model PATH --prompt TEXT [--special]";
    Takes_Cut       : aliased constant String := "--pre NAME --texts PATH";

@@ -5249,6 +5249,8 @@ package body Tests.Inference_Cases is
                   Live : L.Session;
                   On_Device : Logit_Vector;
                   Device_Worst : N.Real := 0.0;
+                  Whole_Was : Natural;
+                  Handed_Was : Natural;
                   use type Interfaces.Unsigned_64;
                begin
                   Start
@@ -5259,20 +5261,27 @@ package body Tests.Inference_Cases is
                      Cache => L.Float_Eighth, Status => Status);
                   Assert (E.Is_Ok (Status),
                           "the E4M3 device session did not open");
+                  Whole_Was := Model_Runner.Backend.Device.Layers_Whole;
+                  Handed_Was := Model_Runner.Backend.Device.Layers_Handed;
                   L.Evaluate_Batch
                     (Live, Over.Ready, Prompt, On_Device,
                      Status => Status);
                   Assert (E.Is_Ok (Status),
                           "the E4M3 device session did not evaluate");
-                  Assert (Model_Runner.Backend.Device.Cached_Bytes = 0,
-                          "E4M3 reserved a device cache without a kernel");
+                  Assert (Model_Runner.Backend.Device.Cached_Bytes > 0,
+                          "E4M3 did not reserve its device cache");
+                  Assert
+                    (Model_Runner.Backend.Device.Layers_Whole > Whole_Was
+                     and then Model_Runner.Backend.Device.Layers_Handed
+                              = Handed_Was,
+                     "E4M3 attention was handed back to the host");
                   for Index in Batched'Range loop
                      Device_Worst := N.Real'Max
                        (Device_Worst,
                         abs (Batched (Index) - On_Device (Index)));
                   end loop;
                   Assert (Device_Worst <= 0.05,
-                          "E4M3 host attention behind device matrices moved "
+                          "E4M3 device attention moved "
                           & "a logit by " & N.Real'Image (Device_Worst));
                   L.Close (Live);
                   L.Close (Over.Ready, Status);
@@ -7272,8 +7281,8 @@ package body Tests.Inference_Cases is
    -- A_Packed_Paged_Session_Says_What_A_Packed_Block_Says --
    ----------------------------------------------------------
 
-   --  Paging and packing at once: a session whose cache is kept in bytes or
-   --  nibbles AND dealt in pages, against the same session in a packed
+   --  Paging and packing at once: a session whose cache is kept in scaled
+   --  bytes, E4M3 bytes or nibbles AND dealt in pages, against the same in a packed
    --  block. The two savings compound -- a fraction of the positions, and a
    --  quarter or an eighth of each -- and the answer is the block's to the
    --  bit, past two pages, in both packed storages. What it exercises that
@@ -7293,8 +7302,8 @@ package body Tests.Inference_Cases is
 
       type Trail is array (1 .. Steps) of Logit_Vector;
 
-      Storages : constant array (1 .. 2) of L.Cache_Precision :=
-        [L.Eighth, L.Fourth];
+      Storages : constant array (1 .. 3) of L.Cache_Precision :=
+        [L.Eighth, L.Fourth, L.Float_Eighth];
 
       Image : B.Byte_Array_Access;
       Awake : Boolean;
@@ -7361,7 +7370,8 @@ package body Tests.Inference_Cases is
                      end loop;
 
                      Assert (L.Holds_Pages (Paged),
-                             "the packed paged session did not reach the"
+                             "the " & L.Cache_Name (Storage)
+                             & " packed paged session did not reach the"
                              & " device in pages, so an agreement says"
                              & " nothing about paging");
                      Assert (Worst = 0.0,
@@ -14909,8 +14919,10 @@ package body Tests.Inference_Cases is
 
          Cross (L.Eighth, False, "in bytes, a token at a time");
          Cross (L.Fourth, False, "in nibbles, a token at a time");
+         Cross (L.Float_Eighth, False, "in E4M3, a token at a time");
          Cross (L.Eighth, True, "in bytes, as a batch");
          Cross (L.Fourth, True, "in nibbles, as a batch");
+         Cross (L.Float_Eighth, True, "in E4M3, as a batch");
 
          Model_Runner.Backend.Device.Close;
       end;
@@ -15031,6 +15043,15 @@ package body Tests.Inference_Cases is
             Cross (Backend, L.Fourth, L.Value_Eighth,
                    Reference_Transformer.To_Nibbles, Reference_Transformer.To_Bytes,
                    "nibble keys with byte values on "
+                   & Model_Runner.Backend.Backend_Kind'Image (Backend));
+            Cross (Backend, L.Float_Eighth, L.Value_Eighth,
+                   Reference_Transformer.To_E4M3, Reference_Transformer.To_Bytes,
+                   "E4M3 keys with byte values on "
+                   & Model_Runner.Backend.Backend_Kind'Image (Backend));
+            Cross (Backend, L.Float_Eighth, L.Value_Fourth,
+                   Reference_Transformer.To_E4M3,
+                   Reference_Transformer.To_Nibbles,
+                   "E4M3 keys with nibble values on "
                    & Model_Runner.Backend.Backend_Kind'Image (Backend));
          end loop;
          Model_Runner.Backend.Device.Close;
@@ -22101,7 +22122,9 @@ package body Tests.Inference_Cases is
       Settings.Expert_Feed := 704;
       Settings.Feed_Forward := 2112;
       Assert (L.Feed_Width (Settings) = 2112, "gemma4's mixture's feed was not its dense one's");
-      Assert (L.Stores_Pair (L.Eighth, L.Value_Fourth) and then L.Stores_Pair (L.Exact, L.Same_As_Keys)
+      Assert (L.Stores_Pair (L.Eighth, L.Value_Fourth)
+              and then L.Stores_Pair (L.Float_Eighth, L.Value_Fourth)
+              and then L.Stores_Pair (L.Exact, L.Same_As_Keys)
               and then not L.Stores_Pair (L.Exact, L.Value_Fourth),
               "a cache and values pair was let open that cannot be, or refused that can");
       Assert (not L.Panels_Unasked (0, 64 * Gib, 64 * Gib)
@@ -22305,7 +22328,7 @@ package body Tests.Inference_Cases is
          "a packed session on the device has its keys and values packed "
          & "there as they are placed, and what it snapshots is the bytes a "
          & "processor session makes of the same text, a token at a time "
-         & "and as a batch, in bytes and in nibbles");
+         & "and as a batch, in q8, E4M3 and q4");
       Register_Routine
         (T, Mixture_Under_Its_Own_Keys'Access,
          "a mixture under the qwen3moe keys is read as one");
@@ -22710,7 +22733,7 @@ package body Tests.Inference_Cases is
         (T, A_Packed_Paged_Session_Says_What_A_Packed_Block_Says'Access,
          "a session whose cache is kept packed and dealt in pages gives, "
          & "bit for bit, what the same session gives in a packed block, "
-         & "past two pages, in bytes and in nibbles");
+         & "past two pages, in q8, E4M3 and q4");
       Register_Routine
         (T, A_Paged_Session_Holds_Only_What_It_Fills'Access,
          "a paged session takes a page of the device's cache only as a "

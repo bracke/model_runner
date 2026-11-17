@@ -5,6 +5,83 @@ procedure Compile_Set (Text : String) is
    Target      : Natural := 0;
    Where       : Natural;
 begin
+   --  Tuple assignment is the assignment counterpart of the pair unpacking
+   --  already used by for-loops.  Compile each target as an indexed read of
+   --  the same expression; expressions are side-effect free in this bounded
+   --  template language, so this is equivalent to Jinja's unpacking without
+   --  adding a second temporary-variable mechanism to the bytecode.
+   declare
+      Equals_At : Natural := 0;
+      Comma_At  : Natural := 0;
+      Quote     : Character := ' ';
+      Level     : Natural := 0;
+   begin
+      for Index in Text'Range loop
+         if Quote /= ' ' then
+            if Text (Index) = Quote
+              and then (Index = Text'First or else Text (Index - 1) /= '\')
+            then
+               Quote := ' ';
+            end if;
+         elsif Text (Index) in ''' | '"' then
+            Quote := Text (Index);
+         elsif Text (Index) in '(' | '[' | '{' then
+            Level := Level + 1;
+         elsif Text (Index) in ')' | ']' | '}' and then Level > 0 then
+            Level := Level - 1;
+         elsif Level = 0 and then Text (Index) = ',' then
+            Comma_At := Index;
+         elsif Level = 0 and then Text (Index) = '='
+           and then (Index = Text'Last or else Text (Index + 1) /= '=')
+         then
+            Equals_At := Index;
+            exit;
+         end if;
+      end loop;
+
+      if Comma_At /= 0 and then Equals_At /= 0 and then Comma_At < Equals_At
+      then
+         declare
+            Left : constant String :=
+              Model_Runner.Text.Trim (Text (Text'First .. Equals_At - 1));
+            Right : constant String :=
+              Model_Runner.Text.Trim (Text (Equals_At + 1 .. Text'Last));
+            At_Name : Natural := Left'First;
+            Number  : Natural := 0;
+         begin
+            while At_Name <= Left'Last loop
+               declare
+                  Stop : Natural := At_Name;
+               begin
+                  while Stop <= Left'Last and then Left (Stop) /= ',' loop
+                     Stop := Stop + 1;
+                  end loop;
+                  declare
+                     Name : constant String :=
+                       Model_Runner.Text.Trim
+                         (Left (At_Name .. Natural'Min (Stop - 1, Left'Last)));
+                  begin
+                     if not Is_Plain_Name (Name) then
+                        Refuse (Text, Where);
+                        return;
+                     end if;
+                     Compile_Set
+                       (Name & " = (" & Right & ")["
+                        & Model_Runner.Text.Image
+                            (Long_Long_Integer (Number)) & "]");
+                     if E.Is_Error (Status) then
+                        return;
+                     end if;
+                     Number := Number + 1;
+                  end;
+                  At_Name := Stop + 1;
+               end;
+            end loop;
+            return;
+         end;
+      end if;
+   end;
+
    Read_Word (Text, Scan, First, Last);
    if Last >= First
      and then (Is_Plain_Name (Text (First .. Last))

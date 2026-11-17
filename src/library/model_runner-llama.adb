@@ -5142,7 +5142,7 @@ package body Model_Runner.Llama is
    --  exact, packed, or a paged session's halves, whose device copy is
    --  the exact cache's.
    function Device_Held (Item : Session) return Boolean
-   is (Item.Held in Exact | Eighth | Fourth
+   is (Item.Held in Exact | Eighth | Fourth | Float_Eighth
        or else (Item.Paged and then Item.Held = Halved));
 
    --  How wide a session's block is, in elements: the exact cache's keys
@@ -5152,7 +5152,8 @@ package body Model_Runner.Llama is
        then (if Item.Keys = null or else Item.Values = null then 0
              elsif Item.Values_In_Keys then Item.Keys.all'Length
              else Item.Keys.all'Length + Item.Values.all'Length)
-       elsif Item.Held in Eighth | Fourth then Packed_Layout (Item).Span
+       elsif Item.Held in Eighth | Fourth | Float_Eighth
+       then Packed_Layout (Item).Span
        else 0);
 
    --  How far into a session's block a half of an element is read, in
@@ -5169,7 +5170,7 @@ package body Model_Runner.Llama is
    --  half of.
    function Copy_Span_Of (Item : Session) return Element_Count
    is (if Item.Held = Exact then Block_Span_Of (Item)
-       elsif Item.Held in Eighth | Fourth
+       elsif Item.Held in Eighth | Fourth | Float_Eighth
        then Element_Count
               ((Key_Row_Width (Item.Owner.Settings) + Value_Row_Width (Item.Owner.Settings)))
             * (if Item.Cells = null then 0 else Widest_Cells (Item.Cells.all))
@@ -5269,7 +5270,7 @@ package body Model_Runner.Llama is
          end if;
 
          --  Then the packed kernel's own rule, for a session that packs.
-         if Item.Held in Eighth | Fourth
+         if Item.Held in Eighth | Fourth | Float_Eighth
            and then not Model_Runner.Backend.Device.Attends_Packed_Heads
                           (Head_Size, Value_Size)
          then
@@ -6055,7 +6056,7 @@ package body Model_Runner.Llama is
    --  values, or their rows of keys alone where the values are packed in
    --  them (Packs_Values), or a packed cache's regions.
    function Page_Want (Item : Session; Layer : Natural) return Element_Count
-   is (if Item.Held in Eighth | Fourth
+   is (if Item.Held in Eighth | Fourth | Float_Eighth
        then Packed_Page_Layout (Item).Span
        elsif not Item.Values_In_Keys
          and then Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged)
@@ -6564,7 +6565,7 @@ package body Model_Runner.Llama is
                   Read_Packed_Pages_Layer
                     (Item, Natural (Index), KV_Width, V_Width,
                      Cell, Span, Read);
-               elsif Item.Held in Eighth | Fourth then
+               elsif Item.Held in Eighth | Fourth | Float_Eighth then
                   Read_Back_Packed
                     (Item, Base, V_At, Span, KV_Width, V_Width, Read);
                else
@@ -6674,7 +6675,7 @@ package body Model_Runner.Llama is
 
       if Item = null
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
-        or else Item.Held not in Eighth | Fourth
+        or else Item.Held not in Eighth | Fourth | Float_Eighth
       then
          return;
       end if;
@@ -6767,7 +6768,7 @@ package body Model_Runner.Llama is
       Laid : constant Packed_Block :=
         (if Paged then Packed_Page_Layout (Item) else Packed_Layout (Item));
    begin
-      if Item.Held not in Eighth | Fourth then
+      if Item.Held not in Eighth | Fourth | Float_Eighth then
          return Model_Runner.Backend.Device.Not_Packed;
       end if;
 
@@ -6778,8 +6779,14 @@ package body Model_Runner.Llama is
       --  reads its own page.
       if Paged then
          return
-           (K_Bits   => (if Item.Held = Fourth then 4 else 8),
-            V_Bits   => (if Item.Held_Values = Fourth then 4 else 8),
+           (K_Bits   =>
+              (if Item.Held = Fourth then 4
+               elsif Item.Held = Float_Eighth
+               then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
+            V_Bits   =>
+              (if Item.Held_Values = Fourth then 4
+               elsif Item.Held_Values = Float_Eighth
+               then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
             K_Bytes  => 0,
             V_Bytes  => Interfaces.Unsigned_64 (Laid.Values_At) * 4,
             KS_At    => Natural (Laid.Key_Scales_At),
@@ -6789,8 +6796,14 @@ package body Model_Runner.Llama is
       end if;
 
       return
-        (K_Bits   => (if Item.Held = Fourth then 4 else 8),
-         V_Bits   => (if Item.Held_Values = Fourth then 4 else 8),
+        (K_Bits   =>
+           (if Item.Held = Fourth then 4
+            elsif Item.Held = Float_Eighth
+            then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
+         V_Bits   =>
+           (if Item.Held_Values = Fourth then 4
+            elsif Item.Held_Values = Float_Eighth
+            then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
          K_Bytes  => Interfaces.Unsigned_64 (Base) * 4
                      + Interfaces.Unsigned_64
                          (Byte_Of (Item.Held, K_Base, KV_Width)),
@@ -6834,7 +6847,7 @@ package body Model_Runner.Llama is
       Held : constant Cache_Precision :=
         (if Keys then Item.Held else Item.Held_Values);
    begin
-      if Item.Held not in Eighth | Fourth then
+      if Item.Held not in Eighth | Fourth | Float_Eighth then
          return Model_Runner.Backend.Device.Not_Packing;
       end if;
 
@@ -6844,7 +6857,10 @@ package body Model_Runner.Llama is
       --  the row.
       if Paged then
          return
-           (Bits      => (if Held = Fourth then 4 else 8),
+           (Bits      =>
+              (if Held = Fourth then 4
+               elsif Held = Float_Eighth
+               then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
             Row_Bytes => Natural (Row_Bytes (Held, Width)),
             At_Byte   => Interfaces.Unsigned_64
                            (if Keys then 0 else Laid.Values_At) * 4,
@@ -6854,7 +6870,10 @@ package body Model_Runner.Llama is
       end if;
 
       return
-        (Bits      => (if Held = Fourth then 4 else 8),
+        (Bits      =>
+           (if Held = Fourth then 4
+            elsif Held = Float_Eighth
+            then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
          Row_Bytes => Natural (Row_Bytes (Held, Width)),
          At_Byte   => Interfaces.Unsigned_64
                         (Base + (if Keys then 0 else Laid.Values_At)) * 4
@@ -6982,7 +7001,9 @@ package body Model_Runner.Llama is
    is
       Base : constant Element_Count := (if Paged then 0 else Block_Base (Item));
    begin
-      if Item.Held not in Eighth | Fourth or else Cells = 0 then
+      if Item.Held not in Eighth | Fourth | Float_Eighth
+        or else Cells = 0
+      then
          return Model_Runner.Backend.Device.Not_Unpacked;
       end if;
 
@@ -7086,7 +7107,9 @@ package body Model_Runner.Llama is
       --  the fixture check said the sinks moved no logit.
       Took := False;
 
-      if Sinks = null and then Item.Held in Eighth | Fourth then
+      if Sinks = null
+        and then Item.Held in Eighth | Fourth | Float_Eighth
+      then
          --  Over the packed block: the rows' bases in bytes and the
          --  scales' in floats, each from where the layer's rows begin.
          declare
@@ -8972,7 +8995,7 @@ package body Model_Runner.Llama is
       begin
          return
            (case Held is
-              when Eighth | Fourth =>
+              when Eighth | Fourth | Float_Eighth =>
                 --  The packed words in the binary32 buffer: paged, a copy
                 --  of every page beside them and the tables' front in
                 --  both; a block, the room a layer unpacks into.
@@ -8980,12 +9003,8 @@ package body Model_Runner.Llama is
                  then Front * 6 + (Plan.KV_Cache_Bytes + Sinks * 4) * 3 / 2
                  else Plan.KV_Cache_Bytes + (Tables + Sinks) * 4 + Widest * Row * 2),
               when Exact | Halved =>
-                Device_Copy_Bytes (Settings, Capacity, Held, Paged),
-              when Float_Eighth =>
-                --  E4M3 attention is currently a host path.  The model's
-                --  matrices may remain on the device, but no device cache
-                --  is reserved for a format its kernels do not interpret.
-                0);
+                Device_Copy_Bytes (Settings, Capacity, Held, Paged)
+              );
       end;
    end Device_Cache_Bytes;
 

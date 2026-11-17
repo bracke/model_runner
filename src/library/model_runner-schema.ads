@@ -20,6 +20,10 @@ with Model_Runner.Errors;
 --    items         the shape of every element of an array
 --    enum          a choice between literal values
 --    const         a single literal value
+--    allOf         exact primitive intersection or closed-object merge
+--    anyOf         a union of supported member schemas
+--    oneOf         a union where member types are provably disjoint
+--    $ref          document-local JSON pointers through $defs/definitions
 --
 --  Everything else is refused where it is met rather than approximated. A
 --  schema this cannot express exactly would otherwise become a grammar that

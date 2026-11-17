@@ -72,10 +72,115 @@ begin
          end if;
          return As_Text (Applied (Step, Prompt_Text (Value)));
 
+      when Method_Slice =>
+         declare
+            Stride : constant Long_Long_Integer :=
+              Number_Of (Value_Of (Item.Operands.all (Step.Third_At)));
+
+            function Bound
+              (Operand_At : Natural;
+               Total    : Natural;
+               Is_Start : Boolean) return Long_Long_Integer
+            is
+               N : constant Long_Long_Integer := Long_Long_Integer (Total);
+               V : Long_Long_Integer;
+            begin
+               if Operand_At = 0 then
+                  return
+                    (if Stride > 0 then (if Is_Start then 0 else N)
+                     else (if Is_Start then N - 1 else -1));
+               end if;
+               V := Number_Of
+                 (Value_Of (Item.Operands.all (Operand_At)));
+               if V < 0 then
+                  V := V + N;
+               end if;
+               if Stride > 0 then
+                  return Long_Long_Integer'Max (0, Long_Long_Integer'Min (V, N));
+               else
+                  return Long_Long_Integer'Max (-1,
+                    Long_Long_Integer'Min (V, N - 1));
+               end if;
+            end Bound;
+         begin
+            if Stride = 0 then
+               Refuse (0, 0, E.Template_Unsupported_Construct);
+               return As_Text ("");
+            end if;
+
+            if Value.Kind in Value_Tools | Value_Call
+              or else (Value.Kind = Value_Data
+                       and then Is_JSON_List (Text_Of (Value)))
+            then
+               declare
+                  Src   : constant String := Listed (Value);
+                  Spans : Span_Array;
+                  Count : Natural;
+                  Kept  : Span_Array;
+                  Used  : Natural := 0;
+                  Position_At : Long_Long_Integer;
+                  Stop  : Long_Long_Integer;
+               begin
+                  Elements_Of (Src, Spans, Count);
+                  Position_At := Bound (Step.At_Operand, Count, True);
+                  Stop := Bound (Step.Second_At, Count, False);
+                  while (if Stride > 0
+                         then Position_At < Stop else Position_At > Stop)
+                  loop
+                     exit when Position_At < 0
+                       or else Position_At >= Long_Long_Integer (Count);
+                     Used := Used + 1;
+                     Kept (Used) := Spans (Natural (Position_At) + 1);
+                     Position_At := Position_At + Stride;
+                  end loop;
+                  return List_Of (Src, Kept, Used);
+               end;
+            elsif Value.Kind = Value_List then
+               --  A strided conversation would need a non-contiguous
+               --  message-list representation. Refuse instead of turning
+               --  messages into anonymous JSON data and changing members.
+               Refuse (0, 0, E.Template_Unsupported_Construct);
+               return As_Text ("");
+            else
+               declare
+                  Text  : constant String := Prompt_Text (Value);
+                  Total : constant Natural := Char_Count (Text);
+                  Position_At : Long_Long_Integer :=
+                    Bound (Step.At_Operand, Total, True);
+                  Stop  : constant Long_Long_Integer :=
+                    Bound (Step.Second_At, Total, False);
+                  R     : Ada.Strings.Unbounded.Unbounded_String;
+               begin
+                  while (if Stride > 0
+                         then Position_At < Stop else Position_At > Stop)
+                  loop
+                     exit when Position_At < 0
+                       or else Position_At >= Long_Long_Integer (Total);
+                     declare
+                        First : constant Positive :=
+                          Byte_Of_Char (Text, Natural (Position_At));
+                        After : constant Positive :=
+                          Byte_Of_Char (Text, Natural (Position_At) + 1);
+                     begin
+                        Ada.Strings.Unbounded.Append
+                          (R, Text (First .. After - 1));
+                     end;
+                     Position_At := Position_At + Stride;
+                  end loop;
+                  return As_Text (Ada.Strings.Unbounded.To_String (R));
+               end;
+            end if;
+         end;
+
       when Method_Strip | Method_Left_Strip | Method_Right_Strip
          | Method_Split_First | Method_Split_Last
-         | Method_Split_Once_After | Method_Split_Once_Rest =>
+         | Method_Split_Once_After | Method_Split_Once_Rest
+         | Method_Right_Split_Once_Before =>
          return As_Text (Applied (Step, Prompt_Text (Value)));
+
+      when Method_Right_Split =>
+         --  Compile-time marker, resolved to an endpoint or whole split.
+         return Value;
 
       when Method_Split_Whole =>
          --  The pieces as a list, which is what the language
@@ -154,7 +259,28 @@ begin
                 elsif Which = 1 and then Step.Second_At /= 0
                 then Printed (Held_Of (Item.Operands.all
                                          (Step.Second_At)))
+                elsif Which = 2 and then Step.Third_At /= 0
+                then Printed (Held_Of (Item.Operands.all
+                                         (Step.Third_At)))
                 else "");
+
+            function Named (Name : String) return String is
+            begin
+               if Step.First_Key_At /= 0
+                 and then Value_Of (Item.Operands.all (Step.First_Key_At)) = Name
+               then
+                  return Argument (0);
+               elsif Step.Second_Key_At /= 0
+                 and then Value_Of (Item.Operands.all (Step.Second_Key_At)) = Name
+               then
+                  return Argument (1);
+               elsif Step.Third_Key_At /= 0
+                 and then Value_Of (Item.Operands.all (Step.Third_Key_At)) = Name
+               then
+                  return Argument (2);
+               end if;
+               return "";
+            end Named;
          begin
             while Index <= Text'Last loop
                if Index < Text'Last
@@ -168,15 +294,33 @@ begin
                   Ada.Strings.Unbounded.Append (R, Argument (Next));
                   Next := Next + 1;
                   Index := Index + 2;
-               elsif Index + 2 <= Text'Last
-                 and then Text (Index) = '{'
-                 and then Text (Index + 1) in '0' .. '1'
-                 and then Text (Index + 2) = '}'
-               then
-                  Ada.Strings.Unbounded.Append
-                    (R, Argument (Character'Pos (Text (Index + 1))
-                                  - Character'Pos ('0')));
-                  Index := Index + 3;
+               elsif Text (Index) = '{' then
+                  declare
+                     Shut : Natural := Index + 1;
+                  begin
+                     while Shut <= Text'Last and then Text (Shut) /= '}' loop
+                        Shut := Shut + 1;
+                     end loop;
+                     if Shut <= Text'Last then
+                        declare
+                           Field : constant String :=
+                             Text (Index + 1 .. Shut - 1);
+                           Piece : constant String :=
+                             (if Field'Length = 1
+                                  and then Field (Field'First) in '0' .. '2'
+                              then Argument
+                                (Character'Pos (Field (Field'First))
+                                 - Character'Pos ('0'))
+                              else Named (Field));
+                        begin
+                           Ada.Strings.Unbounded.Append (R, Piece);
+                        end;
+                        Index := Shut + 1;
+                     else
+                        Ada.Strings.Unbounded.Append (R, Text (Index));
+                        Index := Index + 1;
+                     end if;
+                  end;
                else
                   Ada.Strings.Unbounded.Append (R, Text (Index));
                   Index := Index + 1;
@@ -196,17 +340,24 @@ begin
                else Value_Of (Item.Operands.all (Step.Second_At)));
             R : Ada.Strings.Unbounded.Unbounded_String;
             Index : Natural := Text'First;
+            Replaced : Natural := 0;
+            Most : constant Long_Long_Integer :=
+              (if Step.Third_At = 0 then Long_Long_Integer'Last
+               else Number_Of
+                      (Value_Of (Item.Operands.all (Step.Third_At))));
          begin
-            if Old_Text'Length = 0 then
+            if Old_Text'Length = 0 or else Most <= 0 then
                return As_Text (Text);
             end if;
             while Index <= Text'Last loop
                if Index + Old_Text'Length - 1 <= Text'Last
                  and then Text (Index .. Index + Old_Text'Length - 1)
                           = Old_Text
+                 and then Long_Long_Integer (Replaced) < Most
                then
                   Ada.Strings.Unbounded.Append (R, New_Text);
                   Index := Index + Old_Text'Length;
+                  Replaced := Replaced + 1;
                else
                   Ada.Strings.Unbounded.Append (R, Text (Index));
                   Index := Index + 1;

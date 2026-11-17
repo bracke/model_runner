@@ -25,6 +25,7 @@
 
 const uint LANES = 64u;
 const uint BLOCK = 32u;
+const uint E4M3_BITS = 9u;
 
 layout(local_size_x = LANES) in;
 
@@ -68,6 +69,25 @@ layout(push_constant) uniform Shape {
     uint first_position;
 } shape;
 
+float e4m3_value (uint raw) {
+    uint sign = (raw & 0x80u) << 24u;
+    uint exponent = (raw >> 3u) & 0xFu;
+    uint fraction = raw & 7u;
+
+    if (exponent == 0u) {
+        if (fraction == 0u) {
+            return uintBitsToFloat (sign);
+        }
+        float value = float (fraction) / 512.0;
+        return uintBitsToFloat (floatBitsToUint (value) | sign);
+    }
+    if (exponent == 15u && fraction == 7u) {
+        return uintBitsToFloat (sign | 0x7FC00000u);
+    }
+    return uintBitsToFloat
+      (sign | ((exponent + 120u) << 23u) | (fraction << 20u));
+}
+
 void main() {
     uint slot = gl_WorkGroupID.x;
     uint lane = gl_LocalInvocationID.x;
@@ -90,6 +110,20 @@ void main() {
     uint row_at = shape.at_byte + base * 4u + place * shape.row_bytes;
     uint scale_at = shape.at_scale + base + place * shape.blocks;
     uint into = shape.half_at + slot * shape.width;
+
+    if (shape.bits == E4M3_BITS) {
+        for (uint w = lane; w * 4u < shape.width; w += LANES) {
+            uint word = kvw[(row_at >> 2u) + w];
+            for (uint j = 0u; j < 4u; j++) {
+                uint c = w * 4u + j;
+                if (c < shape.width) {
+                    kvh[into + c] =
+                      float16_t (e4m3_value ((word >> (8u * j)) & 0xFFu));
+                }
+            }
+        }
+        return;
+    }
 
     if (shape.bits == 8u) {
         float scale = kvf[scale_at];

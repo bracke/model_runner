@@ -306,6 +306,96 @@ package body Model_Runner.Schema is
       procedure Shape (From : Natural; Depth : Natural);
       procedure Known_Keywords (From : Natural);
 
+      function Has_Member (From : Natural; Name : String) return Boolean is
+         At_Value : Natural;
+         Failed   : Boolean;
+      begin
+         Find_Member (Text, From, Name, At_Value, Failed);
+         return not Failed and then At_Value /= 0;
+      end Has_Member;
+
+      --  Resolve a document-local JSON pointer. Remote references are not
+      --  allowed: grammar construction remains deterministic and offline.
+      --  Escaped pointer components are refused rather than misresolved.
+      function Resolve_Ref (From : Natural) return Natural is
+         At_Ref : Natural;
+         Failed : Boolean;
+         Item   : Reader;
+         First, Last_At : Natural;
+      begin
+         Find_Member (Text, From, "$ref", At_Ref, Failed);
+         if Failed or else At_Ref = 0 then
+            return 0;
+         end if;
+
+         Item := (At_Char => At_Ref, others => <>);
+         Read_String (Text, Item, First, Last_At);
+         if Item.Failed then
+            Malformed := True;
+            return 0;
+         end if;
+
+         if Text (First .. Last_At) = "#" then
+            return Text'First;
+         elsif Last_At < First + 2
+           or else Text (First .. First + 1) /= "#/"
+         then
+            Refuse ("a non-local $ref");
+            return 0;
+         end if;
+
+         declare
+            Current : Natural := Text'First;
+            Start   : Natural := First + 2;
+            Stop    : Natural;
+            At_Next : Natural;
+            Bad     : Boolean;
+         begin
+            while Start <= Last_At loop
+               Stop := Start;
+               while Stop <= Last_At and then Text (Stop) /= '/' loop
+                  Stop := Stop + 1;
+               end loop;
+               if Stop = Start then
+                  Refuse ("an empty $ref component");
+                  return 0;
+               end if;
+               declare
+                  Raw : constant String := Text (Start .. Stop - 1);
+                  Decoded : String (1 .. Raw'Length);
+                  Used    : Natural := 0;
+                  Index   : Natural := Raw'First;
+               begin
+                  while Index <= Raw'Last loop
+                     Used := Used + 1;
+                     if Raw (Index) = '~' and then Index < Raw'Last
+                       and then Raw (Index + 1) in '0' | '1'
+                     then
+                        Decoded (Used) :=
+                          (if Raw (Index + 1) = '0' then '~' else '/');
+                        Index := Index + 2;
+                     elsif Raw (Index) = '~' or else Raw (Index) = '\' then
+                        Refuse ("an invalid $ref component escape");
+                        return 0;
+                     else
+                        Decoded (Used) := Raw (Index);
+                        Index := Index + 1;
+                     end if;
+                  end loop;
+                  Find_Member
+                    (Text, Current, Decoded (1 .. Used), At_Next, Bad);
+               end;
+               if Bad or else At_Next = 0 then
+                  Refuse ("an unresolved $ref");
+                  return 0;
+               end if;
+               Current := At_Next;
+               Start := Stop + 1;
+            end loop;
+            return Current;
+         end;
+      end Resolve_Ref;
+
       --  The type keyword's value, as a bare word. Empty when absent.
       procedure Named_Type
         (From  : Natural;
@@ -699,6 +789,398 @@ package body Model_Runner.Schema is
          end;
       end Object_Shape;
 
+      --  Merge the closed object shape represented by an allOf tree. Each
+      --  property appears once and required names are the union of member
+      --  requirements. A duplicate property must carry the same schema;
+      --  unlike primitive types, two arbitrary property schemas cannot be
+      --  intersected by a context-free grammar without another full schema
+      --  algebra, so a conflict is refused rather than weakened.
+      procedure Object_AllOf_Shape (From : Natural; Depth : Natural) is
+         Max_Properties : constant := 256;
+         type Positions is array (1 .. Max_Properties) of Natural;
+         type Flags is array (1 .. Max_Properties) of Boolean;
+         Key_First, Key_Last, Value_First, Value_Last : Positions :=
+           [others => 0];
+         Required : Flags := [others => False];
+         Count    : Natural := 0;
+
+         procedure Add_Properties (Source : Natural; Level : Natural);
+
+         procedure Add_Properties (Source : Natural; Level : Natural) is
+            Type_First, Type_Last : Natural;
+            At_Props, At_All      : Natural;
+            Failed                : Boolean;
+         begin
+            if Level > Max_Depth then
+               Refuse ("nesting");
+               return;
+            end if;
+            Known_Keywords (Source);
+            if Refused then
+               return;
+            end if;
+
+            Named_Type (Source, Type_First, Type_Last);
+            if Type_Last >= Type_First
+              and then Text (Type_First .. Type_Last) /= "object"
+            then
+               Refuse ("allOf with incompatible types");
+               return;
+            end if;
+
+            Find_Member (Text, Source, "properties", At_Props, Failed);
+            if not Failed and then At_Props /= 0 then
+               declare
+                  Walk : Reader := (At_Char => At_Props, others => <>);
+               begin
+                  Skip_Blanks (Text, Walk);
+                  if Walk.At_Char > Text'Last
+                    or else Text (Walk.At_Char) /= '{'
+                  then
+                     Malformed := True;
+                     return;
+                  end if;
+                  Walk.At_Char := Walk.At_Char + 1;
+
+                  loop
+                     Skip_Blanks (Text, Walk);
+                     exit when Walk.At_Char > Text'Last
+                       or else Text (Walk.At_Char) = '}';
+                     declare
+                        KF, KL, VF, VL : Natural;
+                        Existing       : Natural := 0;
+                     begin
+                        Read_String (Text, Walk, KF, KL);
+                        Skip_Blanks (Text, Walk);
+                        if Walk.Failed or else Walk.At_Char > Text'Last
+                          or else Text (Walk.At_Char) /= ':'
+                        then
+                           Malformed := True;
+                           return;
+                        end if;
+                        Walk.At_Char := Walk.At_Char + 1;
+                        Read_Value (Text, Walk, VF, VL);
+                        if Walk.Failed then
+                           Malformed := True;
+                           return;
+                        end if;
+
+                        for Index in 1 .. Count loop
+                           if Text (Key_First (Index) .. Key_Last (Index)) =
+                                Text (KF .. KL)
+                           then
+                              Existing := Index;
+                              exit;
+                           end if;
+                        end loop;
+
+                        if Existing = 0 then
+                           if Count = Max_Properties then
+                              Refuse ("too many allOf properties");
+                              return;
+                           end if;
+                           Count := Count + 1;
+                           Key_First (Count) := KF;
+                           Key_Last (Count) := KL;
+                           Value_First (Count) := VF;
+                           Value_Last (Count) := VL;
+                           Required (Count) :=
+                             Is_Required (Source, Text (KF .. KL));
+                        elsif Text
+                                (Value_First (Existing) .. Value_Last (Existing))
+                              /= Text (VF .. VL)
+                        then
+                           Refuse ("allOf with conflicting properties");
+                           return;
+                        else
+                           Required (Existing) := Required (Existing)
+                             or else Is_Required (Source, Text (KF .. KL));
+                        end if;
+
+                        Skip_Blanks (Text, Walk);
+                        if Walk.At_Char <= Text'Last
+                          and then Text (Walk.At_Char) = ','
+                        then
+                           Walk.At_Char := Walk.At_Char + 1;
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end if;
+
+            Find_Member (Text, Source, "allOf", At_All, Failed);
+            if not Failed and then At_All /= 0 then
+               declare
+                  Walk    : Reader := (At_Char => At_All, others => <>);
+                  Members : Natural := 0;
+               begin
+                  Skip_Blanks (Text, Walk);
+                  if Walk.At_Char > Text'Last
+                    or else Text (Walk.At_Char) /= '['
+                  then
+                     Malformed := True;
+                     return;
+                  end if;
+                  Walk.At_Char := Walk.At_Char + 1;
+                  loop
+                     Skip_Blanks (Text, Walk);
+                     exit when Walk.At_Char > Text'Last
+                       or else Text (Walk.At_Char) = ']';
+                     declare
+                        VF, VL : Natural;
+                     begin
+                        Read_Value (Text, Walk, VF, VL);
+                        if Walk.Failed or else Text (VF) /= '{' then
+                           Malformed := True;
+                           return;
+                        end if;
+                        Members := Members + 1;
+                        Add_Properties (VF, Level + 1);
+                        exit when Refused or else Malformed;
+                        Skip_Blanks (Text, Walk);
+                        if Walk.At_Char <= Text'Last
+                          and then Text (Walk.At_Char) = ','
+                        then
+                           Walk.At_Char := Walk.At_Char + 1;
+                        end if;
+                     end;
+                  end loop;
+                  if Members = 0 then
+                     Refuse ("an empty allOf");
+                  end if;
+               end;
+            end if;
+         end Add_Properties;
+
+         Emitted : Natural := 0;
+
+         procedure Emit (Index : Positive) is
+         begin
+            if Emitted > 0 then
+               Put (" ("","" ws ");
+            end if;
+            Emitted := Emitted + 1;
+            Put ("""\""");
+            Put_Literal (Text (Key_First (Index) .. Key_Last (Index)));
+            Put ("\"":"" ws ");
+            Shape (Value_First (Index), Depth + 1);
+            if Emitted > 1 then
+               Put ((if Required (Index) then ")" else ")?"));
+            end if;
+         end Emit;
+      begin
+         Add_Properties (From, Depth);
+         if Refused or else Malformed then
+            return;
+         elsif Count = 0 then
+            Refuse ("object without properties");
+            return;
+         end if;
+
+         Put ("""{"" ws ");
+         for Index in 1 .. Count loop
+            if Required (Index) then
+               Emit (Index);
+            end if;
+         end loop;
+         if Emitted = 0 then
+            Refuse ("an allOf object with only optional properties");
+            return;
+         end if;
+         for Index in 1 .. Count loop
+            if not Required (Index) then
+               Emit (Index);
+            end if;
+         end loop;
+         Put (" ws ""}""");
+      end Object_AllOf_Shape;
+
+      procedure Alternatives
+        (At_Value : Natural; Depth : Natural; Exclusive : Boolean)
+      is
+         Item  : Reader := (At_Char => At_Value, others => <>);
+         Count : Natural := 0;
+         Kinds : array (1 .. 64) of Plain_Kind := [others => No_Plain];
+         Starts : array (1 .. 64) of Natural := [others => 0];
+
+         function Provably_Disjoint (Left, Right : Positive) return Boolean is
+            procedure Const_At
+              (Schema : Natural; First, Last_At : out Natural)
+            is
+               At_Const : Natural;
+               Failed   : Boolean;
+               Walk     : Reader;
+            begin
+               First := 1;
+               Last_At := 0;
+               Find_Member (Text, Schema, "const", At_Const, Failed);
+               if Failed or else At_Const = 0 then
+                  return;
+               end if;
+               Walk := (At_Char => At_Const, others => <>);
+               Read_Value (Text, Walk, First, Last_At);
+               if Walk.Failed then
+                  First := 1;
+                  Last_At := 0;
+               end if;
+            end Const_At;
+
+            LF, LL, RF, RL : Natural;
+            Left_Props, Right_Props : Natural;
+            Failed : Boolean;
+         begin
+            if Kinds (Left) not in No_Plain | Not_Plain
+              and then Kinds (Right) not in No_Plain | Not_Plain
+            then
+               return Intersect (Kinds (Left), Kinds (Right)) = Not_Plain;
+            end if;
+
+            --  Distinct const schemas cannot both accept one value.
+            Const_At (Starts (Left), LF, LL);
+            Const_At (Starts (Right), RF, RL);
+            if LL >= LF and then RL >= RF then
+               return Text (LF .. LL) /= Text (RF .. RL);
+            end if;
+
+            --  The common object-oneOf idiom uses a required discriminator
+            --  property whose const differs in each branch. Because object
+            --  shapes here require every named property unless told
+            --  otherwise, distinct discriminator constants prove the two
+            --  alternatives exclusive.
+            Find_Member
+              (Text, Starts (Left), "properties", Left_Props, Failed);
+            if Failed or else Left_Props = 0 then
+               return False;
+            end if;
+            Find_Member
+              (Text, Starts (Right), "properties", Right_Props, Failed);
+            if Failed or else Right_Props = 0 then
+               return False;
+            end if;
+
+            declare
+               Walk : Reader := (At_Char => Left_Props, others => <>);
+            begin
+               Skip_Blanks (Text, Walk);
+               if Walk.At_Char > Text'Last or else Text (Walk.At_Char) /= '{'
+               then
+                  return False;
+               end if;
+               Walk.At_Char := Walk.At_Char + 1;
+               loop
+                  Skip_Blanks (Text, Walk);
+                  exit when Walk.At_Char > Text'Last
+                    or else Text (Walk.At_Char) = '}';
+                  declare
+                     KF, KL, VF, VL, Other : Natural;
+                     Bad : Boolean;
+                  begin
+                     Read_String (Text, Walk, KF, KL);
+                     Skip_Blanks (Text, Walk);
+                     if Walk.Failed or else Walk.At_Char > Text'Last
+                       or else Text (Walk.At_Char) /= ':'
+                     then
+                        return False;
+                     end if;
+                     Walk.At_Char := Walk.At_Char + 1;
+                     Read_Value (Text, Walk, VF, VL);
+                     if Walk.Failed then
+                        return False;
+                     end if;
+                     Const_At (VF, LF, LL);
+                     if LL >= LF then
+                        Find_Member
+                          (Text, Right_Props, Text (KF .. KL), Other, Bad);
+                        if not Bad and then Other /= 0 then
+                           Const_At (Other, RF, RL);
+                           if RL >= RF
+                             and then Text (LF .. LL) /= Text (RF .. RL)
+                           then
+                              return True;
+                           end if;
+                        end if;
+                     end if;
+                     Skip_Blanks (Text, Walk);
+                     if Walk.At_Char <= Text'Last
+                       and then Text (Walk.At_Char) = ','
+                     then
+                        Walk.At_Char := Walk.At_Char + 1;
+                     end if;
+                  end;
+               end loop;
+            end;
+            return False;
+         end Provably_Disjoint;
+      begin
+         Skip_Blanks (Text, Item);
+         if Item.At_Char > Text'Last or else Text (Item.At_Char) /= '[' then
+            Malformed := True;
+            return;
+         end if;
+         Item.At_Char := Item.At_Char + 1;
+         Put ("(");
+         loop
+            Skip_Blanks (Text, Item);
+            exit when Item.At_Char > Text'Last or else Text (Item.At_Char) = ']';
+            declare
+               VF, VL : Natural;
+               TF, TL : Natural;
+            begin
+               Read_Value (Text, Item, VF, VL);
+               if Item.Failed or else Text (VF) /= '{' then
+                  Malformed := True;
+                  return;
+               end if;
+               Count := Count + 1;
+               if Count > Kinds'Last then
+                  Refuse ("too many schema alternatives");
+                  return;
+               end if;
+               Starts (Count) := VF;
+               if Count > 1 then
+                  Put (" | ");
+               end if;
+               Shape (VF, Depth + 1);
+               Named_Type (VF, TF, TL);
+               if TL >= TF then
+                  declare
+                     Word : constant String := Text (TF .. TL);
+                  begin
+                     Kinds (Count) :=
+                       (if Word = "string" then String_Plain
+                        elsif Word = "number" then Number_Plain
+                        elsif Word = "integer" then Integer_Plain
+                        elsif Word = "boolean" then Boolean_Plain
+                        elsif Word = "null" then Null_Plain
+                        else Not_Plain);
+                  end;
+               else
+                  Kinds (Count) := Not_Plain;
+               end if;
+               Skip_Blanks (Text, Item);
+               if Item.At_Char <= Text'Last and then Text (Item.At_Char) = ',' then
+                  Item.At_Char := Item.At_Char + 1;
+               end if;
+            end;
+         end loop;
+         Put (")");
+         if Count = 0 then
+            Malformed := True;
+            return;
+         end if;
+
+         if Exclusive then
+            for Left in 1 .. Count loop
+               for Right in Left + 1 .. Count loop
+                  if not Provably_Disjoint (Left, Right) then
+                     Refuse ("oneOf alternatives that may overlap");
+                     return;
+                  end if;
+               end loop;
+            end loop;
+         end if;
+      end Alternatives;
+
       procedure Array_Shape (From : Natural; Depth : Natural) is
          At_Items : Natural;
          Failed   : Boolean;
@@ -1077,6 +1559,9 @@ package body Model_Runner.Schema is
                     and then Word /= "required" and then Word /= "items"
                     and then Word /= "enum" and then Word /= "const"
                     and then Word /= "allOf"
+                    and then Word /= "anyOf" and then Word /= "oneOf"
+                    and then Word /= "$ref" and then Word /= "$defs"
+                    and then Word /= "definitions"
                     --  Documentary keywords say nothing about the shape.
                     and then Word /= "description" and then Word /= "title"
                     and then Word /= "$schema" and then Word /= "$id"
@@ -1097,7 +1582,7 @@ package body Model_Runner.Schema is
       end Known_Keywords;
 
       procedure Shape (From : Natural; Depth : Natural) is
-         At_Enum, At_Const, At_All : Natural;
+         At_Enum, At_Const, At_All, At_Any, At_One : Natural;
          Failed : Boolean;
 
          Type_First, Type_Last : Natural;
@@ -1110,6 +1595,32 @@ package body Model_Runner.Schema is
          if Depth > Max_Depth then
             Refuse ("nesting");
             return;
+         end if;
+
+         if Has_Member (From, "$ref") then
+            declare
+               Target : constant Natural := Resolve_Ref (From);
+            begin
+               if Target /= 0 then
+                  --  Shape-bearing siblings are an intersection with the
+                  --  reference. Do not silently discard them.
+                  if Has_Member (From, "type")
+                    or else Has_Member (From, "properties")
+                    or else Has_Member (From, "required")
+                    or else Has_Member (From, "items")
+                    or else Has_Member (From, "enum")
+                    or else Has_Member (From, "const")
+                    or else Has_Member (From, "allOf")
+                    or else Has_Member (From, "anyOf")
+                    or else Has_Member (From, "oneOf")
+                  then
+                     Refuse ("$ref with schema siblings");
+                  else
+                     Shape (Target, Depth + 1);
+                  end if;
+               end if;
+               return;
+            end;
          end if;
 
          --  A fixed value, or a choice between fixed values, says everything
@@ -1141,13 +1652,57 @@ package body Model_Runner.Schema is
 
          Find_Member (Text, From, "allOf", At_All, Failed);
          if not Failed and then At_All /= 0 then
-            declare
-               Kind : constant Plain_Kind := Plain_Type (From, Depth);
-            begin
-               if Kind not in No_Plain | Not_Plain then
-                  Plain (Word_Of (Kind));
-               end if;
-            end;
+            if Has_Member (From, "properties") then
+               Object_AllOf_Shape (From, Depth);
+            else
+               declare
+                  Item : Reader := (At_Char => At_All, others => <>);
+                  VF, VL, TF, TL : Natural;
+                  Looks_Object : Boolean := False;
+               begin
+                  Skip_Blanks (Text, Item);
+                  if Item.At_Char <= Text'Last
+                    and then Text (Item.At_Char) = '['
+                  then
+                     Item.At_Char := Item.At_Char + 1;
+                     Skip_Blanks (Text, Item);
+                     if Item.At_Char <= Text'Last
+                       and then Text (Item.At_Char) /= ']'
+                     then
+                        Read_Value (Text, Item, VF, VL);
+                        if not Item.Failed and then Text (VF) = '{' then
+                           Named_Type (VF, TF, TL);
+                           Looks_Object := Has_Member (VF, "properties")
+                             or else (TL >= TF
+                                      and then Text (TF .. TL) = "object");
+                        end if;
+                     end if;
+                  end if;
+                  if Looks_Object then
+                     Object_AllOf_Shape (From, Depth);
+                  else
+                     declare
+                        Kind : constant Plain_Kind := Plain_Type (From, Depth);
+                     begin
+                        if Kind not in No_Plain | Not_Plain then
+                           Plain (Word_Of (Kind));
+                        end if;
+                     end;
+                  end if;
+               end;
+            end if;
+            return;
+         end if;
+
+         Find_Member (Text, From, "anyOf", At_Any, Failed);
+         if not Failed and then At_Any /= 0 then
+            Alternatives (At_Any, Depth, Exclusive => False);
+            return;
+         end if;
+
+         Find_Member (Text, From, "oneOf", At_One, Failed);
+         if not Failed and then At_One /= 0 then
+            Alternatives (At_One, Depth, Exclusive => True);
             return;
          end if;
 

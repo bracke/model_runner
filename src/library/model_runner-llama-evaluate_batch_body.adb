@@ -1833,7 +1833,7 @@ begin
                        Item.Page_Table_At.all (Reads);
                   end if;
                   No_Block := not Resident;
-               elsif Item.Held in Exact | Eighth | Fourth
+               elsif Item.Held in Exact | Eighth | Fourth | Float_Eighth
                  and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
@@ -2723,7 +2723,8 @@ begin
             --  session whose layer did not go over whole attends on the
             --  host below, out of its host copy, which mirroring keeps
             --  current.
-            if Item.Held in Exact | Eighth | Fourth and then Resident
+            if Item.Held in Exact | Eighth | Fourth | Float_Eighth
+              and then Resident
               and then not Item.Paged
               and then not Fused
               and then not Hybrid (Settings.Kind)
@@ -2777,7 +2778,7 @@ begin
                   --  A packed block's step reads it with the packed
                   --  kernel, a round's rows each out of their own
                   --  block through the table.
-                  if Item.Held in Exact | Eighth | Fourth
+                  if Item.Held in Exact | Eighth | Fourth | Float_Eighth
                     and then Settings.Experts = 0
                     and then not Current.Host_Feed
                     and then T.Is_Present (Current.Gate)
@@ -3623,7 +3624,7 @@ begin
                      Read_Packed_Pages_Layer
                        (Item, Natural (Index), KV_Width, V_Width,
                         Cell, Count, Read);
-                  elsif Item.Held in Eighth | Fourth then
+                  elsif Item.Held in Eighth | Fourth | Float_Eighth then
                      Read_Back_Packed
                        (Item, Base, V_At, Count, KV_Width, V_Width,
                         Read);

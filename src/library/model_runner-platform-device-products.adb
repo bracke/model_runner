@@ -11307,8 +11307,8 @@ package body Model_Runner.Platform.Device.Products is
       KV_Width   : Natural;
       V_Width    : Natural) return Boolean
    is (Packed_Pipeline (Item) /= Null_Handle
-       and then Packed.K_Bits in 4 | 8
-       and then Packed.V_Bits in 4 | 8
+       and then Packed.K_Bits in 4 | 8 | E4M3_Cache_Code
+       and then Packed.V_Bits in 4 | 8 | E4M3_Cache_Code
        and then Head_Size in 4 .. 256
        and then Head_Size mod 4 = 0
        and then Value_Size in 4 .. Attention_Room
@@ -14865,7 +14865,7 @@ package body Model_Runner.Platform.Device.Products is
         --  which the packing kernel looks up in the table as place.comp
         --  does and the unpacking kernel does not.
         or else (Packed.Bits /= 0
-                 and then (Packed.Bits not in 4 | 8
+                 and then (Packed.Bits not in 4 | 8 | E4M3_Cache_Code
                            or else Width mod 4 /= 0
                            or else Packed.Row_Bytes
                                    /= (if Packed.Bits = 4 then Width / 2

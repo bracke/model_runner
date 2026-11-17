@@ -41,7 +41,8 @@ begin
 
             Result.Chained := Result.Chained + 1;
             Result.Methods (Result.Chained) :=
-              (Kind => Kind, At_Operand => Kept, Second_At => 0);
+              (Kind => Kind, At_Operand => Kept, Second_At => 0,
+               Third_At => 0, others => <>);
             Added := True;
          end Add_Cut;
       begin
@@ -56,6 +57,7 @@ begin
                Shut  : Natural := Scan + 1;
                Level : Natural := 0;
                Colon : Natural := 0;
+               Second_Colon : Natural := 0;
             begin
                while Shut <= Text'Last loop
                   if Text (Shut) = '[' then
@@ -63,10 +65,12 @@ begin
                   elsif Text (Shut) = ']' then
                      exit when Level = 0;
                      Level := Level - 1;
-                  elsif Text (Shut) = ':' and then Level = 0
-                    and then Colon = 0
-                  then
-                     Colon := Shut;
+                  elsif Text (Shut) = ':' and then Level = 0 then
+                     if Colon = 0 then
+                        Colon := Shut;
+                     elsif Second_Colon = 0 then
+                        Second_Colon := Shut;
+                     end if;
                   end if;
                   Shut := Shut + 1;
                end loop;
@@ -93,7 +97,14 @@ begin
                   Front : constant String :=
                     Model_Runner.Text.Trim (Text (Scan + 1 .. Colon - 1));
                   Back  : constant String :=
-                    Model_Runner.Text.Trim (Text (Colon + 1 .. Shut - 1));
+                    Model_Runner.Text.Trim
+                      (Text (Colon + 1 ..
+                         (if Second_Colon = 0 then Shut - 1
+                          else Second_Colon - 1)));
+                  Step  : constant String :=
+                    (if Second_Colon = 0 then ""
+                     else Model_Runner.Text.Trim
+                            (Text (Second_Colon + 1 .. Shut - 1)));
                   Added : Boolean := True;
                   --  Each end is measured against the whole. The end cut
                   --  first keeps the front where it was for a start counted
@@ -105,7 +116,51 @@ begin
                   From_End : constant Boolean := Front'Length > 0 and then Front (Front'First) = '-';
                   Back_From_Front : constant Boolean := Back'Length > 0 and then Back (Back'First) /= '-';
                begin
-                  if From_End and then Back_From_Front then
+                  if Second_Colon /= 0 then
+                     if Step = "" or else Result.Chained >= Max_Methods then
+                        Added := False;
+                     else
+                        declare
+                           function Keep_Part (Source : String) return Natural is
+                              Value : Operand;
+                              Cursor : Natural := Source'First;
+                              Read  : Boolean;
+                              Kept  : Natural := 0;
+                           begin
+                              if Source = "" then
+                                 return 0;
+                              end if;
+                              Read_Operand (Source, Cursor, Value, Read);
+                              if not Read
+                                or else Skip_Spaces (Source, Cursor)
+                                          <= Source'Last
+                              then
+                                 return Natural'Last;
+                              end if;
+                              Keep (Value, Kept);
+                              return (if Kept = 0 then Natural'Last else Kept);
+                           end Keep_Part;
+
+                           First_At : constant Natural := Keep_Part (Front);
+                           Last_At  : constant Natural := Keep_Part (Back);
+                           Step_At  : constant Natural := Keep_Part (Step);
+                        begin
+                           if First_At = Natural'Last
+                             or else Last_At = Natural'Last
+                             or else Step_At in 0 | Natural'Last
+                           then
+                              Added := False;
+                           else
+                              Result.Chained := Result.Chained + 1;
+                              Result.Methods (Result.Chained) :=
+                                (Kind => Method_Slice,
+                                 At_Operand => First_At,
+                                 Second_At => Last_At,
+                                 Third_At => Step_At, others => <>);
+                           end if;
+                        end;
+                     end if;
+                  elsif From_End and then Back_From_Front then
                      Added := False;
                   elsif From_End then
                      Add_Cut (Front, Method_Cut_From, Added);
@@ -180,7 +235,7 @@ begin
                Result.Chained := Result.Chained + 1;
                Result.Methods (Result.Chained) :=
                  (Kind => Method_Member, At_Operand => Kept,
-                  Second_At => 0);
+                  Second_At => 0, Third_At => 0, others => <>);
                From := Stop;
                goto Read_On;
             end;
@@ -621,7 +676,7 @@ begin
                      Result.Chained := Result.Chained + 1;
                      Result.Methods (Result.Chained) :=
                        (Kind => Method_Items, At_Operand => 0,
-                        Second_At => 0);
+                        Second_At => 0, Third_At => 0, others => <>);
                   end if;
                   Step.Kind := Filter_None;
                else

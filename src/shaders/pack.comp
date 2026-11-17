@@ -1,9 +1,9 @@
 #version 450
 
 //  A step's result, packed into the cache the device holds: a byte an
-//  element with a scale a row, or a nibble an element with a scale a block
-//  of thirty-two, which are the two storages a session chooses with
-//  --kv-cache q8 and q4.
+//  element with a scale a row, an OCP E4M3FN byte, or a nibble an element
+//  with a scale a block of thirty-two, selected by --kv-cache q8,
+//  f8_e4m3 and q4.
 //
 //  place.comp writes a layer's keys and values into the exact cache so
 //  that they never leave the device between the projection that made them
@@ -58,6 +58,7 @@
 
 const uint LANES = 256u;
 const uint BLOCK = 32u;
+const uint E4M3_BITS = 9u;
 
 layout(local_size_x = LANES) in;
 
@@ -167,6 +168,53 @@ float rounded (float v) {
     return r;
 }
 
+//  Round a non-negative number to the nearest whole number, ties to even.
+uint nearest_even (float value) {
+    float below = floor (value);
+    uint whole = uint (below);
+    float part = value - below;
+    return whole + ((part > 0.5 || (part == 0.5 && (whole & 1u) != 0u))
+                    ? 1u : 0u);
+}
+
+//  Binary32 to OCP E4M3FN, the same cases and rounding as the host codec.
+uint e4m3_of (float value) {
+    uint raw = floatBitsToUint (value);
+    uint sign = (raw >> 24u) & 0x80u;
+    uint exponent = (raw >> 23u) & 0xFFu;
+    uint mantissa = raw & 0x7FFFFFu;
+
+    if (exponent == 0xFFu) {
+        return sign | (mantissa == 0u ? 0x7Eu : 0x7Fu);
+    }
+    if (exponent == 0u && mantissa == 0u) {
+        return sign;
+    }
+
+    float magnitude = uintBitsToFloat (raw & 0x7FFFFFFFu);
+    int power = int (exponent) - 127;
+    uint encoded;
+
+    if (power < -6) {
+        encoded = min (8u, nearest_even (magnitude * 512.0));
+    } else if (power > 8) {
+        encoded = 0x7Eu;
+    } else {
+        uint quantized = nearest_even
+          (magnitude / exp2 (float (power - 3)));
+        if (quantized == 16u) {
+            quantized = 8u;
+            encoded = power == 8
+                      ? 0x7Eu : uint (power + 8) * 8u + quantized - 8u;
+        } else if (power == 8) {
+            encoded = min (0x7Eu, 15u * 8u + quantized - 8u);
+        } else {
+            encoded = uint (power + 7) * 8u + quantized - 8u;
+        }
+    }
+    return sign | encoded;
+}
+
 void main() {
     uint slot = gl_WorkGroupID.x;
     uint lane = gl_LocalInvocationID.x;
@@ -197,6 +245,32 @@ void main() {
         uint in_page = pos & ((1u << shape.page_shift) - 1u);
         row_at = shape.at_byte + base * 4u + in_page * shape.row_bytes;
         scale_at = shape.at_scale + base + in_page * shape.blocks;
+    }
+
+    if (shape.bits == E4M3_BITS) {
+        if (lane == 0u) {
+            //  E4M3 has no quantization scale, but the common packed-cache
+            //  layout retains this slot. Keep snapshots deterministic and
+            //  identical to the host representation.
+            kvf[scale_at] = 1.0;
+        }
+        uint first = row_at >> 2;
+        uint last = (row_at + shape.width - 1u) >> 2;
+
+        for (uint wi = first + lane; wi <= last; wi += LANES) {
+            uint word = 0u;
+            uint mask = 0u;
+
+            for (uint k = 0u; k < 4u; k++) {
+                int c = int (wi * 4u + k - row_at);
+                if (c >= 0 && c < int (shape.width)) {
+                    word |= e4m3_of (x[from + uint (c)]) << (8u * k);
+                    mask |= 0xFFu << (8u * k);
+                }
+            }
+            put_word (wi, word, mask);
+        }
+        return;
     }
 
     if (shape.bits == 8u) {

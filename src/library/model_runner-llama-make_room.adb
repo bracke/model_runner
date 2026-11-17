@@ -295,7 +295,7 @@ begin
                   end;
                elsif Moved > 0
                  and then Item.Seat >= 0
-                 and then Item.Held in Eighth | Fourth
+                 and then Item.Held in Eighth | Fourth | Float_Eighth
                then
                   --  The packed rows that moved, a row at a time.
                   declare

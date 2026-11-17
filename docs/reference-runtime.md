@@ -639,6 +639,13 @@ configuration of a real model, and the chat template.
    recorded logits against the file. Anything that disagrees fails the run and
    names what differed.
 
+   A real split artifact can be checked on the same path: repeat `--shard PATH`
+   or name `--ple PATH` for auxiliary tensors. `--kv-cache f8_e4m3`,
+   `--expert-cache BYTES`, and `--panel-cache PATH` select the byte KV cache,
+   adaptive MoE residency, and combined-model panel cache respectively. These
+   are opt-in because the repository does not download or commit large models;
+   the deterministic fixture suite remains the release authority.
+
 ## Why identifiers rather than text
 
 Token identifiers are what both sides can report unambiguously. Comparing

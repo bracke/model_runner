@@ -236,6 +236,12 @@ begin
       when Term_Macro =>
          return Run_Macro (Value);
 
+      when Term_Macro_Reference =>
+         if not Testing then
+            Refuse (Value.Offset, 0, E.Template_Unsupported_Construct);
+         end if;
+         return "";
+
       when Term_Keyword | Term_Positional_Unpack | Term_Keyword_Unpack =>
          --  Read by the call it belongs to, never on its own.
          return "";

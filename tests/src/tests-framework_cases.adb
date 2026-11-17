@@ -11477,9 +11477,8 @@ package body Tests.Framework_Cases is
       --  The configuration's settings: what each means and its default,
       --  and the fingerprint evidence of an earlier build was held to.
       Assert (Cf.Meaning_Of ("scalar.agents.max_steps") /= ""
-              and then Cf.Default_Of ("scalar.agents.max_steps") = "24"
-              and then Cf.Legacy_Verification_Fingerprint (Cf.Required (Store))'Length = 16,
-              "a setting's meaning or default, or the legacy fingerprint, was not given");
+              and then Cf.Default_Of ("scalar.agents.max_steps") = "24",
+              "a setting's meaning or default was not given");
 
       --  And what the host says while the work runs.
       Wk.Execute (Store, To_String (Id), Probing_Agent'(null record), Cx.Profile (Store, ""), Done, Status);

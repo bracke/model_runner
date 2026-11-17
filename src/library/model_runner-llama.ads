@@ -1075,7 +1075,8 @@ package Model_Runner.Llama is
    --  @return True where a session may be opened with the pair.
    function Stores_Pair
      (Cache : Cache_Precision; Values : Value_Precision) return Boolean
-   is (Values = Same_As_Keys or else Cache in Eighth | Fourth);
+   is (Values = Same_As_Keys
+       or else Cache in Eighth | Fourth | Float_Eighth);
 
    --  Whether a session keeps its values in its keys' rows: a latent read
    --  absorbed (Configuration.Latent_Attention), whose value is its key
@@ -1745,6 +1746,10 @@ package Model_Runner.Llama is
       Reserve_Bytes  : Interfaces.Unsigned_64 := 0;
    end record;
 
+   --  Read the routing-aware expert cache's current counters.
+   --
+   --  @param Item Session to inspect.
+   --  @return Current expert-cache statistics.
    function Expert_Cache_Stats (Item : Session) return Expert_Cache_Statistics;
 
    --  A session named rather than passed.

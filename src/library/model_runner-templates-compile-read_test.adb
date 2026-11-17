@@ -10,6 +10,11 @@ is
 
    --  Set where the negation is written between the two sides.
    Denied_In : Boolean := False;
+
+   --  `x is in(y)` and `x in y` share an evaluator, but the infix form
+   --  reads its right side while recognizing `in`; only the test form must
+   --  read one below with the other parenthesised test arguments.
+   Is_Test : Boolean := False;
 begin
    Ok := True;
 
@@ -49,6 +54,7 @@ begin
          end if;
 
          if Text (First .. Last) = "is" then
+            Is_Test := True;
             declare
                Denied : Boolean := False;
             begin
@@ -109,6 +115,72 @@ begin
                   Current.Operator :=
                     (if Denied then Compare_Is_Not_Boolean
                      else Compare_Is_Boolean);
+               elsif Text (First .. Last) = "odd" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Odd
+                     else Compare_Is_Odd);
+               elsif Text (First .. Last) = "even" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Even
+                     else Compare_Is_Even);
+               elsif Text (First .. Last) = "divisibleby" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Divisible_By
+                     else Compare_Is_Divisible_By);
+               elsif Text (First .. Last) in "eq" | "equalto" then
+                  Current.Operator :=
+                    (if Denied then Compare_Not_Equal else Compare_Equal);
+               elsif Text (First .. Last) = "ne" then
+                  Current.Operator :=
+                    (if Denied then Compare_Equal else Compare_Not_Equal);
+               elsif Text (First .. Last) in "lt" | "lessthan" then
+                  Current.Operator :=
+                    (if Denied then Compare_Greater_Or_Equal
+                     else Compare_Less);
+               elsif Text (First .. Last) = "le" then
+                  Current.Operator :=
+                    (if Denied then Compare_Greater
+                     else Compare_Less_Or_Equal);
+               elsif Text (First .. Last) in "gt" | "greaterthan" then
+                  Current.Operator :=
+                    (if Denied then Compare_Less_Or_Equal
+                     else Compare_Greater);
+               elsif Text (First .. Last) = "ge" then
+                  Current.Operator :=
+                    (if Denied then Compare_Less
+                     else Compare_Greater_Or_Equal);
+               elsif Text (First .. Last) = "in" then
+                  Current.Operator :=
+                    (if Denied then Compare_Not_In_Text
+                     else Compare_In_Text);
+               elsif Text (First .. Last) = "lower" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Lower
+                     else Compare_Is_Lower);
+               elsif Text (First .. Last) = "upper" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Upper
+                     else Compare_Is_Upper);
+               elsif Text (First .. Last) = "sameas" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Same_As
+                     else Compare_Is_Same_As);
+               elsif Text (First .. Last) = "integer" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Integer
+                     else Compare_Is_Integer);
+               elsif Text (First .. Last) = "float" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Float
+                     else Compare_Is_Float);
+               elsif Text (First .. Last) = "callable" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Callable
+                     else Compare_Is_Callable);
+               elsif Text (First .. Last) = "escaped" then
+                  Current.Operator :=
+                    (if Denied then Compare_Is_Not_Escaped
+                     else Compare_Is_Escaped);
                else
                   --  A test this engine has no answer for. The clause
                   --  becomes one that refuses when it is evaluated,
@@ -176,6 +248,12 @@ begin
    if Current.Operator in Compare_Equal | Compare_Not_Equal
                         | Compare_Less | Compare_Less_Or_Equal
                         | Compare_Greater | Compare_Greater_Or_Equal
+                        | Compare_Is_Divisible_By
+                        | Compare_Is_Not_Divisible_By
+                        | Compare_Is_Same_As | Compare_Is_Not_Same_As
+     or else (Is_Test
+              and then Current.Operator in
+                Compare_In_Text | Compare_Not_In_Text)
    then
       Read_Operand (Text, From, Current.Right, Taken);
       Ok := Taken;

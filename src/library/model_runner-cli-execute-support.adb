@@ -464,29 +464,100 @@ package body Model_Runner.CLI.Execute.Support is
            when L.Mixed_Activations   => Products.Rounds_Feed_Forward);
    end Use_Arithmetic;
 
-   function Panel_Cache_For (Path : String; No_Cache : Boolean) return String
+   procedure Append_Panel_Source
+     (Identity : in out US.Unbounded_String;
+      Path     : String;
+      Known    : out Boolean)
    is
    begin
-      if No_Cache or else not Ada.Directories.Exists (Path) then
-         return "";
+      Known := Ada.Directories.Exists (Path)
+        and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File;
+      if not Known then
+         return;
       end if;
+
       --  And by what the file system says of its contents: its
       --  modification and status-change times to the nanosecond, its
       --  size and its file number. Size and modification time alone
       --  were kept by a copy that keeps times (cp -p, rsync -t), and
       --  the panels of the file that was there were served.
       declare
-         Known : Boolean;
-         Stamp : constant String := Hostkit.Metadata.Change_Stamp (Path, Known);
+         Has_Stamp : Boolean;
+         Stamp : constant String :=
+           Hostkit.Metadata.Change_Stamp (Path, Has_Stamp);
       begin
-         return Model_Runner.Platform.Panel_File
-           (Path
-            & "|" & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
-            & "|" & Ada.Calendar.Formatting.Image
-                      (Ada.Directories.Modification_Time (Path),
-                       Include_Time_Fraction => True)
-            & (if Known then "|" & Stamp else ""));
+         US.Append (Identity, "|source=");
+         US.Append (Identity, Path);
+         US.Append
+           (Identity,
+            "|size="
+            & Ada.Directories.File_Size'Image (Ada.Directories.Size (Path)));
+         US.Append
+           (Identity,
+            "|mtime="
+            & Ada.Calendar.Formatting.Image
+                (Ada.Directories.Modification_Time (Path),
+                 Include_Time_Fraction => True));
+         if Has_Stamp then
+            US.Append (Identity, "|stamp=" & Stamp);
+         end if;
       end;
+   exception
+      when others =>
+         Known := False;
+   end Append_Panel_Source;
+
+   function Panel_Cache_For (Path : String; No_Cache : Boolean) return String
+   is
+      Identity : US.Unbounded_String;
+      Known    : Boolean;
+   begin
+      if No_Cache then
+         return "";
+      end if;
+      Append_Panel_Source (Identity, Path, Known);
+      return
+        (if Known
+         then Model_Runner.Platform.Panel_File (US.To_String (Identity))
+         else "");
+   end Panel_Cache_For;
+
+   function Panel_Cache_For (Item : Opt.Command; Path : String) return String
+   is
+      Identity : US.Unbounded_String;
+      Known    : Boolean;
+   begin
+      if Item.No_Cache then
+         return "";
+      end if;
+
+      Append_Panel_Source (Identity, Path, Known);
+      if not Known then
+         return "";
+      end if;
+
+      for Index in 1 .. Item.Auxiliary_Count loop
+         declare
+            Named : constant String :=
+              T.To_String (Item.Auxiliary_Shards (Index));
+            Resolved : constant String :=
+              Model_Runner.Platform.Resolve_Model_Path
+                (if Model_Runner.Config.Has ("alias." & Named)
+                 then Model_Runner.Config.Value ("alias." & Named)
+                 else Named);
+         begin
+            --  Delimit the ordered role as well as the file identity: two
+            --  auxiliary sources with the same contents but reversed
+            --  precedence need not produce the same combined tensor set.
+            US.Append (Identity, "|aux=" & Natural'Image (Index));
+            Append_Panel_Source (Identity, Resolved, Known);
+            if not Known then
+               return "";
+            end if;
+         end;
+      end loop;
+
+      return Model_Runner.Platform.Panel_File (US.To_String (Identity));
    exception
       when others =>
          return "";

@@ -136,6 +136,15 @@ private package Model_Runner.CLI.Execute.Support is
    --  @return The panel file, or empty.
    function Panel_Cache_For (Path : String; No_Cache : Boolean) return String;
 
+   --  The same identity for a command's complete model: the backbone and
+   --  every explicit auxiliary shard, in precedence order.  A combined
+   --  PLE/engram load may reuse panels only when all of those inputs match.
+   --
+   --  @param Item Parsed command carrying the auxiliary paths.
+   --  @param Path Resolved backbone path.
+   --  @return The panel file, or empty.
+   function Panel_Cache_For (Item : Opt.Command; Path : String) return String;
+
    --  How many processor workers a command runs with.
    --
    --  @param Item The command.

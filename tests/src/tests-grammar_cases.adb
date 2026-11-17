@@ -758,13 +758,38 @@ package body Tests.Grammar_Cases is
       Check
         ("{""allOf"":[{""type"":""number""},{""type"":""integer""}]}",
          "1.5", False, "allOf's integer intersection refusing a fraction");
+      Check
+        ("{""allOf"":[{""type"":""object"",""properties"":{""a"":"
+         & "{""type"":""integer""}}},{""type"":""object"",""properties"":{""b"":"
+         & "{""type"":""boolean""}}}]}",
+         "{""a"":7,""b"":true}", True, "allOf merging object properties");
+      Check
+        ("{""anyOf"":[{""type"":""integer""},{""type"":""string""}]}",
+         """word""", True, "anyOf taking its string alternative");
+      Check
+        ("{""oneOf"":[{""type"":""integer""},{""type"":""boolean""}]}",
+         "false", True, "oneOf over provably disjoint alternatives");
+      Check
+        ("{""oneOf"":[{""type"":""object"",""properties"":{"
+         & """kind"":{""const"":""a""},""n"":{""type"":""integer""}}},"
+         & "{""type"":""object"",""properties"":{""kind"":{""const"":""b""},"
+         & """s"":{""type"":""string""}}}]}",
+         "{""kind"":""b"",""s"":""ok""}", True,
+         "oneOf objects separated by a const discriminator");
+      Check
+        ("{""$defs"":{""count"":{""type"":""integer""}},"
+         & """$ref"":""#/$defs/count""}",
+         "42", True, "a document-local definition reference");
+      Check
+        ("{""$defs"":{""a/b"":{""type"":""boolean""}},"
+         & """$ref"":""#/$defs/a~1b""}",
+         "true", True, "an escaped JSON pointer component");
       Refuses
         ("{""allOf"":[{""type"":""string""},{""type"":""boolean""}]}",
          "incompatible types");
       Refuses
-        ("{""allOf"":[{""type"":""object"",""properties"":{"
-         & """a"":{""type"":""integer""}}}]}",
-         "non-plain schema");
+        ("{""oneOf"":[{""type"":""number""},{""type"":""integer""}]}",
+         "overlapping oneOf alternatives");
 
       --  And whitespace bounded, as llama.cpp's converter bounds it: an
       --  indent of twenty, not of every token the model has left.
@@ -781,7 +806,6 @@ package body Tests.Grammar_Cases is
                & "{""type"":""integer""}},""additionalProperties"":true}",
                "additionalProperties");
       Refuses ("{""type"":""integer"",""minimum"":3}", "minimum");
-      Refuses ("{""oneOf"":[{""type"":""integer""}]}", "oneOf");
       Refuses ("{""type"":""object""}", "an object with no properties");
    end Schemas_Become_Grammars_That_Hold;
 

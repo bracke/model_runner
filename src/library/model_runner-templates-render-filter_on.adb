@@ -898,7 +898,7 @@ begin
          then
             return Method_On
               (Value, (Kind => Method_Keys, At_Operand => 0,
-                       Second_At => 0));
+                       Second_At => 0, Third_At => 0, others => <>));
          else
             declare
                T : constant String := Printed (Value);

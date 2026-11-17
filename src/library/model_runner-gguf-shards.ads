@@ -105,8 +105,16 @@ package Model_Runner.GGUF.Shards is
    --  paths are exact: their split numbering is not used to discover more
    --  files.  This supports separately distributed PLE/engram weights.
    --
+   --  @param Item Set to fill in; closed first.
+   --  @param Held Container to fill in.
+   --  @param Path Path of the backbone model, or its first shard.
    --  @param Auxiliary Exact paths of additional GGUF files, in precedence
    --    order. A PLE-only file may replace the backbone's PLE tensor.
+   --  @param Policy Whether to map the files.
+   --  @param Bounds Limits applied to every count and size.
+   --  @param Cancel Cancellation token, or null.
+   --  @param Observer Progress observer, or null.
+   --  @param Status Success, or the first refusal.
    procedure Open_Model
      (Item      : in out Shard_Set;
       Held      : in out Model_Runner.GGUF.Containers.Container;
@@ -172,6 +180,9 @@ package Model_Runner.GGUF.Shards is
      (Item : in out Shard_Set) return Model_Runner.Byte_Sources.Source_Array;
 
    --  Explicit auxiliary files, excluding the numbered backbone shards.
+   --
+   --  @param Item Set to read.
+   --  @return References to the auxiliary parts, in precedence order.
    function Auxiliary
      (Item : in out Shard_Set) return Model_Runner.Byte_Sources.Source_Array;
 

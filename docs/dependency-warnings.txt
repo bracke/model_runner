@@ -30,7 +30,7 @@ httpclient 0
 ssllib 0
 cryptolib 0
 truststores 0
-hostkit 1
+hostkit 0
 zlib 0
 jpeglib 0
 jsonlib 0

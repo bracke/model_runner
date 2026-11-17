@@ -9862,6 +9862,20 @@ package body Tests.Backend_Cases is
             Assert (Apart_Worst = 0.0,
                     "an individually resident expert differs from its stack by "
                     & N.Real'Image (Apart_Worst));
+
+            --  Adaptive expert caching must be able to replace the policy's
+            --  cold victim physically.  Giving the three slice identities
+            --  back makes a later Hold_Expert admission real rather than a
+            --  logical replacement stranded behind a full device reserve.
+            Device.Give_Back (G_Slice);
+            Device.Give_Back (U_Slice);
+            Device.Give_Back (D_Slice);
+            Assert (not Device.Expert_Held (G_Slice, U_Slice, D_Slice),
+                    "a replaced expert remained physically resident");
+            Device.Hold_Expert (G_Slice, U_Slice, D_Slice, Held);
+            Assert (Held and then Device.Expert_Held
+                                      (G_Slice, U_Slice, D_Slice),
+                    "an expert could not be admitted after replacement");
          end;
 
          T.Free (G_Out);
@@ -12182,8 +12196,9 @@ package body Tests.Backend_Cases is
    -- A_Packed_Attention_Says_What_The_Exact_Cache_Says --
    -------------------------------------------------------
 
-   --  The packed kernel over a cache of bytes with a scale a row, and of
-   --  nibbles with a scale a block, against the exact kernel over the
+   --  The packed kernel over a cache of bytes with a scale a row, E4M3
+   --  bytes with no scale, and nibbles with a scale a block, against the
+   --  exact kernel over the
    --  numbers those bytes stand for: the same attention to binary32's
    --  rounding, since the packed kernel reads back exactly the numbers
    --  the exact one was given. Three hundred positions, two groups of
@@ -12224,9 +12239,9 @@ package body Tests.Backend_Cases is
       procedure Compare (K_Bits, V_Bits : Positive; What : String) is
          use type Interfaces.Unsigned_64;
          function Row_Bytes_Of (Bits : Positive) return N.Element_Count
-         is (if Bits = 8 then KV_Span else KV_Span / 2);
+         is (if Bits = 4 then KV_Span / 2 else KV_Span);
          function Blocks_Of (Bits : Positive) return N.Element_Count
-         is (if Bits = 8 then 1 else KV_Span / Block);
+         is (if Bits = 4 then KV_Span / Block else 1);
          K_Row_Bytes : constant N.Element_Count := Row_Bytes_Of (K_Bits);
          V_Row_Bytes : constant N.Element_Count := Row_Bytes_Of (V_Bits);
          K_Blocks    : constant N.Element_Count := Blocks_Of (K_Bits);
@@ -12268,7 +12283,19 @@ package body Tests.Backend_Cases is
             At_Byte : constant Model_Runner.Bytes.Byte_Count :=
               Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
          begin
-            if Bits = 8 then
+            if Bits = Model_Runner.Backend.Device.E4M3_Cache_Code then
+               Scales (Row) := 1.0;
+               for Index in 0 .. KV_Span - 1 loop
+                  declare
+                     Stored : constant N.E4M3 :=
+                       N.To_E4M3 (Source (Source'First + Index));
+                  begin
+                     Into (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
+                       Model_Runner.Bytes.Byte (Stored);
+                     Stands (Stands'First + Index) := N.To_Real (Stored);
+                  end;
+               end loop;
+            elsif Bits = 8 then
                declare
                   Largest : N.Real := 0.0;
                   Scale   : N.Real;
@@ -12793,6 +12820,16 @@ package body Tests.Backend_Cases is
       end loop;
 
       Compare (8, 8, "bytes");
+      Compare
+        (Model_Runner.Backend.Device.E4M3_Cache_Code,
+         Model_Runner.Backend.Device.E4M3_Cache_Code,
+         "OCP E4M3 bytes");
+      Compare
+        (Model_Runner.Backend.Device.E4M3_Cache_Code, 8,
+         "OCP E4M3 keys and scaled-byte values");
+      Compare
+        (Model_Runner.Backend.Device.E4M3_Cache_Code, 4,
+         "OCP E4M3 keys and nibble values");
       Compare (4, 4, "nibbles");
       Compare (8, 4, "byte keys and nibble values");
       Compare (4, 8, "nibble keys and byte values");
@@ -12813,7 +12850,8 @@ package body Tests.Backend_Cases is
    -- The_Device_Packs_As_The_Host_Packs --
    ------------------------------------
 
-   --  Five rows packed into bytes and into nibbles by a placing step of a
+   --  Five rows packed into scaled bytes, E4M3 bytes, and nibbles by a
+   --  placing step of a
    --  sequence, read back and held to the bytes the host's rounding
    --  makes of the same rows -- every byte and every scale the same,
    --  because a session's copy of its block is read out of the device's
@@ -12853,9 +12891,9 @@ package body Tests.Backend_Cases is
             use type Model_Runner.Bytes.Byte;
 
             Row_Bytes : constant N.Element_Count :=
-              (if Bits = 8 then Width else Width / 2);
+              (if Bits = 4 then Width / 2 else Width);
             Blocks    : constant N.Element_Count :=
-              (if Bits = 8 then 1 else (Width + Block - 1) / Block);
+              (if Bits = 4 then (Width + Block - 1) / Block else 1);
 
             --  Past a little the test leaves empty, in words: the rows, then
             --  the scales.
@@ -12884,7 +12922,15 @@ package body Tests.Backend_Cases is
                   At_Byte : constant Model_Runner.Bytes.Byte_Count :=
                     Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
                begin
-                  if Bits = 8 then
+                  if Bits = Model_Runner.Backend.Device.E4M3_Cache_Code then
+                     Wanted_Scales (Row) := 1.0;
+                     for Index in N.Element_Count range 0 .. Width - 1 loop
+                        Wanted_Bytes
+                          (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
+                            Model_Runner.Bytes.Byte
+                              (N.To_E4M3 (Source (From + Index)));
+                     end loop;
+                  elsif Bits = 8 then
                      declare
                         Largest : N.Real := 0.0;
                         Scale   : N.Real;
@@ -13021,7 +13067,12 @@ package body Tests.Backend_Cases is
                   elsif Index mod 4 = 1 then -(N.Real (Index mod 47) + 0.5)
                   elsif Index mod 4 = 2 then 0.0
                   else N.Real (Index mod 23) - 11.0);
-               Source (1 * Width + Index) := -Source (Index);
+               --  The identity product feeding the placing step turns
+               --  negative zero into positive zero on this device. Keep
+               --  the host expectation on the value the packer receives;
+               --  signed-zero codec behavior is covered directly.
+               Source (1 * Width + Index) :=
+                 (if Source (Index) = 0.0 then 0.0 else -Source (Index));
                Source (2 * Width + Index) := 0.0;
                Source (3 * Width + Index) := (I - 128.0) / 1000.0;
                Source (4 * Width + Index) :=
@@ -13032,11 +13083,17 @@ package body Tests.Backend_Cases is
          end loop;
 
          Compare (8, "bytes" & Suffix);
+         Compare
+           (Model_Runner.Backend.Device.E4M3_Cache_Code,
+            "OCP E4M3 bytes" & Suffix);
          Compare (4, "nibbles" & Suffix);
 
          --  And through the compilation without subgroup operations.
          Products.Prefer_Plain_Packing (Engine, True);
          Compare (8, "bytes, through shared memory alone" & Suffix);
+         Compare
+           (Model_Runner.Backend.Device.E4M3_Cache_Code,
+            "OCP E4M3 bytes, through shared memory alone" & Suffix);
          Compare (4, "nibbles, through shared memory alone" & Suffix);
          Products.Prefer_Plain_Packing (Engine, False);
       end Over;
@@ -15823,7 +15880,8 @@ package body Tests.Backend_Cases is
       AUnit.Test_Cases.Registration.Register_Routine
         (T, A_Packed_Attention_Says_What_The_Exact_Cache_Says'Access,
          "the packed attention kernel over a cache of bytes with a scale a "
-         & "row, and of nibbles with a scale a block, and of each side in "
+         & "row, of E4M3 bytes, and of nibbles with a scale a block, and "
+         & "of each side in "
          & "the other's storage, says what the exact kernel says over the "
          & "numbers the bytes stand for, alone and in a windowed batch");
       AUnit.Test_Cases.Registration.Register_Routine
@@ -16079,7 +16137,8 @@ package body Tests.Backend_Cases is
          & "the weights kept before it");
       Register_Routine
         (T, The_Device_Packs_As_The_Host_Packs'Access,
-         "rows packed into bytes and into nibbles by a placing step of a "
+         "rows packed into scaled bytes, E4M3 bytes and nibbles by a "
+         & "placing step of a "
          & "sequence are the bytes and the scales the host's rounding "
          & "makes of the same rows, zeros, halves and either sign's "
          & "largest included");

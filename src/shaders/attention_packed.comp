@@ -1,9 +1,10 @@
 #version 450
 
 //  A batch of positions attending to a cache kept packed: a byte an element
-//  with a scale a row, or a nibble an element with a scale a block of
-//  thirty-two, which are the two storages a session chooses with
-//  --kv-cache q8 and q4 -- and the keys in one and the values in the other,
+//  with a scale a row, an E4M3 byte with its own floating-point meaning, or
+//  a nibble an element with a scale a block of thirty-two, which are the
+//  storages a session chooses with --kv-cache q8, f8_e4m3 and q4 -- and the
+//  keys in one and the values in the other,
 //  where --kv-values says so. The host rounds every position into its bytes and
 //  scales and puts them here; this reads them back as the numbers they
 //  stand for, which is what the host's own attention does out of the same
@@ -170,6 +171,7 @@ const uint LANES = 64u;
 const uint BLOCK = 32u;
 const uint BUNDLE = 8u;
 const uint ROWS = BUNDLE;
+const uint E4M3_BITS = 9u;
 
 //  The rows' queries, four at a time, since the keys come four at a time.
 shared vec4 qs[ROWS * QUERY_ROOM / 4u];
@@ -283,14 +285,41 @@ void whole_sum_all (inout float mine[BUNDLE]) {
 }
 #endif
 
+//  One OCP E4M3FN byte widened to binary32. The widest exponent's last
+//  fraction is NaN; its other seven values are finite through 448.
+float e4m3_value (uint raw) {
+    uint sign = (raw & 0x80u) << 24u;
+    uint exponent = (raw >> 3u) & 0xFu;
+    uint fraction = raw & 7u;
+
+    if (exponent == 0u) {
+        if (fraction == 0u) {
+            return uintBitsToFloat (sign);
+        }
+        float value = float (fraction) / 512.0;
+        return uintBitsToFloat (floatBitsToUint (value) | sign);
+    }
+    if (exponent == 15u && fraction == 7u) {
+        return uintBitsToFloat (sign | 0x7FC00000u);
+    }
+    return uintBitsToFloat
+      (sign | ((exponent + 120u) << 23u) | (fraction << 20u));
+}
+
 //  Four elements of a packed row, e to e + 3, as the numbers they stand
 //  for before their scale: the word they sit in, read once. e is a
 //  multiple of four and the row begins at a word for bytes and at an even
 //  byte for nibbles, so the four never straddle a word.
 vec4 four_of (uint bits, uint row_at, uint e) {
-    uint at = row_at + (bits == 8u ? e : e >> 1u);
+    uint at = row_at + (bits == 4u ? e >> 1u : e);
     uint w = kvw[at >> 2u] >> ((at & 3u) * 8u);
 
+    if (bits == E4M3_BITS) {
+        return vec4 (e4m3_value (w & 0xFFu),
+                     e4m3_value ((w >> 8u) & 0xFFu),
+                     e4m3_value ((w >> 16u) & 0xFFu),
+                     e4m3_value ((w >> 24u) & 0xFFu));
+    }
     if (bits == 8u) {
         return vec4 (float (int (w & 0xFFu) - 128),
                      float (int ((w >> 8u) & 0xFFu) - 128),
@@ -306,12 +335,12 @@ vec4 four_of (uint bits, uint row_at, uint e) {
 //  Where element e's scale is, from the row's first: the one there is for
 //  bytes, its block's for nibbles.
 uint scale_of (uint bits, uint e) {
-    return bits == 8u ? 0u : e / BLOCK;
+    return bits == 4u ? e / BLOCK : 0u;
 }
 
 //  Bytes a row takes, in a storage of bits an element.
 uint row_bytes (uint bits, uint width) {
-    return bits == 8u ? width : (width + 1u) / 2u;
+    return bits == 4u ? (width + 1u) / 2u : width;
 }
 
 //  A cached position's page, in words of the buffer: the workgroup's one
@@ -477,7 +506,6 @@ void main () {
             uint pp = page_at (pos);
             uint row_at = shape.k_bytes + pb * 4u + pp * k_row;
             uint scale_at = shape.ks_at + pb + pp * shape.k_blocks;
-            float row_scale = kvf[scale_at];
             float acc[ROWS];
             for (uint r = 0u; r < ROWS; r++) {
                 acc[r] = 0.0;
@@ -486,10 +514,9 @@ void main () {
             for (uint i = 0u; i < shape.head_size; i += 4u) {
                 uint e = k_off + i;
                 vec4 held = four_of (shape.k_bits, row_at, e);
-                float sc = shape.k_bits == 8u
-                           ? row_scale
-                           : kvf[scale_at + scale_of (shape.k_bits, e)];
-                held *= sc;
+                if (shape.k_bits != E4M3_BITS) {
+                    held *= kvf[scale_at + scale_of (shape.k_bits, e)];
+                }
                 for (uint r = 0u; r < ROWS; r++) {
                     if (r < rows) {
                         acc[r] += dot (held, qs[r * (QUERY_ROOM / 4u) + i / 4u]);
@@ -561,9 +588,10 @@ void main () {
                 uint pp = page_at (p);
                 uint row_at = shape.v_bytes + pb * 4u + pp * v_row;
                 vec4 held = four_of (shape.v_bits, row_at, e4);
-                float sc = kvf[shape.vs_at + pb + pp * shape.v_blocks
-                               + scale_of (shape.v_bits, e0)];
-                held *= sc;
+                if (shape.v_bits != E4M3_BITS) {
+                    held *= kvf[shape.vs_at + pb + pp * shape.v_blocks
+                                + scale_of (shape.v_bits, e0)];
+                }
 
                 for (uint r = 0u; r < ROWS; r++) {
                     if (r < rows) {

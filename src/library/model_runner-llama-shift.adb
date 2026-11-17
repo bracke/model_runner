@@ -376,7 +376,9 @@ begin
    --  rolling its context in a block went on mid-sentence as the paged
    --  session had. Written again from the host's packed copy, which is
    --  current, up to the count just committed.
-   if Item.Seat >= 0 and then Item.Held in Eighth | Fourth then
+   if Item.Seat >= 0
+     and then Item.Held in Eighth | Fourth | Float_Eighth
+   then
       declare
          Written : Boolean;
       begin

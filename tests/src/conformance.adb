@@ -1925,11 +1925,12 @@ package body Conformance is
             --  needed a third.
             Skipped : Natural := 0;
 
-            --  The holdable shape/architecture pairs that run every repack
-            --  mode but brain floats, for the reason written where the sweep
-            --  skips it: Jamba, whose mixture layers flip an expert under a
-            --  halved mantissa and whose state carries the flip to the last
-            --  position. Only the plain shape, since Jamba holds no other.
+            --  The plain shape/architecture/format tuples that run every
+            --  repack mode but brain floats, for the reasons written where
+            --  the sweep skips them. The other five shapes' brain-float arm
+            --  is already absent from the cross product above; counting an
+            --  architecture-wide exclusion for those shapes again would
+            --  subtract it twice.
             Lossy_Skipped : Natural := 0;
 
             --  This part's formats of an architecture, over them all.
@@ -1949,8 +1950,21 @@ package body Conformance is
                         if Tiny_Model.Cannot_Hold (Crossed (Index), Shape)
                         then
                            Skipped := Skipped + 1;
-                        elsif Crossed (Index)
-                                in Tiny_Model.Jamba | Tiny_Model.Deepseek2
+                        elsif Shape = Plain
+                          and then
+                            (Crossed (Index)
+                               in Tiny_Model.Jamba | Tiny_Model.Deepseek2
+                                                     | Tiny_Model.Rwkv6
+                             or else
+                               (Crossed (Index) = Tiny_Model.Qwen35
+                                and then Format = Tiny_Model.IQ3_XXS)
+                             or else
+                               (Crossed (Index) = Tiny_Model.Mamba
+                                and then Format = Tiny_Model.IQ1_S)
+                             or else
+                               (Crossed (Index) = Tiny_Model.Mamba2
+                                and then Format in Tiny_Model.IQ3_S
+                                                   | Tiny_Model.IQ3_XXS))
                         then
                            Lossy_Skipped := Lossy_Skipped + 1;
                         end if;

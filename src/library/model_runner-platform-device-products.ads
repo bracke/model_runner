@@ -697,7 +697,11 @@ package Model_Runner.Platform.Device.Products is
    --  scales in floats, how many scales a row has, and how many bits an
    --  element for the keys and for the values -- what Attend_Packed is
    --  told, carried into a sequence so the step binds that kernel rather
-   --  than the exact one. K_Bits zero is a cache the exact kernels read.
+   --  than the exact one. Four and eight name scaled q4 and q8; nine names
+   --  an unscaled OCP E4M3FN byte. K_Bits zero is a cache the exact kernels
+   --  read.
+   E4M3_Cache_Code : constant Positive := 9;
+
    type Packed_Cache is record
       K_Bits   : Natural := 0;
       V_Bits   : Natural := 0;
@@ -715,8 +719,8 @@ package Model_Runner.Platform.Device.Products is
    --  How a placing step packs the rows it writes, for a packed session's
    --  block: how many bits an element, the bytes from one row to the
    --  next, where the first row's bytes and scales go, and how many
-   --  scales a row has. Bits zero is a row placed as it is, into the
-   --  exact cache.
+   --  scales a row has. Bits uses the same four, eight and nine codes as
+   --  Packed_Cache. Zero is a row placed as it is, into the exact cache.
    type Packing_Shape is record
       Bits      : Natural := 0;
       Row_Bytes : Natural := 0;

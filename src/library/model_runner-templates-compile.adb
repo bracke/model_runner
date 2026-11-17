@@ -567,6 +567,7 @@ is
    LStrip_Name : aliased constant String := ".lstrip";
    RStrip_Name : aliased constant String := ".rstrip";
    Split_Name  : aliased constant String := ".split";
+   RSplit_Name : aliased constant String := ".rsplit";
    Starts_Name : aliased constant String := ".startswith";
    Ends_Name   : aliased constant String := ".endswith";
    Replace_Name : aliased constant String := ".replace";
@@ -581,11 +582,12 @@ is
    Capital_Name : aliased constant String := ".capitalize";
    Format_Name : aliased constant String := ".format";
 
-   Method_Names : constant array (1 .. 16) of Method_Name :=
+   Method_Names : constant array (1 .. 17) of Method_Name :=
      [(Strip_Name'Access, Method_Strip),
       (LStrip_Name'Access, Method_Left_Strip),
       (RStrip_Name'Access, Method_Right_Strip),
       (Split_Name'Access, Method_Split_First),
+      (RSplit_Name'Access, Method_Right_Split),
       (Starts_Name'Access, Method_Starts_With),
       (Ends_Name'Access, Method_Ends_With),
       (Replace_Name'Access, Method_Replace),

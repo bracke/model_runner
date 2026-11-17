@@ -1795,7 +1795,8 @@ is
             | Method_Replace | Method_Items | Method_Index
             | Method_Member | Method_Keys | Method_Values | Method_Get
             | Method_Upper | Method_Lower | Method_Title
-            | Method_Capitalize | Method_Format =>
+            | Method_Capitalize | Method_Format | Method_Right_Split
+            | Method_Slice =>
             --  These are answered on values, in Method_On.
             return Held;
 
@@ -1866,6 +1867,22 @@ is
             end if;
             return (if Step.Kind = Method_Split_Once_After then ""
                     else Held);
+
+         when Method_Right_Split_Once_Before =>
+            --  rsplit(marker, 1)[0]: keep everything before the final
+            --  marker. With no marker the split has one member, the whole.
+            if Argument'Length > 0 and then Held'Length >= Argument'Length
+            then
+               for Start in reverse
+                 Held'First .. Held'Last - Argument'Length + 1
+               loop
+                  if Held (Start .. Start + Argument'Length - 1) = Argument
+                  then
+                     return Held (Held'First .. Start - 1);
+                  end if;
+               end loop;
+            end if;
+            return Held;
 
          when Method_Split_First | Method_Split_Last =>
             --  The text before the first marker, or after the last one.
@@ -2381,6 +2398,61 @@ is
          return V.Kind = Value_Boolean and then V.Start = 1;
       elsif Test = "false" then
          return V.Kind = Value_Boolean and then V.Start = 0;
+      elsif Test in "odd" | "even" then
+         declare
+            Text : constant String := Text_Of (V);
+            Integer : constant Boolean :=
+              (V.Kind = Value_Number
+               or else (V.Kind = Value_Data and then Is_Number_Text (Text)))
+              and then not Is_Real (Text);
+            Odd : constant Boolean :=
+              Integer and then Number_Of (Text) mod 2 = 1;
+         begin
+            return Integer and then (if Test = "odd" then Odd else not Odd);
+         end;
+      elsif Test = "divisibleby" then
+         declare
+            Other : constant Held :=
+              (if Arg = 0 then Nothing
+               else Held_Of (Item.Operands.all (Arg)));
+            Left_Text  : constant String := Text_Of (V);
+            Right_Text : constant String := Text_Of (Other);
+            Integers : constant Boolean :=
+              (V.Kind = Value_Number
+               or else (V.Kind = Value_Data
+                        and then Is_Number_Text (Left_Text)))
+              and then
+              (Other.Kind = Value_Number
+               or else (Other.Kind = Value_Data
+                        and then Is_Number_Text (Right_Text)))
+              and then not Is_Real (Left_Text)
+              and then not Is_Real (Right_Text);
+            Divisor : constant Long_Long_Integer := Number_Of (Right_Text);
+         begin
+            return Integers and then Divisor /= 0
+              and then Number_Of (Left_Text) mod Divisor = 0;
+         end;
+      elsif Test in "integer" | "float" then
+         declare
+            Text : constant String := Text_Of (V);
+            Numeric : constant Boolean :=
+              V.Kind = Value_Number
+              or else (V.Kind = Value_Data and then Is_Number_Text (Text));
+         begin
+            return Numeric
+              and then (if Test = "float" then Is_Real (Text)
+                        else not Is_Real (Text));
+         end;
+      elsif Test in "lower" | "upper" then
+         declare
+            Text : constant String := Printed (V);
+            Lowered : constant String := Recased (Text, Lower);
+            Uppered : constant String := Recased (Text, Upper);
+         begin
+            return (if Test = "lower"
+                    then Text = Lowered and then Text /= Uppered
+                    else Text = Uppered and then Text /= Lowered);
+         end;
       elsif Test in "equalto" | "eq" | "==" | "ne" | "!=" then
          declare
             Wanted : constant String :=
@@ -2388,6 +2460,39 @@ is
             Same   : constant Boolean := Printed (V) = Wanted;
          begin
             return (if Test in "ne" | "!=" then not Same else Same);
+         end;
+      elsif Test in "lt" | "lessthan" | "le" | "gt" | "greaterthan" | "ge"
+      then
+         declare
+            Other : constant Held :=
+              (if Arg = 0 then Nothing
+               else Held_Of (Item.Operands.all (Arg)));
+            Left_Text  : constant String := Printed (V);
+            Right_Text : constant String := Printed (Other);
+            Numbers : constant Boolean :=
+              (V.Kind = Value_Number
+               or else (V.Kind = Value_Data
+                        and then Is_Number_Text (Text_Of (V))))
+              and then
+              (Other.Kind = Value_Number
+               or else (Other.Kind = Value_Data
+                        and then Is_Number_Text (Text_Of (Other))));
+         begin
+            if Numbers then
+               declare
+                  Left  : constant Long_Float := Real_Of (Text_Of (V));
+                  Right : constant Long_Float := Real_Of (Text_Of (Other));
+               begin
+                  return (if Test in "lt" | "lessthan" then Left < Right
+                          elsif Test = "le" then Left <= Right
+                          elsif Test in "gt" | "greaterthan" then Left > Right
+                          else Left >= Right);
+               end;
+            end if;
+            return (if Test in "lt" | "lessthan" then Left_Text < Right_Text
+                    elsif Test = "le" then Left_Text <= Right_Text
+                    elsif Test in "gt" | "greaterthan" then Left_Text > Right_Text
+                    else Left_Text >= Right_Text);
          end;
       elsif Test = "in" then
          declare
@@ -3950,6 +4055,142 @@ is
             begin
                Result :=
                  (if Value.Operator = Compare_Is_Boolean
+                  then Says else not Says);
+            end;
+
+         when Compare_Is_Odd | Compare_Is_Not_Odd
+            | Compare_Is_Even | Compare_Is_Not_Even =>
+            declare
+               V    : constant Held := Held_Of (Value.Left);
+               Text : constant String := Text_Of (V);
+               Is_Integer : constant Boolean :=
+                 (V.Kind = Value_Number
+                  or else (V.Kind = Value_Data and then Is_Number_Text (Text)))
+                 and then not Is_Real (Text);
+               Odd  : constant Boolean :=
+                 Is_Integer and then Number_Of (Text) mod 2 = 1;
+               Says : constant Boolean :=
+                 (if Value.Operator in Compare_Is_Odd | Compare_Is_Not_Odd
+                  then Odd else Is_Integer and then not Odd);
+            begin
+               Result :=
+                 (if Value.Operator in Compare_Is_Odd | Compare_Is_Even
+                  then Says else not Says);
+            end;
+
+         when Compare_Is_Divisible_By | Compare_Is_Not_Divisible_By =>
+            declare
+               L       : constant Held := Held_Of (Value.Left);
+               R       : constant Held := Held_Of (Value.Right);
+               L_Text  : constant String := Text_Of (L);
+               R_Text  : constant String := Text_Of (R);
+               Integers : constant Boolean :=
+                 (L.Kind = Value_Number
+                  or else (L.Kind = Value_Data
+                           and then Is_Number_Text (L_Text)))
+                 and then
+                 (R.Kind = Value_Number
+                  or else (R.Kind = Value_Data
+                           and then Is_Number_Text (R_Text)))
+                 and then not Is_Real (L_Text) and then not Is_Real (R_Text);
+               Divisor : constant Long_Long_Integer := Number_Of (R_Text);
+               Says    : constant Boolean :=
+                 Integers and then Divisor /= 0
+                 and then Number_Of (L_Text) mod Divisor = 0;
+            begin
+               Result :=
+                 (if Value.Operator = Compare_Is_Divisible_By
+                  then Says else not Says);
+            end;
+
+         when Compare_Is_Lower | Compare_Is_Not_Lower
+            | Compare_Is_Upper | Compare_Is_Not_Upper =>
+            declare
+               Text  : constant String := Value_Of (Value.Left);
+               Lower : constant Boolean :=
+                 Text = Recased (Text, Model_Runner.Templates.Render.Lower)
+                 and then Text /= Recased (Text, Model_Runner.Templates.Render.Upper);
+               Upper : constant Boolean :=
+                 Text = Recased (Text, Model_Runner.Templates.Render.Upper)
+                 and then Text /= Recased (Text, Model_Runner.Templates.Render.Lower);
+               Says  : constant Boolean :=
+                 (if Value.Operator in Compare_Is_Lower | Compare_Is_Not_Lower
+                  then Lower else Upper);
+            begin
+               Result :=
+                 (if Value.Operator in Compare_Is_Lower | Compare_Is_Upper
+                  then Says else not Says);
+            end;
+
+         when Compare_Is_Same_As | Compare_Is_Not_Same_As =>
+            declare
+               L : constant Held := Held_Of (Value.Left);
+               R : constant Held := Held_Of (Value.Right);
+
+               function Is_Boolean (V : Held) return Boolean
+               is (V.Kind = Value_Boolean
+                   or else (V.Kind = Value_Data
+                            and then Text_Of (V) in "true" | "false"));
+
+               function Boolean_Value (V : Held) return Boolean
+               is (if V.Kind = Value_Boolean then V.Start = 1
+                   else Text_Of (V) = "true");
+
+               Same : constant Boolean :=
+                 (if Is_Boolean (L) and then Is_Boolean (R)
+                  then Boolean_Value (L) = Boolean_Value (R)
+                  elsif L.Kind = Value_None and then R.Kind = Value_None
+                  then True
+                  elsif L.Kind = Value_Undefined
+                    and then R.Kind = Value_Undefined
+                  then True
+                  else False);
+            begin
+               Result :=
+                 (if Value.Operator = Compare_Is_Same_As
+                  then Same else not Same);
+            end;
+
+         when Compare_Is_Integer | Compare_Is_Not_Integer
+            | Compare_Is_Float | Compare_Is_Not_Float =>
+            declare
+               V       : constant Held := Held_Of (Value.Left);
+               Text    : constant String := Text_Of (V);
+               Numeric : constant Boolean :=
+                 V.Kind = Value_Number
+                 or else (V.Kind = Value_Data and then Is_Number_Text (Text));
+               Is_Integer : constant Boolean := Numeric and then not Is_Real (Text);
+               Is_Float   : constant Boolean := Numeric and then Is_Real (Text);
+               Says       : constant Boolean :=
+                 (if Value.Operator in
+                    Compare_Is_Integer | Compare_Is_Not_Integer
+                  then Is_Integer else Is_Float);
+            begin
+               Result :=
+                 (if Value.Operator in Compare_Is_Integer | Compare_Is_Float
+                  then Says else not Says);
+            end;
+
+         when Compare_Is_Callable | Compare_Is_Not_Callable =>
+            declare
+               Says : constant Boolean :=
+                 Value.Left.Count = 1
+                 and then Value.Left.Terms (1).Kind
+                            in Term_Macro | Term_Macro_Reference;
+            begin
+               Result :=
+                 (if Value.Operator = Compare_Is_Callable
+                  then Says else not Says);
+            end;
+
+         when Compare_Is_Escaped | Compare_Is_Not_Escaped =>
+            declare
+               Says : constant Boolean :=
+                 Value.Left.Count = 1
+                 and then Is_Markup (Value.Left.Terms (1));
+            begin
+               Result :=
+                 (if Value.Operator = Compare_Is_Escaped
                   then Says else not Says);
             end;
 

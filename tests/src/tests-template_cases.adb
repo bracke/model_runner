@@ -1063,6 +1063,29 @@ package body Tests.Template_Cases is
       --  Values: tests, text, sums.
       Same ("{% set t = true %}{{ t is boolean }}{{ t is number }}"
             & "{{ 1 is boolean }}", "TrueTrueFalse", "is boolean");
+      Same ("{{ 3 is odd }}{{ 4 is even }}{{ 4 is not odd }}"
+            & "{{ 9 is divisibleby(3) }}{{ 9 is not divisibleby(2) }}",
+            "TrueTrueTrueTrueTrue", "numeric is tests");
+      Same ("{{ 3 is eq(3) }}{{ 3 is equalto(3) }}{{ 2 is ne(3) }}"
+            & "{{ 3 is not equalto(4) }}{{ 3 is ge(3) }}{{ 3 is gt(2) }}"
+            & "{{ 3 is greaterthan(2) }}{{ 2 is lt(3) }}"
+            & "{{ 2 is lessthan(3) }}{{ 2 is le(2) }}",
+            "TrueTrueTrueTrueTrueTrueTrueTrueTrueTrue",
+            "comparison test aliases");
+      Same ("{{ 'lowercase' is lower }}{{ 'UPPERCASE' is upper }}"
+            & "{{ '123' is not lower }}{{ false is sameas(false) }}"
+            & "{{ false is not sameas(0) }}{{ 1 is integer }}"
+            & "{{ 1.0 is float }}{{ true is not integer }}",
+            "TrueTrueTrueTrueTrueTrueTrueTrue",
+            "case, identity and numeric-kind tests");
+      Same ("{{ 2 is in([1, 2, 3]) }}{{ 'bc' is in('abcde') }}"
+            & "{{ 5 is not in([1, 2, 3]) }}",
+            "TrueTrueTrue", "the in test form");
+      Same ("{{ [1, 2, 3, 4] | select('odd') | join }}|"
+            & "{{ [1, 2, 3, 4] | reject('even') | join }}|"
+            & "{{ [1, 2, 3, 4] | select('divisibleby', 2) | join }}|"
+            & "{{ [1, 2, 3, 4] | select('ge', 3) | join }}",
+            "13|13|24|34", "is tests used by select and reject");
       Same ("{% set bos_token = '<b>' %}{{ bos_token }}", "<b>",
             "a template's own bos_token");
       Same ("{% set bos_token = bos_token or '' %}[{{ bos_token }}]", "[<s>]",
@@ -1507,6 +1530,24 @@ package body Tests.Template_Cases is
             "131011101102103", "numbers read out, counted and looped");
       Same ("{% set i = 1 %}{% set i = 'a' %}{{ i + '1' }}", "a1",
             "a name reassigned text runs together");
+      Same ("{% set a, b, c = [1, 2, 3] %}{{ a }}{{ b }}{{ c }}",
+            "123", "a tuple assignment unpacked a list");
+      Same ("{{ 'a-b-c'.replace('-', '+', 1) }}|"
+            & "{{ 'a-b-c'.replace('-', '+', 0) }}|"
+            & "{{ 'a-b-c'.rsplit('-', 1)[0] }}|"
+            & "{{ 'a-b-c'.rsplit('-', 1)[1] }}",
+            "a+b-c|a-b-c|a-b|c",
+            "counted replacement and a right split");
+      Same ("{{ 'abcdef'[::2] }}|{{ 'abcdef'[::-1] }}|"
+            & "{{ [0,1,2,3,4][1:5:2] | join }}",
+            "ace|fedcba|13", "slices with positive and negative steps");
+      Same ("{% macro m() %}x{% endmacro %}"
+            & "{% if m is callable %}c{% endif %}"
+            & "{% if ('<b>' | safe) is escaped %}e{% endif %}"
+            & "{% if 'plain' is not escaped %}p{% endif %}",
+            "cep", "callable and escaped value tests");
+      Same ("{{ '<{name}|{count}|{0}>'.format('x', name='ada', count=3) }}",
+            "<ada|3|x>", "named and positional str.format fields");
 
       --  The list filters, on lists written out and on the conversation,
       --  a mapping written out with its methods, break and continue,

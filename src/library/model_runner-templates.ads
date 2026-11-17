@@ -123,11 +123,12 @@ with Model_Runner.Tools;
 --  Conditions are an or-list of and-lists of clauses, each clause optionally
 --  negated by 'not', optionally parenthesised, and optionally comparing two
 --  terms with '==', '!=', '<', '<=', '>' or '>=' -- the four orderings
---  reading both sides as whole numbers -- or testing one with 'is defined',
---  'is none', 'is true', 'is false' or 'is string', or asking whether text
---  occurs in text with "'x' in name" or whether a message carries a field
---  with "'field' in message". Any of them may be negated with 'is not', and
---  'in' with 'not in'. Adjacent comparisons form one chain: a < b <= c is
+--  reading both sides as numbers -- or using the standard Jinja tests for
+--  definition, type, parity, divisibility, case and identity. The `eq`, `ne`,
+--  `lt`, `le`, `gt`, `ge`, `equalto`, `lessthan` and `greaterthan` test names
+--  are aliases for the corresponding comparisons, and `is in(X)` is the
+--  predicate spelling of `in X`. Any test may be negated with `is not`, and
+--  `in` with `not in`. Adjacent comparisons form one chain: a < b <= c is
 --  true only when both a < b and b <= c are true.
 --
 --  A bare operand is a condition too, and is true when it holds something
@@ -147,8 +148,8 @@ with Model_Runner.Tools;
 --  or printed: a template that works a position out in a set and prints
 --  the same expression elsewhere means the same thing in both places.
 --
---  Structural constructs outside the subset -- include, import, extends,
---  filter blocks -- are rejected at compile time with
+--  Structural constructs that require another template source -- include,
+--  import and extends -- are rejected at compile time with
 --  Template_Unsupported_Construct, because a program whose shape cannot be
 --  read cannot be reasoned about at all.
 --
@@ -563,6 +564,9 @@ private
       --  many there are. The body runs where the call is read and what it
       --  wrote is the value.
       Term_Macro,
+      --  The macro object itself, without call parentheses. It has no prompt
+      --  text, but `is callable` can identify it without invoking it.
+      Term_Macro_Reference,
 
       --  name=value among a macro call's arguments: Offset and Length
       --  hold the name, and the operand kept after this one the value.
@@ -744,6 +748,10 @@ private
       --  the whole text, as the two-piece list the language makes would.
       Method_Split_Once_After,
       Method_Split_Once_Rest,
+      --  Internal parser marker for rsplit, and the distinct result of
+      --  rsplit(marker, 1)[0]: everything before the last marker.
+      Method_Right_Split,
+      Method_Right_Split_Once_Before,
 
       --  A cut whose side has not been said yet: text.split(marker) with
       --  neither [0] nor [-1] after it. The language answers a list there,
@@ -762,6 +770,9 @@ private
       --  negative, and no further than the text goes either way.
       Method_Cut_From,
       Method_Cut_To,
+      --  A three-part slice with an explicit non-zero step. Omitted bounds
+      --  are represented by absent operands and interpreted by step sign.
+      Method_Slice,
 
       --  Whether the text begins or ends with the argument, answered as a
       --  condition answers: "true" or nothing.
@@ -809,6 +820,12 @@ private
       At_Operand : Natural := 0;
       --  The second argument, where the method takes two.
       Second_At  : Natural := 0;
+      --  replace's optional maximum replacement count.
+      Third_At   : Natural := 0;
+      --  str.format keyword names paired with the three argument operands.
+      First_Key_At  : Natural := 0;
+      Second_Key_At : Natural := 0;
+      Third_Key_At  : Natural := 0;
    end record;
 
    --  How many methods may follow one another. Four is what the template
@@ -906,8 +923,8 @@ private
       Compare_Equal,
       Compare_Not_Equal,
 
-      --  Jinja's "is" tests. Only the two this engine can answer are here;
-      --  every other test makes the clause unsupported.
+      --  Jinja's "is" tests. A test the bounded engine cannot answer makes
+      --  the clause unsupported rather than guessing.
       Compare_Defined,
       Compare_Not_Defined,
       Compare_Is_None,
@@ -963,7 +980,32 @@ private
 
       --  'is boolean': true or false, assigned or read out of JSON.
       Compare_Is_Boolean,
-      Compare_Is_Not_Boolean);
+      Compare_Is_Not_Boolean,
+
+      --  The remaining value tests used by portable chat templates.  The
+      --  comparison aliases (eq, ne, lt, le, gt and ge) reuse the ordinary
+      --  comparison kinds above; these have semantics that need a kind of
+      --  their own.
+      Compare_Is_Odd,
+      Compare_Is_Not_Odd,
+      Compare_Is_Even,
+      Compare_Is_Not_Even,
+      Compare_Is_Divisible_By,
+      Compare_Is_Not_Divisible_By,
+      Compare_Is_Lower,
+      Compare_Is_Not_Lower,
+      Compare_Is_Upper,
+      Compare_Is_Not_Upper,
+      Compare_Is_Same_As,
+      Compare_Is_Not_Same_As,
+      Compare_Is_Integer,
+      Compare_Is_Not_Integer,
+      Compare_Is_Float,
+      Compare_Is_Not_Float,
+      Compare_Is_Callable,
+      Compare_Is_Not_Callable,
+      Compare_Is_Escaped,
+      Compare_Is_Not_Escaped);
 
    type Clause is record
       Negated : Boolean := False;

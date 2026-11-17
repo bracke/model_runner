@@ -17,9 +17,10 @@ is
 
    Wide   : constant Element_Count := Count * Width;
 
-   --  Experts opportunistically retained as individual slices.  A split
-   --  mixture may run these on the device while every other expert remains
-   --  on the processor; admission below never evicts an existing matrix.
+   --  Experts retained as individual slices.  A split mixture may run these
+   --  on the device while every other expert remains on the processor.  The
+   --  policy replacement pass below gives back only slices admitted for this
+   --  cache before it admits their hotter replacements.
    Resident_Experts : Expert_Flags (0 .. Many - 1) := [others => False];
 
    --  Whether the device made the shared expert's answer for this one
@@ -426,11 +427,12 @@ begin
    end loop;
 
    --  A split mixture ordinarily leaves every expert on the processor.
-   --  Warm only policy candidates, only when all three products can run as
-   --  one device sequence, and only from genuinely unused device budget.
-   --  Hold_Expert rolls a partial admission back and never evicts another
-   --  matrix, so this cannot churn the attention weights that made the
-   --  split useful in the first place.
+   --  First make physical residency agree with the replacement policy, then
+   --  warm its candidates.  The views below are individual expert slices in
+   --  a host-fed split mixture: they cannot be attention matrices or a whole
+   --  resident expert stack.  Hold_Expert rolls a partial admission back and
+   --  never evicts an unrelated matrix, so replacement remains inside the
+   --  cache's explicit reserve.
    if On_Pool
      and then Item.Host_Feed
      and then Item.Owner.Expert_Cache_Room > 0
@@ -443,6 +445,51 @@ begin
      and then Current.Expert_Up_Bias = null
      and then Current.Expert_Down_Bias = null
    then
+      --  Logical eviction used to leave the old three matrices resident.
+      --  Once the reserve filled, no newly hot expert could therefore be
+      --  admitted.  Reclaim non-residents before considering admissions so
+      --  the physical cache continues to follow the routing policy.
+      for Which in Resident_Experts'Range loop
+         if not Model_Runner.Expert_Cache.Is_Resident
+                  (Item.Expert_Policy, Current.Number, Which)
+         then
+            declare
+               Gate, Up, Down : T.View;
+               Trouble        : E.Error_Info;
+               Bytes          : Interfaces.Unsigned_64;
+            begin
+               Device_Expert_Views
+                 (Current, Which, Feed, Width, Gate, Up, Down, Trouble);
+               if E.Is_Error (Trouble) then
+                  Status := Trouble;
+                  return;
+               end if;
+
+               if not Gate.Interleaved
+                 and then not Up.Interleaved
+                 and then not Down.Interleaved
+                 and then Model_Runner.Backend.Device.Expert_Held
+                            (Gate, Up, Down)
+               then
+                  Bytes :=
+                    Interfaces.Unsigned_64 (Gate.Rows)
+                      * Interfaces.Unsigned_64 (T.Row_Bytes (Gate))
+                    + Interfaces.Unsigned_64 (Up.Rows)
+                      * Interfaces.Unsigned_64 (T.Row_Bytes (Up))
+                    + Interfaces.Unsigned_64 (Down.Rows)
+                      * Interfaces.Unsigned_64 (T.Row_Bytes (Down));
+                  Model_Runner.Backend.Device.Give_Back (Gate);
+                  Model_Runner.Backend.Device.Give_Back (Up);
+                  Model_Runner.Backend.Device.Give_Back (Down);
+                  Item.Expert_Cache_Used :=
+                    Item.Expert_Cache_Used
+                    - Interfaces.Unsigned_64'Min
+                        (Item.Expert_Cache_Used, Bytes);
+               end if;
+            end;
+         end if;
+      end loop;
+
       for Which in Resident_Experts'Range loop
          if Model_Runner.Expert_Cache.Is_Resident
               (Item.Expert_Policy, Current.Number, Which)

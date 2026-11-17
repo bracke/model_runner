@@ -34,6 +34,62 @@ package body Model_Runner.Framework.Verification is
 
    Tab : constant Character := ASCII.HT;
 
+   --  Read evidence written before execution limits became part of the
+   --  verification fingerprint. This is a persistence migration detail,
+   --  not a configuration API: keeping it here prevents new library callers
+   --  from creating fresh evidence under an obsolete identity contract.
+   function Legacy_Verification_Fingerprint
+     (Value : Records.Item) return String
+   is
+      Meaning : Records.Item := Records.Create ("CONFIG", 1, "", 1);
+
+      function Starts_With (Name, Prefix : String) return Boolean
+      is (Name'Length >= Prefix'Length
+          and then Name (Name'First .. Name'First + Prefix'Length - 1)
+                   = Prefix);
+
+      function Bears (Name : String) return Boolean is
+        (Starts_With (Name, "profile.")
+         or else Starts_With (Name, "list.verification.")
+         or else Starts_With (Name, "scalar.verification.")
+         or else Starts_With (Name, "scalar.profile_capability.")
+         or else Starts_With (Name, "scalar.build.")
+         or else Starts_With (Name, "adapter.")
+         or else Starts_With (Name, "set.repository.")
+         or else Starts_With (Name, "set.source")
+         or else Starts_With (Name, "set.directories")
+         or else Starts_With (Name, "set.execution.shell")
+         or else Starts_With (Name, "set.execution.environment")
+         or else Starts_With (Name, "scalar.execution.network")
+         or else Starts_With (Name, "scalar.execution.memory")
+         or else Starts_With (Name, "scalar.execution.cpu")
+         or else Starts_With (Name, "scalar.execution.processes")
+         or else Starts_With (Name, "scalar.execution.file")
+         or else Starts_With (Name, "map.component.")
+         or else Starts_With (Name, "set.components")
+         or else Starts_With (Name, "input.project_name"));
+   begin
+      for Index in 1 .. Records.Field_Count (Value) loop
+         declare
+            Name : constant String := Records.Field_Name (Value, Index);
+         begin
+            if (Starts_With (Name, "scalar.execution.")
+                or else Starts_With (Name, "set.execution."))
+              and then not Bears (Name)
+              and then Name not in "scalar.execution.output_limit"
+                                   | "scalar.execution.process_slots"
+                                   | "set.execution.allowed"
+            then
+               return "";
+            end if;
+            if Bears (Name) then
+               Records.Set (Meaning, Name, Records.Get (Value, Name));
+            end if;
+         end;
+      end loop;
+      return Records.Fingerprint_Of (Meaning);
+   end Legacy_Verification_Fingerprint;
+
    function Trim (Text : String) return String
    is (Ada.Strings.Fixed.Trim (Text, Ada.Strings.Both));
 
@@ -1920,7 +1976,7 @@ package body Model_Runner.Framework.Verification is
            --  Taken before the limits counted, and what it was held to then
            --  unchanged: not stale for the way it was counted alone.
            and then not (Configuration = "" and then Records.Get (Value, "checks_fingerprint")
-                                                    = Configurations.Legacy_Verification_Fingerprint (Settings))
+                                                    = Legacy_Verification_Fingerprint (Settings))
          then
             Note (Stale_Configuration, "the configuration of its checks has changed since " & Evidence);
          end if;

@@ -2243,7 +2243,7 @@ begin
                   Read_Packed_Pages_Layer
                     (Item, Natural (Index), KV_Width, V_Width,
                      Cell_Of (Item, Natural (Index), Reserved), 1, Read);
-               elsif Item.Held in Eighth | Fourth then
+               elsif Item.Held in Eighth | Fourth | Float_Eighth then
                   Read_Back_Packed
                     (Item, At_Key, At_Val, 1, KV_Width, V_Width, Read);
                else

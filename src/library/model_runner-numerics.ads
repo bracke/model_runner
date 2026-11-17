@@ -106,8 +106,16 @@ package Model_Runner.Numerics is
    --  Decode and encode the finite-numbers OCP E4M3 format.  Encoding uses
    --  round-to-nearest-even, keeps signed zero, saturates infinities and
    --  finite overflow at 448, and preserves a NaN as the format's NaN.
+   --
+   --  @param Item E4M3 bit pattern.
+   --  @return Exactly represented single-precision value.
    function To_Real (Item : E4M3) return Real
      with Inline;
+
+   --  Encode one single-precision value as OCP E4M3.
+   --
+   --  @param Item Single-precision value.
+   --  @return Nearest E4M3 bit pattern.
    function To_E4M3 (Item : Real) return E4M3;
 
    --  Reinterpret a value as its IEEE bit pattern.

@@ -99,13 +99,14 @@ package Reference_Transformer is
    --  How the model rounds what it keeps, where it is asked to: as the
    --  engine's byte cache does -- a signed byte an element with the row's
    --  largest over a hundred and twenty-seven, rounded to the nearest --
-   --  or as its nibble cache does -- a block of thirty-two elements scaled
+   --  as an OCP E4M3FN floating-point byte with no scale, or as its nibble
+   --  cache does -- a block of thirty-two elements scaled
    --  by its largest, sign and all, over minus eight, each element its
    --  share of that plus eight and a half cut to a whole number and held
    --  to fifteen. Written here on its own, in binary64, so that the
    --  engine's packed caches can be held to what they claim -- the same
    --  rounding -- rather than to the exact cache, which they are not.
-   type Cache_Rounding is (Unrounded, To_Bytes, To_Nibbles);
+   type Cache_Rounding is (Unrounded, To_Bytes, To_E4M3, To_Nibbles);
 
    --  Round every key and value the model keeps, each side its own way,
    --  from now on.

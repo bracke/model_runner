@@ -75,12 +75,72 @@ package body Reference_Transformer is
       end loop;
    end Round_To_Bytes;
 
+   --  A row rounded arithmetically to OCP E4M3FN. This intentionally does
+   --  not call the engine's codec: it is the independent reference used to
+   --  check mixed key and value cache formats.
+   procedure Round_To_E4M3 (Row : in out Real_Vector) is
+      function Nearest_Even (Value : Long_Float) return Natural is
+         Below : constant Long_Float := Long_Float'Floor (Value);
+         Whole : constant Natural := Natural (Below);
+         Part  : constant Long_Float := Value - Below;
+      begin
+         return Whole
+           + (if Part > 0.5
+                or else (Part = 0.5 and then Whole mod 2 = 1)
+              then 1 else 0);
+      end Nearest_Even;
+   begin
+      for Index in Row'Range loop
+         declare
+            Negative  : constant Boolean := Row (Index) < 0.0;
+            Magnitude : constant Long_Float := abs Row (Index);
+            Rounded   : Long_Float;
+         begin
+            if Magnitude = 0.0 then
+               Rounded := 0.0;
+            elsif Magnitude >= 448.0 then
+               Rounded := 448.0;
+            else
+               declare
+                  Power  : Integer := 0;
+                  Scaled : Long_Float := Magnitude;
+               begin
+                  while Scaled >= 2.0 loop
+                     Scaled := Scaled / 2.0;
+                     Power := Power + 1;
+                  end loop;
+                  while Scaled < 1.0 loop
+                     Scaled := Scaled * 2.0;
+                     Power := Power - 1;
+                  end loop;
+
+                  if Power < -6 then
+                     Rounded := Long_Float (Nearest_Even (Magnitude * 512.0))
+                       / 512.0;
+                  else
+                     declare
+                        Step : constant Long_Float := 2.0 ** (Power - 3);
+                        Q    : constant Natural :=
+                          Nearest_Even (Magnitude / Step);
+                     begin
+                        Rounded := Long_Float'Min
+                          (448.0, Long_Float (Q) * Step);
+                     end;
+                  end if;
+               end;
+            end if;
+            Row (Index) := (if Negative then -Rounded else Rounded);
+         end;
+      end loop;
+   end Round_To_E4M3;
+
    --  A row rounded as one side's rounding says.
    procedure Round_As (Row : in out Real_Vector; How : Cache_Rounding) is
    begin
       case How is
          when Unrounded  => null;
          when To_Bytes   => Round_To_Bytes (Row);
+         when To_E4M3    => Round_To_E4M3 (Row);
          when To_Nibbles => Round_To_Nibbles (Row);
       end case;
    end Round_As;

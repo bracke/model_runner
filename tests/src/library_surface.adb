@@ -274,6 +274,14 @@ package body Library_Surface is
       new String'("Last_Summary"),
       new String'("Profile_Count"),
 
+      --  Routing-policy and session telemetry. The command reports these
+      --  while it owns a run; an embedding caller and the deterministic
+      --  policy tests need the same state without reaching into either
+      --  implementation.
+      new String'("Expert_Count"),
+      new String'("Capacity_Per_Layer"),
+      new String'("Expert_Cache_Stats"),
+
       --  These answer paths or layout state to callers outside the command
       --  that owns their implementation. Conversations uses the platform
       --  path internally and presentation uses Row_Full internally, which

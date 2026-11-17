@@ -451,11 +451,10 @@ package body Model_Runner.CLI.Execute.Acquisition is
       Auxiliary : T.Bounded_List (1 .. Item.Auxiliary_Count);
 
       --  Where the weights written in panels are kept between loads, keyed
-      --  by the file and what says it is unchanged -- its size and when it
-      --  was last written -- unless the caller opted out of caches.
+      --  by every input file and what says each is unchanged -- its size and
+      --  when it was last written -- unless the caller opted out of caches.
       function Panel_Path return String
-      is (Panel_Cache_For
-            (Path, Item.No_Cache or else Item.Auxiliary_Count > 0));
+      is (Panel_Cache_For (Item, Path));
    begin
       for Index in Auxiliary'Range loop
          Auxiliary (Index) :=

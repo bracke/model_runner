@@ -99,6 +99,33 @@ layout(push_constant, std430) uniform Shape {
 } shape;
 
 const uint BLOCK = 32u;
+const uint E4M3_BITS = 9u;
+
+float e4m3_value (uint raw) {
+    uint sign = (raw & 0x80u) << 24u;
+    uint exponent = (raw >> 3u) & 0xFu;
+    uint fraction = raw & 7u;
+
+    if (exponent == 0u) {
+        if (fraction == 0u) {
+            return uintBitsToFloat (sign);
+        }
+        float value = float (fraction) / 512.0;
+        return uintBitsToFloat (floatBitsToUint (value) | sign);
+    }
+    if (exponent == 15u && fraction == 7u) {
+        return uintBitsToFloat (sign | 0x7FC00000u);
+    }
+    return uintBitsToFloat
+      (sign | ((exponent + 120u) << 23u) | (fraction << 20u));
+}
+
+vec4 e4m3s_of (uint w) {
+    return vec4 (e4m3_value (w & 0xFFu),
+                 e4m3_value ((w >> 8u) & 0xFFu),
+                 e4m3_value ((w >> 16u) & 0xFFu),
+                 e4m3_value ((w >> 24u) & 0xFFu));
+}
 
 //  A word's four bytes, and a word's low or high four nibbles.
 vec4 bytes_of (uint w) {
@@ -131,14 +158,19 @@ void packed_eight (uint bits, uint bytes, uint scales, uint blocks,
                    uint width, uint pos, uint e, out vec4 a, out vec4 b) {
     uint pb = page_base (pos);
     uint pp = page_at (pos);
-    uint row = bits == 8u ? width : (width + 1u) / 2u;
-    float sc = kv[scales + pb + pp * blocks + (bits == 8u ? 0u : e / BLOCK)];
-    uint at = (bytes + pb * 4u + pp * row + (bits == 8u ? e : e >> 1u)) >> 2u;
+    uint row = bits == 4u ? (width + 1u) / 2u : width;
+    uint at = (bytes + pb * 4u + pp * row
+               + (bits == 4u ? e >> 1u : e)) >> 2u;
 
-    if (bits == 8u) {
+    if (bits == E4M3_BITS) {
+        a = e4m3s_of (kvw[at]);
+        b = e4m3s_of (kvw[at + 1u]);
+    } else if (bits == 8u) {
+        float sc = kv[scales + pb + pp * blocks];
         a = bytes_of (kvw[at]) * sc;
         b = bytes_of (kvw[at + 1u]) * sc;
     } else {
+        float sc = kv[scales + pb + pp * blocks + e / BLOCK];
         uint w = kvw[at];
         a = nibbles_of (w) * sc;
         b = nibbles_of (w >> 16u) * sc;

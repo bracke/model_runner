@@ -17,15 +17,14 @@ with Model_Runner.Backend.CPU;
 with Model_Runner.Tensors;
 with Model_Runner.Backend.Device;
 with Model_Runner.Backend.Reference;
-with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Errors;
-with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.GGUF.Containers;
+with Model_Runner.GGUF.Shards;
 with Model_Runner.Generation;
 with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
-with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 
@@ -40,7 +39,7 @@ package body External_Model is
    package CPU renames Model_Runner.Backend.CPU;
    package Containers renames Model_Runner.GGUF.Containers;
    package E renames Model_Runner.Errors;
-   package Files renames Model_Runner.Byte_Sources.Files;
+   package Shards renames Model_Runner.GGUF.Shards;
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
    package N renames Model_Runner.Numerics;
@@ -127,6 +126,10 @@ package body External_Model is
       Draft   : String := "";
       Draft_Tokens : Positive := 4;
       Repack  : L.Repack_Mode := L.No_Repack;
+      Auxiliary : T.Bounded_List := [1 .. 0 => <>];
+      Cache : L.Cache_Precision := L.Exact;
+      Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Panel_Cache : String := "";
       Result  : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
@@ -147,7 +150,7 @@ package body External_Model is
       Greedy_Held : Held_Text;
       Greedy : String renames Greedy_Held.Data.all;
       Greedy_Last : Natural := 0;
-      Source      : Files.File_Source;
+      Source      : Shards.Shard_Set;
       Container : Containers.Container;
       Engine    : L.Model;
       Status    : E.Error_Info;
@@ -171,7 +174,7 @@ package body External_Model is
          Say (Detail);
          L.Close (Engine, Ignored);
          Containers.Close (Container);
-         Files.Close (Source);
+         Shards.Close (Source);
       end Give_Up;
 
       --  The expectation's prompt wins when there is one: comparing against a
@@ -393,13 +396,8 @@ package body External_Model is
          end;
       end if;
 
-      Files.Open (Source, Path, Files.Mapping_Automatic, 0, Status);
-      if E.Is_Error (Status) then
-         Give_Up (Rejected, "cannot open: " & E.Diagnostic_Code (Status.Code));
-         return;
-      end if;
-
-      Containers.Reader.Parse (Container, Source, Status => Status);
+      Shards.Open_Model
+        (Source, Container, Path, Auxiliary => Auxiliary, Status => Status);
       if E.Is_Error (Status) then
          Give_Up (Rejected,
                   "container rejected: " & E.Diagnostic_Code (Status.Code));
@@ -408,7 +406,8 @@ package body External_Model is
 
       L.Prepare
         (Engine, Container, Source, Repack => Repack, Backend => Backend,
-         Threads => Threads, Status => Status);
+         Threads => Threads, Cache => Cache, Expert_Cache => Expert_Cache,
+         Panel_Cache => Panel_Cache, Status => Status);
       if E.Is_Error (Status) then
          Give_Up (Rejected,
                   "model rejected: " & E.Diagnostic_Code (Status.Code));
@@ -520,7 +519,8 @@ package body External_Model is
             begin
                L.Prepare
                  (Plain, Container, Source, Threads => Threads,
-                  Backend => Backend, Status => Local);
+                  Backend => Backend, Cache => Cache,
+                  Expert_Cache => Expert_Cache, Status => Local);
 
                if E.Is_Ok (Local) then
                   declare
@@ -578,7 +578,7 @@ package body External_Model is
          Result.Draft_Checked := True;
 
          declare
-            Draft_Source    : Files.File_Source;
+            Draft_Source    : Shards.Shard_Set;
             Draft_Container : Containers.Container;
             Draft_Engine    : aliased L.Model;
 
@@ -589,12 +589,8 @@ package body External_Model is
             Fine  : Boolean := False;
             Local : E.Error_Info;
          begin
-            Files.Open (Draft_Source, Draft, Status => Local);
-
-            if E.Is_Ok (Local) then
-               Containers.Reader.Parse
-                 (Draft_Container, Draft_Source, Status => Local);
-            end if;
+            Shards.Open_Model
+              (Draft_Source, Draft_Container, Draft, Status => Local);
 
             if E.Is_Ok (Local) then
                L.Prepare
@@ -653,7 +649,7 @@ package body External_Model is
                Containers.Close (Draft_Container);
             end if;
 
-            Files.Close (Draft_Source);
+            Shards.Close (Draft_Source);
 
             Result.Draft_Match :=
               Fine and then Count = Result.Generated
@@ -1058,7 +1054,7 @@ package body External_Model is
          L.Close (Engine, Ignored);
       end;
       Containers.Close (Container);
-      Files.Close (Source);
+      Shards.Close (Source);
    exception
       when Escaped : others =>
          Result.Result := Failed;
