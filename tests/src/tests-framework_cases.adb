@@ -21302,14 +21302,27 @@ package body Tests.Framework_Cases is
          Was : constant String :=
            (if Ada.Environment_Variables.Exists ("PATH")
             then Ada.Environment_Variables.Value ("PATH") else "");
+         Separator : constant Character :=
+           (if GNAT.OS_Lib.Directory_Separator = '\' then ';'
+            else GNAT.OS_Lib.Path_Separator);
+         First : constant String :=
+           (if GNAT.OS_Lib.Directory_Separator = '\' then "C:\Windows"
+            else "/usr/bin");
+         Second : constant String :=
+           (if GNAT.OS_Lib.Directory_Separator = '\' then "C:\Windows\System32"
+            else "/bin");
       begin
-         Ada.Environment_Variables.Set ("PATH", ".:/usr/bin::node_modules/.bin:/bin");
+         Ada.Environment_Variables.Set
+           ("PATH", "." & Separator & First & Separator & Separator
+            & "node_modules/.bin" & Separator & Second);
          declare
             Passed : constant String := Model_Runner.Platform.Passed_Environment ("");
          begin
             Ada.Environment_Variables.Set ("PATH", Was);
-            Assert (Ada.Strings.Fixed.Index (Passed, "PATH=/usr/bin:/bin" & LF) > 0,
-                    "a relative or empty search path entry was handed to checks: " & Passed);
+            Assert
+              (Ada.Strings.Fixed.Index
+                 (Passed, "PATH=" & First & Separator & Second & LF) > 0,
+               "a relative or empty search path entry was handed to checks: " & Passed);
          end;
       exception
          when others =>

@@ -936,24 +936,29 @@ package body Tests.Platform_Cases is
       function Templates return String is (P.User_Templates_Directory);
       function Sessions return String is (P.Sessions_Directory);
       function Session_Path return String is (P.Resolve_Session_Path ("chat", For_Saving => True));
+      Root : constant String := Ada.Directories.Full_Name ("obj/environment-root");
    begin
       AUnit.Assertions.Assert (With_Set ("HF_TOKEN", "hf_x", Token'Access) = "hf_x", "the hub's token was not read");
       AUnit.Assertions.Assert (With_Set ("HTTPS_PROXY", "http://proxy:3128", Proxy'Access) = "http://proxy:3128",
                                "the proxy was not read");
       AUnit.Assertions.Assert (With_Set ("NO_PROXY", "localhost", Bypass'Access) = "localhost",
                                "the hosts bypassing the proxy were not read");
-      AUnit.Assertions.Assert (With_Set ("MODEL_RUNNER_CONFIG", "/tmp/mr/config", Config'Access) = "/tmp/mr/config",
-                               "the settings file's override was not taken");
       AUnit.Assertions.Assert
-        (With_Set ("MODEL_RUNNER_CONFIG", "/tmp/mr/config", Templates'Access) = "/tmp/mr/templates",
+        (With_Set ("MODEL_RUNNER_CONFIG", Hostkit.Fs.Join (Root, "config"), Config'Access)
+           = Hostkit.Fs.Join (Root, "config"),
+         "the settings file's override was not taken");
+      AUnit.Assertions.Assert
+        (With_Set ("MODEL_RUNNER_CONFIG", Hostkit.Fs.Join (Root, "config"), Templates'Access)
+           = Hostkit.Fs.Join (Root, "templates"),
          "the user's templates were not beside the settings file: "
-         & With_Set ("MODEL_RUNNER_CONFIG", "/tmp/mr/config", Templates'Access));
-      AUnit.Assertions.Assert (With_Set ("MODEL_RUNNER_SESSIONS", "/tmp/mr-sessions", Sessions'Access)
-                                 = "/tmp/mr-sessions",
-                               "the sessions directory's override was not taken");
+         & With_Set ("MODEL_RUNNER_CONFIG", Hostkit.Fs.Join (Root, "config"), Templates'Access));
       AUnit.Assertions.Assert
-        (Ada.Strings.Fixed.Index (With_Set ("MODEL_RUNNER_SESSIONS", "/tmp/mr-sessions", Session_Path'Access),
-                                  "/tmp/mr-sessions/") = 1,
+        (With_Set ("MODEL_RUNNER_SESSIONS", Root, Sessions'Access) = Root,
+         "the sessions directory's override was not taken");
+      AUnit.Assertions.Assert
+        (Ada.Strings.Fixed.Index
+           (With_Set ("MODEL_RUNNER_SESSIONS", Root, Session_Path'Access),
+            Root & GNAT.OS_Lib.Directory_Separator) = 1,
          "a session named without a path was not placed in the sessions directory");
       AUnit.Assertions.Assert (P.Search_Path = (if Env.Exists ("PATH") then Env.Value ("PATH") else ""),
                                "the search path was not the environment's");

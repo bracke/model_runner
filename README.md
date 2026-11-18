@@ -1218,6 +1218,7 @@ generated text in `answer.txt` — no trailing newline, no styling, no prefix.
 | `XDG_DATA_HOME` | base for the models and sessions directories |
 | `XDG_CACHE_HOME` | base for the prompt cache |
 | `HOME` | fallback base for the above when the `XDG_*` variables are unset; passed to a project's verification checks |
+| `USERPROFILE` | Windows fallback for `HOME` when choosing configuration, data and cache directories |
 | `PATH` | passed to a project's verification checks, with the variables its configuration's `execution.environment` names |
 
 Prompts are never taken from the environment. This table is the whole of what

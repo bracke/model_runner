@@ -19957,7 +19957,12 @@ package body Tests.CLI_Cases is
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
          Ada.Text_IO.Put (File, "one");
          Ada.Text_IO.Close (File);
-         Model_Runner.Byte_Sources.Files.Open (Source, Path, Status => Status);
+         --  Keep this a metadata-change test.  A read-only Windows mapping
+         --  deliberately denies writers while it exists.
+         Model_Runner.Byte_Sources.Files.Open
+           (Source, Path,
+            Policy => Model_Runner.Byte_Sources.Files.Mapping_Disabled,
+            Status => Status);
          Assert (E.Is_Ok (Status) and then not Model_Runner.Byte_Sources.Files.Written_Since (Source),
                  "a file just opened was said written since");
          delay 0.05;

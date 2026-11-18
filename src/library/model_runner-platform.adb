@@ -24,6 +24,12 @@ with Model_Runner.Config;
 
 package body Model_Runner.Platform is
 
+   --  A native Windows process inherits a semicolon-separated PATH even
+   --  though GNAT's MinGW tools expose ':' as their path-list separator.
+   Native_Path_Separator : constant Character :=
+     (if GNAT.OS_Lib.Directory_Separator = '\' then ';'
+      else GNAT.OS_Lib.Path_Separator);
+
    -----------------
    -- Is_Terminal --
    -----------------
@@ -90,6 +96,14 @@ package body Model_Runner.Platform is
       when others =>
          return False;
    end Environment_Exists;
+
+   --  Native Windows processes are not required to receive HOME;
+   --  USERPROFILE is their corresponding per-user directory.
+   function Home_Directory return String is
+     (if Environment_Value ("HOME") /= "" then Environment_Value ("HOME")
+      elsif GNAT.OS_Lib.Directory_Separator = '\'
+        then Environment_Value ("USERPROFILE")
+      else "");
 
    ---------------
    -- Hub_Token --
@@ -281,7 +295,7 @@ package body Model_Runner.Platform is
          From : Positive := Search'First;
       begin
          for Index in Search'First .. Search'Last + 1 loop
-            if Index > Search'Last or else Search (Index) = GNAT.OS_Lib.Path_Separator then
+            if Index > Search'Last or else Search (Index) = Native_Path_Separator then
                declare
                   Folder : constant String := Search (From .. Index - 1);
                begin
@@ -293,7 +307,7 @@ package body Model_Runner.Platform is
                                        and then Folder (Folder'First + 2) in '/' | '\'))
                   then
                      if Ada.Strings.Unbounded.Length (Kept) > 0 then
-                        Ada.Strings.Unbounded.Append (Kept, GNAT.OS_Lib.Path_Separator);
+                        Ada.Strings.Unbounded.Append (Kept, Native_Path_Separator);
                      end if;
                      Ada.Strings.Unbounded.Append (Kept, Folder);
                   end if;
@@ -375,7 +389,7 @@ package body Model_Runner.Platform is
 
       Override    : constant String := Environment_Value ("MODEL_RUNNER_CONFIG");
       Config_Home : constant String := XDG_Value ("XDG_CONFIG_HOME");
-      Home        : constant String := Environment_Value ("HOME");
+      Home        : constant String := Home_Directory;
    begin
       if Override /= "" then
          return Override;
@@ -402,7 +416,7 @@ package body Model_Runner.Platform is
         renames Hostkit.Fs.Join;
 
       Cache_Home : constant String := XDG_Value ("XDG_CACHE_HOME");
-      Home       : constant String := Environment_Value ("HOME");
+      Home       : constant String := Home_Directory;
    begin
       if Cache_Home /= "" then
          return Under (Under (Cache_Home, Model_Runner.Program_Name), "prefill");
@@ -639,7 +653,7 @@ package body Model_Runner.Platform is
       Override   : constant String := Environment_Value (Override_Var);
       From_Config : constant String := Model_Runner.Config.Value (Config_Key);
       Data       : constant String := XDG_Value ("XDG_DATA_HOME");
-      Home       : constant String := Environment_Value ("HOME");
+      Home       : constant String := Home_Directory;
    begin
       if Override /= "" then
          return Override;

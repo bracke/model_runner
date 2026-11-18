@@ -5,6 +5,8 @@ with Interfaces.C.Strings;
 
 with System.Storage_Elements;
 
+with Model_Runner.Platform.Mapped_Ranges;
+
 --  Windows file mapping.
 --
 --  The same contract the POSIX body implements, over CreateFileMappingA and
@@ -166,6 +168,8 @@ package body Model_Runner.Platform.Mapping is
          Item.Size := File_Size;
          Item.Handle := To_Integer (File);
          Item.Mapping := To_Integer (Mapping);
+         Model_Runner.Platform.Mapped_Ranges.Note
+           (Base, File_Size, To_Integer (File));
          Available := True;
       exception
          when others =>
@@ -180,7 +184,8 @@ package body Model_Runner.Platform.Mapping is
 
    procedure Close (Item : in out Region) is
    begin
-      if Item.Address /= System.Null_Address then
+      if Item.Address /= System.Null_Address and then Item.Size > 0 then
+         Model_Runner.Platform.Mapped_Ranges.Forget (Item.Address);
          if Unmap_View_Of_File (Item.Address) = 0 then
             null;
          end if;

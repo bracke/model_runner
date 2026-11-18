@@ -69,6 +69,14 @@ package body Model_Runner.Framework.Execution is
                 and then Path (Path'First + 1) = ':'
                 and then Path (Path'First + 2) in '/' | '\'));
 
+   --  GNAT's Path_Separator describes its Unix-shaped tool environment on
+   --  MinGW, while PATH inherited by a native Windows executable is still a
+   --  semicolon-separated Windows path.  Splitting that PATH at ':' treats a
+   --  drive letter as a separator and leaves every program unresolved.
+   Native_Path_Separator : constant Character :=
+     (if GNAT.OS_Lib.Directory_Separator = '\' then ';'
+      else GNAT.OS_Lib.Path_Separator);
+
    --  Resolve the command before env clears PATH. This matters especially on
    --  Windows, where the native PATH uses semicolons but the MSYS env utility
    --  interprets the replacement PATH as a POSIX search path. A name with a
@@ -90,7 +98,7 @@ package body Model_Runner.Framework.Execution is
          From   : Positive := Search'First;
       begin
          for Index in Search'First .. Search'Last + 1 loop
-            if Index > Search'Last or else Search (Index) = GNAT.OS_Lib.Path_Separator then
+            if Index > Search'Last or else Search (Index) = Native_Path_Separator then
                declare
                   Folder : constant String := Search (From .. Index - 1);
                begin
