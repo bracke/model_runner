@@ -646,6 +646,52 @@ configuration of a real model, and the chat template.
    are opt-in because the repository does not download or commit large models;
    the deterministic fixture suite remains the release authority.
 
+### Real-artifact opt-in validation
+
+The opt-in paths were exercised on 2026-11-17 with locally supplied GGUF
+artifacts. The TinyLlama Q8_0 recording already carried by the test fixtures
+made the E4M3 and panel-cache runs differential, not merely smoke tests:
+
+```
+./bin/tests external-model \
+  --model /path/to/tinyllama-1.1b-chat-q8_0.gguf \
+  --expect fixtures/tinyllama-q8_0.expect \
+  --backend device --kv-cache f8_e4m3 --max-tokens 2 --threads 4
+
+./bin/tests external-model \
+  --model /path/to/tinyllama-1.1b-chat-q8_0.gguf \
+  --expect fixtures/tinyllama-q8_0.expect \
+  --backend cpu --repack rows --panel-cache /tmp/tinyllama.panels \
+  --max-tokens 2 --threads 4
+```
+
+Both matched the recorded tokens, greedy output and compared logits. Repeating
+the panel-cache command reused the same cache-file inode; its use time changed,
+showing that the mapped cache was marked used rather than replaced.
+
+The physical adaptive-expert path was exercised separately with a 10.5 GiB
+Qwen3-30B-A3B GGUF under a 9 GiB device budget:
+
+```
+./bin/tests external-model --model /path/to/qwen3moe.gguf \
+  --prompt Hi --max-tokens 1 --threads 4 --backend device \
+  --device-memory 9663676416 --expert-cache 268435456
+```
+
+That run was deterministic and reported 608 routing observations, 576 logical
+promotions, 157 physical admissions, 172 device expert runs, and 268,161,024
+of 268,435,456 reserved bytes resident. It had no reference recording, so it
+establishes execution, bounded residency and repeatability, not numerical
+agreement with llama.cpp. The runner reports these counters whenever
+`--expert-cache` is named so an accepted but dormant option cannot be mistaken
+for an exercised cache.
+
+No compatible external PLE/engram or numbered split artifact was available in
+this validation environment. A separately distributed MTP block is not the
+same contract and was not presented as auxiliary-shard evidence; that path
+remains covered by the deterministic fixture suite until a matching real
+artifact and recording are supplied.
+
 ## Why identifiers rather than text
 
 Token identifiers are what both sides can report unambiguously. Comparing

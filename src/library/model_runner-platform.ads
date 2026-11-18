@@ -109,6 +109,16 @@ package Model_Runner.Platform is
    --  @return The directory, or an empty string when none is known.
    function Cache_Directory return String;
 
+   --  The local registry of expert-cache recommendations produced by the
+   --  qualification tool.  It sits beside, not inside, the prefill cache so
+   --  clearing one kind of cache does not silently change execution policy.
+   --
+   --  MODEL_RUNNER_EXPERT_CACHE_RECOMMENDATIONS overrides the conventional
+   --  path.  Empty when no cache home is known.
+   --
+   --  @return Registry path, or empty when none is available.
+   function Expert_Cache_Recommendations_File return String;
+
    --  A cache file path for a key -- the key hashed, under Cache_Directory.
    --  Empty when there is no cache directory. The same key gives the same
    --  path, so a run keys the file by the model and the settings that must

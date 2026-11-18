@@ -83,6 +83,12 @@ package External_Model is
         Model_Runner.Backend.Backend_CPU;
       Partitions     : Boolean := True;
 
+      --  The requested expert reserve and the strongest session observation
+      --  made during this validation. Keeping the physical counters here is
+      --  what distinguishes an exercised cache from an accepted no-op flag.
+      Expert_Cache_Requested : Interfaces.Unsigned_64 := 0;
+      Expert_Cache : Model_Runner.Llama.Expert_Cache_Statistics;
+
       Tokens_Match  : Boolean := False;
       Greedy_Match  : Boolean := False;
       Text_Match    : Boolean := False;
@@ -128,6 +134,10 @@ package External_Model is
    --    engram weights; numbered backbone shards remain auto-discovered.
    --  @param Cache KV storage precision, including the E4M3FN byte format.
    --  @param Expert_Cache Device bytes reserved for adaptive MoE experts.
+   --  @param Device_Memory Device residency budget, or zero for the backend's
+   --    normal share. A deliberately small budget lets a real-model run prove
+   --    that adaptive expert residency was exercised rather than merely
+   --    configured.
    --  @param Panel_Cache Combined-model panel cache file, or empty for none.
    --  @param Result What the run found.
    procedure Run
@@ -146,6 +156,7 @@ package External_Model is
       Cache : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Exact;
       Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Device_Memory : Interfaces.Unsigned_64 := 0;
       Panel_Cache : String := "";
       Result  : out Report);
 

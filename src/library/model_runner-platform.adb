@@ -418,6 +418,37 @@ package body Model_Runner.Platform is
          return "";
    end Cache_Directory;
 
+   ---------------------------------------
+   -- Expert_Cache_Recommendations_File --
+   ---------------------------------------
+
+   function Expert_Cache_Recommendations_File return String is
+      function Under (Base : String; Part : String) return String
+        renames Hostkit.Fs.Join;
+
+      Override   : constant String :=
+        Environment_Value ("MODEL_RUNNER_EXPERT_CACHE_RECOMMENDATIONS");
+      Cache_Home : constant String := XDG_Value ("XDG_CACHE_HOME");
+      Home       : constant String := Environment_Value ("HOME");
+   begin
+      if Override /= "" then
+         return Override;
+      elsif Cache_Home /= "" then
+         return Under
+           (Under (Cache_Home, Model_Runner.Program_Name),
+            "expert-cache-recommendations.json");
+      elsif Home /= "" then
+         return Under
+           (Under (Under (Home, ".cache"), Model_Runner.Program_Name),
+            "expert-cache-recommendations.json");
+      else
+         return "";
+      end if;
+   exception
+      when others =>
+         return "";
+   end Expert_Cache_Recommendations_File;
+
    ----------------
    -- Cache_File --
    ----------------

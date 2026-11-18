@@ -68,7 +68,10 @@ package body Tool_Commands is
      & " --cache-hit-min --evaluated-max --prompt-seconds-max --expect-digest"
      & " --warmup"
      & " --anyway --wait"
-     & " --budget --device-timeline --context-size --device-memory --ignore-eos ";
+     & " --budget --device-timeline --context-size --device-memory"
+     & " --expert-cache --expert-cache-sweep --report --min-improvement"
+     & " --expert-cache-models --logit-tolerance --max-leg-drift"
+     & " --recommendations --ignore-eos ";
    Opts_Benchmark : aliased constant String := " --seconds --rounds --anyway --wait ";
    --  The bare "--" is in this list because the command really does
    --  accept it -- it is what separates this tool's options from the
@@ -78,7 +81,7 @@ package body Tool_Commands is
    Opts_External  : aliased constant String :=
      " --model --prompt --max-tokens --threads --expect --repack --backend"
      & " --draft-model --draft-tokens --shard --ple --kv-cache"
-     & " --expert-cache --panel-cache ";
+     & " --expert-cache --device-memory --panel-cache ";
    Opts_Tokenize  : aliased constant String := " --model --prompt --special ";
    Opts_Cut       : aliased constant String := " --pre --texts ";
    Opts_Render    : aliased constant String :=
@@ -113,7 +116,13 @@ package body Tool_Commands is
      & " [--kv-cache MODE] [--repeats N] [--turns DIR] [--host-depth N] [--paged] [--no-paged]"
      & " [--anyway] [--wait MINUTES]"
      & " [--budget] [--device-timeline] [--context-size N] [--ignore-eos]"
-     & " [--device-memory BYTES] [--memory-limit BYTES] [--no-cache]"
+     & " [--device-memory BYTES] [--expert-cache BYTES]"
+     & " [--expert-cache-sweep BYTES,...] [--report PATH]"
+     & " [--expert-cache-models MANIFEST]"
+     & " [--recommendations PATH]"
+     & " [--min-improvement PERCENT] [--logit-tolerance X]"
+     & " [--max-leg-drift PERCENT]"
+     & " [--memory-limit BYTES] [--no-cache]"
      & " [--cache-hit-min PERCENT] [--evaluated-max N]"
      & " [--prompt-seconds-max SECONDS] [--expect-digest HEX] [--warmup]";
    Takes_Benchmark : aliased constant String := "[--seconds N] [--rounds N] [--anyway] [--wait MINUTES]";
@@ -124,7 +133,8 @@ package body Tool_Commands is
      & " [--expect TEXT] [--repack MODE] [--backend NAME]"
      & " [--draft-model PATH] [--draft-tokens N]"
      & " [--shard PATH] [--ple PATH] [--kv-cache MODE]"
-     & " [--expert-cache BYTES] [--panel-cache PATH]";
+     & " [--expert-cache BYTES] [--device-memory BYTES]"
+     & " [--panel-cache PATH]";
    Takes_Tokenize  : aliased constant String :=
      "--model PATH --prompt TEXT [--special]";
    Takes_Cut       : aliased constant String := "--pre NAME --texts PATH";

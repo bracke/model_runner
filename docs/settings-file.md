@@ -69,6 +69,23 @@ Six keys are **not** options — a model, places, a secret and what the lists le
 | `hf-token`     | the Hugging Face token for a gated repository | `HF_TOKEN` |
 | `models-hide`  | models the lists to choose from leave out -- `run` without a model, `/model` in a conversation: name patterns, a space between them, `*` for any run of characters, matched to a file's name in any case (`models-hide = tinyllama* *-f32.gguf`) | — |
 
+## Expert-cache recommendations
+
+`tests speed --expert-cache-sweep` writes only recommendations that pass its
+ABBA timing, numerical-equivalence, physical-work and load gates. A device run
+then looks up the exact model SHA-256, inference build, device name and
+device-memory budget automatically. The command line remains authoritative:
+an explicit `--expert-cache` always overrides the registry.
+
+| key | default | meaning |
+|-----|---------|---------|
+| `expert-cache-auto` | `true` | set `false` to disable automatic lookup |
+| `expert-cache-recommendations` | platform cache path | use another registry file |
+
+`MODEL_RUNNER_EXPERT_CACHE_RECOMMENDATIONS` overrides the platform default
+when the settings file does not name a path. Invalid, stale or unmatched
+entries are ignored; they never make a model fail to run.
+
 ## Hooks
 
 Two keys run a command of yours in a conversation that uses the tools, by

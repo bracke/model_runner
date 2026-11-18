@@ -94,6 +94,8 @@ with State_Dump;
 with Tokenizer_Cross;
 with Quantize_Run;
 with Speed_Run;
+with Expert_Cache_Bench;
+with Expert_Cache_Matrix;
 with Cache_Regression;
 with Crossing;
 with Image_Crossing;
@@ -2928,6 +2930,7 @@ begin
             Auxiliary => Auxiliary,
             Cache => Cache_Of (Option ("--kv-cache", "f32")),
             Expert_Cache => Bytes ("--expert-cache"),
+            Device_Memory => Bytes ("--device-memory"),
             Panel_Cache => Option ("--panel-cache", ""),
             Result  => Result);
 
@@ -4012,7 +4015,9 @@ begin
 
          Chosen_Backend : constant String := Chosen;
       begin
-         if Option ("--model", "") = "" then
+         if Option ("--model", "") = ""
+           and then not Given ("--expert-cache-models")
+         then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "speed: --model PATH is required");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
@@ -4060,6 +4065,103 @@ begin
          --  between.
          if Option ("--host-depth", "") /= "" then
             Model_Runner.Llama.Set_Host_Depth_Most (Count ("--host-depth", 1_536));
+         end if;
+
+         --  A complete adaptive-expert qualification rather than one cache
+         --  size inspected by hand. It owns the matrix and writes one JSON
+         --  decision record bound to the model, runtime and device.
+         if Given ("--expert-cache-sweep") then
+            if Given ("--expert-cache") then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "speed: --expert-cache-sweep and --expert-cache are alternatives");
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
+            if Given ("--expert-cache-models")
+              and then (Given ("--model") or else Option ("--report", "") = "")
+            then
+               Ada.Text_IO.Put_Line
+                 (Ada.Text_IO.Standard_Error,
+                  "speed: --expert-cache-models replaces --model and requires --report");
+               Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               return;
+            end if;
+
+            declare
+               Completed : Boolean;
+            begin
+               if Given ("--expert-cache-models") then
+                  Expert_Cache_Matrix.Run
+                    (Manifest => Option ("--expert-cache-models", ""),
+                     Prompt =>
+                       Option
+                         ("--prompt-file",
+                          "../tests/fixtures/speed-prompt-long.txt"),
+                     Turns => Option ("--turns", ""),
+                     Cache_Sizes =>
+                       Option
+                         ("--expert-cache-sweep",
+                          "268435456,536870912,1073741824"),
+                     Report_Path => Option ("--report", ""),
+                     Recommendation_Path =>
+                       Option ("--recommendations", ""),
+                     Tokens => Number ("--max-tokens", 32),
+                     Threads =>
+                       Number
+                         ("--threads", Model_Runner.Platform.Core_Count - 1),
+                     Context => Whole ("--context-size"),
+                     Repeats => Number ("--repeats", 3),
+                     Default_Device_Memory => Bytes ("--device-memory"),
+                     Minimum_Gain =>
+                       Long_Float
+                         (Real_Of (Option ("--min-improvement", "5.0"))),
+                     Logit_Tolerance =>
+                       Real_Of (Option ("--logit-tolerance", "0.001")),
+                     Leg_Drift_Limit =>
+                       Long_Float
+                         (Real_Of (Option ("--max-leg-drift", "10.0"))),
+                     Success => Completed);
+               else
+                  Expert_Cache_Bench.Run
+                    (Model => Option ("--model", ""),
+                     Prompt =>
+                       Option
+                         ("--prompt-file",
+                          "../tests/fixtures/speed-prompt-long.txt"),
+                     Turns => Option ("--turns", ""),
+                     Cache_Sizes =>
+                       Option
+                         ("--expert-cache-sweep",
+                          "268435456,536870912,1073741824"),
+                     Report_Path => Option ("--report", ""),
+                     Recommendation_Path =>
+                       Option ("--recommendations", ""),
+                     Tokens => Number ("--max-tokens", 32),
+                     Threads =>
+                       Number
+                         ("--threads", Model_Runner.Platform.Core_Count - 1),
+                     Context => Whole ("--context-size"),
+                     Repeats => Number ("--repeats", 3),
+                     Device_Memory => Bytes ("--device-memory"),
+                     Minimum_Gain =>
+                       Long_Float
+                         (Real_Of (Option ("--min-improvement", "5.0"))),
+                     Logit_Tolerance =>
+                       Real_Of (Option ("--logit-tolerance", "0.001")),
+                     Leg_Drift_Limit =>
+                       Long_Float
+                         (Real_Of (Option ("--max-leg-drift", "10.0"))),
+                     Success => Completed);
+               end if;
+               if not Completed then
+                  Ada.Text_IO.Put_Line
+                    (Ada.Text_IO.Standard_Error,
+                     "speed: expert-cache campaign did not complete");
+                  Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+               end if;
+               return;
+            end;
          end if;
 
          declare
@@ -4135,6 +4237,7 @@ begin
                   Context     => Whole ("--context-size"),
                   Device_Bytes => Bytes ("--device-memory"),
                   Device_Named => Given ("--device-memory"),
+                  Expert_Cache => Bytes ("--expert-cache"),
 
                   --  Paged where the command pages: on a device, unless told
                   --  otherwise. The tool took --paged and dropped it, and opened

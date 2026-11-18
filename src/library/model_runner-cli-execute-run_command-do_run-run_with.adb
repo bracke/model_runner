@@ -18,8 +18,6 @@ procedure Run_With (Team : Workers_CPU.Pool_Reference) is
    --  its answer, for --output-json, is what follows the block's close.
    Reply_Opened_Thought : Boolean := False;
 
-   use type Model_Runner.Clocks.Nanoseconds;
-
    --  Why the first layer that did not go over whole did not, as a
    --  message key, or the empty string where every layer did.
    function Handed_Key return String is

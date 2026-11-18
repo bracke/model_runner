@@ -35,6 +35,7 @@ package body External_Model is
 
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.Numerics.Element_Count;
+   use type Interfaces.Unsigned_64;
 
    package CPU renames Model_Runner.Backend.CPU;
    package Containers renames Model_Runner.GGUF.Containers;
@@ -129,10 +130,12 @@ package body External_Model is
       Auxiliary : T.Bounded_List := [1 .. 0 => <>];
       Cache : L.Cache_Precision := L.Exact;
       Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Device_Memory : Interfaces.Unsigned_64 := 0;
       Panel_Cache : String := "";
       Result  : out Report)
    is
       use type Model_Runner.Backend.Backend_Kind;
+      use type CPU.Pool_Reference;
 
       --  Whether this backend partitions rows across workers. Asked of the
       --  backend rather than of its name, so a backend that gains a pool
@@ -207,6 +210,29 @@ package body External_Model is
 
          Refusal := E.Success;
 
+         --  A device does not partition its own products across these
+         --  workers, but a partially resident mixture still runs its host
+         --  experts on the processor pool.  The command supplies that pool;
+         --  do the same here or an expert-cache validation observes routing
+         --  while never reaching the physical admission path.
+         if Team = null
+           and then Backend = Model_Runner.Backend.Backend_Device
+           and then Threads > 1
+         then
+            declare
+               Device_Team : aliased CPU.Pool (CPU.Worker_Count (Threads));
+            begin
+               Generate
+                 (Device_Team'Unchecked_Access, Text, Last, Counted, Ok);
+               CPU.Close (Device_Team);
+               return;
+            exception
+               when others =>
+                  CPU.Close (Device_Team);
+                  raise;
+            end;
+         end if;
+
          L.Open (Session, Engine, Workers => Team, Status => Local);
          if E.Is_Error (Local) then
             Refusal := Local;
@@ -240,6 +266,18 @@ package body External_Model is
          if not Ok then
             Refusal := Outcome.Error;
          end if;
+
+         declare
+            Observed : constant L.Expert_Cache_Statistics :=
+              L.Expert_Cache_Stats (Session);
+         begin
+            --  Several deterministic passes run below. They should observe
+            --  the same routes; retain the one that reached the most rather
+            --  than adding identical validation passes together.
+            if Observed.Observations > Result.Expert_Cache.Observations then
+               Result.Expert_Cache := Observed;
+            end if;
+         end;
 
          Model_Runner.Stops.Close (Stop);
          L.Close (Session);
@@ -360,6 +398,7 @@ package body External_Model is
 
    begin
       Result := (others => <>);
+      Result.Expert_Cache_Requested := Expert_Cache;
 
       if Expect /= "" then
          Expectations.Load (Expect, Expected);
@@ -387,7 +426,7 @@ package body External_Model is
          declare
             Ready : Boolean;
          begin
-            Model_Runner.Backend.Device.Open (Ready);
+            Model_Runner.Backend.Device.Open (Ready, Budget => Device_Memory);
             if not Ready then
                Result.Result := Skipped;
                Say ("no compute device on this machine");
@@ -1096,6 +1135,29 @@ package body External_Model is
                       & Boolean'Image (Item.Draft_Match)
                       & ", proposed" & Natural'Image (Item.Draft_Proposed)
                       & ", accepted" & Natural'Image (Item.Draft_Accepted))
+              & (if Item.Expert_Cache_Requested = 0 then ""
+                 else ", expert-cache"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Observations)
+                      & " observations,"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Promotions)
+                      & " promotions,"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Evictions)
+                      & " evictions,"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Admissions)
+                      & " admissions,"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Device_Runs)
+                      & " device runs,"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Resident_Bytes)
+                      & " of"
+                      & Interfaces.Unsigned_64'Image
+                          (Item.Expert_Cache.Reserve_Bytes)
+                      & " bytes resident")
               & (if Item.Thread_Checked
                  then ", thread-stable " & Boolean'Image (Item.Thread_Stable)
                  elsif not Item.Partitions

@@ -1,0 +1,3 @@
+Review that sequence for concurrency hazards. Two agents may edit separate
+workspaces while checks are running, and a source snapshot may become stale.
+Explain how revision binding and cancellation prevent evidence being reused.

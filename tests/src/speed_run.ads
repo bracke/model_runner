@@ -47,6 +47,37 @@ with Model_Runner.Numerics;
 
 package Speed_Run is
 
+   --  A bounded numerical trace of generated positions. It is deliberately
+   --  smaller than a full vocabulary dump: enough to compare the chosen and
+   --  most likely tokens and their model probabilities without turning a
+   --  benchmark report into another model-sized artifact.
+   Max_Probability_Positions    : constant := 64;
+   Max_Probability_Alternatives : constant := 8;
+
+   subtype Probability_Position is
+     Positive range 1 .. Max_Probability_Positions;
+   subtype Probability_Alternative is
+     Positive range 1 .. Max_Probability_Alternatives;
+
+   type Probability_Counts is
+     array (Probability_Position) of Natural;
+   type Probability_Tokens is
+     array (Probability_Position, Probability_Alternative) of
+       Model_Runner.Generation.Token_Id;
+   type Probability_Values is
+     array (Probability_Position, Probability_Alternative) of
+       Model_Runner.Numerics.Real;
+   type Chosen_Tokens is
+     array (Probability_Position) of Model_Runner.Generation.Token_Id;
+
+   type Probability_Ledger is record
+      Positions : Natural := 0;
+      Chosen    : Chosen_Tokens := [others => 0];
+      Counts    : Probability_Counts := [others => 0];
+      Tokens    : Probability_Tokens := [others => [others => 0]];
+      Values    : Probability_Values := [others => [others => 0.0]];
+   end record;
+
    --  What one set of repetitions measured. Times are seconds.
    type Report is record
       Ran       : Boolean := False;
@@ -63,6 +94,25 @@ package Speed_Run is
 
       Digest    : String (1 .. 16) := [others => '0'];
 
+      --  A cold pass is taken before the repetitions whose median is Wall.
+      --  Keeping both separates admission and pipeline setup from sustained
+      --  reuse instead of hiding the first behind a warm median.
+      Cold_Ran      : Boolean := False;
+      Cold_Digest   : String (1 .. 16) := [others => '0'];
+      Cold_Wall     : Duration := 0.0;
+      Cold_Evaluate : Duration := 0.0;
+      Cold_Generate : Duration := 0.0;
+
+      --  The device and adaptive-expert work actually observed. A nonzero
+      --  option without device runs is configuration, not evidence.
+      Device_Name    : String (1 .. 120) := [others => ' '];
+      Device_Name_Up : Natural := 0;
+      Expert_Cache_Requested : Interfaces.Unsigned_64 := 0;
+      Experts : Model_Runner.Llama.Expert_Cache_Statistics;
+
+      --  Optional, untimed numerical evidence from the cold pass.
+      Probabilities : Probability_Ledger;
+
       --  What the machine was doing while this was measured: the load
       --  average, before the first run and after the last.
       --
@@ -74,6 +124,28 @@ package Speed_Run is
       --  another; one that does not has to be believed.
       Load_Before : Long_Float := 0.0;
       Load_After  : Long_Float := 0.0;
+
+      --  The load average above identifies the sitting, but it lags.  This
+      --  is the largest instantaneous background reading sampled directly
+      --  before and after every pass.  Load_Qualified is false as soon as
+      --  one such sample exceeds the repository's publishing bound.
+      Background_Max : Long_Float := 0.0;
+      Background_Before_Max : Long_Float := 0.0;
+      Background_After_Max  : Long_Float := 0.0;
+      Background_Uses_Processors : Boolean := True;
+      Load_Qualified : Boolean := True;
+
+      --  Device contention is sampled while this run itself is idle, just
+      --  before and after every measured pass.  The in-run Busy reading in
+      --  Clock is useful evidence that the workload fed the device; it
+      --  cannot identify another device user because this run is meant to
+      --  make that number high.  These readings can: a qualification is
+      --  refused when the device was already busy outside the timed region,
+      --  or when the host exposes no idle-utilization reading at all.
+      Device_Background_Before_Max : Natural := 0;
+      Device_Background_After_Max  : Natural := 0;
+      Device_Background_Seen       : Boolean := False;
+      Device_Load_Qualified        : Boolean := True;
 
       --  How warm the parts that did the work were, before and after.
       --  Negative where the host exposes no such sensor. Carried for the
@@ -180,6 +252,11 @@ package Speed_Run is
    --  @param Device_Named Whether --device-memory was named at all: named
    --    as zero it reads the weights where they lie, as run's does, and
    --    unnamed it is the engine's own share and the fit run asks for.
+   --  @param Expert_Cache Bytes of the device budget reserved for adaptive
+   --    MoE expert residency, as --expert-cache selects. Zero disables it.
+   --  @param Capture_Probabilities Whether the untimed cold pass records the
+   --    chosen and eight most likely tokens with their log probabilities.
+   --  @param Capture_Conditions Whether each pass samples background load.
    --  @param Paged Whether the session keeps its context in pages, which
    --    the command does on a device and nowhere else unless told.
    --  @param Ignore_End Whether the run goes on past the end of the
@@ -226,6 +303,9 @@ package Speed_Run is
       Context     : Natural := 0;
       Device_Bytes : Interfaces.Unsigned_64 := 0;
       Device_Named : Boolean := False;
+      Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Capture_Probabilities : Boolean := False;
+      Capture_Conditions : Boolean := False;
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
