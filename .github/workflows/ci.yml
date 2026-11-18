@@ -158,10 +158,13 @@ jobs:
         # executable declared by a dependency.  In particular, ada_quality's
         # release/coverage tools use POSIX process and locking operations;
         # they are not part of model_runner's Windows dependency surface.
-        run: alr --non-interactive exec -- gprbuild -P model_runner.gpr -j0
+        run: |
+          alr --non-interactive build --stop-after=generation
+          alr --non-interactive exec -- gprbuild -P model_runner.gpr -j0
       - name: Build and run the test suite
         working-directory: model_runner/tests
         run: |
+          alr --non-interactive build --stop-after=generation
           alr --non-interactive exec -- gprbuild -P tests.gpr -j0
           ./bin/tests.exe test
       - name: Run the repository checks
