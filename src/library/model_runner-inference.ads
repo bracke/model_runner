@@ -1,9 +1,11 @@
 with Ada.Finalization;
 with Ada.Real_Time;
 with Ada.Strings.Unbounded;
+with Interfaces;
 
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.Generation;
 with Model_Runner.GGUF.Containers;
@@ -11,13 +13,22 @@ with Model_Runner.GGUF.Shards;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Sampling;
+with Model_Runner.Text;
 
 --  Bounded, schema-constrained inference over one local GGUF model.
 --
---  This package is the reusable embedding boundary for the inference engine.
+--  This package is the reusable embedded boundary for the inference engine.
 --  It owns model and session resources, performs no CLI presentation, opens
 --  no network connection, and reports expected failures as typed outcomes.
 package Model_Runner.Inference is
+
+   Max_Auxiliary_Shards : constant := 8;
+   --  Most separately distributed PLE/engram sets contain one file.  The
+   --  fixed upper bound keeps an Open request allocation-free.
+
+   type Auxiliary_List is
+     array (Positive range 1 .. Max_Auxiliary_Shards) of
+       Model_Runner.Text.Bounded;
 
    subtype UString is Ada.Strings.Unbounded.Unbounded_String;
    --  Owned completion text.
@@ -35,6 +46,16 @@ package Model_Runner.Inference is
       Values         : Model_Runner.Llama.Value_Precision :=
         Model_Runner.Llama.Same_As_Keys;
       Paged          : Boolean := False;
+      Auxiliary      : Auxiliary_List :=
+        [others => Model_Runner.Text.Empty];
+      Auxiliary_Count : Natural range 0 .. Max_Auxiliary_Shards := 0;
+      Panel_Cache    : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Fit_Required   : Boolean := True;
+      Device_Memory  : Interfaces.Unsigned_64 := 0;
+      Device_Share_Host : Boolean := False;
+      Device_Index   : Positive := 1;
+      Device_Patience : Duration := 60.0;
+      Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Model_Bounds   : Model_Runner.Limits.Model_Limits :=
         Model_Runner.Limits.Default_Model_Limits;
       Session_Bounds : Model_Runner.Limits.Session_Limits :=
@@ -49,6 +70,15 @@ package Model_Runner.Inference is
    --  @field Cache Key-cache precision.
    --  @field Values Value-cache precision.
    --  @field Paged Whether a device session uses the shared paged cache.
+   --  @field Auxiliary Exact auxiliary GGUF paths, including PLE/engram files.
+   --  @field Auxiliary_Count Number of leading Auxiliary entries to use.
+   --  @field Panel_Cache Reusable repacked-panel file, or empty for none.
+   --  @field Fit_Required Whether device preparation must keep all weights.
+   --  @field Device_Memory Device matrix budget, or zero for the default.
+   --  @field Device_Share_Host Read weights from host memory on the device.
+   --  @field Device_Index One-based device selected for a device backend.
+   --  @field Device_Patience Maximum duration to wait for the device.
+   --  @field Cancel Cooperative cancellation for loading and preparation.
    --  @field Model_Bounds Limits applied while reading and preparing GGUF.
    --  @field Session_Bounds Limits applied while opening and generating.
 
@@ -59,6 +89,7 @@ package Model_Runner.Inference is
       Sampling             : Model_Runner.Sampling.Configuration :=
         Model_Runner.Sampling.Greedy_Configuration;
       Add_Beginning        : Boolean := True;
+      Cancel               : Model_Runner.Cancellation.Token_Reference := null;
    end record;
    --  Bounded controls for one completion.
    --  @field Maximum_Tokens Largest number of generated tokens.
@@ -66,12 +97,14 @@ package Model_Runner.Inference is
    --  @field Deadline Absolute cooperative deadline, or Time_Last.
    --  @field Sampling Validated token-sampling policy.
    --  @field Add_Beginning Whether to prepend the tokenizer's beginning token.
+   --  @field Cancel Cooperative cancellation for this completion.
 
    type Completion_State is
-     (Completion_Ready, Completion_Timed_Out, Completion_Output_Limit,
-      Completion_Failed);
+     (Completion_Ready, Completion_Cancelled, Completion_Timed_Out,
+      Completion_Output_Limit, Completion_Failed);
    --  Disposition of one completion.
    --  @enum Completion_Ready Generation reached an ordinary engine stop.
+   --  @enum Completion_Cancelled The caller requested cooperative cancellation.
    --  @enum Completion_Timed_Out The cooperative deadline expired.
    --  @enum Completion_Output_Limit The bounded sink refused another fragment.
    --  @enum Completion_Failed Schema compilation or generation failed.
@@ -143,6 +176,7 @@ private
         Model_Runner.Limits.Default_Session_Limits;
       Path           : UString;
       Opened         : Boolean := False;
+      Device_Owned   : Boolean := False;
    end record;
 
    overriding procedure Finalize (Item : in out Session);

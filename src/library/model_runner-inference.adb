@@ -2,6 +2,7 @@ with Ada.Unchecked_Deallocation;
 
 with Model_Runner.Grammar;
 with Model_Runner.Grammar.Rooms;
+with Model_Runner.Backend.Device;
 with Model_Runner.Heap_Buffers;
 with Model_Runner.Output;
 with Model_Runner.Schema;
@@ -9,9 +10,11 @@ with Model_Runner.Stops;
 
 package body Model_Runner.Inference is
    use Ada.Strings.Unbounded;
+   use type Model_Runner.Backend.Backend_Kind;
    use type Model_Runner.Generation.Completion_Reason;
 
    package CPU renames Model_Runner.Backend.CPU;
+   package Device renames Model_Runner.Backend.Device;
    package E renames Model_Runner.Errors;
    package G renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
@@ -73,6 +76,10 @@ package body Model_Runner.Inference is
       L.Close (Item.Engine, Ignored);
       Model_Runner.GGUF.Containers.Close (Item.Container);
       Model_Runner.GGUF.Shards.Close (Item.Source);
+      if Item.Device_Owned then
+         Device.Close;
+         Item.Device_Owned := False;
+      end if;
       Item.Bounds := Model_Runner.Limits.Default_Session_Limits;
       Item.Path := Null_Unbounded_String;
       Item.Opened := False;
@@ -88,12 +95,34 @@ package body Model_Runner.Inference is
       Path    : String;
       Options : Open_Options := (others => <>);
       Status  : out E.Error_Info) is
+      Ready : Boolean;
    begin
       Close (Item);
 
-      Model_Runner.GGUF.Shards.Open_Model
-        (Item.Source, Item.Container, Path, Bounds => Options.Model_Bounds,
-         Status => Status);
+      if Options.Backend = Model_Runner.Backend.Backend_Device then
+         Device.Open
+           (Ready, Budget => Options.Device_Memory,
+            Share_Host => Options.Device_Share_Host,
+            Patience => Options.Device_Patience, Which => Options.Device_Index);
+         if not Ready then
+            Status := E.Make (E.Backend_No_Device);
+            return;
+         end if;
+         Item.Device_Owned := True;
+      end if;
+
+      declare
+         Auxiliary : Model_Runner.Text.Bounded_List
+           (1 .. Options.Auxiliary_Count);
+      begin
+         for Index in Auxiliary'Range loop
+            Auxiliary (Index) := Options.Auxiliary (Index);
+         end loop;
+         Model_Runner.GGUF.Shards.Open_Model
+           (Item.Source, Item.Container, Path, Auxiliary,
+            Bounds => Options.Model_Bounds, Cancel => Options.Cancel,
+            Status => Status);
+      end;
       if E.Is_Error (Status) then
          Close (Item);
          return;
@@ -103,6 +132,8 @@ package body Model_Runner.Inference is
         (Item.Engine, Item.Container, Item.Source,
          Bounds => Options.Model_Bounds, Backend => Options.Backend,
          Repack => Options.Repack, Threads => Options.Load_Threads,
+         Fit_Required => Options.Fit_Required, Cancel => Options.Cancel,
+         Panel_Cache => Model_Runner.Text.To_String (Options.Panel_Cache),
          Context => Options.Context_Tokens, Cache => Options.Cache,
          Paged => Options.Paged, Status => Status);
       if E.Is_Error (Status) then
@@ -182,7 +213,7 @@ package body Model_Runner.Inference is
          Item => Request, Stop_Set => Stop,
          Rules => Rules'Unchecked_Access,
          Sink => Sink'Unchecked_Access, Observer => null, Time => null,
-         Seeds => null, Cancel => null, Bounds => Item.Bounds,
+         Seeds => null, Cancel => Options.Cancel, Bounds => Item.Bounds,
          Outcome => Generated);
 
       Outcome.Text := Sink.Content;
@@ -190,6 +221,8 @@ package body Model_Runner.Inference is
       Outcome.Error := Generated.Error;
       if Sink.Overflow then
          Outcome.State := Completion_Output_Limit;
+      elsif Generated.Reason = G.Cancelled then
+         Outcome.State := Completion_Cancelled;
       elsif Generated.Reason = G.Time_Limit then
          Outcome.State := Completion_Timed_Out;
       elsif Generated.Reason = G.Runtime_Error then

@@ -743,8 +743,10 @@ as is half a pair, because half a difference is not a smaller difference.
 `--json-schema TEXT` and `--json-schema-file PATH` take a JSON schema and
 turn it into a grammar before anything is generated, so a caller with a
 schema does not have to hand-write GBNF and then keep the two in step. It
-reads `type`, `properties` with `required`, `items`, `enum` and `const`, and
-`allOf` intersections. Nested intersections are reduced exactly;
+reads `type`, `properties` with `required`, `items`, `enum`, `const`, exact
+`allOf` intersections, supported `anyOf` unions, provably disjoint `oneOf`
+unions, and document-local `$ref` pointers through `$defs` or `definitions`.
+Nested intersections are reduced exactly;
 `integer` intersected with `number` remains `integer`, while incompatible
 types are refused. Object intersections merge distinct properties and
 identical declarations of the same property; conflicting declarations are
@@ -2106,6 +2108,10 @@ greedy generation, valid UTF-8, seed reproducibility and worker-count stability
 tokenization, the greedy token identifiers and any recorded logits against it.
 Nothing is downloaded, and a missing file is a skip rather than a failure. See
 [docs/reference-runtime.md](docs/reference-runtime.md).
+
+Ada applications can use the bounded, reusable in-process completion boundary
+described in [docs/inference-api.md](docs/inference-api.md); its public-surface
+compatibility rules are in [docs/api-lifecycle.md](docs/api-lifecycle.md).
 
 `--backend NAME` points it at any backend this build has, which is what makes
 it a validation of a backend on somebody's own model rather than of the

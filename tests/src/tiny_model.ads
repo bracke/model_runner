@@ -300,13 +300,15 @@ package Tiny_Model is
    --    exercises through the library alone.
    --  @param Shape Which shape, which decides the window, the experts and
    --    the stretch, exactly as it does for a fixture built in memory.
+   --  @param Byte_Pair Write the alternate byte-pair vocabulary.
    procedure Write
      (Path           : String;
       Adds_Beginning : Boolean := True;
       Room           : Positive := Context;
       Format         : Weight_Format := F32;
       Kind           : Fixture_Architecture := Llama;
-      Shape          : Fixture_Shape := Plain);
+      Shape          : Fixture_Shape := Plain;
+      Byte_Pair      : Boolean := False);
 
    --  Build the fixture in memory.
    --

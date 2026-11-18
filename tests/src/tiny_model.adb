@@ -2359,7 +2359,8 @@ package body Tiny_Model is
       Room : Positive := Context;
       Format : Weight_Format := F32;
       Kind : Fixture_Architecture := Llama;
-      Shape : Fixture_Shape := Plain) is
+      Shape : Fixture_Shape := Plain;
+      Byte_Pair : Boolean := False) is
       use Ada.Streams;
       Image  : Model_Runner.Bytes.Byte_Array_Access;
       Handle : Stream_IO.File_Type;
@@ -2372,6 +2373,7 @@ package body Tiny_Model is
       --  one wants to inspect.
       Build (Image, Format => Format,
              Adds_Beginning => Adds_Beginning, Room => Room, Kind => Kind,
+             Byte_Pair => Byte_Pair,
              Window => (if Shape in Windowed | Reaching then 3 else 0),
              Experts => (if Shape = Mixed then 4 else 0),
              Experts_Used => (if Shape = Mixed then 2 else 0),

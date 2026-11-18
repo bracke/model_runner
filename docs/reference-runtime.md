@@ -692,6 +692,21 @@ same contract and was not presented as auxiliary-shard evidence; that path
 remains covered by the deterministic fixture suite until a matching real
 artifact and recording are supplied.
 
+When a compatible pair is available, the opt-in differential check is:
+
+```
+./bin/tests external-model \
+  --model /path/to/backbone.gguf \
+  --ple /path/to/compatible-ple-or-engram.gguf \
+  --expect /path/to/reference.expect \
+  --backend cpu --max-tokens 2 --threads 4
+```
+
+The command must report `external-model: ok`; a run without `--expect` is only
+self-consistency evidence and is not recorded as a differential result. This
+keeps the test reproducible without treating an unrelated auxiliary artifact
+as compatible evidence.
+
 ## Why identifiers rather than text
 
 Token identifiers are what both sides can report unambiguously. Comparing

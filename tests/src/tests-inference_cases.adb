@@ -17,6 +17,7 @@ with Model_Runner.Grammar;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 with Ada.Real_Time;
 with Ada.Unchecked_Deallocation;
@@ -53,6 +54,7 @@ with Model_Runner.Localization;
 with Model_Runner.Memory;
 with Model_Runner.Numerics;
 with Model_Runner.Generation;
+with Model_Runner.Inference;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
@@ -69,6 +71,7 @@ with Tiny_Model;
 package body Tests.Inference_Cases is
 
    use type Model_Runner.Cancellation.Token_Reference;
+   use type Ada.Strings.Unbounded.Unbounded_String;
 
    use AUnit.Assertions;
    use type Model_Runner.Errors.Error_Code;
@@ -22136,9 +22139,186 @@ package body Tests.Inference_Cases is
       end if;
    end Architectures_Are_Told_Apart;
 
+   ------------------------------------------
+   -- Public_Inference_Session_Is_Reusable --
+   ------------------------------------------
+
+   procedure Public_Inference_Session_Is_Reusable
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package I renames Model_Runner.Inference;
+      use type I.Completion_State;
+
+      Model  : constant String := "obj/public-inference.gguf";
+      Item   : I.Session;
+      Status : E.Error_Info;
+      First  : I.Completion;
+      Again  : I.Completion;
+      Options : constant I.Completion_Options :=
+        (Maximum_Tokens => 4, Maximum_Output_Bytes => 16,
+         others => <>);
+   begin
+      Tiny_Model.Write (Model, Byte_Pair => True);
+      I.Open (Item, Model, Status => Status);
+      Assert (E.Is_Ok (Status), "the public inference session did not open");
+      Assert (I.Is_Open (Item), "the opened inference session says it is closed");
+      Assert (I.Model_Path (Item) = Model,
+              "the inference session forgot its model path");
+
+      I.Complete (Item, "ab", "{""const"":12}", Options, First);
+      I.Complete (Item, "ab", "{""const"":12}", Options, Again);
+      Assert (First.State = I.Completion_Ready,
+              "the first public completion did not finish normally: "
+              & I.Completion_State'Image (First.State) & "/"
+              & Model_Runner.Generation.Completion_Reason'Image
+                  (First.Reason) & "/" & E.Error_Code'Image (First.Error.Code));
+      Assert (Again.State = I.Completion_Ready,
+              "the reused public session did not finish normally");
+      Assert (First.Text = Again.Text,
+              "resetting and reusing the public session changed its answer");
+      Assert (Ada.Strings.Unbounded.Length (First.Text) <=
+                Options.Maximum_Output_Bytes,
+              "the public completion exceeded its output bound");
+
+      I.Close (Item);
+      I.Close (Item);
+      Assert (not I.Is_Open (Item), "an idempotent close left the session open");
+      Assert (I.Model_Path (Item) = "", "a closed session retained its path");
+
+      I.Complete (Item, "ab", "{""const"":12}", Options, First);
+      Assert (First.State = I.Completion_Failed
+              and then First.Error.Code = E.Lifecycle_Model_Not_Ready,
+              "completion on a closed session was not a lifecycle failure");
+   end Public_Inference_Session_Is_Reusable;
+
+   --------------------------------------------------
+   -- Public_Inference_Reports_Each_Bounded_Stop --
+   --------------------------------------------------
+
+   procedure Public_Inference_Reports_Each_Bounded_Stop
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package I renames Model_Runner.Inference;
+      use type I.Completion_State;
+      use type Ada.Real_Time.Time;
+
+      Model   : constant String := "obj/public-inference.gguf";
+      Item    : I.Session;
+      Status  : E.Error_Info;
+      Outcome : I.Completion;
+      Token   : aliased Model_Runner.Cancellation.Token;
+      Options : I.Completion_Options :=
+        (Maximum_Tokens => 4, Maximum_Output_Bytes => 1,
+         others => <>);
+   begin
+      Tiny_Model.Write (Model, Byte_Pair => True);
+      I.Open (Item, Model, Status => Status);
+      Assert (E.Is_Ok (Status), "the bounded public session did not open");
+
+      I.Complete (Item, "ab", "{""const"":12}", Options, Outcome);
+      Assert (Outcome.State = I.Completion_Output_Limit,
+              "a two-byte forced answer did not meet the one-byte bound: "
+              & I.Completion_State'Image (Outcome.State) & "/"
+              & Model_Runner.Generation.Completion_Reason'Image
+                  (Outcome.Reason) & "/"
+              & E.Error_Code'Image (Outcome.Error.Code));
+      Assert (Ada.Strings.Unbounded.Length (Outcome.Text) <= 1,
+              "the refused fragment escaped the bounded output sink");
+
+      Options.Maximum_Output_Bytes := 16;
+      Options.Deadline := Ada.Real_Time.Clock - Ada.Real_Time.Milliseconds (1);
+      I.Complete (Item, "ab", "{""const"":12}", Options, Outcome);
+      Assert (Outcome.State = I.Completion_Timed_Out,
+              "an already expired public deadline did not time out");
+
+      Options.Deadline := Ada.Real_Time.Time_Last;
+      Options.Cancel := Token'Unchecked_Access;
+      Token.Request;
+      I.Complete (Item, "ab", "{""const"":12}", Options, Outcome);
+      Assert (Outcome.State = I.Completion_Cancelled,
+              "a cancelled public completion did not say cancelled");
+
+      Options.Cancel := null;
+      I.Complete (Item, "ab", "not json", Options, Outcome);
+      Assert (Outcome.State = I.Completion_Failed
+              and then E.Is_Error (Outcome.Error),
+              "a malformed answer schema was not a typed public failure");
+   end Public_Inference_Reports_Each_Bounded_Stop;
+
+   --------------------------------------------------
+   -- Public_Inference_Load_Controls_Reach_The_Load --
+   --------------------------------------------------
+
+   procedure Public_Inference_Load_Controls_Reach_The_Load
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package I renames Model_Runner.Inference;
+
+      Model   : constant String := "obj/public-inference-load.gguf";
+      Item    : I.Session;
+      Status  : E.Error_Info;
+      Token   : aliased Model_Runner.Cancellation.Token;
+      Options : I.Open_Options;
+      Panel   : constant String := "obj/public-inference.panels";
+
+      procedure Open_And_Finalize is
+         Local : I.Session;
+      begin
+         I.Open (Local, Model, Status => Status);
+         Assert (E.Is_Ok (Status), "the finalization fixture did not open");
+      end Open_And_Finalize;
+   begin
+      Tiny_Model.Write (Model, Format => Tiny_Model.Q8_0);
+
+      Options.Auxiliary_Count := 1;
+      Options.Auxiliary (1) := Model_Runner.Text.To_Bounded
+        ("obj/no-such-auxiliary.gguf");
+      I.Open (Item, Model, Options, Status);
+      Assert (E.Is_Error (Status) and then not I.Is_Open (Item),
+              "the public loader ignored its auxiliary shard list");
+
+      Options := (others => <>);
+      Options.Cancel := Token'Unchecked_Access;
+      Token.Request;
+      I.Open (Item, Model, Options, Status);
+      Assert (E.Is_Error (Status) and then not I.Is_Open (Item),
+              "the public loader ignored cancellation");
+
+      if Ada.Directories.Exists (Panel) then
+         Ada.Directories.Delete_File (Panel);
+      end if;
+      Options := (Repack => L.To_Rows,
+                  Panel_Cache => Model_Runner.Text.To_Bounded (Panel),
+                  others => <>);
+      I.Open (Item, Model, Options, Status);
+      Assert (E.Is_Ok (Status),
+              "the public loader did not prepare its panel-backed model");
+      I.Close (Item);
+      Assert (Ada.Directories.Exists (Panel),
+              "the public loader did not write its named panel cache");
+
+      Open_And_Finalize;
+      I.Open (Item, Model, Status => Status);
+      Assert (E.Is_Ok (Status),
+              "a finalized public session left resources that prevented reuse");
+      I.Close (Item);
+   end Public_Inference_Load_Controls_Reach_The_Load;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Public_Inference_Session_Is_Reusable'Access,
+         "the public inference session owns, resets and releases its model");
+      Register_Routine
+        (T, Public_Inference_Reports_Each_Bounded_Stop'Access,
+         "the public inference API distinguishes output, time, cancellation and schema failures");
+      Register_Routine
+        (T, Public_Inference_Load_Controls_Reach_The_Load'Access,
+         "auxiliary shards, cancellation and finalization reach the public load boundary");
       Register_Routine
         (T, Tokenizer_Matches_An_Independent_One'Access,
          "the tokenizer agrees with one written from the description");

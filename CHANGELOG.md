@@ -7,6 +7,13 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **A supported embedded inference API.** `Model_Runner.Inference` owns and
+  reuses a bounded local generation session without the CLI. Its public
+  options cover auxiliary GGUF shards, panel caches, device selection and
+  budgets, deadlines, output limits and cooperative cancellation; typed
+  results distinguish normal, cancelled, timed-out, bounded and failed
+  completions. Deterministic AUnit cases exercise lifecycle, reuse,
+  finalization and failure paths.
 - **Native model execution and artifact compatibility enhancements.** Explicit auxiliary GGUF
   shards can supply PLE/engram tensors and participate in panel-cache
   identity; packed device KV caches include OCP E4M3; mixtures can retain a
