@@ -27,6 +27,25 @@ package body Model_Runner.Platform.Signals is
    use type Model_Runner.Cancellation.Token_Reference;
    use type Interfaces.C.unsigned_long;
 
+   --  Ada_Quality.Execution first tries POSIX process-group signalling and,
+   --  when kill(2) is unavailable, deliberately falls back to
+   --  GNAT.Expect's portable child-process signalling.  MinGW does not
+   --  provide kill(2), so export the unavailable result that selects that
+   --  fallback instead of leaving the imported symbol unresolved at link
+   --  time.  In particular, do not claim POSIX process-group semantics that
+   --  Windows does not have.
+   function Posix_Kill_Unavailable
+     (Pid : Interfaces.C.int; Signal : Interfaces.C.int) return Interfaces.C.int
+   with Export, Convention => C, External_Name => "kill";
+
+   function Posix_Kill_Unavailable
+     (Pid : Interfaces.C.int; Signal : Interfaces.C.int) return Interfaces.C.int
+   is
+      pragma Unreferenced (Pid, Signal);
+   begin
+      return -1;
+   end Posix_Kill_Unavailable;
+
    --  Written by a thread Windows owns, read by the poller. Atomic is the
    --  whole of the synchronization, and the whole of what the foreign thread
    --  is allowed to do.
