@@ -137,20 +137,6 @@ option always wins.
   Where the processor rewrites experts into interleaved panels, admission
   and device execution use source-layout slices retained from their stacks;
   the device never reads the panel representation as ordinary rows.
-  [The five-model A/B campaign](docs/expert-cache-ab.md) records when this
-  manual option is useful and the correctness and speed gates it must pass
-  before becoming an automatic default. `tests speed --expert-cache-sweep`
-  takes repeated cold/warm measurements in A1,B1,B2,A2 order, rejects host
-  or idle-device contention, and persists only an exact qualified tuple of
-  model SHA-256, engine build, device name and device-memory budget. A later
-  device run applies that retained reserve automatically; an explicit
-  `--expert-cache` overrides it, and `expert-cache-auto = false` in the
-  settings file disables automatic lookup. `--expert-cache-models MANIFEST`
-  runs the same protocol for every tab-separated `MODEL<TAB>DEVICE_BYTES`
-  row and writes one aggregate JSON report.
-  runs that qualification itself and writes a model-, runtime- and
-  device-bound JSON decision, including cold/warm timings, load evidence,
-  output and top-logit equivalence, and physical residency counters.
 - **How the processor holds the weights.** Repacked once into eight-row
   panels (`--repack rows`) where the processor has the kernels, the model fits
   in free memory and in one allocation; the panels are kept under
@@ -1222,7 +1208,6 @@ generated text in `answer.txt` — no trailing newline, no styling, no prefix.
 | `LC_ALL` | locale, when `MODEL_RUNNER_LOCALE` is unset |
 | `LANG` | locale, when neither of the above is set |
 | `MODEL_RUNNER_CONFIG` | path to the settings file, overriding its default location |
-| `MODEL_RUNNER_EXPERT_CACHE_RECOMMENDATIONS` | path to the exact, locally qualified expert-cache registry |
 | `MODEL_RUNNER_INSTRUCTIONS` | `off` disables standing `AGENTS.md` instructions |
 | `HF_TOKEN` | Hugging Face token, sent when downloading a gated model |
 | `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY` | proxy a hub download goes through, the first set of the three |

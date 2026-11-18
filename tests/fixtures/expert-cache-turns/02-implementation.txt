@@ -1,3 +1,0 @@
-Now propose a small implementation sequence. Keep measurement separate from
-repair, use explicit result states, and ensure a failed or unavailable check
-cannot be interpreted as passing. Mention where deterministic ordering helps.

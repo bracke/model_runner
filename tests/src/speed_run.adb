@@ -54,41 +54,6 @@ package body Speed_Run is
    overriding procedure Flush (Self : in out Discard; Closed : out Boolean);
    overriding function Is_Closed (Self : Discard) return Boolean;
 
-   --  Numerical evidence kept independently of the generated text. The
-   --  cold pass carries it so the timed repetitions remain measurements of
-   --  inference rather than of sorting the vocabulary for a report.
-   type Probability_Book is limited new Gen.Explainer with record
-      Ledger : Probability_Ledger;
-   end record;
-
-   overriding procedure Explain
-     (Self   : in out Probability_Book;
-      Report : Model_Runner.Sampling.Explanation);
-
-   overriding procedure Explain
-     (Self   : in out Probability_Book;
-      Report : Model_Runner.Sampling.Explanation)
-   is
-      Place : Natural;
-      Count : constant Natural :=
-        Natural'Min (Report.Count, Max_Probability_Alternatives);
-   begin
-      if Self.Ledger.Positions >= Max_Probability_Positions then
-         return;
-      end if;
-
-      Self.Ledger.Positions := Self.Ledger.Positions + 1;
-      Place := Self.Ledger.Positions;
-      Self.Ledger.Chosen (Place) := Report.Chosen;
-      Self.Ledger.Counts (Place) := Count;
-      for Alternative in 1 .. Count loop
-         Self.Ledger.Tokens (Place, Alternative) :=
-           Report.Tokens (Alternative);
-         Self.Ledger.Values (Place, Alternative) :=
-           Report.Log_Values (Alternative);
-      end loop;
-   end Explain;
-
    --  The hash itself, so that the sink and the public digest below cannot
    --  drift apart.
    procedure Absorb (Into : in out Interfaces.Unsigned_64; Item : String) is
@@ -197,8 +162,6 @@ package body Speed_Run is
       Device_Bytes : Interfaces.Unsigned_64 := 0;
       Device_Named : Boolean := False;
       Expert_Cache : Interfaces.Unsigned_64 := 0;
-      Capture_Probabilities : Boolean := False;
-      Capture_Conditions : Boolean := False;
       Paged       : Boolean := False;
       Ignore_End  : Boolean := False;
       Draft_Floor : Model_Runner.Numerics.Real := 0.0;
@@ -254,8 +217,6 @@ package body Speed_Run is
       Generates : Duration_Array (1 .. Repeats) := [others => 0.0];
    begin
       Result := (others => <>);
-      Result.Load_Qualified := True;
-      Result.Expert_Cache_Requested := Expert_Cache;
       Result.Load_Before := Host_Load.Now;
       Result.Warm_Before := Host_Load.Warmth;
 
@@ -380,12 +341,18 @@ package body Speed_Run is
          --  README says of it: one figure is the model and the other is the
          --  disk.
          Started := Ada.Real_Time.Clock;
+         Shards.Open_Model
+           (Source, Container, Path, Status => Status);
+         if E.Is_Error (Status) then
+            Shards.Close (Source);
+            Say ("the model would not open: "
+                 & E.Error_Code'Image (Status.Code));
+            return;
+         end if;
 
-         --  Open the device before even mapping the model, as production
-         --  acquisition and the external-model validator do. A software
-         --  device's heap is host-backed; opening it after a large mapping
-         --  made its availability decision depend on the artifact that was
-         --  about to be loaded and refused a budget the real run accepts.
+         --  A device is opened before the model is prepared, because the
+         --  preparation asks the backend what it can read and a device that
+         --  is not there answers for nothing.
          if Backend = Model_Runner.Backend.Backend_Device then
             declare
                Ready : Boolean;
@@ -400,33 +367,11 @@ package body Speed_Run is
                   return;
                end if;
 
-               declare
-                  Name : constant String :=
-                    Model_Runner.Backend.Device.Name;
-               begin
-                  Result.Device_Name_Up :=
-                    Natural'Min (Name'Length, Result.Device_Name'Length);
-                  if Result.Device_Name_Up > 0 then
-                     Result.Device_Name (1 .. Result.Device_Name_Up) :=
-                       Name (Name'First
-                             .. Name'First + Result.Device_Name_Up - 1);
-                  end if;
-               end;
-
                --  From here, so that the sequences a load runs -- a held
                --  stack is uploaded and not run, but a warm-up would be --
                --  are in the sums with the rest.
                Model_Runner.Backend.Device.Keep_Timeline (Timeline);
             end;
-         end if;
-
-         Shards.Open_Model
-           (Source, Container, Path, Status => Status);
-         if E.Is_Error (Status) then
-            Shards.Close (Source);
-            Say ("the model would not open: "
-                 & E.Error_Code'Image (Status.Code));
-            return;
          end if;
 
          --  As run prepares it: its paging and panel cache, and refused
@@ -576,49 +521,8 @@ package body Speed_Run is
               and then Device_Clock.Offered;
 
             Watch : Device_Clock.Watcher;
-
-            --  A device may properly be near one hundred per cent busy
-            --  inside the timed region.  What disqualifies a comparison is
-            --  work already present while this run is idle.  Five per cent
-            --  admits the kernel sensor's rounding and rejects a second
-            --  compute user before its work is mistaken for this run's.
-            Device_Background_Limit : constant Natural := 5;
-
-            procedure Sample_Device_Background (Before : Boolean) is
-               Seen : constant Device_Clock.Reading := Device_Clock.Look;
-            begin
-               if not Capture_Conditions or else not Watching then
-                  return;
-               end if;
-
-               Result.Device_Background_Seen :=
-                 Result.Device_Background_Seen or else Seen.Busy_Seen;
-               if not Seen.Busy_Seen then
-                  Result.Device_Load_Qualified := False;
-               elsif Before then
-                  Result.Device_Background_Before_Max :=
-                    Natural'Max
-                      (Result.Device_Background_Before_Max, Seen.Busy);
-                  Result.Device_Load_Qualified :=
-                    Result.Device_Load_Qualified
-                    and then Seen.Busy <= Device_Background_Limit;
-               else
-                  Result.Device_Background_After_Max :=
-                    Natural'Max
-                      (Result.Device_Background_After_Max, Seen.Busy);
-                  Result.Device_Load_Qualified :=
-                    Result.Device_Load_Qualified
-                    and then Seen.Busy <= Device_Background_Limit;
-               end if;
-            end Sample_Device_Background;
          begin
             Watch.Start (Watching);
-
-            if Capture_Conditions and then not Watching then
-               --  A hardware timing without a device-utilization instrument
-               --  is still useful, but is not automatic-policy evidence.
-               Result.Device_Load_Qualified := False;
-            end if;
 
             --  Held until a pass is actually running, so that what the
             --  reading answers about is the region the wall is taken
@@ -653,7 +557,6 @@ package body Speed_Run is
                     not Turning or else Pass = Repeats;
                   Stop    : Model_Runner.Stops.Set;
                   Sink    : aliased Discard;
-                  Book    : aliased Probability_Book;
                   Request : Gen.Request;
                   Outcome : Gen.Result;
                   Local   : E.Error_Info;
@@ -720,12 +623,6 @@ package body Speed_Run is
                   Request.Seed := 1;
                   Request.Has_Seed := True;
                   Request.Add_Beginning := True;
-                  if Capture_Probabilities
-                    and then not Turning
-                    and then Round = 0
-                  then
-                     Request.Logprobs := Max_Probability_Alternatives;
-                  end if;
                   --  Drafting as the command drafts, asked or not.
                   declare
                      Plan : constant Draft_Policy.Plan :=
@@ -772,27 +669,6 @@ package body Speed_Run is
                   --  ahead of them, none of them now is.
                   Device_Clock.Sample (Round = Repeats);
 
-                  if Capture_Conditions then
-                     declare
-                        Quiet      : Boolean;
-                        Reading    : Long_Float;
-                        Processors : Boolean;
-                     begin
-                        Host_Load.Look (Quiet, Reading, Processors);
-                        Result.Background_Max :=
-                          Long_Float'Max (Result.Background_Max, Reading);
-                        Result.Background_Before_Max :=
-                          Long_Float'Max
-                            (Result.Background_Before_Max, Reading);
-                        Result.Background_Uses_Processors :=
-                          Result.Background_Uses_Processors
-                          and then Processors;
-                        Result.Load_Qualified :=
-                          Result.Load_Qualified and then Quiet;
-                     end;
-                     Sample_Device_Background (Before => True);
-                  end if;
-
                   Started := Ada.Real_Time.Clock;
                   Spent_At := Host_Load.Processor_Seconds;
                   Gen.Generate
@@ -805,41 +681,12 @@ package body Speed_Run is
                      Draft_Session =>
                        (if Drafting then Draft_Session'Unchecked_Access
                         else null),
-                     Reporter =>
-                       (if Request.Logprobs > 0
-                        then Book'Unchecked_Access else null),
                      Outcome => Outcome);
                   Walls (Pass) :=
                     Ada.Real_Time.To_Duration
                       (Ada.Real_Time.Clock - Started);
 
                   Device_Clock.Sample (False);
-
-                  if Capture_Conditions then
-                     --  Do not call worker teardown background load.  The
-                     --  timed region has ended; give its tasks half a second
-                     --  to park before asking what else is using the host.
-                     delay 0.5;
-
-                     declare
-                        Quiet      : Boolean;
-                        Reading    : Long_Float;
-                        Processors : Boolean;
-                     begin
-                        Host_Load.Look (Quiet, Reading, Processors);
-                        Result.Background_Max :=
-                          Long_Float'Max (Result.Background_Max, Reading);
-                        Result.Background_After_Max :=
-                          Long_Float'Max
-                            (Result.Background_After_Max, Reading);
-                        Result.Background_Uses_Processors :=
-                          Result.Background_Uses_Processors
-                          and then Processors;
-                        Result.Load_Qualified :=
-                          Result.Load_Qualified and then Quiet;
-                     end;
-                     Sample_Device_Background (Before => False);
-                  end if;
 
                   --  Around the same region the wall is taken around, so
                   --  the two answer about the same work. Taken across the
@@ -862,15 +709,6 @@ package body Speed_Run is
                            (Model_Runner.Clocks.Nanoseconds_Per_Second));
 
                   Result.Digest := Shown (Sink.Hash);
-
-                  if Round = 0 then
-                     Result.Cold_Ran := True;
-                     Result.Cold_Digest := Result.Digest;
-                     Result.Cold_Wall := Walls (Pass);
-                     Result.Cold_Evaluate := Evaluates (Pass);
-                     Result.Cold_Generate := Generates (Pass);
-                     Result.Probabilities := Book.Ledger;
-                  end if;
 
                   --  A run that did not finish is not a figure. This
                   --  reported the wall time of a failure as though it were
@@ -936,11 +774,6 @@ package body Speed_Run is
                   Result.Offered_At := Outcome.Offered_At;
                   Result.Kept_At := Outcome.Kept_At;
                   Result.Runs := Pass;
-
-                  --  Kept whether or not the verbose phase budget was
-                  --  requested: a machine-readable benchmark must be able
-                  --  to prove that a named reserve performed physical work.
-                  Result.Experts := L.Expert_Cache_Stats (Session);
 
                   --  Where the time went, for the caller who asked. Written
                   --  as the run ends rather than kept, because a median of
@@ -1025,11 +858,6 @@ package body Speed_Run is
             end loop;
 
             Watch.Stop (Result.Clock);
-            if Capture_Conditions then
-               Result.Load_Qualified :=
-                 Result.Load_Qualified
-                 and then Result.Device_Load_Qualified;
-            end if;
 
             CPU.Close (Team);
          exception

@@ -18,9 +18,7 @@ with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
 with Model_Runner.Clocks;
 with Model_Runner.Conversation;
-with Model_Runner.Config;
 with Model_Runner.Entropy;
-with Model_Runner.Expert_Cache_Recommendations;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Generation;
 with Model_Runner.Grammar;
@@ -61,9 +59,7 @@ package body Model_Runner.CLI.Execute.Run_Command is
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.Conversation.Role;
    use type Model_Runner.Agent.Stop_Reason;
-   use type Model_Runner.Backend.Backend_Kind;
    use type Model_Runner.Bytes.Byte_Array_Access;
-   use type Interfaces.Unsigned_64;
    use type L.Repack_Mode;
    use type N.Element_Count;
    use type N.Real;
@@ -1012,59 +1008,6 @@ package body Model_Runner.CLI.Execute.Run_Command is
        Tokens_Set  => Item.Draft_Tokens_Set,
        Lookup      => Item.Draft_Lookup,
        Model_Named => not T.Is_Empty (Item.Draft_Path));
-
-   --  Apply a retained qualification only after backend resolution has
-   --  opened and named the actual device.  An explicit --expert-cache wins,
-   --  auxiliary or adapted models are not the artifact that was measured,
-   --  and a user may disable this local automatic layer in the settings
-   --  file with expert-cache-auto = false.
-   function With_Expert_Cache_Recommendation
-     (Item   : Opt.Command;
-      Screen : in out Pres.Console) return Opt.Command
-   is
-      Result : Opt.Command := Item;
-      Setting : constant String := Model_Runner.Config.Value ("expert-cache-auto");
-      Registry : constant String :=
-        Model_Runner.Config.Value ("expert-cache-recommendations");
-   begin
-      if Item.Expert_Cache_Set
-        or else Item.Backend /= Model_Runner.Backend.Backend_Device
-        or else Item.Auxiliary_Count > 0
-        or else not T.Is_Empty (Item.Adapter_Path)
-        or else Setting in "false" | "no" | "off" | "0"
-      then
-         return Result;
-      end if;
-
-      declare
-         Named : constant String := T.To_String (Item.Model_Path);
-         Path  : constant String :=
-           Model_Runner.Platform.Resolve_Model_Path (Resolve_Alias (Named));
-         Device : constant String := Model_Runner.Backend.Device.Name;
-         Bytes : constant Interfaces.Unsigned_64 :=
-           Model_Runner.Expert_Cache_Recommendations.Find
-             (Model_Path => Path,
-              Device => Device,
-              Device_Memory => Item.Device_Memory,
-              Registry_Path => Registry);
-      begin
-         if Bytes > 0 then
-            Result.Expert_Cache := Bytes;
-            Result.Expert_Cache_Set := True;
-            Pres.Put_Note
-              (Screen, "cli.note.expert_cache_auto",
-               [Loc.Named
-                  ("bytes", T.Image (Long_Long_Integer (Bytes))),
-                Loc.Named ("device", Device)]);
-         end if;
-      end;
-      return Result;
-   exception
-      when others =>
-         --  A local optimization registry can never make a model fail to
-         --  run.  Malformed, unreadable and stale entries mean disabled.
-         return Item;
-   end With_Expert_Cache_Recommendation;
 
    procedure Do_Run
      (Item    : Opt.Command;

@@ -139,7 +139,6 @@ package body Model_Runner.CLI.Execute is
             --  a Command carries fixed room for every bounded option, and
             --  nested returns otherwise put three copies in this frame.
             Running := Resolved_Backend (Current, Screen);
-            Running := With_Expert_Cache_Recommendation (Running, Screen);
             Running := With_Panels (Running);
             Do_Run (Running, Screen, Catalog, Status);
             if Talk.Switch_Requested /= "" then

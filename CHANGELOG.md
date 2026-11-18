@@ -42,6 +42,12 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Expert residency is manual only.** `--expert-cache BYTES` remains an
+  explicit opt-in for a run and for the speed and external-model harnesses,
+  with physical residency counters available for inspection. The automatic
+  qualification campaign, recommendation registry and implicit runtime
+  application have been removed; no cache reserve is selected unless the
+  caller names one.
 - **`/help` explains the project's commands.** Under a "Project commands" heading, each one that applies where the session is gets its line of what it does, as `/help project` gives them -- and how many more apply elsewhere -- where before they were named on one long line. Every help line's description starts in one column and wraps under itself to the window; a command too long for the column has its description on the line below. `/help projects` is `/help project`.
 - **Notes no longer begin with `model_runner: `.** What the program says in passing -- the banner, the run's summary, a reply that stopped, a hint after an error -- is said without the program's name; errors and warnings still name it, so a failure says where it came from.
 - **A reply's length is not cut at 256 tokens.** In a conversation a reply has no limit unless `--max-tokens` names one: it runs until the model ends it, Ctrl-C stops it, or the context is full, which is said. `run` with a prompt writes at most 4,096 tokens, or until the context is full where that comes first -- before, a request whose prompt and limit did not both fit was refused before it began. The run's summary says the limit in force, and `--help` the new defaults. An agent's reply is unchanged.

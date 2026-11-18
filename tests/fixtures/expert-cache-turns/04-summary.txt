@@ -1,3 +1,0 @@
-Conclude with a concise verification checklist covering the success path,
-timeouts, malformed diagnostics, policy changes, stale results, and a repair
-loop that stops after repeated equivalent failures.

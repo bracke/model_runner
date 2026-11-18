@@ -58,10 +58,6 @@ package body Untested_Surface is
    --  Free_Reals and Free_Text, are private packages of the command line's
    --  execution, which a test cannot name; every command-line test reaches
    --  them through Dispatch, as a command run from the shell does.
-   --  With_Expert_Cache_Recommendation is another such private helper: the
-   --  registry's exact matching is tested directly and an optional hardware
-   --  case reaches the run boundary, while the helper itself is visible only
-   --  to its parent execution package.
    --  Private to the framework. Remembered is Read_Memory's, which no test
    --  can name; the retrieval key's hand-edit test and readiness's scan
    --  hold what it gives. Delete_If_Present and Make_Directory are Files',
@@ -185,7 +181,6 @@ package body Untested_Surface is
          | "Selected_Workers"
          | "Session_Paging"
          | "With_Panels"
-         | "With_Expert_Cache_Recommendation"
          | "Resolve_Alias"
          | "Confirmed_Line"
          | "Edited_Line"

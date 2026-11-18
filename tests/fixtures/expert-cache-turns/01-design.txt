@@ -1,3 +1,0 @@
-Review an Ada service that reads untrusted project files and runs bounded
-analysis commands. Identify the invariants its public interface should state,
-especially around path confinement, cancellation, and immutable evidence.

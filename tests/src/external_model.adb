@@ -130,7 +130,6 @@ package body External_Model is
       Auxiliary : T.Bounded_List := [1 .. 0 => <>];
       Cache : L.Cache_Precision := L.Exact;
       Expert_Cache : Interfaces.Unsigned_64 := 0;
-      Device_Memory : Interfaces.Unsigned_64 := 0;
       Panel_Cache : String := "";
       Result  : out Report)
    is
@@ -426,7 +425,7 @@ package body External_Model is
          declare
             Ready : Boolean;
          begin
-            Model_Runner.Backend.Device.Open (Ready, Budget => Device_Memory);
+            Model_Runner.Backend.Device.Open (Ready);
             if not Ready then
                Result.Result := Skipped;
                Say ("no compute device on this machine");
