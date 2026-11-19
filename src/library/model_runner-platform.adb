@@ -295,6 +295,34 @@ package body Model_Runner.Platform is
       function Absolute_Only (Search : String) return String is
          Kept : Ada.Strings.Unbounded.Unbounded_String;
          From : Positive := Search'First;
+
+         --  The policy runner starts programs through Git's MSYS env.exe on
+         --  native Windows.  env and the sh it starts expect a POSIX path
+         --  list; handing them the native semicolon-separated value lets the
+         --  first program start by its resolved absolute name, but leaves its
+         --  children (grep, touch, git, ...) impossible to find.
+         function For_Environment (Folder : String) return String is
+            Result : String := Folder;
+         begin
+            if Hostkit.Host.Current /= Hostkit.Host.Windows then
+               return Folder;
+            end if;
+            for C of Result loop
+               if C = '\' then
+                  C := '/';
+               end if;
+            end loop;
+            if Result'Length >= 3 and then Result (Result'First + 1) = ':'
+              and then Result (Result'First + 2) = '/'
+            then
+               return "/" & Result (Result'First) & Result (Result'First + 2 .. Result'Last);
+            end if;
+            return Result;
+         end For_Environment;
+
+         Passed_Separator : constant Character :=
+           (if Hostkit.Host.Current = Hostkit.Host.Windows then ':'
+            else Native_Path_Separator);
       begin
          for Index in Search'First .. Search'Last + 1 loop
             if Index > Search'Last or else Search (Index) = Native_Path_Separator then
@@ -309,9 +337,9 @@ package body Model_Runner.Platform is
                                        and then Folder (Folder'First + 2) in '/' | '\'))
                   then
                      if Ada.Strings.Unbounded.Length (Kept) > 0 then
-                        Ada.Strings.Unbounded.Append (Kept, Native_Path_Separator);
+                        Ada.Strings.Unbounded.Append (Kept, Passed_Separator);
                      end if;
-                     Ada.Strings.Unbounded.Append (Kept, Folder);
+                     Ada.Strings.Unbounded.Append (Kept, For_Environment (Folder));
                   end if;
                end;
                From := Index + 1;

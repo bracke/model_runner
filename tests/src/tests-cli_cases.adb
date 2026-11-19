@@ -21,6 +21,7 @@ with Model_Runner.Project_Manifests;
 with AUnit.Assertions;
 
 with Hostkit.Descriptors;
+with Hostkit.Fs;
 with Hostkit.Host;
 with Hostkit.Locks;
 with Hostkit.Pty;
@@ -16873,7 +16874,7 @@ package body Tests.CLI_Cases is
       pragma Unreferenced (T);
       package Ins renames Model_Runner.CLI.Instructions;
       Outer : constant String := Ada.Directories.Full_Name ("obj/instructions-outer");
-      Inner : constant String := Outer & "/inner";
+      Inner : constant String := Hostkit.Fs.Join (Outer, "inner");
       File  : Ada.Text_IO.File_Type;
    begin
       if Ada.Directories.Exists (Outer) then
@@ -16894,10 +16895,11 @@ package body Tests.CLI_Cases is
       begin
          Assert (At_Outer > 0 and then At_Inner > At_Outer,
                  "the instructions were not both read, the outer first: " & Said);
-         Assert (Ada.Strings.Fixed.Index (Said, "From " & Inner & "/" & Ins.File_Name & ":") > 0,
+         Assert (Ada.Strings.Fixed.Index
+                   (Said, "From " & Hostkit.Fs.Join (Inner, Ins.File_Name) & ":") > 0,
                  "an instruction was not set under the file it came from: " & Said);
-         Assert (Ada.Strings.Fixed.Index (Files, Outer & "/" & Ins.File_Name) > 0
-                 and then Ada.Strings.Fixed.Index (Files, Inner & "/" & Ins.File_Name) > 0,
+         Assert (Ada.Strings.Fixed.Index (Files, Hostkit.Fs.Join (Outer, Ins.File_Name)) > 0
+                 and then Ada.Strings.Fixed.Index (Files, Hostkit.Fs.Join (Inner, Ins.File_Name)) > 0,
                  "the files read were not named: " & Files);
       end;
       --  The outer folder's alone where the session is held there.
@@ -16927,8 +16929,7 @@ package body Tests.CLI_Cases is
    is
       pragma Unreferenced (T);
    begin
-      Assert (Ada.Strings.Fixed.Index
-                (Model_Runner.Platform.Config_File, "obj/suite-config") > 0,
+      Assert (Ada.Directories.Simple_Name (Model_Runner.Platform.Config_File) = "suite-config",
               "the suite read the settings file " & Model_Runner.Platform.Config_File);
       Assert (Model_Runner.Config.Value ("model") = ""
               and then Model_Runner.Config.Value ("models-hide") = "",
@@ -17156,7 +17157,12 @@ package body Tests.CLI_Cases is
       begin
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
          Ada.Text_IO.Put_Line (File, "hook.after-edit = echo formatted $FILE");
-         Ada.Text_IO.Put_Line (File, "hook.after-turn = echo checked; exit 3");
+         Ada.Text_IO.Put_Line
+           (File,
+            "hook.after-turn = "
+            & (if Hostkit.Host.Current = Hostkit.Host.Windows
+               then "echo checked && exit /b 3"
+               else "echo checked; exit 3"));
          Ada.Text_IO.Close (File);
          Ada.Environment_Variables.Set ("MODEL_RUNNER_CONFIG", Own);
          Model_Runner.CLI.Tool_Turns.Set_Base (Ada.Directories.Full_Name ("obj"));

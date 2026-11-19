@@ -214,7 +214,13 @@ package body Model_Runner.Framework.Git is
       end Ask;
    begin
       Within (Directory, Ask'Access, Worked);
-      return (if Worked then To_String (Top) else "");
+      --  versionlib deliberately reports Git's slash spelling.  The rest of
+      --  the framework compares host paths, for which Ada.Directories uses
+      --  the native spelling on Windows.
+      return (if Worked then Ada.Directories.Full_Name (To_String (Top)) else "");
+   exception
+      when others =>
+         return "";
    end Top_Level;
 
    --  The renames of the last commits as of one commit of one repository:

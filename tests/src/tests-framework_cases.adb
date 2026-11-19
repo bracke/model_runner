@@ -15371,16 +15371,24 @@ package body Tests.Framework_Cases is
          Ws.Create (Store, Change, To_String (Id), "AG-TEST", "9", False, Lost, Status);
          Change := S.No_Changes;
          Home := To_Unbounded_String (Dirs.Containing_Directory (To_String (Lost.Path)));
-         GNAT.OS_Lib.Set_Non_Writable (To_String (Home));
-         Ws.Discard_Unrecorded (Store, Lost, Status);
-         GNAT.OS_Lib.Set_Writable (To_String (Home));
-         Assert (E.Is_Error (Status) and then Ws.Aborted (Store, To_String (Lost.Id)),
-                 "a workspace that would not go was not marked to go: " & Code_Of (Status));
-         Ws.Discard_Aborted (Store, Removed);
-         Assert (Removed.Contains (To_String (Lost.Id))
-                 and then not Dirs.Exists (To_String (Home))
-                 and then not Ws.Aborted (Store, To_String (Lost.Id)),
-                 "a workspace marked to go was not removed when asked again");
+         if Hostkit.Host.Current = Hostkit.Host.Windows then
+            --  Windows' writable bit is not a directory deletion barrier;
+            --  the failure path cannot be induced with chmod semantics.
+            Ws.Discard_Unrecorded (Store, Lost, Status);
+            Assert (E.Is_Ok (Status) and then not Dirs.Exists (To_String (Lost.Path)),
+                    "an ordinary Windows workspace was not discarded: " & Code_Of (Status));
+         else
+            GNAT.OS_Lib.Set_Non_Writable (To_String (Home));
+            Ws.Discard_Unrecorded (Store, Lost, Status);
+            GNAT.OS_Lib.Set_Writable (To_String (Home));
+            Assert (E.Is_Error (Status) and then Ws.Aborted (Store, To_String (Lost.Id)),
+                    "a workspace that would not go was not marked to go: " & Code_Of (Status));
+            Ws.Discard_Aborted (Store, Removed);
+            Assert (Removed.Contains (To_String (Lost.Id))
+                    and then not Dirs.Exists (To_String (Home))
+                    and then not Ws.Aborted (Store, To_String (Lost.Id)),
+                    "a workspace marked to go was not removed when asked again");
+         end if;
          --  A mark is held to the tree its name gives under this store, not
          --  the place it names: copied with a project, it named the
          --  original's live tree, which was removed.
@@ -16496,7 +16504,7 @@ package body Tests.Framework_Cases is
                   Target : Unbounded_String;
                begin
                   return Hostkit.Fs.Is_Link (Link) and then Hostkit.Fs.Read_Link_Target (Link, Target)
-                    and then To_String (Target) = Away;
+                    and then Hostkit.Fs.Real_Path (Link) = Hostkit.Fs.Real_Path (Away);
                end Names_Away;
             begin
                if not Hostkit.Fs.Delete_Link (Link) then
@@ -21323,7 +21331,12 @@ package body Tests.Framework_Cases is
             Ada.Environment_Variables.Set ("PATH", Was);
             Assert
               (Ada.Strings.Fixed.Index
-                 (Passed, "PATH=" & First & Separator & Second & LF) > 0,
+                 (Passed,
+                  "PATH="
+                  & (if Hostkit.Host.Current = Hostkit.Host.Windows
+                     then "/C/Windows:/C/Windows/System32"
+                     else First & Separator & Second)
+                  & LF) > 0,
                "a relative or empty search path entry was handed to checks: " & Passed);
          end;
       exception

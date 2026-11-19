@@ -3245,7 +3245,15 @@ package body Model_Runner.Framework.Work is
                            begin
                               for Position in Whole'First .. Whole'Last + 1 loop
                                  if Position > Whole'Last or else Whole (Position) = ASCII.LF then
-                                    Lines.Append (Whole (Start .. Position - 1));
+                                    --  Files.Read_Text preserves bytes.  A
+                                    --  native Windows text file therefore
+                                    --  has CRLF lines; CR is a line ending,
+                                    --  not part of the condition quoted to
+                                    --  the model.
+                                    Lines.Append
+                                      (if Position > Start and then Whole (Position - 1) = ASCII.CR
+                                       then Whole (Start .. Position - 2)
+                                       else Whole (Start .. Position - 1));
                                     Start := Position + 1;
                                  end if;
                               end loop;

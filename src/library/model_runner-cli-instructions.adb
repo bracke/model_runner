@@ -2,6 +2,8 @@ with Ada.Directories;
 with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
+with Hostkit.Fs;
+
 with Model_Runner.Platform;
 
 package body Model_Runner.CLI.Instructions is
@@ -24,7 +26,7 @@ package body Model_Runner.CLI.Instructions is
          if Settings /= "" then
             declare
                Own : constant String :=
-                 Ada.Directories.Containing_Directory (Settings) & "/" & File_Name;
+                 Hostkit.Fs.Join (Ada.Directories.Containing_Directory (Settings), File_Name);
             begin
                if Ada.Directories.Exists (Own) then
                   Count := Count + 1;
@@ -40,7 +42,7 @@ package body Model_Runner.CLI.Instructions is
       loop
          declare
             Folder : constant String := To_String (Here);
-            File   : constant String := (if Folder = "/" then "/" else Folder & "/") & File_Name;
+            File   : constant String := Hostkit.Fs.Join (Folder, File_Name);
          begin
             if Ada.Directories.Exists (File) and then Up < Upward'Last then
                Up := Up + 1;

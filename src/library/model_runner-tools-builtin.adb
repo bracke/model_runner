@@ -2683,6 +2683,16 @@ package body Model_Runner.Tools.Builtin is
       --  A file tool's call on its path as given: held to what was seen of
       --  the file, and what it now sees noted.
       function File_Call (Args : String) return Reply is
+         function Exists (Path : String) return Boolean is
+         begin
+            return Ada.Directories.Exists (Path);
+         exception
+            --  Ada.Directories raises for a Windows path beyond MAX_PATH.
+            --  A malformed or unrepresentable tool path is a refused call,
+            --  never an exception that ends the agent session.
+            when others =>
+               return False;
+         end Exists;
       begin
          declare
             Have : Boolean;
@@ -2733,7 +2743,7 @@ package body Model_Runner.Tools.Builtin is
             --  was seen of it whole: a part read, or none, would lose the
             --  rest.
             if Named = "write_file" and then Have
-              and then Ada.Directories.Exists (Model_Runner.Tools.Editing.On_Disk (U.To_String (Self.Base), Spelt))
+              and then Exists (Model_Runner.Tools.Editing.On_Disk (U.To_String (Self.Base), Spelt))
             then
                declare
                   There : constant String :=
