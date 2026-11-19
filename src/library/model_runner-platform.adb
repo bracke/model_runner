@@ -24,10 +24,12 @@ with Model_Runner.Config;
 
 package body Model_Runner.Platform is
 
+   use type Hostkit.Host.Kind;
+
    --  A native Windows process inherits a semicolon-separated PATH even
    --  though GNAT's MinGW tools expose ':' as their path-list separator.
    Native_Path_Separator : constant Character :=
-     (if GNAT.OS_Lib.Directory_Separator = '\' then ';'
+     (if Hostkit.Host.Current = Hostkit.Host.Windows then ';'
       else GNAT.OS_Lib.Path_Separator);
 
    -----------------
@@ -101,7 +103,7 @@ package body Model_Runner.Platform is
    --  USERPROFILE is their corresponding per-user directory.
    function Home_Directory return String is
      (if Environment_Value ("HOME") /= "" then Environment_Value ("HOME")
-      elsif GNAT.OS_Lib.Directory_Separator = '\'
+      elsif Hostkit.Host.Current = Hostkit.Host.Windows
         then Environment_Value ("USERPROFILE")
       else "");
 
@@ -301,7 +303,7 @@ package body Model_Runner.Platform is
                begin
                   if Folder /= ""
                     and then (GNAT.OS_Lib.Is_Absolute_Path (Folder)
-                              or else (GNAT.OS_Lib.Directory_Separator = '\'
+                              or else (Hostkit.Host.Current = Hostkit.Host.Windows
                                        and then Folder'Length >= 3
                                        and then Folder (Folder'First + 1) = ':'
                                        and then Folder (Folder'First + 2) in '/' | '\'))
@@ -712,7 +714,7 @@ package body Model_Runner.Platform is
    --  The folder of models kept by hand, where the home has one.
    function Home_Models return String is
       use type Ada.Directories.File_Kind;
-      Home : constant String := Hostkit.Fs.Home_Directory;
+      Home : constant String := Home_Directory;
    begin
       if Home /= "" and then Ada.Directories.Exists (Hostkit.Fs.Join (Home, "models"))
         and then Ada.Directories.Kind (Hostkit.Fs.Join (Home, "models")) = Ada.Directories.Directory

@@ -95,6 +95,8 @@ with Model_Runner.Text;
 
 package body Tests.Framework_Cases is
 
+   use type Hostkit.Host.Kind;
+
    --  What a background read's follow-on saw: whether it ran, and how many
    --  files the graph it was given held.
    protected Warmed is
@@ -21303,13 +21305,13 @@ package body Tests.Framework_Cases is
            (if Ada.Environment_Variables.Exists ("PATH")
             then Ada.Environment_Variables.Value ("PATH") else "");
          Separator : constant Character :=
-           (if GNAT.OS_Lib.Directory_Separator = '\' then ';'
+           (if Hostkit.Host.Current = Hostkit.Host.Windows then ';'
             else GNAT.OS_Lib.Path_Separator);
          First : constant String :=
-           (if GNAT.OS_Lib.Directory_Separator = '\' then "C:\Windows"
+           (if Hostkit.Host.Current = Hostkit.Host.Windows then "C:\Windows"
             else "/usr/bin");
          Second : constant String :=
-           (if GNAT.OS_Lib.Directory_Separator = '\' then "C:\Windows\System32"
+           (if Hostkit.Host.Current = Hostkit.Host.Windows then "C:\Windows\System32"
             else "/bin");
       begin
          Ada.Environment_Variables.Set

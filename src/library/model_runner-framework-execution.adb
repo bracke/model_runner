@@ -53,6 +53,7 @@ package body Model_Runner.Framework.Execution is
 
    use Ada.Strings.Unbounded;
    use type Ada.Calendar.Time;
+   use type Hostkit.Host.Kind;
 
    package E renames Model_Runner.Errors;
 
@@ -64,7 +65,7 @@ package body Model_Runner.Framework.Execution is
    --  either view and must remain eligible for command resolution.
    function Is_Absolute (Path : String) return Boolean
    is (GNAT.OS_Lib.Is_Absolute_Path (Path)
-       or else (GNAT.OS_Lib.Directory_Separator = '\'
+       or else (Hostkit.Host.Current = Hostkit.Host.Windows
                 and then Path'Length >= 3
                 and then Path (Path'First + 1) = ':'
                 and then Path (Path'First + 2) in '/' | '\'));
@@ -74,7 +75,7 @@ package body Model_Runner.Framework.Execution is
    --  semicolon-separated Windows path.  Splitting that PATH at ':' treats a
    --  drive letter as a separator and leaves every program unresolved.
    Native_Path_Separator : constant Character :=
-     (if GNAT.OS_Lib.Directory_Separator = '\' then ';'
+     (if Hostkit.Host.Current = Hostkit.Host.Windows then ';'
       else GNAT.OS_Lib.Path_Separator);
 
    --  Resolve the command before env clears PATH. This matters especially on
@@ -106,7 +107,7 @@ package body Model_Runner.Framework.Execution is
                      --  And with the suffix a program has where one is
                      --  named so -- env.exe -- as the path search adds it.
                      for Suffix of Name_Lists.Vector'
-                       (if GNAT.OS_Lib.Directory_Separator = '\' then ["", ".exe"] else [""])
+                       (if Hostkit.Host.Current = Hostkit.Host.Windows then ["", ".exe"] else [""])
                      loop
                         declare
                            Candidate : constant String := Hostkit.Fs.Join (Folder, Name & Suffix);
