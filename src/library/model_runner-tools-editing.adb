@@ -38,6 +38,7 @@ package body Model_Runner.Tools.Editing is
 
    function On_Disk (Base, Path : String) return String
    is (if Base = "" or else Path = "" or else Path (Path'First) = '/'
+          or else Hostkit.Fs.Has_Windows_Root (Path)
        then Path
        elsif Path = "." then Base
        else Base & "/" & Path);

@@ -5473,7 +5473,9 @@ package body Tests.Tools_Cases is
               "whether a tool or a finding asks the graph was misjudged");
 
       --  Editing: a path on disk, a durable change's note, declarations.
-      Assert (Ed.On_Disk ("/b", "x/y") = "/b/x/y" and then Ed.On_Disk ("", "x") = "x",
+      Assert (Ed.On_Disk ("/b", "x/y") = "/b/x/y" and then Ed.On_Disk ("", "x") = "x"
+              and then Ed.On_Disk ("/b", "C:\\x") = "C:\\x"
+              and then Ed.On_Disk ("/b", "\\\\server\\share\\x") = "\\\\server\\share\\x",
               "a path was not placed on disk as said");
       Assert (Ed.Kept_Note ((others => <>)) = "", "a durable change was given a note");
       Assert (Ed.Declarations_In ("procedure A;" & LF & "function B return X;" & LF & "C := 1;" & LF, 1, 3)
