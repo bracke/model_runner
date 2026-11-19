@@ -11,6 +11,7 @@ with Ada.Streams.Stream_IO;
 with Ada.Text_IO;
 
 with Zlib;
+with Jsonlib.Serializers;
 
 with Ada.Environment_Variables;
 
@@ -3827,6 +3828,8 @@ package body Tests.Tools_Cases is
          declare
             Listed  : constant String := Placed.Stamp ("list_directory", "{""path"": "".""}");
             Notes   : constant String := Ada.Directories.Full_Name ("obj") & "/tools-notes";
+            Retrieve_Arguments : constant String :=
+              "{""folder"": """ & Jsonlib.Serializers.Escape (Notes) & """, ""query"": ""x""}";
          begin
             Ada.Directories.Create_Path (Tree & "/out");
             Assert (Listed /= Placed.Stamp ("list_directory", "{""path"": "".""}"),
@@ -3841,11 +3844,10 @@ package body Tests.Tools_Cases is
             end if;
             Ada.Directories.Create_Path (Notes);
             declare
-               Before : constant String :=
-                 Placed.Stamp ("retrieve", "{""folder"": """ & Notes & """, ""query"": ""x""}");
+               Before : constant String := Placed.Stamp ("retrieve", Retrieve_Arguments);
             begin
                Put_Bytes (Notes & "/note.txt", "a note");
-               Assert (Before /= Placed.Stamp ("retrieve", "{""folder"": """ & Notes & """, ""query"": ""x""}"),
+               Assert (Before /= Placed.Stamp ("retrieve", Retrieve_Arguments),
                        "a note added to the folder retrieve reads left its stamp as it was");
             end;
             Ada.Directories.Delete_Tree (Notes);
