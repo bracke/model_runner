@@ -3836,6 +3836,9 @@ package body Tests.Tools_Cases is
             Assert (Listed /= Placed.Stamp ("list_directory", "{""path"": "".""}"),
                     "a dot-named file made beside a listing left its stamp as it was");
             Ada.Directories.Delete_File (Tree & "/.env");
+            if Ada.Directories.Exists (Notes) then
+               Ada.Directories.Delete_Tree (Notes);
+            end if;
             Ada.Directories.Create_Path (Notes);
             declare
                Before : constant String :=

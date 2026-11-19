@@ -1271,7 +1271,7 @@ package body Tests.Code_Health_Cases is
 
       Runner.Run
         ("shell", "{""command"":""printf 'package Generated is end Generated;' > "
-         & Hostkit.Shell.Quote
+         & Hostkit.Shell.Sh_Quote
              (Shell_Path
                 (Hostkit.Fs.Join
                    (Hostkit.Fs.Join (Root, "src"), "generated.ads")))

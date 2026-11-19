@@ -3,6 +3,7 @@ with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
 with Hostkit.Fs;
+with Hostkit.Path_Text;
 
 with Model_Runner.Platform;
 
@@ -43,14 +44,17 @@ package body Model_Runner.CLI.Instructions is
          declare
             Folder : constant String := To_String (Here);
             File   : constant String := Hostkit.Fs.Join (Folder, File_Name);
+            Parent : constant String := Hostkit.Path_Text.Parent (Folder);
          begin
             if Ada.Directories.Exists (File) and then Up < Upward'Last then
                Up := Up + 1;
                Upward (Up) := To_Unbounded_String (File);
             end if;
-            exit when Folder = "/" or else Folder = "";
-            Here := To_Unbounded_String (Ada.Directories.Containing_Directory (Folder));
-            exit when To_String (Here) = Folder;
+            --  Parent is empty at both POSIX and Windows roots.  Asking
+            --  Ada.Directories for the parent of a drive root can raise on
+            --  Windows and used to discard the gathered instruction list.
+            exit when Parent = "" or else Parent = Folder;
+            Here := To_Unbounded_String (Parent);
          end;
       end loop;
       for Index in reverse 1 .. Up loop

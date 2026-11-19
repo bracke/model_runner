@@ -16641,22 +16641,29 @@ package body Tests.Framework_Cases is
             Dirs.Create_Path (Folder);
             Put_File (Folder & "/a.rec", "a record");
             Ignored := Hostkit.Fs.Create_Link (Away, Folder & "/held.lnk");
-            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
-            S.Snapshot_State (Store, Taken);
-            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
-            Put_File (Folder & "/b.rec", "made since");
-            S.Restore_State (Store, Taken, Changed, Left);
-            Assert (Dirs.Exists (Folder & "/a.rec") and then Dirs.Exists (Folder & "/b.rec")
-                    and then Hostkit.Fs.Is_Link (Folder & "/held.lnk"),
-                    "a folder the snapshot could not list was emptied at the restore");
-            Ignored := Hostkit.Fs.Delete_Link (Folder & "/held.lnk");
-            Dirs.Delete_Tree (Folder);
-            Ignored := Hostkit.Metadata.Set_Permissions (State, 8#000#);
-            S.Snapshot_State (Store, Taken);
-            Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
-            S.Restore_State (Store, Taken, Changed, Left);
-            Assert (Dirs.Exists (State & "/tasks") and then not Left.Is_Empty,
-                    "a state the snapshot could not list was emptied at the restore");
+            if Hostkit.Host.Current = Hostkit.Host.Windows then
+               --  Windows permission bits do not make these directories
+               --  unlistable, so neither POSIX failure path can be induced.
+               Ignored := Hostkit.Fs.Delete_Link (Folder & "/held.lnk");
+               Dirs.Delete_Tree (Folder);
+            else
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
+               S.Snapshot_State (Store, Taken);
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
+               Put_File (Folder & "/b.rec", "made since");
+               S.Restore_State (Store, Taken, Changed, Left);
+               Assert (Dirs.Exists (Folder & "/a.rec") and then Dirs.Exists (Folder & "/b.rec")
+                       and then Hostkit.Fs.Is_Link (Folder & "/held.lnk"),
+                       "a folder the snapshot could not list was emptied at the restore");
+               Ignored := Hostkit.Fs.Delete_Link (Folder & "/held.lnk");
+               Dirs.Delete_Tree (Folder);
+               Ignored := Hostkit.Metadata.Set_Permissions (State, 8#000#);
+               S.Snapshot_State (Store, Taken);
+               Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
+               S.Restore_State (Store, Taken, Changed, Left);
+               Assert (Dirs.Exists (State & "/tasks") and then not Left.Is_Empty,
+                       "a state the snapshot could not list was emptied at the restore");
+            end if;
          exception
             when others =>
                Ignored := Hostkit.Metadata.Set_Permissions (State, 8#755#);
