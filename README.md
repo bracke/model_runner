@@ -2294,21 +2294,23 @@ already runs, or every check fails to start one.
 
 ## Not implemented
 
-Named in the specification, absent here:
+No item is currently listed here.
 
-- **Hand-written vector code or intrinsics.** The kernels are ordinary Ada and
-  the compiler vectorizes them; there is no assembly in this repository. That
-  is a fact about the code and not a rule: machine code insertions are an Ada
-  feature and a check used to refuse them, which guarded this sentence rather
-  than anything about the program. What the release checklist does hold is
-  that no source in another language lives here, which is a different
-  question -- and one `src/shaders/row_product.comp` answers with a yes: it is
-  GLSL, because a compute shader has to be written in a language a graphics
-  driver's compiler reads. What the checklist refuses is compiled code in
-  another language -- C, C++, assembly -- and it holds the shader to something
-  stricter instead: the source's digest is recorded beside the compiled form,
-  so a shader edited and not recompiled fails the checklist rather than going
-  on running the old one.
+## Native SIMD
+
+The processor backend includes hand-written SIMD kernels in native Ada through
+`System.Machine_Code`: x86-64-v3 variants use AVX2, FMA and F16C, and
+x86-64-v4 variants add AVX-512 VNNI byte products. Runtime dispatch selects a
+wide kernel only when the platform has positively identified the required host
+features; the portable scalar path remains the fallback. Equivalence tests run
+the scalar and vector implementations over the same inputs, including half,
+floating-point and quantized products.
+
+There is no separately compiled C, C++ or assembly source in the repository.
+`src/shaders/row_product.comp` is GLSL because the graphics driver compiles the
+compute shader. Its source digest is recorded beside the compiled form, so an
+edited shader that has not been recompiled fails the release check instead of
+silently running the old binary.
 
 ## Speed
 
@@ -8289,9 +8291,10 @@ a four-instruction loop waiting for the next job, which issues at nearly four
 a cycle and has nothing to do with the kernel. `### The generating kernel has
 no slack` below has the correction and the measurement that settles it: one
 worker reads this run at 16 GB/s and issues 3.46 instructions a cycle, three
-workers reach 39 GB/s, and four to seven add nothing at all. What is left there is a gap in the kernels --
-ordinary Ada compiled for baseline x86-64, which `## Not implemented` says
-and this measures -- rather than a gap in what the program is doing.
+workers reach 39 GB/s, and four to seven add nothing at all. What is left there
+is a gap in kernel throughput rather than a gap in what the program is doing.
+The native SIMD paths described above narrow it while retaining the portable
+fallback.
 
 The prompt is the other kind, and the device row has just stopped being an
 example of it. A batch here shares one reading of the weights between the

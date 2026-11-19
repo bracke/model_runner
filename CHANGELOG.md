@@ -12,8 +12,12 @@ Keep a Changelog and the project uses semantic versioning.
   options cover auxiliary GGUF shards, panel caches, device selection and
   budgets, deadlines, output limits and cooperative cancellation; typed
   results distinguish normal, cancelled, timed-out, bounded and failed
-  completions. Deterministic AUnit cases exercise lifecycle, reuse,
-  finalization and failure paths.
+  completions. It also exposes reusable prepared schemas and records artifact
+  provenance, including an explicitly verified model SHA-256 digest.
+  Hash progress is an explicit model-file operation rather than an ordinary
+  load stage in CLI traces.
+  Deterministic AUnit cases exercise lifecycle, reuse, finalization and
+  failure paths.
 - **Native model execution and artifact compatibility enhancements.** Explicit auxiliary GGUF
   shards can supply PLE/engram tensors and participate in panel-cache
   identity; packed device KV caches include OCP E4M3; mixtures can retain a
@@ -49,6 +53,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Native SIMD support is documented as implemented.** The processor backend
+  has native Ada AVX2/FMA/F16C and AVX-512 VNNI kernels, selected only after
+  positive host-feature detection, with portable fallbacks and equivalence
+  tests; stale contrary statements in the README and support matrix have been
+  corrected.
 - **Model-store paths are recognized portably on Windows.** Model listings use
   the same platform-resolved home model directory as storage and normalized
   paths when identifying the per-user model store.

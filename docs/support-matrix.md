@@ -445,7 +445,7 @@ a partition are what `cpu` has and what `reference` deliberately has not.
 
 A locale this build does not carry falls back to `en`. When it was named on the command line that is reported, at any verbosity: a request that was not honoured is not progress chatter. A locale taken from the environment reports only under `--verbose`.
 
-## Not implemented
+## Native processor kernels
 
 Nothing remains from the specification's tooling list: the release checklist is
 `tools/bin/check_all` and the archive is `tests package`.
@@ -459,10 +459,12 @@ per-element rounding every other format already had. The measurement that
 reversed the earlier decision is in the README, with the rest of the kernel
 figures.
 
-The kernels are vectorized by the compiler from ordinary Ada, with no
-intrinsics, no assembly and no target-specific flags; `-march=native` and
-`-march=x86-64-v3` both measured slower than the baseline build, so neither is
-used. Weights are not repacked.
+The portable kernels are ordinary Ada. Native Ada machine-code insertions add
+x86-64-v3 AVX2/FMA/F16C and x86-64-v4 AVX-512 VNNI variants, selected only
+after positive host-feature detection; otherwise execution stays on the
+portable path. The project compiles the target-specific variants separately,
+and equivalence tests compare them with the portable results. Weights may also
+be repacked into row panels for the product shape that benefits from them.
 
 Kernel measurements are in the README and only there. They were carried in both
 places, and when a measuring fault was found and corrected -- the benchmark was

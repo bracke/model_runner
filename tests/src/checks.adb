@@ -4412,6 +4412,7 @@ package body Checks is
          Body_Text : constant String :=
            Contents ("src/library/model_runner-generation.adb")
            & Unit_Contents ("src/library/model_runner-llama.adb")
+           & Contents ("src/library/model_runner-inference.adb")
            & Contents ("src/library/model_runner-gguf-containers-reader.adb")
            & Execution_Contents;
          Named : Natural := 0;

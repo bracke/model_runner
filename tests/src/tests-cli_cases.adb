@@ -5755,8 +5755,10 @@ package body Tests.CLI_Cases is
       Model_Runner.Localization.Open
         (Catalog, Model_Runner.Platform.Catalog_Path, "en");
 
-      --  Every load stage this build can report has a line of its own, and a
-      --  verbose run reaches all of them.
+      --  Every load stage this build can report has a line of its own. A
+      --  verbose run reaches every ordinary loading stage; Hashing_Model is
+      --  reached only by the public API's explicit SHA256 operation and is
+      --  exercised by the public inference case.
       --
       --  With --repack, because one stage is published only when repacking
       --  was asked for. A run without it would reach every stage but that
@@ -5781,8 +5783,10 @@ package body Tests.CLI_Cases is
                        "the load stage "
                        & Model_Runner.Progress.Load_Stage'Image (Stage)
                        & " has no message of its own");
-               Assert (Project_Tools.Text.Contains (Screen, Said),
-                       "a verbose run did not report " & Said);
+               if Stage not in Model_Runner.Progress.Hashing_Model then
+                  Assert (Project_Tools.Text.Contains (Screen, Said),
+                          "a verbose run did not report " & Said);
+               end if;
             end;
          end loop;
       end;

@@ -15,12 +15,14 @@ with Model_Runner.Text;
 --  needs to be task safe if the caller shares it between sessions.
 package Model_Runner.Progress is
 
-   --  Stages of the model-loading pipeline, in the order they occur.
+   --  Stages of model loading and explicit model-file operations.
    --  Repacking_Weights is published only when repacking was asked for, and
    --  then for as long as it takes to decode every matrix -- about ten
    --  seconds for a one-gigabyte model. Without a stage of its own the trace
    --  went from reading tensors to finalizing with nothing in between, which
    --  was the longest silence in a load and the least explained.
+   --  Hashing_Model belongs to the explicit SHA256 operation and is not
+   --  published by an ordinary load.
    type Load_Stage is
      (Opening_Model,
       Reading_Header,
