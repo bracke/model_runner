@@ -46,10 +46,7 @@ package body Model_Runner.CLI.Execute.Models_Command is
    --  home shown as ~, ahead of each name.
    function Other_Label return String is
       Other : constant String := Model_Runner.Platform.Other_Models_Directory;
-      Home  : constant String :=
-        (if Model_Runner.Platform.Environment_Value ("HOME") /= ""
-         then Model_Runner.Platform.Environment_Value ("HOME")
-         else Model_Runner.Platform.Environment_Value ("USERPROFILE"));
+      Home  : constant String := Hostkit.Fs.Home_Directory;
       Home_Models : constant String :=
         (if Home = "" then "" else Hostkit.Fs.Join (Home, "models"));
    begin
