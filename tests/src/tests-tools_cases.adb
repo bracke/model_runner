@@ -4071,7 +4071,10 @@ package body Tests.Tools_Cases is
       begin
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
          for Line in 1 .. 32 * 1024 loop
-            Ada.Text_IO.Put_Line (File, [1 .. 63 => 'x']);
+            --  Put_Line writes CRLF on Windows and LF elsewhere: keep each
+            --  record at 64 bytes so the file is exactly two megabytes.
+            Ada.Text_IO.Put_Line
+              (File, [1 .. (if Hostkit.Host."=" (Hostkit.Host.Current, Hostkit.Host.Windows) then 62 else 63) => 'x']);
          end loop;
          Ada.Text_IO.Close (File);
          declare
