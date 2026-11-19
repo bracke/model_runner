@@ -740,7 +740,7 @@ package body Model_Runner.Platform is
    -----------------------
 
    --  The folder of models kept by hand, where the home has one.
-   function Home_Models return String is
+   function Home_Models_Directory return String is
       use type Ada.Directories.File_Kind;
       Home : constant String := Home_Directory;
    begin
@@ -753,7 +753,7 @@ package body Model_Runner.Platform is
    exception
       when others =>
          return "";
-   end Home_Models;
+   end Home_Models_Directory;
 
    --  The data home's models, as the store was before ~/models was taken.
    function Data_Models return String is (Data_Directory ("", "", "models"));
@@ -764,7 +764,7 @@ package body Model_Runner.Platform is
    begin
       return (if Named /= "" then Named
               elsif Set /= "" then Set
-              elsif Home_Models /= "" then Home_Models
+              elsif Home_Models_Directory /= "" then Home_Models_Directory
               else Data_Models);
    end Models_Directory;
 
@@ -775,7 +775,10 @@ package body Model_Runner.Platform is
    function Other_Models_Directory return String is
       use type Ada.Directories.File_Kind;
       Store : constant String := Models_Directory;
-      Other : constant String := (if Store /= "" and then Store = Home_Models then Data_Models else Home_Models);
+      Other : constant String :=
+        (if Store /= "" and then Store = Home_Models_Directory
+         then Data_Models
+         else Home_Models_Directory);
    begin
       if Other = "" or else not Ada.Directories.Exists (Other)
         or else Ada.Directories.Kind (Other) /= Ada.Directories.Directory

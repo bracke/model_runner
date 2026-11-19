@@ -991,7 +991,8 @@ package body Tests.Platform_Cases is
                Ada.Text_IO.Close (File);
             end Touch;
 
-            Store_Kept, Other_Kept, Found_Kept, Found_Bare : Unbounded_String;
+            Home_Kept, Store_Kept, Other_Kept              : Unbounded_String;
+            Found_Kept, Found_Bare                         : Unbounded_String;
             Found_Old, Found_Both, Store_Data, Other_Data  : Unbounded_String;
             Store_Named, Other_Named                       : Unbounded_String;
             Found_Moved                                    : Unbounded_String;
@@ -1013,6 +1014,7 @@ package body Tests.Platform_Cases is
             Env.Set ("HOME", Root);
             Env.Set ("XDG_DATA_HOME", Data_Root);
             Env.Clear ("MODEL_RUNNER_MODELS");
+            Home_Kept := To_Unbounded_String (P.Home_Models_Directory);
             Store_Kept := To_Unbounded_String (P.Models_Directory);
             Other_Kept := To_Unbounded_String (P.Other_Models_Directory);
             Found_Kept := To_Unbounded_String (P.Resolve_Model_Path ("kept.gguf"));
@@ -1038,6 +1040,10 @@ package body Tests.Platform_Cases is
                end if;
             end loop;
             Ada.Directories.Delete_Tree (Root);
+            AUnit.Assertions.Assert
+              (To_String (Home_Kept) = Kept,
+               "the home model directory was not the platform-resolved folder: "
+               & To_String (Home_Kept));
             AUnit.Assertions.Assert (To_String (Store_Kept) = Kept and then To_String (Other_Kept) = Data,
                                      "~/models was not the store, the data home's after it: "
                                      & To_String (Store_Kept) & " " & To_String (Other_Kept));

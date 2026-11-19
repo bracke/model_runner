@@ -198,6 +198,13 @@ package Model_Runner.Platform is
    --  @return The directory, or an empty string when none is known.
    function Models_Directory return String;
 
+   --  The conventional per-user model folder, ~/models, when it exists.
+   --  This is the same platform-resolved directory considered by
+   --  Models_Directory and Other_Models_Directory.
+   --
+   --  @return The directory; empty where no home model folder exists.
+   function Home_Models_Directory return String;
+
    --  The other folder of models, searched after the store: the data
    --  home's models where ~/models is the store -- what was downloaded
    --  before ~/models was made -- and ~/models where the store is named

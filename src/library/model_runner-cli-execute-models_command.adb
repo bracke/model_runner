@@ -9,7 +9,6 @@ with Ada.Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
-with Hostkit.Fs;
 with Model_Runner.Hub;
 with Model_Runner.Hub.Store;
 with Model_Runner.Platform;
@@ -46,9 +45,8 @@ package body Model_Runner.CLI.Execute.Models_Command is
    --  home shown as ~, ahead of each name.
    function Other_Label return String is
       Other : constant String := Model_Runner.Platform.Other_Models_Directory;
-      Home  : constant String := Hostkit.Fs.Home_Directory;
       Home_Models : constant String :=
-        (if Home = "" then "" else Hostkit.Fs.Join (Home, "models"));
+        Model_Runner.Platform.Home_Models_Directory;
    begin
       return
         (if Home_Models /= "" and then Other /= ""

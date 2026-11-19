@@ -50,8 +50,8 @@ Keep a Changelog and the project uses semantic versioning.
 ### Changed
 
 - **Model-store paths are recognized portably on Windows.** Model listings use
-  the host platform's home directory and normalized paths when identifying the
-  per-user model store.
+  the same platform-resolved home model directory as storage and normalized
+  paths when identifying the per-user model store.
 - **Expert residency is manual only.** `--expert-cache BYTES` remains an
   explicit opt-in for a run and for the speed and external-model harnesses,
   with physical residency counters available for inspection. The automatic
