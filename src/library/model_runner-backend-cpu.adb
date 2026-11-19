@@ -1417,6 +1417,18 @@ package body Model_Runner.Backend.CPU is
          Ada.Synchronous_Task_Control.Set_True (Item.Waking.Gate (Index));
       end loop;
 
+      --  Most pools live in a declaring frame, whose master waits for the
+      --  worker tasks.  An embedded inference session owns its pool through
+      --  an access value, however, so Close must also be a join point before
+      --  that storage can be reclaimed or reused by another pool.
+      if Item.Started then
+         for Index in 1 .. Item.Workers loop
+            while not Item.Team (Index)'Terminated loop
+               delay 0.0;
+            end loop;
+         end loop;
+      end if;
+
       Free_Packed (Item);
    exception
       when others =>

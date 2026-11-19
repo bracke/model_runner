@@ -22273,6 +22273,10 @@ package body Tests.Inference_Cases is
    begin
       Tiny_Model.Write (Model, Format => Tiny_Model.Q8_0);
 
+      I.Open (Item, "obj/no-such-public-model.gguf", Status => Status);
+      Assert (E.Is_Error (Status) and then not I.Is_Open (Item),
+              "a missing public model was not a typed load failure");
+
       Options.Auxiliary_Count := 1;
       Options.Auxiliary (1) := Model_Runner.Text.To_Bounded
         ("obj/no-such-auxiliary.gguf");
@@ -22307,6 +22311,106 @@ package body Tests.Inference_Cases is
       I.Close (Item);
    end Public_Inference_Load_Controls_Reach_The_Load;
 
+   ------------------------------------------------------
+   -- Public_Inference_Caches_Schema_And_Reports_Identity --
+   ------------------------------------------------------
+
+   procedure Public_Inference_Caches_Schema_And_Reports_Identity
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package I renames Model_Runner.Inference;
+      use type I.Completion_State;
+      use type Interfaces.Unsigned_64;
+      use type Model_Runner.Progress.Load_Stage;
+
+      type Watcher is limited new Model_Runner.Progress.Observer with record
+         Loads       : Natural := 0;
+         Generations : Natural := 0;
+         Hashes      : Natural := 0;
+      end record;
+
+      overriding procedure Notify
+        (Self : in out Watcher; Item : Model_Runner.Progress.Event);
+
+      overriding procedure Notify
+        (Self : in out Watcher; Item : Model_Runner.Progress.Event) is
+      begin
+         case Item.Kind is
+            when Model_Runner.Progress.Load_Event =>
+               Self.Loads := Self.Loads + 1;
+               if Item.Load = Model_Runner.Progress.Hashing_Model then
+                  Self.Hashes := Self.Hashes + 1;
+               end if;
+            when Model_Runner.Progress.Generation_Event =>
+               Self.Generations := Self.Generations + 1;
+         end case;
+      end Notify;
+
+      Model    : constant String := "obj/public-inference-identity.gguf";
+      Item     : I.Session;
+      Schema   : I.Prepared_Schema;
+      Status   : E.Error_Info;
+      Outcome  : I.Completion;
+      Seen     : aliased Watcher;
+      Open_Options : constant I.Open_Options :=
+        (Observer => Seen'Unchecked_Access, others => <>);
+      Run_Options  : I.Completion_Options :=
+        (Maximum_Tokens => 0, Maximum_Output_Bytes => 16,
+         Observer => Seen'Unchecked_Access, others => <>);
+      Identity : I.Model_Provenance;
+      First_SHA, Again_SHA : I.SHA256_Hex;
+      Hash_Cancel : aliased Model_Runner.Cancellation.Token;
+   begin
+      Tiny_Model.Write (Model, Byte_Pair => True);
+      I.Open (Item, Model, Open_Options, Status);
+      Assert (E.Is_Ok (Status) and then Seen.Loads > 0,
+              "the public loader did not publish progress");
+
+      I.Prepare (Schema, "{""const"":12}", Status);
+      Assert (E.Is_Ok (Status) and then I.Is_Ready (Schema),
+              "the reusable public schema did not compile");
+      I.Complete (Item, "ab", Schema, Run_Options, Outcome);
+      Assert (Outcome.State = I.Completion_Incomplete,
+              "a zero-token schema completion was reported ready");
+
+      Run_Options.Maximum_Tokens := 4;
+      I.Complete (Item, "ab", Schema, Run_Options, Outcome);
+      Assert (Outcome.State = I.Completion_Ready and then Seen.Generations > 0,
+              "the prepared schema or generation observer was not reused");
+
+      Identity := I.Provenance (Item);
+      Assert
+        (Ada.Strings.Unbounded.To_String (Identity.Canonical_Path) =
+           Ada.Directories.Full_Name (Model)
+         and then Ada.Strings.Unbounded.To_String (Identity.Name) = "tiny"
+         and then Ada.Strings.Unbounded.To_String (Identity.Architecture) = "llama"
+         and then Identity.Fingerprint /= 0 and then Identity.Bytes > 0
+         and then Identity.Parts = 1,
+         "the public model provenance was incomplete");
+
+      I.SHA256
+        (Item, First_SHA, Status, Observer => Seen'Unchecked_Access);
+      Assert
+        (E.Is_Ok (Status) and then First_SHA /= [1 .. 64 => '0']
+         and then Seen.Hashes >= 2,
+         "the explicit public model digest or its progress failed");
+      I.SHA256 (Item, Again_SHA, Status);
+      Assert (E.Is_Ok (Status) and then Again_SHA = First_SHA,
+              "the public model digest was not stable");
+      Hash_Cancel.Request;
+      I.SHA256
+        (Item, Again_SHA, Status, Cancel => Hash_Cancel'Unchecked_Access);
+      Assert
+        (Status.Code = E.Generation_Cancelled
+         and then Again_SHA = [1 .. 64 => '0'],
+         "the public model digest ignored cancellation");
+
+      I.Close (Schema);
+      Assert (not I.Is_Ready (Schema), "closing a prepared schema left it ready");
+      I.Close (Item);
+   end Public_Inference_Caches_Schema_And_Reports_Identity;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -22319,6 +22423,9 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Public_Inference_Load_Controls_Reach_The_Load'Access,
          "auxiliary shards, cancellation and finalization reach the public load boundary");
+      Register_Routine
+        (T, Public_Inference_Caches_Schema_And_Reports_Identity'Access,
+         "prepared schemas, progress and model provenance cross the public boundary");
       Register_Routine
         (T, Tokenizer_Matches_An_Independent_One'Access,
          "the tokenizer agrees with one written from the description");

@@ -301,6 +301,10 @@ package Tiny_Model is
    --  @param Shape Which shape, which decides the window, the experts and
    --    the stretch, exactly as it does for a fixture built in memory.
    --  @param Byte_Pair Write the alternate byte-pair vocabulary.
+   --  @param Forced_Output Optional ordinary token containing a complete
+   --    schema-constrained test response. Empty keeps the normal vocabulary.
+   --  @param Forced_Output_Parts Number of sequential ordinary tokens used
+   --    for Forced_Output, up to the fixture's thirteen non-control tokens.
    procedure Write
      (Path           : String;
       Adds_Beginning : Boolean := True;
@@ -308,7 +312,9 @@ package Tiny_Model is
       Format         : Weight_Format := F32;
       Kind           : Fixture_Architecture := Llama;
       Shape          : Fixture_Shape := Plain;
-      Byte_Pair      : Boolean := False);
+      Byte_Pair      : Boolean := False;
+      Forced_Output  : String := "";
+      Forced_Output_Parts : Positive := 1);
 
    --  Build the fixture in memory.
    --
@@ -458,6 +464,10 @@ package Tiny_Model is
    --  @param Sampled Whether the file says it is sampled so: temperature
    --    0.6 and top_k 20, as qwen3's do, and top_p 0.8, apart from this
    --    program's own.
+   --  @param Forced_Output Optional ordinary token containing a complete
+   --    schema-constrained test response. Empty keeps the normal vocabulary.
+   --  @param Forced_Output_Parts Number of sequential ordinary tokens used
+   --    for Forced_Output, up to the fixture's thirteen non-control tokens.
    procedure Build
      (Result         : out Model_Runner.Bytes.Byte_Array_Access;
       Format         : Weight_Format := F32;
@@ -499,6 +509,8 @@ package Tiny_Model is
       Add_Sep_Token   : Integer := -1;
       Unit_Ssm_Norms  : Boolean := False;
       Rare_Form       : Boolean := False;
-      Sampled         : Boolean := False);
+      Sampled         : Boolean := False;
+      Forced_Output   : String := "";
+      Forced_Output_Parts : Positive := 1);
 
 end Tiny_Model;

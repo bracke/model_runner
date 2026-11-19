@@ -1,0 +1,15 @@
+with "inference/model_runner_inference.gpr";
+
+project Model_Runner_Test_Support is
+   for Languages use ("Ada");
+   for Source_Dirs use ("tests/src");
+   for Source_Files use
+     ("fixtures.ads", "fixtures.adb", "tiny_model.ads", "tiny_model.adb");
+   for Object_Dir use "tests/obj-support";
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        ("-gnat2022", "-gnatyM120", "-gnata", "-gnatwa", "-gnatVa");
+   end Compiler;
+end Model_Runner_Test_Support;

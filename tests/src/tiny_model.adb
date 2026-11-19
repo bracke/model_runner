@@ -93,7 +93,9 @@ package body Tiny_Model is
       Add_Sep_Token   : Integer := -1;
       Unit_Ssm_Norms  : Boolean := False;
       Rare_Form       : Boolean := False;
-      Sampled         : Boolean := False)
+      Sampled         : Boolean := False;
+      Forced_Output   : String := "";
+      Forced_Output_Parts : Positive := 1)
    is
       --  Rows of the embedding and of the output, the padding among them.
       Rows_Of_Words : constant Natural := Vocabulary + Padding;
@@ -1216,6 +1218,52 @@ package body Tiny_Model is
             end loop;
             Fixtures.End_Array (Builder);
          end;
+
+      elsif Forced_Output /= "" then
+         if Forced_Output_Parts > Vocabulary - 3
+           or else Forced_Output_Parts > Forced_Output'Length
+         then
+            raise Constraint_Error with "forced output has too many token parts";
+         end if;
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.tokens", G.Value_String, Vocabulary);
+         Fixtures.String_Element (Builder, "<unk>");
+         Fixtures.String_Element (Builder, "<s>");
+         Fixtures.String_Element (Builder, "</s>");
+         for Part in 1 .. Forced_Output_Parts loop
+            declare
+               First : constant Positive :=
+                 Forced_Output'First
+                 + (Part - 1) * Forced_Output'Length / Forced_Output_Parts;
+               Last : constant Positive :=
+                 Forced_Output'First
+                 + Part * Forced_Output'Length / Forced_Output_Parts - 1;
+            begin
+               Fixtures.String_Element (Builder, Forced_Output (First .. Last));
+            end;
+         end loop;
+         for Index in Forced_Output_Parts + 3 .. Vocabulary - 1 loop
+            Fixtures.String_Element
+              (Builder, "[UNUSED" & Natural'Image (Index) & "]");
+         end loop;
+         Fixtures.End_Array (Builder);
+
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.scores", G.Value_Float32, Vocabulary);
+         for Index in 0 .. Vocabulary - 1 loop
+            Fixtures.Float_Element (Builder, 0.0);
+         end loop;
+         Fixtures.End_Array (Builder);
+
+         Fixtures.Begin_Array
+           (Builder, "tokenizer.ggml.token_type", G.Value_Int32, Vocabulary);
+         Fixtures.Int32_Element (Builder, 2);   --  <unk>
+         Fixtures.Int32_Element (Builder, 3);   --  <s>
+         Fixtures.Int32_Element (Builder, 3);   --  </s>
+         for Index in 4 .. Vocabulary loop
+            Fixtures.Int32_Element (Builder, 1);
+         end loop;
+         Fixtures.End_Array (Builder);
 
       elsif Byte_Pair then
          declare
@@ -2360,7 +2408,9 @@ package body Tiny_Model is
       Format : Weight_Format := F32;
       Kind : Fixture_Architecture := Llama;
       Shape : Fixture_Shape := Plain;
-      Byte_Pair : Boolean := False) is
+      Byte_Pair : Boolean := False;
+      Forced_Output : String := "";
+      Forced_Output_Parts : Positive := 1) is
       use Ada.Streams;
       Image  : Model_Runner.Bytes.Byte_Array_Access;
       Handle : Stream_IO.File_Type;
@@ -2374,6 +2424,8 @@ package body Tiny_Model is
       Build (Image, Format => Format,
              Adds_Beginning => Adds_Beginning, Room => Room, Kind => Kind,
              Byte_Pair => Byte_Pair,
+             Forced_Output => Forced_Output,
+             Forced_Output_Parts => Forced_Output_Parts,
              Window => (if Shape in Windowed | Reaching then 3 else 0),
              Experts => (if Shape = Mixed then 4 else 0),
              Experts_Used => (if Shape = Mixed then 2 else 0),

@@ -35,6 +35,7 @@ package Model_Runner.Progress is
       Preparing_Tensors,
       Repacking_Weights,
       Finalizing_Model,
+      Hashing_Model,
       Model_Ready);
 
    --  Points in a generation request that an observer can react to.

@@ -8,7 +8,9 @@
 /framework/bin/
 /framework/alire/
 /framework/config/
+/inference/obj/
 /tests/obj/
+/tests/obj-support/
 /tests/bin/
 /tests/alire/
 /tests/config/
