@@ -1229,7 +1229,7 @@ package body Model_Runner.Tools.Editing is
       end;
 
       declare
-         Shift : constant Integer :=
+         First_Shift : constant Integer :=
            Indent (U.To_String (File (At_Line))) - Indent (U.To_String (Given.First_Element));
          --  The line ending of the lines replaced, kept: a file of CRLF lines
          --  given new LF lines had two endings.
@@ -1262,6 +1262,15 @@ package body Model_Runner.Tools.Editing is
             declare
                Line : constant String := U.To_String (Fresh (Index));
                Lead : constant Natural := Indent (Line);
+               --  A later line may deliberately stand left of the first.
+               --  Preserve that line's own displacement when it replaces
+               --  an old line; use the first line's displacement only for
+               --  additional lines that have no old counterpart.
+               Shift : constant Integer :=
+                 (if Index <= Natural (Given.Length)
+                  then Indent (U.To_String (File (At_Line + Index - 1)))
+                       - Indent (U.To_String (Given (Index)))
+                  else First_Shift);
             begin
                U.Append (Moved, (if Index = 1 then "" else [1 => ASCII.LF]));
                if Line = "" then
@@ -1327,9 +1336,10 @@ package body Model_Runner.Tools.Editing is
                   & (if Settled_By_Read
                      then ", in more than one place, and edited in the one within the lines you last read"
                      else "")
-                  & (if Shift = 0 then ""
-                     else ", and the new text moved" & Natural'Image (abs Shift) & " space"
-                          & (if abs Shift = 1 then "" else "s") & (if Shift > 0 then " in" else " out")
+                  & (if First_Shift = 0 then ""
+                     else ", and the new text moved" & Natural'Image (abs First_Shift) & " space"
+                          & (if abs First_Shift = 1 then "" else "s")
+                          & (if First_Shift > 0 then " in" else " out")
                           & " to the file's indentation")
                   & "; revision now " & Revision (Whole) & Kept_Note (Put)),
                Changed => True,

@@ -780,8 +780,8 @@ package body Model_Runner.Platform is
       --  ~/ as the shell takes it: the home directory.
       Expanded : constant String :=
         (if Named'Length > 2 and then Named (Named'First .. Named'First + 1) = "~/"
-           and then Hostkit.Fs.Home_Directory /= ""
-         then Hostkit.Fs.Join (Hostkit.Fs.Home_Directory, Named (Named'First + 2 .. Named'Last))
+           and then Home_Directory /= ""
+         then Hostkit.Fs.Join (Home_Directory, Named (Named'First + 2 .. Named'Last))
          else Named);
       --  In the store, then in the other folder of models.
       function Look (Name : String) return String is

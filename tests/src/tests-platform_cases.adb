@@ -972,9 +972,11 @@ package body Tests.Platform_Cases is
       if Model_Runner.Config.Value ("models-dir") = "" then
          declare
             Root  : constant String := Ada.Directories.Full_Name ("obj/models-home");
-            Kept  : constant String := Root & "/models";
-            Data  : constant String := Root & "/data/model_runner/models";
-            Named : constant String := Root & "/named";
+            Kept  : constant String := Hostkit.Fs.Join (Root, "models");
+            Data_Root : constant String := Hostkit.Fs.Join (Root, "data");
+            Data  : constant String :=
+              Hostkit.Fs.Join (Hostkit.Fs.Join (Data_Root, "model_runner"), "models");
+            Named : constant String := Hostkit.Fs.Join (Root, "named");
             type Names is array (1 .. 3) of Unbounded_String;
             Saved : constant Names :=
               [To_Unbounded_String ("HOME"), To_Unbounded_String ("XDG_DATA_HOME"),
@@ -1004,12 +1006,12 @@ package body Tests.Platform_Cases is
             Ada.Directories.Create_Path (Kept);
             Ada.Directories.Create_Path (Data);
             Ada.Directories.Create_Path (Named);
-            Touch (Kept & "/kept.gguf");
-            Touch (Kept & "/both.gguf");
-            Touch (Data & "/both.gguf");
-            Touch (Data & "/old.gguf");
+            Touch (Hostkit.Fs.Join (Kept, "kept.gguf"));
+            Touch (Hostkit.Fs.Join (Kept, "both.gguf"));
+            Touch (Hostkit.Fs.Join (Data, "both.gguf"));
+            Touch (Hostkit.Fs.Join (Data, "old.gguf"));
             Env.Set ("HOME", Root);
-            Env.Set ("XDG_DATA_HOME", Root & "/data");
+            Env.Set ("XDG_DATA_HOME", Data_Root);
             Env.Clear ("MODEL_RUNNER_MODELS");
             Store_Kept := To_Unbounded_String (P.Models_Directory);
             Other_Kept := To_Unbounded_String (P.Other_Models_Directory);
@@ -1019,7 +1021,8 @@ package body Tests.Platform_Cases is
             Found_Both := To_Unbounded_String (P.Resolve_Model_Path ("both.gguf"));
             --  A settings file naming the data home's copy after it moved
             --  into ~/models: found where it is now.
-            Found_Moved := To_Unbounded_String (P.Resolve_Model_Path (Data & "/kept.gguf"));
+            Found_Moved := To_Unbounded_String
+              (P.Resolve_Model_Path (Hostkit.Fs.Join (Data, "kept.gguf")));
             Env.Set ("MODEL_RUNNER_MODELS", Named);
             Store_Named := To_Unbounded_String (P.Models_Directory);
             Other_Named := To_Unbounded_String (P.Other_Models_Directory);
@@ -1038,13 +1041,15 @@ package body Tests.Platform_Cases is
             AUnit.Assertions.Assert (To_String (Store_Kept) = Kept and then To_String (Other_Kept) = Data,
                                      "~/models was not the store, the data home's after it: "
                                      & To_String (Store_Kept) & " " & To_String (Other_Kept));
-            AUnit.Assertions.Assert (To_String (Found_Kept) = Kept & "/kept.gguf"
-                                     and then To_String (Found_Bare) = Kept & "/kept.gguf"
-                                     and then To_String (Found_Old) = Data & "/old.gguf"
-                                     and then To_String (Found_Both) = Kept & "/both.gguf",
+            AUnit.Assertions.Assert
+              (To_String (Found_Kept) = Hostkit.Fs.Join (Kept, "kept.gguf")
+               and then To_String (Found_Bare) = Hostkit.Fs.Join (Kept, "kept.gguf")
+               and then To_String (Found_Old) = Hostkit.Fs.Join (Data, "old.gguf")
+               and then To_String (Found_Both) = Hostkit.Fs.Join (Kept, "both.gguf"),
                                      "a model was not found by its name in the store, then the other folder: "
                                      & To_String (Found_Old) & " " & To_String (Found_Both));
-            AUnit.Assertions.Assert (To_String (Found_Moved) = Kept & "/kept.gguf",
+            AUnit.Assertions.Assert
+              (To_String (Found_Moved) = Hostkit.Fs.Join (Kept, "kept.gguf"),
                                      "a path into the data home's models was not followed to ~/models: "
                                      & To_String (Found_Moved));
             AUnit.Assertions.Assert (To_String (Store_Named) = Named and then To_String (Other_Named) = Kept,

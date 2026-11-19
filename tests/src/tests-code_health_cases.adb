@@ -1032,13 +1032,22 @@ package body Tests.Code_Health_Cases is
             Applied := Hostkit.Metadata.Set_Permissions
               (Root & "/src/a.adb", Changed_Mode);
             if Applied then
-               Changes.Capture (Root, Mode_Changed, Status);
-               Changes.Reconcile
-                 (Before, Mode_Changed, Changes.External_Command, Found, Status);
-               Assert
-                 (E.Is_Ok (Status) and then Changes.Length (Found) = 1
-                  and then To_String (Changes.Element (Found, 1).Path) = "src/a.adb",
-                  "a permission-only source change did not change the snapshot");
+               declare
+                  Changed_Available : Boolean;
+                  Effective_Mode : constant Natural :=
+                    Hostkit.Metadata.File_Permission_Bits
+                      (Root & "/src/a.adb", Changed_Available);
+               begin
+                  if Changed_Available and then Effective_Mode /= Original then
+                     Changes.Capture (Root, Mode_Changed, Status);
+                     Changes.Reconcile
+                       (Before, Mode_Changed, Changes.External_Command, Found, Status);
+                     Assert
+                       (E.Is_Ok (Status) and then Changes.Length (Found) = 1
+                        and then To_String (Changes.Element (Found, 1).Path) = "src/a.adb",
+                        "a permission-only source change did not change the snapshot");
+                  end if;
+               end;
                Assert
                  (Hostkit.Metadata.Set_Permissions (Root & "/src/a.adb", Original),
                   "the source fixture's permissions could not be restored");

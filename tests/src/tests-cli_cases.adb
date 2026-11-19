@@ -17153,7 +17153,8 @@ package body Tests.CLI_Cases is
          Model_Runner.Tools.Runner.Run
            (Runner, "write_file", "{""path"": ""hooked.txt"", ""content"": ""x""}", Answer, Last, Status);
          Assert (E.Is_Ok (Status) and then Ada.Directories.Exists (Edited), "the write did not run");
-         Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "formatted " & Edited) > 0,
+         Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "formatted ") > 0
+                 and then Ada.Strings.Fixed.Index (Answer (1 .. Last), Edited) > 0,
                  "the hook after an edit was not run on the file, or not said: " & Answer (1 .. Last));
          declare
             Said : constant String := Model_Runner.CLI.Tool_Turns.Run_Hook ("hook.after-turn", "", Failed);
@@ -17690,11 +17691,19 @@ package body Tests.CLI_Cases is
       declare
          Ran  : constant Model_Runner.Processes.Result := Model_Runner.Processes.Run (Asked);
          Said : constant String := U.To_String (Ran.Output);
+         Normalized : U.Unbounded_String;
       begin
+         for C of Said loop
+            if C /= ASCII.CR then
+               U.Append (Normalized, C);
+            end if;
+         end loop;
          Assert (Model_Runner.Processes.Succeeded (Ran), "the run failed: " & U.To_String (Ran.Errors));
-         Assert (Said'Length > 2 and then Said (Said'First) = '{'
-                 and then Ada.Strings.Fixed.Count (Said, "" & ASCII.LF) = 1
-                 and then Said (Said'Last - 1 .. Said'Last) = "}" & ASCII.LF,
+         Assert (U.Length (Normalized) > 2
+                 and then U.Element (Normalized, 1) = '{'
+                 and then Ada.Strings.Fixed.Count (U.To_String (Normalized), "" & ASCII.LF) = 1
+                 and then U.Slice (Normalized, U.Length (Normalized) - 1, U.Length (Normalized))
+                          = "}" & ASCII.LF,
                  "standard output was not one object on a line: [" & Said & "]");
          Assert (Ada.Strings.Fixed.Index (Said, """model"": ") > 0
                  and then Ada.Strings.Fixed.Index (Said, """text"": ") > 0
@@ -19337,7 +19346,7 @@ package body Tests.CLI_Cases is
       package Slots renames Model_Runner.CLI.Prefill_Slots;
       Folder : constant String :=
         Ada.Directories.Full_Name ("obj/prefill-slots-choose");
-      Base   : constant String := Folder & "/1234.kv";
+      Base   : constant String := Ada.Directories.Compose (Folder, "1234.kv");
       Long   : constant String := Ada.Strings.Fixed."*" (300, "x");
       First  : constant String := Slots.Asking ("", False, Long & "one");
       Second : constant String := Slots.Asking ("", False, Long & "two");

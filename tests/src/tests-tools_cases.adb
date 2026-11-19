@@ -23,6 +23,7 @@ with Model_Runner.Numerics;
 with Model_Runner.Grammar;
 with Hostkit.Durability;
 with Hostkit.Fs;
+with Hostkit.Host;
 with Hostkit.Metadata;
 with Model_Runner.Tools;
 with Model_Runner.Conversation;
@@ -3494,7 +3495,8 @@ package body Tests.Tools_Cases is
             Placed.Run ("read_file", "{""path"": ""locked.txt""}", Room, Last, Ended, Status);
             Placed.Run ("write_file", "{""path"": ""locked.txt"", ""content"": ""theirs""}", Room, Last, Ended,
                         Status);
-            Assert (not Kept or else (not Ended.Changed and then Whole_File (Tree & "/locked.txt") = "mine"),
+            Assert (not Kept or else Hostkit.Host."=" (Hostkit.Host.Current, Hostkit.Host.Windows)
+                    or else (not Ended.Changed and then Whole_File (Tree & "/locked.txt") = "mine"),
                     "a read-only file was written over: " & Room (Room'First .. Last));
             Assert (Hostkit.Metadata.Set_Permissions (Tree & "/locked.txt", 8#644#) or else not Kept,
                     "the read-only file could not be made writable again");

@@ -53,6 +53,7 @@ package body Model_Runner.Framework.Execution is
 
    use Ada.Strings.Unbounded;
    use type Ada.Calendar.Time;
+   use type Ada.Directories.File_Kind;
    use type Hostkit.Host.Kind;
 
    package E renames Model_Runner.Errors;
@@ -77,6 +78,24 @@ package body Model_Runner.Framework.Execution is
    Native_Path_Separator : constant Character :=
      (if Hostkit.Host.Current = Hostkit.Host.Windows then ';'
       else GNAT.OS_Lib.Path_Separator);
+
+   --  MinGW's Is_Executable_File follows its Unix compatibility view and can
+   --  reject an ordinary native .exe that CreateProcess accepts.  The search
+   --  below has already constrained the candidate to one explicit absolute
+   --  PATH directory, and only adds the native executable suffix on Windows.
+   function Is_Program_File (Path : String) return Boolean is
+   begin
+      if Hostkit.Host.Current = Hostkit.Host.Windows then
+         return Ada.Directories.Exists (Path)
+           and then Ada.Directories.Kind (Path) = Ada.Directories.Ordinary_File;
+      else
+         return GNAT.OS_Lib.Is_Executable_File (Path)
+           and then not GNAT.OS_Lib.Is_Directory (Path);
+      end if;
+   exception
+      when others =>
+         return False;
+   end Is_Program_File;
 
    --  Resolve the command before env clears PATH. This matters especially on
    --  Windows, where the native PATH uses semicolons but the MSYS env utility
@@ -112,9 +131,7 @@ package body Model_Runner.Framework.Execution is
                         declare
                            Candidate : constant String := Hostkit.Fs.Join (Folder, Name & Suffix);
                         begin
-                           if GNAT.OS_Lib.Is_Executable_File (Candidate)
-                             and then not GNAT.OS_Lib.Is_Directory (Candidate)
-                           then
+                           if Is_Program_File (Candidate) then
                               return Candidate;
                            end if;
                         end;

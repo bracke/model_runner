@@ -46,13 +46,22 @@ package body Model_Runner.CLI.Execute.Models_Command is
    --  home shown as ~, ahead of each name.
    function Other_Label return String is
       Other : constant String := Model_Runner.Platform.Other_Models_Directory;
-      Home  : constant String := Hostkit.Fs.Home_Directory;
+      Home  : constant String :=
+        (if Model_Runner.Platform.Environment_Value ("HOME") /= ""
+         then Model_Runner.Platform.Environment_Value ("HOME")
+         else Model_Runner.Platform.Environment_Value ("USERPROFILE"));
+      Home_Models : constant String :=
+        (if Home = "" then "" else Hostkit.Fs.Join (Home, "models"));
    begin
-      return (if Home /= "" and then Other'Length > Home'Length
-                and then Other (Other'First .. Other'First + Home'Length - 1) = Home
-                and then Other (Other'First + Home'Length) = '/'
-              then "~" & Other (Other'First + Home'Length .. Other'Last)
-              else Other) & "/";
+      return
+        (if Home_Models /= "" and then Other /= ""
+           and then Ada.Directories.Full_Name (Other)
+                    = Ada.Directories.Full_Name (Home_Models)
+         then "~/models/"
+         else Other & "/");
+   exception
+      when others =>
+         return Other & "/";
    end Other_Label;
 
    type Name_Array is array (1 .. 500) of Model_Runner.Text.Bounded;
