@@ -497,7 +497,7 @@ package body Model_Runner.Tools.Editing is
       Disk   : constant String :=
         (if Resolved /= "" and then Tree /= "" and then Resolved'Length > Tree'Length
            and then Resolved (Resolved'First .. Resolved'First + Tree'Length - 1) = Tree
-           and then Resolved (Resolved'First + Tree'Length) = '/'
+           and then Resolved (Resolved'First + Tree'Length) in '/' | '\'
          then Resolved else Given);
       Folder : constant String := Ada.Directories.Containing_Directory (Disk);
       --  Hidden beside it, where a crash may leave it, and on the same
@@ -1537,6 +1537,23 @@ package body Model_Runner.Tools.Editing is
       --  as if the file had changed, and gave the task up.
       Read_Revision : constant Boolean :=
         Expected'Length = 16 and then (for all C of Expected => C in '0' .. '9' | 'a' .. 'f');
+
+      --  A model sees read_file's logical LF lines on every host.  Match
+      --  those lines exactly in a CRLF file before falling back to the loose
+      --  indentation matcher, and write new lines with the file's endings.
+      function With_CRLF (Item : String) return String is
+         Result : U.Unbounded_String;
+      begin
+         for Index in Item'Range loop
+            if Item (Index) = ASCII.LF
+              and then (Index = Item'First or else Item (Index - 1) /= ASCII.CR)
+            then
+               U.Append (Result, ASCII.CR);
+            end if;
+            U.Append (Result, Item (Index));
+         end loop;
+         return U.To_String (Result);
+      end With_CRLF;
    begin
       Read_Text (Path, Held, Status, Base);
       --  A file not there is made by write_file: a helper edited one into
@@ -1609,6 +1626,25 @@ package body Model_Runner.Tools.Editing is
             Times   : constant Natural := (if Chosen > 0 then 1 else Times_There);
          begin
             if At_Text = 0 then
+               --  Text_IO and native editors use CRLF on Windows, while the
+               --  tool contract exposes logical LF lines.  This is still an
+               --  exact edit; treating it as loose can move already-laid-out
+               --  lines and can turn a no-op into a reported change.
+               if Ada.Strings.Fixed.Index
+                    (Text, ASCII.CR & ASCII.LF) > 0
+                 and then With_CRLF (Old_Text) /= Old_Text
+               then
+                  declare
+                     Again : constant Said :=
+                       Edit
+                         (Path, With_CRLF (Old_Text), With_CRLF (New_Text),
+                          Expected, Base, Near_First, Near_Last);
+                  begin
+                     if not Again.Failed then
+                        return Again;
+                     end if;
+                  end;
+               end if;
                --  Not there as given, but there line for line once the spaces
                --  at the ends of lines are left out, and in one place only:
                --  edited there, the new text moved by how far the given one

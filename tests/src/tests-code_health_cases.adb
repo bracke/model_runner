@@ -14,6 +14,7 @@ with Hostkit.Metadata;
 with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
+with Jsonlib.Serializers;
 
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.Agent;
@@ -1254,7 +1255,10 @@ package body Tests.Code_Health_Cases is
 
       Runner.Run
         ("shell", "{""command"":""printf 'package Generated is end Generated;' > "
-         & Root & "/src/generated.ads""}",
+         & Jsonlib.Serializers.Escape
+             (Hostkit.Fs.Join
+                (Hostkit.Fs.Join (Root, "src"), "generated.ads"))
+         & """}",
          Answer, Last, Outcome, Status);
       Assert (E.Is_Ok (Status) and then Outcome.Answer = Tr.Answered
               and then Recorder.Calls = 2 and then Recorder.Trigger = H.After_Command

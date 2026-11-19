@@ -201,7 +201,9 @@ package body Model_Runner.Code_Health.Diagnostics is
          Normalized : constant String :=
            (if Path = "" then ""
             elsif Project_Root /= ""
-            then Model_Runner.Framework.Repository.Relative_Path (Project_Root, Path)
+            then Model_Runner.Framework.Permissions.Normal
+                   (Model_Runner.Framework.Repository.Relative_Path
+                      (Project_Root, Path))
             else Model_Runner.Framework.Permissions.Normal (Path));
       begin
          if Normalized /= ""
@@ -218,7 +220,9 @@ package body Model_Runner.Code_Health.Diagnostics is
             Path       : constant String := To_String (Place.Path);
             Normalized : constant String :=
               (if Project_Root /= ""
-               then Model_Runner.Framework.Repository.Relative_Path (Project_Root, Path)
+               then Model_Runner.Framework.Permissions.Normal
+                      (Model_Runner.Framework.Repository.Relative_Path
+                         (Project_Root, Path))
                else Model_Runner.Framework.Permissions.Normal (Path));
          begin
             if not Model_Runner.Framework.Templates.Is_Project_Path (Normalized) then

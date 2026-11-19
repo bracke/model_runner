@@ -1058,8 +1058,9 @@ package body Tests.Platform_Cases is
                                      "with no ~/models the data home's was not the store alone");
          end;
       end if;
-      AUnit.Assertions.Assert (P.Models_File ("a.gguf") = ""
-                               or else Ada.Strings.Fixed.Index (P.Models_File ("a.gguf"), "/a.gguf") > 0,
+      AUnit.Assertions.Assert
+        (P.Models_File ("a.gguf") = ""
+         or else Ada.Directories.Simple_Name (P.Models_File ("a.gguf")) = "a.gguf",
                                "a downloaded model was not placed by its name");
       AUnit.Assertions.Assert (P.Physical_Memory = 0 or else P.Available_Memory <= P.Physical_Memory,
                                "more memory was available than the machine has");

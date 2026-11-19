@@ -17142,6 +17142,17 @@ package body Tests.CLI_Cases is
          Answer   : String (1 .. 4096);
          Last     : Natural;
          Status   : E.Error_Info;
+
+         function Slashes (Text : String) return String is
+            Result : String := Text;
+         begin
+            for C of Result loop
+               if C = '\' then
+                  C := '/';
+               end if;
+            end loop;
+            return Result;
+         end Slashes;
       begin
          Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Own);
          Ada.Text_IO.Put_Line (File, "hook.after-edit = echo formatted $FILE");
@@ -17154,7 +17165,8 @@ package body Tests.CLI_Cases is
            (Runner, "write_file", "{""path"": ""hooked.txt"", ""content"": ""x""}", Answer, Last, Status);
          Assert (E.Is_Ok (Status) and then Ada.Directories.Exists (Edited), "the write did not run");
          Assert (Ada.Strings.Fixed.Index (Answer (1 .. Last), "formatted ") > 0
-                 and then Ada.Strings.Fixed.Index (Answer (1 .. Last), Edited) > 0,
+                 and then Ada.Strings.Fixed.Index
+                            (Slashes (Answer (1 .. Last)), Slashes (Edited)) > 0,
                  "the hook after an edit was not run on the file, or not said: " & Answer (1 .. Last));
          declare
             Said : constant String := Model_Runner.CLI.Tool_Turns.Run_Hook ("hook.after-turn", "", Failed);
@@ -17167,6 +17179,10 @@ package body Tests.CLI_Cases is
                  and then not Failed,
                  "a hook ran where no setting names one");
          Ada.Directories.Delete_File (Edited);
+      exception
+         when others =>
+            Restore_Settings;
+            raise;
       end;
 
       --  A language server: after a write or an edit its problems with the

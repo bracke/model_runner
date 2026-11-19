@@ -1,5 +1,6 @@
 with Ada.Calendar;
 with Ada.Calendar.Formatting;
+with Ada.Characters.Handling;
 with Ada.Directories;
 with Ada.Exceptions;
 with Ada.IO_Exceptions;
@@ -109,6 +110,29 @@ package body Model_Runner.Framework.Execution is
    --  directory's, where the work under check could have put a make or a
    --  prlimit of its own to run in place of the one allowed.
    function Executable (Name : String) return String is
+      --  GNAT's path locator uses the native process lookup that already
+      --  launches env.exe correctly on MinGW.  Accept its answer only when
+      --  its containing directory is one of the absolute PATH entries we
+      --  would search ourselves, so a relative entry in an analyzed project
+      --  still cannot supply an executable.
+      Located : constant String :=
+        (if Hostkit.Host.Current = Hostkit.Host.Windows
+         then Hostkit.Process.Locate (Name)
+         else "");
+
+      function Same_Directory (Left, Right : String) return Boolean is
+         Left_Full  : constant String := Ada.Directories.Full_Name (Left);
+         Right_Full : constant String := Ada.Directories.Full_Name (Right);
+      begin
+         return
+           (if Hostkit.Host.Current = Hostkit.Host.Windows
+            then Ada.Characters.Handling.To_Lower (Left_Full)
+                 = Ada.Characters.Handling.To_Lower (Right_Full)
+            else Left_Full = Right_Full);
+      exception
+         when others =>
+            return False;
+      end Same_Directory;
    begin
       if (for some C of Name => C in '/' | '\') then
          return Name;
@@ -136,6 +160,15 @@ package body Model_Runner.Framework.Execution is
                            end if;
                         end;
                      end loop;
+                     if Located /= "" and then Is_Absolute (Located)
+                       and then Is_Program_File (Located)
+                       and then Same_Directory
+                                  (Folder,
+                                   Ada.Directories.Containing_Directory
+                                     (Located))
+                     then
+                        return Located;
+                     end if;
                   end if;
                end;
                From := Index + 1;
