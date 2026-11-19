@@ -1347,12 +1347,28 @@ package body Model_Runner.Tools.Builtin is
       Path    : constant String := Text_Argument (Args, "path", Have_P);
       Content : constant String := Text_Argument (Args, "content", Have_C);
       Put     : Model_Runner.Tools.Editing.Said;
+
+      function Representable (Disk : String) return Boolean is
+      begin
+         declare
+            Parent : constant String := Ada.Directories.Containing_Directory (Disk);
+            pragma Unreferenced (Parent);
+         begin
+            return True;
+         end;
+      exception
+         when others =>
+            return False;
+      end Representable;
    begin
       if not (Have_P and then Have_C) then
          return Failure ("write_file needs "
            & (if not Have_P and then not Have_C then "a path and content"
               elsif not Have_P then "a path"
               else "content: the whole new text of " & Path));
+      end if;
+      if not Representable (Model_Runner.Tools.Editing.On_Disk (Base, Path)) then
+         return Failure (Path & " is not a path this host can represent");
       end if;
       --  Nothing written over something: an empty write of a file that holds
       --  text is refused, not taken -- a 4B wrote "" over the source it was

@@ -3323,9 +3323,13 @@ package body Model_Runner.Framework.Work is
                                        for Position in Whole'First .. Whole'Last + 1 loop
                                           if Position > Whole'Last or else Whole (Position) = ASCII.LF then
                                              declare
+                                                Raw : constant String := Whole (Start .. Position - 1);
                                                 Line : constant String :=
                                                   Ada.Strings.Fixed.Trim
-                                                    (Whole (Start .. Position - 1), Ada.Strings.Both);
+                                                    (Ada.Strings.Fixed.Trim
+                                                       (Raw, Ada.Strings.Maps.Null_Set,
+                                                        Ada.Strings.Maps.To_Set (ASCII.CR)),
+                                                     Ada.Strings.Both);
                                                 Says : constant String := Difference_Guard (Line);
                                              begin
                                                 if Says /= "" and then Given < 6 then

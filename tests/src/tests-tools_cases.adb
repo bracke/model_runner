@@ -760,6 +760,17 @@ package body Tests.Tools_Cases is
       function Has (Item : Ed.Said; Part : String) return Boolean is
         (Ada.Strings.Fixed.Index (Ada.Strings.Unbounded.To_String (Item.Text), Part) > 0);
 
+      function Logical (Value : String) return String is
+         Result : Ada.Strings.Unbounded.Unbounded_String;
+      begin
+         for C of Value loop
+            if C /= ASCII.CR then
+               Ada.Strings.Unbounded.Append (Result, C);
+            end if;
+         end loop;
+         return Ada.Strings.Unbounded.To_String (Result);
+      end Logical;
+
       procedure Put (Name, Text : String) is
          F : Ada.Text_IO.File_Type;
       begin
@@ -1178,17 +1189,6 @@ package body Tests.Tools_Cases is
          Quoted_Path : constant String := Dir & "/quoted.adb";
          Text        : Ada.Strings.Unbounded.Unbounded_String;
          Got         : E.Error_Info;
-
-         function Logical (Value : String) return String is
-            Result : Ada.Strings.Unbounded.Unbounded_String;
-         begin
-            for C of Value loop
-               if C /= ASCII.CR then
-                  Ada.Strings.Unbounded.Append (Result, C);
-               end if;
-            end loop;
-            return Ada.Strings.Unbounded.To_String (Result);
-         end Logical;
       begin
          Put (Quoted_Path, "   if A = B then" & ASCII.LF & "      X := 1;");
          declare
@@ -1219,9 +1219,11 @@ package body Tests.Tools_Cases is
          begin
             Ed.Read_Text (Spelled_Path, Text, Got);
             Assert (not Done.Failed and then Has (Done, "read as Ada spells it")
-                    and then Ada.Strings.Unbounded.To_String (Text)
-                             = "   if A then" & ASCII.LF & "      X := 1;" & ASCII.LF
-                               & "   elsif B = C and then D then  -- not ""elif""" & ASCII.LF,
+                    and then Logical (Ada.Strings.Unbounded.To_String (Text))
+                               in "   if A then" & ASCII.LF & "      X := 1;" & ASCII.LF
+                                    & "   elsif B = C and then D then  -- not ""elif"""
+                                | "   if A then" & ASCII.LF & "      X := 1;" & ASCII.LF
+                                    & "   elsif B = C and then D then  -- not ""elif""" & ASCII.LF,
                     "old_text spelled as another language was not read as Ada: "
                     & Ada.Strings.Unbounded.To_String (Done.Text) & " / " & Ada.Strings.Unbounded.To_String (Text));
          end;

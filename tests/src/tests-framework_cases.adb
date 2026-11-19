@@ -16589,13 +16589,19 @@ package body Tests.Framework_Cases is
             Dirs.Create_Path (Folder);
             Put_File (Folder & "/a.rec", "a record");
             S.Snapshot_State (Store, Taken);
-            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
-            S.Restore_State (Store, Taken, Changed, Left);
-            Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
-            Assert ((for some Line of Left => Ada.Strings.Fixed.Index (Line, "cannot be read") > 0)
-                    and then Read_Whole (Folder & "/a.rec") = "a record",
-                    "a folder of the state that will not be listed was not said: "
-                    & (if Left.Is_Empty then "" else Left.First_Element));
+            if Hostkit.Host.Current = Hostkit.Host.Windows then
+               --  Windows permission bits do not make a directory
+               --  unlistable, so this POSIX failure path cannot be induced.
+               null;
+            else
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#000#);
+               S.Restore_State (Store, Taken, Changed, Left);
+               Ignored := Hostkit.Metadata.Set_Permissions (Folder, 8#755#);
+               Assert ((for some Line of Left => Ada.Strings.Fixed.Index (Line, "cannot be read") > 0)
+                       and then Read_Whole (Folder & "/a.rec") = "a record",
+                       "a folder of the state that will not be listed was not said: "
+                       & (if Left.Is_Empty then "" else Left.First_Element));
+            end if;
             Dirs.Delete_Tree (Folder);
          exception
             when others =>

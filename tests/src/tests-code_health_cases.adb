@@ -10,12 +10,11 @@ with AUnit.Test_Cases;
 
 with Hostkit.Fs;
 with Hostkit.Metadata;
+with Hostkit.Shell;
 
 with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
-with Jsonlib.Serializers;
-
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.Agent;
 with Model_Runner.Cancellation;
@@ -997,6 +996,7 @@ package body Tests.Code_Health_Cases is
            (Status.Code = E.Framework_Execution_Refused and then not Outcome.Started,
             "the interactive Code Health runner broadened its explicit authority");
       end;
+      Stores.Close (Store);
       Ada.Directories.Delete_Tree (Root);
    end Execution_Is_Authorized_Cancellable_And_Source_Guarded;
 
@@ -1226,6 +1226,22 @@ package body Tests.Code_Health_Cases is
       Last    : Natural;
       Outcome : Tr.Call_Outcome;
       Status  : E.Error_Info;
+
+      function Shell_Path (Path : String) return String is
+         Result : String := Path;
+      begin
+         for C of Result loop
+            if C = '\' then
+               C := '/';
+            end if;
+         end loop;
+         if Result'Length >= 3 and then Result (Result'First + 1) = ':'
+           and then Result (Result'First + 2) = '/'
+         then
+            return "/" & Result (Result'First) & Result (Result'First + 2 .. Result'Last);
+         end if;
+         return Result;
+      end Shell_Path;
    begin
       Fresh (Root);
       Reset_Recorder;
@@ -1255,9 +1271,10 @@ package body Tests.Code_Health_Cases is
 
       Runner.Run
         ("shell", "{""command"":""printf 'package Generated is end Generated;' > "
-         & Jsonlib.Serializers.Escape
-             (Hostkit.Fs.Join
-                (Hostkit.Fs.Join (Root, "src"), "generated.ads"))
+         & Hostkit.Shell.Quote
+             (Shell_Path
+                (Hostkit.Fs.Join
+                   (Hostkit.Fs.Join (Root, "src"), "generated.ads")))
          & """}",
          Answer, Last, Outcome, Status);
       Assert (E.Is_Ok (Status) and then Outcome.Answer = Tr.Answered

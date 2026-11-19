@@ -16881,10 +16881,10 @@ package body Tests.CLI_Cases is
          Ada.Directories.Delete_Tree (Outer);
       end if;
       Ada.Directories.Create_Path (Inner);
-      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Outer & "/" & Ins.File_Name);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Hostkit.Fs.Join (Outer, Ins.File_Name));
       Ada.Text_IO.Put_Line (File, "outer-rule");
       Ada.Text_IO.Close (File);
-      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Inner & "/" & Ins.File_Name);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Hostkit.Fs.Join (Inner, Ins.File_Name));
       Ada.Text_IO.Put_Line (File, "inner-rule");
       Ada.Text_IO.Close (File);
       declare
@@ -16906,7 +16906,7 @@ package body Tests.CLI_Cases is
       Assert (Ada.Strings.Fixed.Index (Ins.Gathered (Outer), "inner-rule") = 0,
               "a folder below the session's was read");
       --  Past the cap: cut, and said.
-      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Inner & "/" & Ins.File_Name);
+      Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Hostkit.Fs.Join (Inner, Ins.File_Name));
       for Line in 1 .. Ins.Most_Bytes / 40 + 10 loop
          Ada.Text_IO.Put_Line (File, "a rule long enough to fill the cap ......");
       end loop;
