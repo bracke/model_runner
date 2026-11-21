@@ -18,14 +18,14 @@ begin
       return;
    end if;
 
-   Engine_Slot.Claim (Granted);
+   Life.Claim (Granted);
    if not Granted then
       return;
    end if;
    Item.Owns_Slot := True;
 
    Item.Instance := On.Instance;
-   Instance_Of := Item.Instance;
+   Life.Select_Instance (Item.Instance);
 
    --  Through the accessor rather than the field. This package can see
    --  the private part, being a child, and reading it directly would make

@@ -2,6 +2,10 @@
 
 Local GGUF language-model execution in Ada 2022.
 
+The current native runtime requires an x86-64 host. Non-x86 execution is
+refused explicitly until the remaining machine-code kernels have portable
+bodies.
+
 `model_runner` loads a local GGUF model file, validates its container strictly,
 prepares a bounded Llama-compatible decoder-only execution plan, tokenizes
 prompts, evaluates the model on the processor or on a compute device, maintains
@@ -2321,9 +2325,10 @@ x86-64-v4 variants add AVX-512 VNNI byte products. Runtime dispatch selects a
 wide kernel only when CPUID identifies every feature in the complete inherited
 ISA level and XGETBV confirms that the operating system saves the required
 vector state. The same predicate is used on Linux, Windows and Intel macOS;
-synthetic feature-mask tests remove each required member in turn. The portable
-scalar path remains the fallback. Equivalence tests run the scalar and vector
-implementations over the same inputs, including half, floating-point and
+synthetic feature-mask tests remove each required member in turn. On supported
+x86-64 hosts, the scalar path remains the fallback. Equivalence tests run the
+scalar and vector implementations over the same inputs, including half,
+floating-point and
 quantized products.
 
 There is no separately compiled C, C++ or assembly source in the repository.

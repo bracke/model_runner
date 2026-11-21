@@ -3,8 +3,8 @@ with Ada.Finalization;
 with Hostkit.Spawn;
 
 --  Bounded ownership of a child process started by an integration test.
---  A failed assertion must not leave the child running or make the rest of
---  the AUnit process wait forever.
+--  A failed assertion stops it locally or transfers it to the package reaper;
+--  finalization never masks the test's original exception.
 package Child_Guards is
 
    type Guard is limited new Ada.Finalization.Limited_Controlled with private;

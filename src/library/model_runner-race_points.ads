@@ -28,6 +28,7 @@ package Model_Runner.Race_Points is
       Context_Built,
       CPU_Worker_Pre_Sleep,
       CPU_Shutdown_Published,
+      Device_Wait_Begins,
       Program_Stamp_Claimed);
 
    --  What a test does at a point.

@@ -109,6 +109,8 @@ abstract project Model_Runner_Sources is
       "model_runner-panel_cache.adb",
       "model_runner-panel_cache.ads",
       "model_runner-platform-device-products-attend_packed.adb",
+      "model_runner-platform-device-products-lifecycle.adb",
+      "model_runner-platform-device-products-lifecycle.ads",
       "model_runner-platform-device-products-open.adb",
       "model_runner-platform-device-products-run.adb",
       "model_runner-platform-device-products.adb",

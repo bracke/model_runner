@@ -2,8 +2,9 @@ with "config/model_runner_config.gpr";
 with "build/model_runner_build.gpr";
 
 project Model_Runner is
-   --  Only x86-64 carries the CPUID/XGETBV body.  Other hosts keep the same
-   --  public feature queries, answered conservatively by a portable body.
+   --  Only x86-64 carries the CPUID/XGETBV body.  The selected non-x86 body
+   --  refuses execution with an explicit diagnostic: shared kernels still
+   --  contain x86 machine code and must not pretend to be portable.
    Arch_Dir := "src/platform/non_x86";
    case Model_Runner_Config.Alire_Host_Arch is
       when "x86_64" => Arch_Dir := "src/platform/x86_64";

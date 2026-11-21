@@ -13,9 +13,9 @@ abstract project Model_Runner_Build is
    Large_Unit_Switches :=
      Common_Ada_Switches & ("-fno-var-tracking-assignments");
 
-   --  On a non-x86 host the alternate instantiations remain valid scalar
-   --  bodies and their runtime feature gates always answer False.  Passing
-   --  an x86 -march flag there would make an otherwise portable build fail.
+   --  The non-x86 platform body refuses execution explicitly.  These neutral
+   --  defaults keep its source compilable without an unrecognized -march
+   --  option, including during the repository's cross-platform source check.
    X86_64_V3_Switches := Common_Ada_Switches & ("-ffp-contract=off");
    X86_64_V4_Switches := Common_Ada_Switches & ("-ffp-contract=off");
    case Model_Runner_Config.Alire_Host_Arch is

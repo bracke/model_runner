@@ -4,6 +4,8 @@ with "../build/model_runner_sources.gpr";
 with "../core/model_runner_core.gpr";
 
 project Model_Runner_Inference is
+   --  The non-x86 feature body deliberately refuses execution until the
+   --  shared machine-code kernels have architecture-specific implementations.
    Arch_Dir := "../src/platform/non_x86";
    case Model_Runner_Config.Alire_Host_Arch is
       when "x86_64" => Arch_Dir := "../src/platform/x86_64";

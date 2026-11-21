@@ -459,12 +459,13 @@ per-element rounding every other format already had. The measurement that
 reversed the earlier decision is in the README, with the rest of the kernel
 figures.
 
-The portable kernels are ordinary Ada. Native Ada machine-code insertions add
+The scalar kernels are ordinary Ada. Native Ada machine-code insertions add
 x86-64-v3 AVX2/FMA/F16C and x86-64-v4 AVX-512 VNNI variants, selected only
 after complete CPUID feature detection and an XGETBV check of the operating
 system's enabled vector state on every x86 host. The v3 gate includes every v2
 and v3 member; the v4/VNNI gate includes every v4 member and its inherited v3
-set. Otherwise execution stays on the portable path. The project compiles the
+set. On a supported x86-64 host without those features, execution stays on the
+scalar path. The project compiles the
 target-specific variants separately, and equivalence and synthetic-mask tests
 compare them with the portable results. Weights may also be repacked into row
 panels for the product shape that benefits from them.

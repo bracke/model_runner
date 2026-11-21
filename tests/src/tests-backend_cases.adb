@@ -2084,20 +2084,17 @@ package body Tests.Backend_Cases is
               "a standing request did not stop a product on the device: "
               & E.Error_Code'Image (Status.Code));
 
-      --  And a request that arrives while the device is working, which is
-      --  the case the slicing exists for and the one above does not reach:
+      --  And a request that arrives after work was submitted, which is the
+      --  case the wait and fence spin exist for and the one above does not reach:
       --  a request already standing is answered before anything is
       --  submitted, so it never gets near the loop.
       --
-      --  Two things make this reliable rather than a race. The slices are a
-      --  nanosecond, so a wait times out however fast the device is and the
-      --  loop goes round to ask the token -- without that, seeing the
-      --  request would depend on the product outlasting twenty
-      --  milliseconds, which is a test that passes on one machine. And the
-      --  matrix is four million elements, so the product takes long enough
-      --  for another task to have run by the time it is done.
+      --  The request is made at the wait's entry race point.  That proves the
+      --  post-submission path without depending on task scheduling or device
+      --  speed.
       declare
          During : aliased Model_Runner.Cancellation.Token;
+         Asked_During : Boolean := False;
 
          Big_Wide : constant N.Element_Count := 2048;
          Big_Tall : constant N.Element_Count := 2048;
@@ -2131,40 +2128,36 @@ package body Tests.Backend_Cases is
          T.Allocate (Big_Tall, Big_Room);
          Big_Vector.all := [others => 1.0];
 
-         --  The asking task is declared here rather than above, so that
-         --  its delay starts beside the dispatch instead of before the
-         --  sixteen megabytes are allocated and filled. Started earlier, it
-         --  had always fired by the time the product began -- which is the
-         --  standing case again, and the slice counter below is what caught
-         --  that rather than a green test hiding it.
          declare
-            task Asks;
-
-            task body Asks is
+            procedure Ask_After_Submission is
             begin
-               delay 0.000_1;
+               Asked_During := True;
                During.Request;
-            end Asks;
+            end Ask_After_Submission;
          begin
-            Model_Runner.Backend.Device.Dispatch
-              (Big_Weight, Big_Vector, Big_Room, Status,
-               During'Unchecked_Access);
+            Model_Runner.Race_Points.Arm
+              (Model_Runner.Race_Points.Device_Wait_Begins,
+               Ask_After_Submission'Unrestricted_Access);
+            begin
+               Model_Runner.Backend.Device.Dispatch
+                 (Big_Weight, Big_Vector, Big_Room, Status,
+                  During'Unchecked_Access);
+            exception
+               when others =>
+                  Model_Runner.Race_Points.Disarm
+                    (Model_Runner.Race_Points.Device_Wait_Begins);
+                  raise;
+            end;
+            Model_Runner.Race_Points.Disarm
+              (Model_Runner.Race_Points.Device_Wait_Begins);
          end;
 
+         Assert (Asked_During,
+                 "the request boundary after submission was not reached");
          Assert (Status.Code = E.Generation_Cancelled,
                  "a request made while the device was working was not seen "
-                 & "between slices of the wait: "
+                 & "by its wait: "
                  & E.Error_Code'Image (Status.Code));
-
-         --  And it was seen there rather than by the check before anything
-         --  is submitted. That check answers a request that was already
-         --  standing, so a cancelled product proves nothing on its own:
-         --  what proves it is that the wait went round more than once,
-         --  which is the only place a request arriving later can be seen.
-         Assert (Model_Runner.Backend.Device.Waited > 1,
-                 "the product was cancelled without the wait going round, "
-                 & "so the request was already standing and this says "
-                 & "nothing about a request that arrives during a product");
 
          T.Free (Big_Vector);
          T.Free (Big_Room);

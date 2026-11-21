@@ -79,8 +79,9 @@ package body Untested_Surface is
    --  the split mixture's tests load, reads it.
    --
    --  Not public. Entry_Point and Is_Live are declared in the private part
-   --  of Platform.Device, for its children; the check reads the whole of a
-   --  specification and takes it for public.
+   --  of Platform.Device, for its children; Selected_Instance belongs to a
+   --  private child and is exercised by the device-products dispatch paths.
+   --  The check reads the whole of a specification and takes it for public.
    --
    --  Asked of the device too: Fetches_Cache says whether the engine made
    --  the kernel Add_Fetch's step runs on, which a device may refuse; the
@@ -196,6 +197,7 @@ package body Untested_Surface is
          | "Scale_Shuffle_Address"
          | "Sign_Shuffle_Address"
          | "Entry_Point"
+         | "Selected_Instance"
          | "Shares_Memory"
          | "Room_Beside"
          | "Is_Live"
@@ -213,6 +215,6 @@ package body Untested_Surface is
    -- Count --
    -----------
 
-   function Count return Natural is (77);
+   function Count return Natural is (78);
 
 end Untested_Surface;

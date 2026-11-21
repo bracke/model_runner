@@ -1,6 +1,8 @@
 with Model_Runner.Platform.Pages;
 with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Device.Tile_Plans;
+with Model_Runner.Platform.Device.Products.Lifecycle;
+with Model_Runner.Race_Points;
 with Ada.Environment_Variables;
 with Ada.Real_Time;
 with Ada.Unchecked_Conversion;
@@ -47,6 +49,7 @@ package body Model_Runner.Platform.Device.Products is
    use type Model_Runner.Numerics.Element_Count;
 
    package C renames Interfaces.C;
+   package Life renames Model_Runner.Platform.Device.Products.Lifecycle;
    package Tiles renames Model_Runner.Platform.Device.Tile_Plans;
 
    use type Model_Runner.Bytes.Byte_Count;
@@ -2408,55 +2411,23 @@ package body Model_Runner.Platform.Device.Products is
    function To_Query_Results is
      new Ada.Unchecked_Conversion (Address, Query_Results_Call);
 
-   --  The instance every entry point below is found through. Set from the
-   --  engine whose operation is running, because an entry point belongs to
-   --  the instance it was found through and outlives none of them.
-   --
-   --  It used to be set once, when an engine was opened, and left. Closing
-   --  an engine and then the device under it left this naming an instance
-   --  that no longer existed, and the next engine's Open -- which releases
-   --  before it makes -- asked that dead instance for vkDestroyBuffer. The
-   --  loader does not return null for an invalid instance; it aborts the
-   --  process, which is what it did.
-   Instance_Of : Address := Null_Handle;
-
-   --  The implementation below has package-wide worker tasks, prefetch slots
-   --  and Vulkan entry-point state. Refuse a second live Engine explicitly;
-   --  allowing one would make those globals cross device instances.
-   protected Engine_Slot is
-      procedure Claim (Granted : out Boolean);
-      procedure Release;
-   private
-      Held : Boolean := False;
-   end Engine_Slot;
-
-   protected body Engine_Slot is
-      procedure Claim (Granted : out Boolean) is
-      begin
-         Granted := not Held;
-         Held := True;
-      end Claim;
-
-      procedure Release is
-      begin
-         Held := False;
-      end Release;
-   end Engine_Slot;
-
    --  Null when there is no instance to ask, so that a caller releasing an
    --  engine that was never made asks nobody rather than asking a handle
    --  that is not one.
-   function Point (Name : String) return Address
-   is (if Instance_Of = Null_Handle
-       then Null_Handle
-       else Entry_Point (Instance_Of, Name));
+   function Point (Name : String) return Address is
+      Instance : constant Address := Life.Selected_Instance;
+   begin
+      return (if Instance = Null_Handle
+              then Null_Handle
+              else Entry_Point (Instance, Name));
+   end Point;
 
    --  Point this engine's instance at the loader before anything is asked of
    --  it. A function so that it can be a declaration in the operations that
    --  need it, which is how it comes before their first entry point.
    function Set_Asking (Item : Engine) return Boolean is
    begin
-      Instance_Of := Item.Instance;
+      Life.Select_Instance (Item.Instance);
       return True;
    end Set_Asking;
 
@@ -3184,7 +3155,7 @@ package body Model_Runner.Platform.Device.Products is
    procedure Close (Item : in out Engine) is
       --  Whatever this engine was opened on, which is nothing at all for an
       --  engine that never was.
-      Restore : constant Address := Instance_Of;
+      Restore : constant Address := Life.Selected_Instance;
 
       procedure Give_Back (Handle : in out Address; Name : String) is
          Destroy : constant Destroy_Call := To_Destroy (Point (Name));
@@ -3204,7 +3175,7 @@ package body Model_Runner.Platform.Device.Products is
          return;
       end if;
 
-      Instance_Of := Item.Instance;
+      Life.Select_Instance (Item.Instance);
       Settle_Copies;
 
       --  Nothing may be in flight: what follows destroys the fences a
@@ -3714,9 +3685,10 @@ package body Model_Runner.Platform.Device.Products is
       --  of its own to go back to; an engine closed after the inventory it
       --  was made from would otherwise leave every later asker -- the
       --  keeper among them -- naming an instance that is gone.
-      Instance_Of := (if Is_Live (Restore) then Restore else Null_Handle);
+      Life.Select_Instance
+        ((if Is_Live (Restore) then Restore else Null_Handle));
       Item.Owns_Slot := False;
-      Engine_Slot.Release;
+      Life.Release;
    end Close;
 
    function Is_Ready (Item : Engine) return Boolean
@@ -5544,6 +5516,12 @@ package body Model_Runner.Platform.Device.Products is
          begin
             Item.Waited := 0;
 
+            --  The work has been submitted and its fence is pending.  Tests
+            --  use this exact boundary instead of racing a delayed task
+            --  against the device.
+            Model_Runner.Race_Points.Here
+              (Model_Runner.Race_Points.Device_Wait_Begins);
+
             --  Asked before it is waited for. A dispatch this engine sends
             --  is tens of microseconds of work and the wait around it is a
             --  blocking call; asking first is what the worker pool does for
@@ -5551,22 +5529,22 @@ package body Model_Runner.Platform.Device.Products is
             if Ready /= null then
                for Turn in 1 .. Fence_Spin loop
                   Item.Waited := Turn;
-                  exit when Ready (Item.Logical, Item.Fence) = 0;
-
-                  --  The same question the wait below asks between its
-                  --  slices, asked here as well. Without it a spin that
-                  --  covers the whole of a short dispatch is a spin that
-                  --  never notices a caller has asked to stop -- which is
-                  --  what the test for a standing stop request found the
-                  --  first time this was built, and is the only thing the
-                  --  spin changed about what this procedure means.
-                  if not Stopped
-                    and then Turn mod 64 = 0
-                    and then Model_Runner.Cancellation."/=" (Cancel, null)
-                    and then Cancel.all.Is_Requested
-                  then
-                     Stopped := True;
-                  end if;
+                  declare
+                     Done : constant Boolean :=
+                       Ready (Item.Logical, Item.Fence) = 0;
+                  begin
+                     --  Always ask when completion is observed.  Otherwise a
+                     --  request arriving during a short dispatch could be
+                     --  skipped by the successful fence check.
+                     if not Stopped
+                       and then (Done or else Turn mod 64 = 0)
+                       and then Model_Runner.Cancellation."/=" (Cancel, null)
+                       and then Cancel.all.Is_Requested
+                     then
+                        Stopped := True;
+                     end if;
+                     exit when Done;
+                  end;
                end loop;
             end if;
 
@@ -5577,6 +5555,16 @@ package body Model_Runner.Platform.Device.Products is
                     Wait (Item.Logical, 1, Fence_Handle'Address, 1,
                           Nanoseconds);
                begin
+                  --  Ask after every blocking wait, including the one that
+                  --  observes completion.  A request made while that call was
+                  --  blocked still belongs to this dispatch.
+                  if not Stopped
+                    and then Model_Runner.Cancellation."/=" (Cancel, null)
+                    and then Cancel.all.Is_Requested
+                  then
+                     Stopped := True;
+                  end if;
+
                   if Answer = 0 then
                      Answered := True;
                      exit;
@@ -5586,18 +5574,6 @@ package body Model_Runner.Platform.Device.Products is
                      exit;
                   end if;
                end;
-
-               --  Asked between slices and acted on after the device has
-               --  finished, never instead of finishing: the buffers this
-               --  dispatch is reading belong to it until the fence says
-               --  otherwise, and giving them back sooner is how a cancelled
-               --  run corrupts the next one.
-               if not Stopped
-                 and then Model_Runner.Cancellation."/=" (Cancel, null)
-                 and then Cancel.all.Is_Requested
-               then
-                  Stopped := True;
-               end if;
             end loop;
 
             if not Answered then
@@ -11991,7 +11967,7 @@ package body Model_Runner.Platform.Device.Products is
       if not Is_Open (On) or else not Is_Live (On.Instance) then
          return;
       end if;
-      Instance_Of := On.Instance;
+      Life.Select_Instance (On.Instance);
 
       Keep.Logical := On.Logical;
       Keep.Queue := On.Queue;
