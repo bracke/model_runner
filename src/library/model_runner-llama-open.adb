@@ -259,6 +259,7 @@ begin
                    (Source.Able.Kind,
                     Model_Runner.Backend.Backend_Device)
         and then Cache in Exact | Halved | Eighth | Fourth | Float_Eighth
+                              | Transformed_Fourth
       then
          Item.Paged := True;
          Item.Page_First :=
@@ -373,7 +374,7 @@ begin
                T.Allocate (Rows * KV_Out, Item.Half_Values);
             end if;
 
-         when Eighth | Fourth | Float_Eighth =>
+         when Eighth | Fourth | Float_Eighth | Transformed_Fourth =>
             --  The bytes, and the scales: one a row a position a layer
             --  for the byte cache, one a block of thirty-two for the
             --  nibble cache, for the keys and again for the values.
@@ -814,7 +815,7 @@ begin
         or else (Item.Held = Halved
                  and then (Item.Half_Keys = null
                            or else Item.Half_Values = null))
-        or else (Item.Held in Eighth | Fourth | Float_Eighth
+        or else (Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth
                  and then (Item.Byte_Keys = null
                            or else Item.Byte_Values = null
                            or else Item.Key_Scales = null

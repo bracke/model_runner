@@ -55,10 +55,13 @@
 
 #extension GL_KHR_shader_subgroup_basic      : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle    : require
 
 const uint LANES = 256u;
 const uint BLOCK = 32u;
 const uint E4M3_BITS = 9u;
+const uint TRANSFORMED_FOUR_BIT_CODEC = 2u;
+const uint Q4T_SIGN_MASK = 0xD6E8FEB8u;
 
 layout(local_size_x = LANES) in;
 
@@ -99,6 +102,10 @@ layout(push_constant) uniform Shape {
     uint pages_at;
     uint page_shift;
     uint first_position;
+
+    //  Explicit codec identity. Zero is scaled integer, one is E4M3 and
+    //  two is transformed Q4; the bit width alone never selects q4t.
+    uint codec;
 } shape;
 
 #ifdef SUBGROUPS
@@ -319,7 +326,135 @@ void main() {
         return;
     }
 
-    //  Nibbles: a lane a block.
+    //  Transformed nibbles: a lane rotates and packs one group. The
+    //  butterfly and its double intermediates mirror the host codec. A
+    //  short last group is partitioned greedily into power-of-two pieces.
+    if (shape.codec == TRANSFORMED_FOUR_BIT_CODEC) {
+#ifdef SUBGROUPS
+        //  Production q4t rows are whole transform groups and word-aligned.
+        //  Give a group to thirty-two lanes: the five butterfly stages are
+        //  subgroup shuffles, and four leaders write its four words. Keep
+        //  the scalar path below for partial test rows and unaligned rows.
+        if (gl_SubgroupSize >= BLOCK
+            && shape.width % BLOCK == 0u && (row_at & 3u) == 0u) {
+            //  A sixty-four-lane subgroup computes the group twice, one
+            //  copy in each half; that lets the ordinary subgroup maximum
+            //  and minimum stand in for clustered operations without
+            //  requiring that optional device feature. Only its lower half
+            //  writes. A thirty-two-lane subgroup computes it once.
+            uint cohort = gl_SubgroupID;
+            uint within = gl_SubgroupInvocationID % BLOCK;
+            uint cohorts = gl_NumSubgroups;
+
+            for (uint b = cohort; b * BLOCK < shape.width; b += cohorts) {
+                double turned = double (x[from + b * BLOCK + within]);
+                if (((Q4T_SIGN_MASK >> within) & 1u) != 0u) {
+                    turned = -turned;
+                }
+                for (uint step = 1u; step < BLOCK; step *= 2u) {
+                    double other = subgroupShuffleXor (turned, step);
+                    turned = (within & step) == 0u
+                             ? turned + other : other - turned;
+                }
+                float rotated = float (turned / sqrt (double (BLOCK)));
+
+                float magnitude = abs (rotated);
+                float largest = subgroupMax (magnitude);
+                uint winner = subgroupMin
+                  (magnitude == largest ? within : BLOCK);
+                float signed_largest = subgroupShuffle (rotated, winner);
+
+                float scale = signed_largest / (-8.0);
+                float inverse = scale != 0.0
+                                ? float (1.0lf / double (scale)) : 0.0;
+                if (gl_SubgroupInvocationID == 0u) {
+                    kvf[scale_at + b] = scale;
+                }
+
+                precise float level = floor (rotated * inverse + 8.5);
+                uint nibble = uint (int (max (0.0, min (15.0, level))));
+                uint word = nibble << (4u * (within & 7u));
+                for (uint step = 1u; step < 8u; step *= 2u) {
+                    word += subgroupShuffleXor (word, step);
+                }
+                if (gl_SubgroupInvocationID < BLOCK
+                    && (within & 7u) == 0u) {
+                    uint wi = (row_at + b * (BLOCK / 2u)) / 4u + within / 8u;
+                    put_word (wi, word, 0xFFFFFFFFu);
+                }
+            }
+            return;
+        }
+#endif
+        for (uint b = lane; b * BLOCK < shape.width; b += LANES) {
+            uint start = b * BLOCK;
+            uint span = min (BLOCK, shape.width - start);
+            double scratch[32];
+            float rotated[32];
+            uint used = 0u;
+
+            while (used < span) {
+                uint width = 1u;
+                while (width * 2u <= span - used) {
+                    width *= 2u;
+                }
+                for (uint i = 0u; i < width; i++) {
+                    double v = double (x[from + start + used + i]);
+                    scratch[i] = ((Q4T_SIGN_MASK >> (used + i)) & 1u) == 0u
+                               ? v : -v;
+                }
+                for (uint step = 1u; step < width; step *= 2u) {
+                    for (uint block = 0u; block < width; block += step * 2u) {
+                        for (uint i = 0u; i < step; i++) {
+                            double a = scratch[block + i];
+                            double z = scratch[block + step + i];
+                            scratch[block + i] = a + z;
+                            scratch[block + step + i] = a - z;
+                        }
+                    }
+                }
+                double normalizer = 1.0lf / sqrt (double (width));
+                for (uint i = 0u; i < width; i++) {
+                    rotated[used + i] = float (scratch[i] * normalizer);
+                }
+                used += width;
+            }
+
+            float largest = 0.0;
+            float signed_largest = 0.0;
+            for (uint i = 0u; i < span; i++) {
+                if (abs (rotated[i]) > largest) {
+                    largest = abs (rotated[i]);
+                    signed_largest = rotated[i];
+                }
+            }
+            float scale = signed_largest / (-8.0);
+            float inverse = scale != 0.0 ? float (1.0lf / double (scale)) : 0.0;
+            kvf[scale_at + b] = scale;
+
+            uint block_at = row_at + start / 2u;
+            uint first = block_at >> 2;
+            uint last = (block_at + (span + 1u) / 2u - 1u) >> 2;
+            for (uint wi = first; wi <= last; wi++) {
+                uint word = 0u;
+                uint mask = 0u;
+                for (uint k = 0u; k < 8u; k++) {
+                    int i = int (wi * 4u - block_at) * 2 + int (k);
+                    if (i >= 0 && i < int (span)) {
+                        precise float level =
+                          floor (rotated[uint (i)] * inverse + 8.5);
+                        uint nibble = uint (int (max (0.0, min (15.0, level))));
+                        word |= nibble << (4u * k);
+                        mask |= 0xFu << (4u * k);
+                    }
+                }
+                put_word (wi, word, mask);
+            }
+        }
+        return;
+    }
+
+    //  Ordinary nibbles: a lane a block.
     for (uint b = lane; b * BLOCK < shape.width; b += LANES) {
         uint start = b * BLOCK;
         uint span = min (BLOCK, shape.width - start);

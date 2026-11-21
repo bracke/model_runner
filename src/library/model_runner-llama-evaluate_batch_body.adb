@@ -1834,6 +1834,7 @@ begin
                   end if;
                   No_Block := not Resident;
                elsif Item.Held in Exact | Eighth | Fourth | Float_Eighth
+                                     | Transformed_Fourth
                  and then Model_Runner.Backend."="
                             (Item.Owner.Able.Kind,
                              Model_Runner.Backend.Backend_Device)
@@ -2619,7 +2620,7 @@ begin
                   --  one wrote these positions' keys and values already.
                   if not Own_Cache then
                      null;
-                  elsif Item.Held in Eighth | Fourth | Float_Eighth then
+                  elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth then
                      Pack_Row
                        (Keys.all (KV_At .. KV_At + Row_KV - 1),
                         Item'Unchecked_Access.Byte_Keys.all, Place, Row_KV,
@@ -2724,6 +2725,7 @@ begin
             --  host below, out of its host copy, which mirroring keeps
             --  current.
             if Item.Held in Exact | Eighth | Fourth | Float_Eighth
+                                  | Transformed_Fourth
               and then Resident
               and then not Item.Paged
               and then not Fused
@@ -2779,6 +2781,7 @@ begin
                   --  kernel, a round's rows each out of their own
                   --  block through the table.
                   if Item.Held in Exact | Eighth | Fourth | Float_Eighth
+                                        | Transformed_Fourth
                     and then Settings.Experts = 0
                     and then not Current.Host_Feed
                     and then T.Is_Present (Current.Gate)
@@ -2964,7 +2967,7 @@ begin
                              Slot (Which, Blend);
                            Usable : Boolean := True;
                         begin
-                           if Item.Held in Eighth | Fourth | Float_Eighth then
+                           if Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth then
                               Blend_Eighth
                                 (Item.Held, Item.Held_Values,
                                  Query.all (Q_At .. Q_At + Wide - 1),
@@ -3624,7 +3627,9 @@ begin
                      Read_Packed_Pages_Layer
                        (Item, Natural (Index), KV_Width, V_Width,
                         Cell, Count, Read);
-                  elsif Item.Held in Eighth | Fourth | Float_Eighth then
+                  elsif Item.Held in Eighth | Fourth | Float_Eighth
+                                        | Transformed_Fourth
+                  then
                      Read_Back_Packed
                        (Item, Base, V_At, Count, KV_Width, V_Width,
                         Read);

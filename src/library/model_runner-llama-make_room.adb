@@ -203,7 +203,7 @@ begin
                                 .. Vals_Base + (From + Moved) * V_Width - 1);
                         end if;
 
-                     when Eighth | Fourth | Float_Eighth =>
+                     when Eighth | Fourth | Float_Eighth | Transformed_Fourth =>
                         --  Whole rows move, so the bytes and the
                         --  scales move by a row's worth of each.
                         declare
@@ -296,6 +296,7 @@ begin
                elsif Moved > 0
                  and then Item.Seat >= 0
                  and then Item.Held in Eighth | Fourth | Float_Eighth
+                                       | Transformed_Fourth
                then
                   --  The packed rows that moved, a row at a time.
                   declare

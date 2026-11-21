@@ -8,6 +8,7 @@ with Ada.Unchecked_Deallocation;
 with Ada.Numerics.Elementary_Functions;
 with Ada.Numerics.Long_Elementary_Functions;
 with Ada.Strings.Fixed;
+with Ada.Synchronous_Task_Control;
 with Ada.Text_IO;
 
 with AUnit.Assertions;
@@ -23,6 +24,7 @@ with Model_Runner.Backend.Device;
 with Model_Runner.Localization;
 with Model_Runner.Cancellation;
 with Model_Runner.Bytes;
+with Model_Runner.Cache_Codecs.Transformed_Four_Bit;
 with Model_Runner.Errors;
 with Model_Runner.Expert_Cache;
 with Model_Runner.GGUF;
@@ -30,11 +32,15 @@ with Model_Runner.Numerics;
 with Model_Runner.Platform;
 with Model_Runner.Platform.Device;
 with Model_Runner.Platform.Device.Products;
+with Model_Runner.Platform.Device.Products.Tile_Plan_Testing;
+with Model_Runner.Platform.Device.Tuning;
 with Model_Runner.Platform.Mapping;
+with Model_Runner.Platform.X86_Feature_Sets;
 with Ada.Directories;
 with Ada.Streams.Stream_IO;
 with System.Storage_Elements;
 with Model_Runner.Quantization.Interleave;
+with Model_Runner.Race_Points;
 with Model_Runner.Shares;
 with Model_Runner.Tensors;
 
@@ -49,9 +55,11 @@ package body Tests.Backend_Cases is
    use type Model_Runner.Numerics.Element_Count;
    use type Model_Runner.Numerics.Real;
    use type Model_Runner.Bytes.Byte_Count;
+   use type Model_Runner.Platform.Device.Products.Cache_Codec;
    use type Model_Runner.Tensors.Real_Array_Access;
 
    package B renames Model_Runner.Bytes;
+   package Q4T renames Model_Runner.Cache_Codecs.Transformed_Four_Bit;
    package CPU renames Model_Runner.Backend.CPU;
    package E renames Model_Runner.Errors;
    package Expert_Cache renames Model_Runner.Expert_Cache;
@@ -1070,6 +1078,181 @@ package body Tests.Backend_Cases is
             raise;
       end;
    end Unused_Pool_Terminates;
+
+   --  Closing immediately after binding workers exercises the handover from
+   --  Start to Watch: Close is the join point even when a worker has not yet
+   --  reached its first wait.  Repeating with a scheduler yield covers both
+   --  sides of that transition without relying on a completed matrix job.
+   procedure Immediate_Close_Joins_Workers
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+   begin
+      for Round in 1 .. 64 loop
+         declare
+            Team : CPU.Pool (4);
+         begin
+            CPU.Open (Team);
+            if Round mod 2 = 0 then
+               delay 0.0;
+            end if;
+            CPU.Close (Team);
+            Assert (not CPU.Is_Open (Team), "an immediately closed pool remained open");
+            CPU.Close (Team);
+         exception
+            when others =>
+               CPU.Close (Team);
+               raise;
+         end;
+      end loop;
+   end Immediate_Close_Joins_Workers;
+
+   --  Put one worker exactly between announcing sleep and checking the job
+   --  ticket, then let Close publish its shutdown wake before that worker can
+   --  continue.  This is the lost-wakeup ordering that a scheduler yield can
+   --  only encounter by chance.
+   procedure Close_Joins_Pre_Sleep_Worker
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package STC renames Ada.Synchronous_Task_Control;
+
+      Worker_Held   : STC.Suspension_Object;
+      Close_Held    : STC.Suspension_Object;
+      Release_Worker : STC.Suspension_Object;
+      Release_Close : STC.Suspension_Object;
+      Close_Done    : STC.Suspension_Object;
+      Close_Started : Boolean := False;
+      Close_Completed : Boolean := False;
+      Close_Failed  : Boolean := False with Atomic;
+
+      procedure Hold_Worker is
+      begin
+         STC.Set_True (Worker_Held);
+         STC.Suspend_Until_True (Release_Worker);
+      end Hold_Worker;
+
+      procedure Hold_Close is
+      begin
+         STC.Set_True (Close_Held);
+         STC.Suspend_Until_True (Release_Close);
+      end Hold_Close;
+
+      type Pool_Access is access all CPU.Pool;
+      task Closer is
+         entry Start (Item : Pool_Access);
+      end Closer;
+
+      task body Closer is
+         Target : Pool_Access;
+      begin
+         accept Start (Item : Pool_Access) do
+            Target := Item;
+         end Start;
+         CPU.Close (Target.all);
+         STC.Set_True (Close_Done);
+      exception
+         when others =>
+            Close_Failed := True;
+            STC.Set_True (Close_Done);
+      end Closer;
+
+      Team : aliased CPU.Pool (1);
+   begin
+      Model_Runner.Race_Points.Arm
+        (Model_Runner.Race_Points.CPU_Worker_Pre_Sleep,
+         Hold_Worker'Unrestricted_Access);
+      Model_Runner.Race_Points.Arm
+        (Model_Runner.Race_Points.CPU_Shutdown_Published,
+         Hold_Close'Unrestricted_Access);
+
+      CPU.Open (Team);
+      STC.Suspend_Until_True (Worker_Held);
+      Closer.Start (Team'Unchecked_Access);
+      Close_Started := True;
+      STC.Suspend_Until_True (Close_Held);
+
+      STC.Set_True (Release_Worker);
+      STC.Set_True (Release_Close);
+      STC.Suspend_Until_True (Close_Done);
+      Close_Completed := True;
+
+      Assert
+        (not Close_Failed and then not CPU.Is_Open (Team),
+         "Close returned while the pre-sleep worker remained live");
+      CPU.Close (Team);
+   exception
+      when others =>
+         Model_Runner.Race_Points.Disarm
+           (Model_Runner.Race_Points.CPU_Worker_Pre_Sleep);
+         Model_Runner.Race_Points.Disarm
+           (Model_Runner.Race_Points.CPU_Shutdown_Published);
+         STC.Set_True (Release_Worker);
+         STC.Set_True (Release_Close);
+         if Close_Started and then not Close_Completed then
+            STC.Suspend_Until_True (Close_Done);
+         elsif not Close_Started then
+            CPU.Close (Team);
+         end if;
+         raise;
+   end Close_Joins_Pre_Sleep_Worker;
+
+   --  Every inherited member of an ISA level is part of its gate.  These
+   --  synthetic masks catch the easy but unsafe implementation that asks
+   --  only for the instructions a particular kernel happens to mention.
+   procedure X86_ISA_Gates_Are_Complete
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      package X86 renames Model_Runner.Platform.X86_Feature_Sets;
+
+      Full : constant X86.Feature_Set := (others => True);
+      type Sets is array (Positive range <>) of X86.Feature_Set;
+      Missing_V3 : constant Sets :=
+        [1  => (Full with delta OS_XMM_YMM => False),
+         2  => (Full with delta LAHF_SAHF => False),
+         3  => (Full with delta SSE3 => False),
+         4  => (Full with delta SSSE3 => False),
+         5  => (Full with delta CMPXCHG16B => False),
+         6  => (Full with delta SSE4_1 => False),
+         7  => (Full with delta SSE4_2 => False),
+         8  => (Full with delta POPCNT => False),
+         9  => (Full with delta AVX => False),
+         10 => (Full with delta FMA => False),
+         11 => (Full with delta MOVBE => False),
+         12 => (Full with delta XSAVE => False),
+         13 => (Full with delta F16C => False),
+         14 => (Full with delta BMI1 => False),
+         15 => (Full with delta AVX2 => False),
+         16 => (Full with delta BMI2 => False),
+         17 => (Full with delta LZCNT => False)];
+      Missing_V4 : constant Sets :=
+        [1 => (Full with delta OS_ZMM => False),
+         2 => (Full with delta AVX512F => False),
+         3 => (Full with delta AVX512DQ => False),
+         4 => (Full with delta AVX512CD => False),
+         5 => (Full with delta AVX512BW => False),
+         6 => (Full with delta AVX512VL => False),
+         7 => (Full with delta AVX512VNNI => False)];
+   begin
+      Assert (X86.Supports_V3 (Full), "the complete v3 set was refused");
+      Assert (X86.Supports_V4_VNNI (Full), "the complete v4/VNNI set was refused");
+      Assert (not X86.Supports_V3 (X86.No_Features), "an empty set was accepted as v3");
+
+      for Index in Missing_V3'Range loop
+         Assert
+           (not X86.Supports_V3 (Missing_V3 (Index)),
+            "v3 accepted a set missing required member" & Index'Image);
+         Assert
+           (not X86.Supports_V4_VNNI (Missing_V3 (Index)),
+            "v4 accepted a set missing inherited member" & Index'Image);
+      end loop;
+      for Index in Missing_V4'Range loop
+         Assert
+           (not X86.Supports_V4_VNNI (Missing_V4 (Index)),
+            "v4/VNNI accepted a set missing required member" & Index'Image);
+      end loop;
+   end X86_ISA_Gates_Are_Complete;
 
    --  Capabilities report what the backend actually implements.
    procedure Capabilities_Reported (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -6040,6 +6223,34 @@ package body Tests.Backend_Cases is
       Devices.Close (Held);
    end A_Mixture_Keeps_Its_Expert_Biases_On_The_Device;
 
+   ---------------------------------------
+   -- Tile_Policy_Is_Per_Product_Engine --
+   ---------------------------------------
+
+   procedure Tile_Policy_Is_Per_Product_Engine
+     (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T_Case);
+
+      Narrow, Mid, Mid_Wide, Wide, Narrowed_Wide, Other_Default : Positive;
+      First_Keeps, Other_Keeps : Boolean;
+   begin
+      Model_Runner.Platform.Device.Products.Tile_Plan_Testing.Exercise
+        (Narrow, Mid, Mid_Wide, Wide, Narrowed_Wide, Other_Default,
+         First_Keeps, Other_Keeps);
+
+      Assert (Narrow = 32, "the narrow tile was not selected");
+      Assert (Mid = 64, "the mid tile was not selected");
+      Assert (Mid_Wide = 96, "the mid-wide tile was not selected");
+      Assert (Wide = 256, "the wider tile was not selected");
+      Assert (Narrowed_Wide = 128,
+              "a narrow run still selected the wider tile");
+      Assert (Other_Default = 128,
+              "one engine changed another engine's tile availability");
+      Assert (First_Keeps and then not Other_Keeps,
+              "one engine changed another engine's routing policy");
+   end Tile_Policy_Is_Per_Product_Engine;
+
    ------------------------------------------------------
    -- A_Short_Batch_Answers_As_The_Wide_Tile_Does --
    ------------------------------------------------------
@@ -6053,7 +6264,9 @@ package body Tests.Backend_Cases is
    --  ahead too) and the low-bit one (IQ3_S). Each against the same
    --  product over six hundred positions, which is the wider tiles, on
    --  the first twenty-two, forty-eight, eighty, 150, 200 and 400: the same
-   --  half-precision operands, the sums in another order.
+   --  half-precision operands, the sums in another order. The eighty- and
+   --  400-position cases also exercise the optional tile families through
+   --  the engine's private policy state.
    procedure A_Short_Batch_Answers_As_The_Wide_Tile_Does
      (T_Case : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -6458,6 +6671,8 @@ package body Tests.Backend_Cases is
       --  And with the shares left as the softmax gave them, as DeepSeek-V2
       --  asks: the same experts, each share the renormalized one times the
       --  chosen few's total, which is under one.
+      --  This reaches the per-engine route policy through the device's
+      --  public boundary rather than exposing the private plan.
       declare
          Kept_Choice : Device.Choice_Array (0 .. Used - 1);
          Kept_Shares : N.Real_Array (0 .. Used - 1);
@@ -12236,8 +12451,18 @@ package body Tests.Backend_Cases is
       Exact_Cache : N.Real_Array (0 .. 2 * Room - 1);
       Query       : N.Real_Array (0 .. Span * Wide - 1);
 
-      procedure Compare (K_Bits, V_Bits : Positive; What : String) is
+      procedure Compare
+        (K_Bits, V_Bits : Positive;
+         What : String;
+         Transformed_Keys : Boolean := False)
+      is
          use type Interfaces.Unsigned_64;
+         Key_Codec : constant Products.Cache_Codec :=
+           (if Transformed_Keys
+            then Products.Transformed_Four_Bit_Cache
+            elsif K_Bits = Products.E4M3_Cache_Code
+            then Products.OCP_E4M3_Cache
+            else Products.Scaled_Integer_Cache);
          function Row_Bytes_Of (Bits : Positive) return N.Element_Count
          is (if Bits = 4 then KV_Span / 2 else KV_Span);
          function Blocks_Of (Bits : Positive) return N.Element_Count
@@ -12275,7 +12500,8 @@ package body Tests.Backend_Cases is
             Source : N.Real_Array;
             Into   : in out Model_Runner.Bytes.Byte_Array;
             Scales : in out N.Real_Array;
-            Stands : out N.Real_Array)
+            Stands : out N.Real_Array;
+            Codec  : Products.Cache_Codec := Products.Scaled_Integer_Cache)
          is
             use type Model_Runner.Bytes.Byte;
             Row_Bytes : constant N.Element_Count := Row_Bytes_Of (Bits);
@@ -12283,7 +12509,27 @@ package body Tests.Backend_Cases is
             At_Byte : constant Model_Runner.Bytes.Byte_Count :=
               Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
          begin
-            if Bits = Model_Runner.Backend.Device.E4M3_Cache_Code then
+            if Codec = Products.Transformed_Four_Bit_Cache then
+               declare
+                  Codes : Q4T.Byte_Array (0 .. Q4T.Code_Bytes (KV_Span) - 1);
+                  Held_Scales : N.Real_Array
+                    (0 .. Q4T.Scale_Count (KV_Span) - 1);
+                  Valid : Boolean;
+               begin
+                  Q4T.Encode_Key (Source, Codes, Held_Scales, Valid);
+                  Assert (Valid, "the q4t key encoder refused " & What);
+                  Q4T.Decode_Key (Codes, Held_Scales, Stands, Valid);
+                  Assert (Valid, "the q4t key decoder refused " & What);
+                  for Index in Codes'Range loop
+                     Into
+                       (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
+                         Model_Runner.Bytes.Byte (Codes (Index));
+                  end loop;
+                  for Index in Held_Scales'Range loop
+                     Scales (Row * Blocks + Index) := Held_Scales (Index);
+                  end loop;
+               end;
+            elsif Bits = Model_Runner.Backend.Device.E4M3_Cache_Code then
                Scales (Row) := 1.0;
                for Index in 0 .. KV_Span - 1 loop
                   declare
@@ -12358,8 +12604,11 @@ package body Tests.Backend_Cases is
          Worst : N.Real := 0.0;
       begin
          for Row in 0 .. Rows - 1 loop
-            Pack (K_Bits, Row, Exact_Cache (Row * KV_Span .. (Row + 1) * KV_Span - 1),
-                  Key_Bytes, Key_Scales, Stand (Row * KV_Span .. (Row + 1) * KV_Span - 1));
+            Pack (K_Bits, Row,
+                  Exact_Cache (Row * KV_Span .. (Row + 1) * KV_Span - 1),
+                  Key_Bytes, Key_Scales,
+                  Stand (Row * KV_Span .. (Row + 1) * KV_Span - 1),
+                  Key_Codec);
             Pack (V_Bits, Row,
                   Exact_Cache (Room + Row * KV_Span .. Room + (Row + 1) * KV_Span - 1),
                   Value_Bytes, Value_Scales,
@@ -12419,7 +12668,8 @@ package body Tests.Backend_Cases is
                   VS_At => Natural (2 * Room + V_Scale_At),
                   K_Blocks => Natural (K_Blocks), V_Blocks => Natural (V_Blocks),
                   Scale => 0.125, Cap => 0.0, Target => Packed_Blend, Ok => Ok,
-                  Positions => Positions_Now, Window => Window);
+                  Positions => Positions_Now, Window => Window,
+                  K_Codec => Key_Codec);
                Assert (Ok, "the packed attention was refused for " & What);
 
                for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1 loop
@@ -12477,7 +12727,12 @@ package body Tests.Backend_Cases is
                      Scale => 0.125, Cap => 0.0, Added => Added,
                      Window => Window, Chained => True,
                      Packed =>
-                       (K_Bits => K_Bits, V_Bits => V_Bits,
+                       (K_Codec => Key_Codec,
+                        V_Codec =>
+                          (if V_Bits = Products.E4M3_Cache_Code
+                           then Products.OCP_E4M3_Cache
+                           else Products.Scaled_Integer_Cache),
+                        K_Bits => K_Bits, V_Bits => V_Bits,
                         K_Bytes => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
                         V_Bytes => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
                         KS_At => Natural (2 * Room + K_Scale_At),
@@ -12493,10 +12748,50 @@ package body Tests.Backend_Cases is
                   Model_Runner.Bytes.Free (Identity);
 
                   Worst := 0.0;
+                  declare
+                     Query_Worst : N.Real := 0.0;
+                  begin
+                     for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1
+                     loop
+                        Query_Worst := N.Real'Max
+                          (Query_Worst,
+                           abs (Query (Index) - Through (Index)));
+                     end loop;
+                     Assert
+                       (Query_Worst <= 1.0e-5,
+                        "the identity before " & What & " changes its query by"
+                        & N.Real'Image (Query_Worst));
+                  end;
                   for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1 loop
                      Worst := N.Real'Max
                        (Worst, abs (Exact_Blend (Index) - Through (Blend_At + Index)));
                   end loop;
+                  declare
+                     Direct_Worst : N.Real := 0.0;
+                     Direct_At    : N.Element_Count := 0;
+                  begin
+                     for Index in 0 .. Span * N.Element_Count (Positions_Now) - 1
+                     loop
+                        if abs (Packed_Blend (Index)
+                                - Through (Blend_At + Index)) > Direct_Worst
+                        then
+                           Direct_Worst := abs
+                             (Packed_Blend (Index)
+                              - Through (Blend_At + Index));
+                           Direct_At := Index;
+                        end if;
+                     end loop;
+                     Assert
+                       (Direct_Worst <= 1.0e-4,
+                        "the sequence over " & What & " differs from its direct"
+                        & " packed call by" & N.Real'Image (Direct_Worst)
+                        & " at" & N.Element_Count'Image (Direct_At)
+                        & " (" & N.Real'Image (Packed_Blend (Direct_At))
+                        & " against"
+                        & N.Real'Image (Through (Blend_At + Direct_At))
+                        & "), for" & Positive'Image (Positions_Now)
+                        & " queries");
+                  end;
                   Assert (Worst <= 1.0e-4,
                           "the packed attention step of a sequence over " & What
                           & " answers" & N.Real'Image (Worst)
@@ -12584,7 +12879,12 @@ package body Tests.Backend_Cases is
                         Scale => 0.125, Cap => 0.0, Added => Added,
                         Chained => True, Sinks_At => Natural (Sinks_At),
                         Packed =>
-                          (K_Bits => K_Bits, V_Bits => V_Bits,
+                          (K_Codec => Key_Codec,
+                           V_Codec =>
+                             (if V_Bits = Products.E4M3_Cache_Code
+                              then Products.OCP_E4M3_Cache
+                              else Products.Scaled_Integer_Cache),
+                           K_Bits => K_Bits, V_Bits => V_Bits,
                            K_Bytes => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
                            V_Bytes => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
                            KS_At => Natural (2 * Room + K_Scale_At),
@@ -12713,7 +13013,7 @@ package body Tests.Backend_Cases is
                   VS_At => Natural (2 * Room + V_Scale_At),
                   K_Blocks => Natural (K_Blocks), V_Blocks => Natural (V_Blocks),
                   Scale => 0.125, Cap => 0.0, Target => Packed_Blend, Ok => Ok,
-                  Positions => Wide);
+                  Positions => Wide, K_Codec => Key_Codec);
                Assert (Ok, "the packed attention over " & Positive'Image (Wide)
                        & " positions was refused for " & What);
 
@@ -12749,7 +13049,9 @@ package body Tests.Backend_Cases is
                Assert (Added, "a sequence would not take the product for " & What);
                Products.Add_Place
                  (Steps, Natural (KV_Span), Natural (KV_Span), 0, Added,
-                  Packed => (Bits => K_Bits, Row_Bytes => Natural (K_Row_Bytes),
+                  Packed =>
+                    (Codec => Key_Codec,
+                     Bits => K_Bits, Row_Bytes => Natural (K_Row_Bytes),
                              At_Byte => Interfaces.Unsigned_64 (2 * Room + Base) * 4,
                              At_Scale => Natural (2 * Room + K_Scale_At),
                              Blocks => Natural (K_Blocks)),
@@ -12758,7 +13060,12 @@ package body Tests.Backend_Cases is
                Assert (Added, "a sequence would not take the keys' unpacking for " & What);
                Products.Add_Place
                  (Steps, Natural (KV_Span), Natural (KV_Span), 0, Added,
-                  Packed => (Bits => V_Bits, Row_Bytes => Natural (V_Row_Bytes),
+                  Packed =>
+                    (Codec =>
+                       (if V_Bits = Products.E4M3_Cache_Code
+                        then Products.OCP_E4M3_Cache
+                        else Products.Scaled_Integer_Cache),
+                     Bits => V_Bits, Row_Bytes => Natural (V_Row_Bytes),
                              At_Byte => Interfaces.Unsigned_64 (2 * Room + Values_At) * 4,
                              At_Scale => Natural (2 * Room + V_Scale_At),
                              Blocks => Natural (V_Blocks)),
@@ -12819,6 +13126,29 @@ package body Tests.Backend_Cases is
          Query (Index) := N.Real (Index mod 7) / 7.0 - 0.25;
       end loop;
 
+      Assert
+        (Products.Takes_Packed
+           (Engine,
+            (K_Codec => Products.Transformed_Four_Bit_Cache,
+             V_Codec => Products.Scaled_Integer_Cache,
+             K_Bits => 4, V_Bits => 4,
+             K_Bytes => 0, V_Bytes => 64,
+             KS_At => 128, VS_At => 136,
+             K_Blocks => 4, V_Blocks => 4),
+            Head_Size, Head_Size, Natural (KV_Span), Natural (KV_Span)),
+         "the packed kernel refused transformed Q4 keys");
+      Assert
+        (not Products.Takes_Packed
+           (Engine,
+            (K_Codec => Products.Scaled_Integer_Cache,
+             V_Codec => Products.Transformed_Four_Bit_Cache,
+             K_Bits => 4, V_Bits => 4,
+             K_Bytes => 0, V_Bytes => 64,
+             KS_At => 128, VS_At => 136,
+             K_Blocks => 4, V_Blocks => 4),
+            Head_Size, Head_Size, Natural (KV_Span), Natural (KV_Span)),
+         "the packed kernel accepted unsupported transformed Q4 values");
+
       Compare (8, 8, "bytes");
       Compare
         (Model_Runner.Backend.Device.E4M3_Cache_Code,
@@ -12831,6 +13161,7 @@ package body Tests.Backend_Cases is
         (Model_Runner.Backend.Device.E4M3_Cache_Code, 4,
          "OCP E4M3 keys and nibble values");
       Compare (4, 4, "nibbles");
+      Compare (4, 4, "transformed nibble keys", Transformed_Keys => True);
       Compare (8, 4, "byte keys and nibble values");
       Compare (4, 8, "nibble keys and byte values");
 
@@ -12886,7 +13217,11 @@ package body Tests.Backend_Cases is
            " at a width of" & N.Element_Count'Image (Width);
          Source : N.Real_Array (0 .. Rows * Width - 1);
 
-         procedure Compare (Bits : Positive; What : String) is
+         procedure Compare
+           (Bits  : Positive;
+            What  : String;
+            Codec : Products.Cache_Codec := Products.Scaled_Integer_Cache)
+         is
             use type Interfaces.Unsigned_64;
             use type Model_Runner.Bytes.Byte;
 
@@ -12909,6 +13244,7 @@ package body Tests.Backend_Cases is
             Got_Bytes     : Model_Runner.Bytes.Byte_Array (Wanted_Bytes'Range) :=
               [others => 0];
             Got_Scales    : N.Real_Array (Wanted_Scales'Range) := [others => 0.0];
+            Wanted_Decoded : N.Real_Array (Source'Range) := [others => 0.0];
 
             Identity : Model_Runner.Bytes.Byte_Array_Access;
             Steps    : Products.Sequence;
@@ -12922,7 +13258,30 @@ package body Tests.Backend_Cases is
                   At_Byte : constant Model_Runner.Bytes.Byte_Count :=
                     Model_Runner.Bytes.Byte_Count (Row * Row_Bytes);
                begin
-                  if Bits = Model_Runner.Backend.Device.E4M3_Cache_Code then
+                  if Codec = Products.Transformed_Four_Bit_Cache then
+                     declare
+                        Codes : Q4T.Byte_Array (0 .. Q4T.Code_Bytes (Width) - 1);
+                        Scales : N.Real_Array (0 .. Q4T.Scale_Count (Width) - 1);
+                        Valid : Boolean;
+                     begin
+                        Q4T.Encode_Key
+                          (Source (From .. From + Width - 1),
+                           Codes, Scales, Valid);
+                        Assert (Valid, "the host q4t encoder refused " & What);
+                        for Index in Codes'Range loop
+                           Wanted_Bytes
+                             (At_Byte + Model_Runner.Bytes.Byte_Count (Index)) :=
+                               Model_Runner.Bytes.Byte (Codes (Index));
+                        end loop;
+                        for Index in Scales'Range loop
+                           Wanted_Scales (Row * Blocks + Index) := Scales (Index);
+                        end loop;
+                        Q4T.Decode_Key
+                          (Codes, Scales,
+                           Wanted_Decoded (From .. From + Width - 1), Valid);
+                        Assert (Valid, "the host q4t decoder refused " & What);
+                     end;
+                  elsif Bits = Model_Runner.Backend.Device.E4M3_Cache_Code then
                      Wanted_Scales (Row) := 1.0;
                      for Index in N.Element_Count range 0 .. Width - 1 loop
                         Wanted_Bytes
@@ -13021,7 +13380,11 @@ package body Tests.Backend_Cases is
             Assert (Added, "a sequence would not take the product for " & What);
             Products.Add_Place
               (Steps, Natural (Width), Natural (Width), 0, Added,
-               Packed => (Bits => Bits, Row_Bytes => Natural (Row_Bytes),
+               Packed =>
+                 (Codec =>
+                    (if Bits = Products.E4M3_Cache_Code
+                     then Products.OCP_E4M3_Cache else Codec),
+                  Bits => Bits, Row_Bytes => Natural (Row_Bytes),
                           At_Byte => Interfaces.Unsigned_64 (Base) * 4,
                           At_Scale => Natural (Scale_At),
                           Blocks => Natural (Blocks)));
@@ -13049,6 +13412,278 @@ package body Tests.Backend_Cases is
                        & " where the host makes"
                        & Model_Runner.Bytes.Byte'Image (Wanted_Bytes (Index)));
             end loop;
+
+            --  The transformed codec through page addressing as well: five
+            --  rows beginning at position six in four-position pages cross
+            --  from logical page one into page two. Nonzero region offsets
+            --  catch treating either byte or scale addresses as page bases.
+            if Codec = Products.Transformed_Four_Bit_Cache and then Width = 256
+            then
+               declare
+                  Page_Shift : constant := 2;
+                  First_Position : constant := 6;
+                  Table_At : constant N.Element_Count := 4;
+                  Byte_Offset : constant N.Element_Count := 12;
+                  Scale_Offset : constant N.Element_Count := 132;
+                  Page_Base : constant array (Natural range 0 .. 2)
+                    of N.Element_Count := [64, 512, 960];
+                  Page_Whole : constant N.Element_Count :=
+                    Page_Base (2) + Scale_Offset + 4 * Blocks;
+                  Table : Model_Runner.Bytes.Byte_Array (0 .. 11) :=
+                    [others => 0];
+                  Page_Matrix : Model_Runner.Bytes.Byte_Array_Access;
+                  Page_Steps : Products.Sequence;
+                  Took, Stopped : Boolean;
+               begin
+                  for Page in Page_Base'Range loop
+                     declare
+                        Where : constant Model_Runner.Bytes.Byte_Count :=
+                          Model_Runner.Bytes.Byte_Count (Page * 4);
+                     begin
+                        Table (Where .. Where + 3) :=
+                          Model_Runner.Bytes.Put_U32
+                            (Interfaces.Unsigned_32 (Page_Base (Page)));
+                     end;
+                  end loop;
+
+                  Products.Reserve (Engine, Page_Whole, Page_Whole, Ok);
+                  Assert (Ok, "the q4t paged cache would not be reserved");
+                  Products.Put_Bytes
+                    (Engine, Interfaces.Unsigned_64 (Table_At) * 4, Table, Ok);
+                  Assert (Ok, "the q4t page table would not be written");
+
+                  Model_Runner.Bytes.Allocate
+                    (Model_Runner.Bytes.Byte_Count (Width * Width) * 4,
+                     Page_Matrix);
+                  Assert (Page_Matrix /= null,
+                          "no room for the q4t paged identity");
+                  Page_Matrix.all := [others => 0];
+                  for Row in 0 .. Width - 1 loop
+                     declare
+                        Where : constant Model_Runner.Bytes.Byte_Count :=
+                          Model_Runner.Bytes.Byte_Count (Row * Width + Row) * 4 + 1;
+                     begin
+                        Page_Matrix.all (Where .. Where + 3) :=
+                          Model_Runner.Bytes.Put_F32 (1.0);
+                     end;
+                  end loop;
+
+                  Products.Open_Sequence (Page_Steps);
+                  Products.Add_Product
+                    (Page_Steps, Page_Matrix.all'Address,
+                     Model_Runner.Bytes.Byte_Count (Page_Matrix.all'Length),
+                     0, Products.Values_F32,
+                     Natural (Width), Natural (Width), Took);
+                  Assert (Took, "the q4t paged identity was refused");
+                  Products.Add_Place
+                    (Page_Steps, Natural (Width), Natural (Width), 0, Took,
+                     Packed =>
+                       (Codec => Products.Transformed_Four_Bit_Cache,
+                        Bits => 4, Row_Bytes => Natural (Row_Bytes),
+                        At_Byte => Interfaces.Unsigned_64 (Byte_Offset),
+                        At_Scale => Natural (Scale_Offset),
+                        Blocks => Natural (Blocks)),
+                     Pages_At => Natural (Table_At),
+                     Page_Shift => Page_Shift,
+                     First_Position => First_Position);
+                  Assert (Took, "the q4t paged packing step was refused");
+                  Products.Run
+                    (Engine, Page_Steps, Source, Rows, Through, Ok, Stopped);
+                  Model_Runner.Bytes.Free (Page_Matrix);
+                  Assert (Ok and then not Stopped,
+                          "the q4t paged packing sequence did not finish");
+
+                  for Row in 0 .. N.Element_Count (Rows) - 1 loop
+                     declare
+                        Position : constant N.Element_Count :=
+                          First_Position + Row;
+                        Page : constant Natural :=
+                          Natural (Position / (2 ** Page_Shift));
+                        Cell : constant N.Element_Count :=
+                          Position mod (2 ** Page_Shift);
+                        Row_At : constant Interfaces.Unsigned_64 :=
+                          Interfaces.Unsigned_64 (Page_Base (Page)) * 4
+                          + Interfaces.Unsigned_64 (Byte_Offset)
+                          + Interfaces.Unsigned_64 (Cell * Row_Bytes);
+                        Scale_At_Page : constant N.Element_Count :=
+                          Page_Base (Page) + Scale_Offset + Cell * Blocks;
+                        Page_Bytes : Model_Runner.Bytes.Byte_Array
+                          (0 .. Model_Runner.Bytes.Byte_Count (Row_Bytes) - 1);
+                        Page_Scales : N.Real_Array (0 .. Blocks - 1);
+                     begin
+                        Products.Get_Bytes (Engine, Row_At, Page_Bytes, Ok);
+                        Assert (Ok, "a q4t paged row would not read back");
+                        Products.Get_Cache
+                          (Engine, Scale_At_Page, Page_Scales, Ok);
+                        Assert (Ok, "q4t paged scales would not read back");
+                        for Index in Page_Bytes'Range loop
+                           Assert
+                             (Page_Bytes (Index)
+                                = Wanted_Bytes
+                                    (Model_Runner.Bytes.Byte_Count
+                                       (Row * Row_Bytes) + Index),
+                              "a q4t paged byte differs from the host encoder");
+                        end loop;
+                        for Index in Page_Scales'Range loop
+                           Assert
+                             (Page_Scales (Index)
+                                = Wanted_Scales (Row * Blocks + Index),
+                              "a q4t paged scale differs from the host encoder");
+                        end loop;
+                     end;
+                  end loop;
+               end;
+            end if;
+
+            --  Exercise the other direction once at a full model-like
+            --  width. The unpack shader restores q4t keys to the model
+            --  basis in the half copy; exact matrix attention then reads
+            --  that copy. Compare it with the same softmax over the host
+            --  decoder's rows, using the decoded keys as values as well.
+            if Codec = Products.Transformed_Four_Bit_Cache
+              and then Width = 256
+              and then Products.Attends_By_Matrix
+                (Engine, 32, Natural (Width), Natural (Width))
+            then
+               declare
+                  Count    : constant Positive := 32;
+                  Span     : constant N.Element_Count :=
+                    Width * N.Element_Count (Count);
+                  Blend_At : constant N.Element_Count := Span * 2;
+                  Scale    : constant N.Real := 0.0625;
+                  Queries  : N.Real_Array (0 .. Span - 1);
+                  Expected : N.Real_Array (0 .. Span - 1) := [others => 0.0];
+                  Results  : N.Real_Array (0 .. Span * 3 - 1) := [others => 0.0];
+                  Matrix   : Model_Runner.Bytes.Byte_Array_Access;
+                  Unpack_Steps : Products.Sequence;
+                  Took, Stopped : Boolean;
+                  Worst : N.Real := 0.0;
+               begin
+                  for Position in 0 .. N.Element_Count (Count) - 1 loop
+                     for Column in 0 .. Width - 1 loop
+                        Queries (Position * Width + Column) :=
+                          N.Real ((Position + Column) mod 17) / 17.0 - 0.5;
+                     end loop;
+                  end loop;
+
+                  for Position in 0 .. N.Element_Count (Count) - 1 loop
+                     declare
+                        Scores : N.Real_Array (0 .. Rows - 1);
+                        Top : N.Real := N.Real'First;
+                        Sum : N.Real := 0.0;
+                     begin
+                        for Row in 0 .. N.Element_Count (Rows) - 1 loop
+                           Scores (Row) := 0.0;
+                           for Column in 0 .. Width - 1 loop
+                              Scores (Row) := Scores (Row)
+                                + Queries (Position * Width + Column)
+                                  * N.To_Real
+                                      (N.To_Half
+                                         (Wanted_Decoded
+                                            (Row * Width + Column)));
+                           end loop;
+                           Scores (Row) := Scores (Row) * Scale;
+                           Top := N.Real'Max (Top, Scores (Row));
+                        end loop;
+                        for Row in Scores'Range loop
+                           Scores (Row) :=
+                             N.Real (Ada.Numerics.Elementary_Functions.Exp
+                               (Float (Scores (Row) - Top)));
+                           Sum := Sum + Scores (Row);
+                        end loop;
+                        for Row in Scores'Range loop
+                           for Column in 0 .. Width - 1 loop
+                              Expected (Position * Width + Column) :=
+                                Expected (Position * Width + Column)
+                                + Scores (Row) / Sum
+                                  * N.To_Real
+                                      (N.To_Half
+                                         (Wanted_Decoded
+                                            (Row * Width + Column)));
+                           end loop;
+                        end loop;
+                     end;
+                  end loop;
+
+                  Model_Runner.Bytes.Allocate
+                    (Model_Runner.Bytes.Byte_Count (Width * Width) * 4, Matrix);
+                  Assert (Matrix /= null, "no room for the q4t unpack identity");
+                  Matrix.all := [others => 0];
+                  for Row in 0 .. Width - 1 loop
+                     declare
+                        Where : constant Model_Runner.Bytes.Byte_Count :=
+                          Model_Runner.Bytes.Byte_Count (Row * Width + Row) * 4 + 1;
+                     begin
+                        Matrix.all (Where .. Where + 3) :=
+                          Model_Runner.Bytes.Put_F32 (1.0);
+                     end;
+                  end loop;
+
+                  Products.Reserve
+                    (Engine, N.Element_Count (Rows) * Width,
+                     N.Element_Count (Rows) * Width, Ok);
+                  Assert (Ok, "the q4t half copy would not be reserved");
+                  for Paged in Boolean loop
+                     Results := [others => 0.0];
+                     Worst := 0.0;
+                     Products.Open_Sequence (Unpack_Steps);
+                     Products.Add_Product
+                       (Unpack_Steps, Matrix.all'Address,
+                        Model_Runner.Bytes.Byte_Count (Matrix.all'Length),
+                        0, Products.Values_F32,
+                        Natural (Width), Natural (Width), Took);
+                     Assert (Took, "the q4t unpack identity was refused");
+                     Products.Add_Place
+                       (Unpack_Steps, Natural (Width), Natural (Width), 0, Took,
+                        Packed =>
+                          (Codec => Products.Transformed_Four_Bit_Cache,
+                           Bits => 4, Row_Bytes => Natural (Row_Bytes),
+                           At_Byte =>
+                             (if Paged then 12
+                              else Interfaces.Unsigned_64 (Base) * 4),
+                           At_Scale =>
+                             (if Paged then 132 else Natural (Scale_At)),
+                           Blocks => Natural (Blocks)),
+                        Unpack => True, Cells => Rows,
+                        Half_At => Products.Copy_At (Engine),
+                        Pages_At => (if Paged then 4 else 0),
+                        Page_Shift => (if Paged then 2 else 0),
+                        First_Position => (if Paged then 6 else 0));
+                     Assert (Took, "the q4t unpacking step was refused");
+                     Products.Add_Attention
+                       (Unpack_Steps, Heads => 1,
+                        Head_Size => Natural (Width), Value_Size => Natural (Width),
+                        Group_Size => 1, First => 0, Last => Rows - 1,
+                        K_Base => 0, V_Base => 0,
+                        KV_Width => Natural (Width), V_Width => Natural (Width),
+                        Scale => Scale, Cap => 0.0, Added => Took,
+                        Chained => True, Causal => False, From_Step => 1);
+                     Assert (Took, "attention over the q4t half copy was refused");
+                     Products.Run
+                       (Engine, Unpack_Steps, Queries, Count,
+                        Results, Ok, Stopped);
+                     Assert (Ok and then not Stopped,
+                             "the q4t unpacking sequence did not finish: ok="
+                             & Boolean'Image (Ok) & ", stopped="
+                             & Boolean'Image (Stopped) & ", refusal="
+                             & Products.Refusal'Image
+                                 (Products.Last_Refusal (Engine)));
+
+                     for Index in Expected'Range loop
+                        Worst := N.Real'Max
+                          (Worst,
+                           abs (Expected (Index)
+                                - Results (Blend_At + Index)));
+                     end loop;
+                     Assert
+                       (Worst <= 0.1,
+                        "q4t " & (if Paged then "paged " else "block ")
+                        & "unpacked attention is" & N.Real'Image (Worst)
+                        & " away from the host-decoded rows");
+                  end loop;
+                  Model_Runner.Bytes.Free (Matrix);
+               end;
+            end if;
          end Compare;
       begin
          --  Row 0: a spread with its largest at 127, so a byte's level is
@@ -13087,6 +13722,9 @@ package body Tests.Backend_Cases is
            (Model_Runner.Backend.Device.E4M3_Cache_Code,
             "OCP E4M3 bytes" & Suffix);
          Compare (4, "nibbles" & Suffix);
+         Compare
+           (4, "transformed nibbles" & Suffix,
+            Products.Transformed_Four_Bit_Cache);
 
          --  And through the compilation without subgroup operations.
          Products.Prefer_Plain_Packing (Engine, True);
@@ -13095,6 +13733,9 @@ package body Tests.Backend_Cases is
            (Model_Runner.Backend.Device.E4M3_Cache_Code,
             "OCP E4M3 bytes, through shared memory alone" & Suffix);
          Compare (4, "nibbles, through shared memory alone" & Suffix);
+         Compare
+           (4, "transformed nibbles, through shared memory alone" & Suffix,
+            Products.Transformed_Four_Bit_Cache);
          Products.Prefer_Plain_Packing (Engine, False);
       end Over;
    begin
@@ -15740,6 +16381,75 @@ package body Tests.Backend_Cases is
       end;
       Products.Open (Engine, Opened, Ready);
       if Ready then
+         declare
+            package Tune renames Model_Runner.Platform.Device.Tuning;
+            use type Tune.Launch_Choices;
+            Default   : constant Tune.Launch_Choices := Tune.Default_Choices;
+            Candidate : Tune.Launch_Choices := Default;
+            Invalid   : Tune.Launch_Choices := Default;
+            Accepted  : Boolean;
+         begin
+            Assert (Products.Tuning_Of (Engine) = Default,
+                    "a fresh engine did not use the safe launch choices");
+            Candidate.Attention_Workgroups := 128;
+            Candidate.Attention_Slice_Least := 128;
+            Candidate.Attention_Slice_Limit := 8;
+            Candidate.Row_Product_Workgroup := 128;
+            Candidate.Packed_Bundle_Least := 512;
+            Candidate.Packed_Cuts_A_Round := True;
+            Candidate.Matrix_Row_Crossover := 17;
+            Products.Use_Tuning (Engine, Candidate, Accepted);
+            Assert (Accepted and then Products.Tuning_Of (Engine) = Candidate,
+                    "an engine refused supported launch choices");
+            declare
+               Rows    : constant := 16;
+               Columns : constant := 64;
+               Weights : N.Real_Array
+                 (0 .. N.Element_Count (Rows * Columns) - 1);
+               Vector  : N.Real_Array
+                 (0 .. N.Element_Count (Columns) - 1);
+               Result  : N.Real_Array
+                 (0 .. N.Element_Count (Rows) - 1);
+               Expected : N.Real;
+               Computed : Boolean;
+            begin
+               for Index in Weights'Range loop
+                  Weights (Index) :=
+                    N.Real (Integer (Natural (Index) mod 11) - 5) / 32.0;
+               end loop;
+               for Index in Vector'Range loop
+                  Vector (Index) :=
+                    N.Real (Integer (Natural (Index) mod 7) - 3) / 16.0;
+               end loop;
+               Products.Multiply
+                 (Engine, Weights, Vector, Rows, Columns, Result, Computed);
+               Assert (Computed,
+                       "the selected 128-lane row product was refused");
+               for Row in 0 .. Rows - 1 loop
+                  Expected := 0.0;
+                  for Column in 0 .. Columns - 1 loop
+                     Expected := Expected
+                       + Weights (N.Element_Count (Row * Columns + Column))
+                         * Vector (N.Element_Count (Column));
+                  end loop;
+                  Assert
+                    (abs (Result (N.Element_Count (Row)) - Expected) < 1.0E-4,
+                     "a selected row-product variant changed its answer");
+               end loop;
+            end;
+            Invalid.Attention_Workgroups := 65;
+            Products.Use_Tuning (Engine, Invalid, Accepted);
+            Assert (not Accepted and then Products.Tuning_Of (Engine) = Candidate,
+                    "an engine partly applied unsupported launch choices");
+            Invalid := Default;
+            Invalid.Packed_Cuts_A_Round := False;
+            Products.Use_Tuning (Engine, Invalid, Accepted);
+            Assert (not Accepted and then Products.Tuning_Of (Engine) = Candidate,
+                    "an unmeasured packed-round choice was applied");
+            Products.Use_Tuning (Engine, Default, Accepted);
+            Assert (Accepted and then Products.Tuning_Of (Engine) = Default,
+                    "an engine did not restore its safe launch choices");
+         end;
          Assert (not Products.Is_Stalled (Engine) and then Products.Submissions (Engine) >= 0
                  and then (Products.Heap_Budget (Engine) = 0
                            or else Products.Heap_Budget (Engine) <= Devices.Storage_Limit (Opened)
@@ -15750,6 +16460,68 @@ package body Tests.Backend_Cases is
       Devices.Close (Opened);
       Devices.Close (Held);
    end Device_Context_Says_What_It_Has;
+
+   --  Automatic launch tuning is only an optimization hint, while an
+   --  explicitly named profile is a contract: an exact one is applied,
+   --  "none" disables lookup, and a missing one refuses the open.
+   procedure Device_Tuning_Is_Exact
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Dev renames Model_Runner.Backend.Device;
+      package Tune renames Model_Runner.Platform.Device.Tuning;
+      use type Dev.Tuning_Disposition;
+      Held    : Devices.Inventory;
+      Opened  : Devices.Context;
+      Found   : Boolean;
+      Ready   : Boolean;
+      Written : Boolean;
+      Key     : Tune.Tuning_Key;
+      Choice  : Tune.Launch_Choices := Tune.Default_Choices;
+      Path    : constant String := "obj/device-tuning/profile.tuning";
+      Missing : constant String := "obj/device-tuning/absent.tuning";
+   begin
+      Dev.Close;
+      Devices.Open (Held, Found);
+      if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
+         return;
+      end if;
+      Devices.Open (Opened, Held, 1, Ready);
+      if not Ready then
+         Device_Notes.Skip ("for automatic device tuning");
+         Devices.Close (Held);
+         return;
+      end if;
+      Key := Tune.Create_Key
+        (Devices.Identity (Opened), Tune.Shader_Stamp,
+         Model_Runner.Platform.Program_Stamp);
+      Devices.Close (Opened);
+      Devices.Close (Held);
+
+      Choice.Matrix_Row_Crossover := 17;
+      Tune.Store (Path, Key, Choice, Written);
+      Assert (Written, "an exact device profile could not be prepared");
+
+      Dev.Open (Ready, Tuning_Profile => Path);
+      Assert
+        (Ready and then Dev.Tuning_Status = Dev.Tuning_Applied
+         and then Dev.Tuning_Profile = Path,
+         "an exact explicitly named device profile was not applied");
+
+      Dev.Open (Ready, Tuning_Profile => "none");
+      Assert
+        (Ready and then Dev.Tuning_Status = Dev.Tuning_Disabled
+         and then Dev.Tuning_Profile = "",
+         "device tuning was not disabled when asked");
+
+      Dev.Open (Ready, Tuning_Profile => Missing);
+      Assert
+        (not Ready and then Dev.Tuning_Status = Dev.Tuning_Refused
+         and then Dev.Tuning_Profile = Missing,
+         "an absent explicitly named device profile did not refuse the open");
+      Dev.Close;
+   end Device_Tuning_Is_Exact;
 
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
@@ -15790,6 +16562,15 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Unused_Pool_Terminates'Access,
          "a pool that is never used still terminates");
+      Register_Routine
+        (T, Immediate_Close_Joins_Workers'Access,
+         "closing at the first worker wait joins every worker");
+      Register_Routine
+        (T, Close_Joins_Pre_Sleep_Worker'Access,
+         "shutdown cannot lose a worker held at the pre-sleep boundary");
+      Register_Routine
+        (T, X86_ISA_Gates_Are_Complete'Access,
+         "x86 multiversion gates require every inherited ISA feature");
       Register_Routine
         (T, Capabilities_Reported'Access,
          "capabilities report only what the backend implements");
@@ -16028,7 +16809,6 @@ package body Tests.Backend_Cases is
         (T, Hot_Experts_Displace_Cold_Ones_Only'Access,
          "a routing-aware expert cache retains repeated choices without "
          & "letting one-off or other-layer choices churn them");
-
       Register_Routine
         (T, Cores_Are_Not_Above_Processors'Access,
          "the core count is at least one and never above the processor "
@@ -16125,6 +16905,9 @@ package body Tests.Backend_Cases is
          "what the device keeps is bounded by bytes and not by the size of "
          & "the table it keeps them in");
       Register_Routine
+        (T, Tile_Policy_Is_Per_Product_Engine'Access,
+         "tile availability and routing policy belong to one product engine");
+      Register_Routine
         (T, A_Short_Batch_Answers_As_The_Wide_Tile_Does'Access,
          "a batch of twenty-two positions on the narrow tile, one of "
          & "forty-eight at sixty-four vectors, one of eighty at ninety-six and "
@@ -16137,7 +16920,8 @@ package body Tests.Backend_Cases is
          & "the weights kept before it");
       Register_Routine
         (T, The_Device_Packs_As_The_Host_Packs'Access,
-         "rows packed into scaled bytes, E4M3 bytes and nibbles by a "
+         "rows packed into scaled bytes, E4M3 bytes, nibbles and transformed "
+         & "nibbles by a "
          & "placing step of a "
          & "sequence are the bytes and the scales the host's rounding "
          & "makes of the same rows, zeros, halves and either sign's "
@@ -16151,6 +16935,9 @@ package body Tests.Backend_Cases is
       Register_Routine
         (T, Device_Context_Says_What_It_Has'Access,
          "a device context and its engine say what the device has, and a closed one nothing");
+      Register_Routine
+        (T, Device_Tuning_Is_Exact'Access,
+         "device tuning applies an exact profile, can be disabled, and refuses a bad explicit path");
    end Register_Tests;
 
 end Tests.Backend_Cases;

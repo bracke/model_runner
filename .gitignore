@@ -8,12 +8,17 @@
 /framework/bin/
 /framework/alire/
 /framework/config/
+/core/obj/
 /inference/obj/
 /tests/obj/
 /tests/obj-support/
 /tests/bin/
 /tests/alire/
 /tests/config/
+/tests/inference_consumer/obj/
+/tests/inference_consumer/bin/
+/tests/inference_fixture/obj/
+/tests/inference_fixture/bin/
 
 # Generated fixtures
 /tests/image-prompt-cache-test/

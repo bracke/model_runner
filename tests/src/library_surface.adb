@@ -75,6 +75,18 @@ package body Library_Surface is
       new String'("Value_Code"),
       new String'("Wipe"),
 
+      --  The transformed-cache codec operations that remain library-only.
+      --  Session storage now uses Encode_Key and Decode_Key directly; score
+      --  and the value-side primitives remain part of the embedding contract.
+      new String'("Score_Key"),
+      new String'("Encode_Value"),
+      new String'("Accumulate_Value"),
+      new String'("Finish_Value"),
+
+      --  The explicit tuning campaign and device tests inspect the policy
+      --  they just applied; an ordinary run only needs to apply one.
+      new String'("Tuning_Of"),
+
       --  The device keeper's count of rounds, which is how its test tells
       --  a keeper that stopped from one that went on.
       new String'("Keeper_Rounds"),

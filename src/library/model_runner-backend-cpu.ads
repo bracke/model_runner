@@ -709,6 +709,12 @@ private
 
    type Worker_Array is array (Worker_Count range <>) of Worker;
 
+   --  Closing is deliberately distinct from Closed.  Storage containing
+   --  workers may be reclaimed only after every task has terminated; marking
+   --  it closed before that join made a cleanup exception turn a live pool
+   --  into one whose next Close returned immediately.
+   type Pool_State is (Fresh, Opened, Closing, Closed);
+
    --  Derived from Limited_Controlled so that finalization asks the workers to
    --  finish even when a caller forgets to close the pool. The language waits
    --  for the workers at the end of the frame that declares the pool, so there
@@ -744,7 +750,7 @@ private
       --  Dispatch_Shares.
       Latest  : Share_Count := Workers + 1;
       Team    : Worker_Array (1 .. Workers);
-      Started : Boolean := False;
+      State   : Pool_State := Fresh;
 
       --  Where the submitting task leaves the activations it quantized
       --  before it posted the job. One set for the pool, because exactly one

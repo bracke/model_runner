@@ -47,6 +47,7 @@ with Interfaces;
 with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Backend.Device;
+with Model_Runner.Backend.Device_Ownership;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Llama;
 with Model_Runner.Tensors;
@@ -5338,6 +5339,260 @@ package body Tests.Inference_Cases is
       end;
       B.Free (Image);
    end An_E4M3_Cache_Holds_A_Conversation;
+
+   --------------------------------------------------
+   -- A_Transformed_Q4_Cache_Holds_A_Conversation --
+   --------------------------------------------------
+
+   procedure A_Transformed_Q4_Cache_Holds_A_Conversation
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+
+      Prompt : constant Vocab.Token_Array := [1, 4, 5, 6, 7, 8];
+      Image  : B.Byte_Array_Access;
+   begin
+      declare
+         Narrow : L.Configuration;
+         Plan   : Model_Runner.Memory.Session_Plan;
+         Status : E.Error_Info;
+      begin
+         Narrow.Layers := 1;
+         Narrow.Head_Size := 16;
+         Assert
+           (not L.Cache_Compatible (Narrow, L.Transformed_Fourth),
+            "q4t compatibility accepted a partial transform group");
+         L.Plan_For
+           (Narrow, 32, Plan, Status, Cache => L.Transformed_Fourth);
+         Assert
+           (Status.Code = E.Arch_Unsupported_Feature,
+            "a q4t plan accepted a head boundary inside a transform group");
+         Narrow.Head_Size := 32;
+         Assert
+           (L.Cache_Compatible (Narrow, L.Transformed_Fourth),
+            "q4t compatibility refused one complete transform group");
+      end;
+
+      --  A K-quant fixture uses 128-wide heads. The first host integration
+      --  intentionally requires a multiple of the transform's 32 values.
+      Tiny_Model.Build (Image, Format => Tiny_Model.Q4_K, Room => 32);
+
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Batched, Stepped : Logit_Vector := [others => 0.0];
+         Mixed_Batched, Mixed_Stepped : Logit_Vector := [others => 0.0];
+         Continued, Restored : Logit_Vector := [others => 0.0];
+
+         procedure Run
+           (Batch  : Boolean;
+            Answer : out Logit_Vector;
+            Values : L.Value_Precision := L.Same_As_Keys)
+         is
+            Live : L.Session;
+         begin
+            L.Open
+              (Live, Under.Ready, Context => 32,
+               Cache => L.Transformed_Fourth, Values => Values,
+               Status => Status);
+            Assert (E.Is_Ok (Status), "the q4t session did not open");
+            if Batch then
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Prompt, Answer, Status => Status);
+            else
+               for Token of Prompt loop
+                  L.Evaluate
+                    (Live, Under.Ready, Token, Answer, Status => Status);
+                  exit when E.Is_Error (Status);
+               end loop;
+            end if;
+            Assert (E.Is_Ok (Status), "the q4t session did not evaluate");
+            L.Close (Live);
+         end Run;
+      begin
+         Start (Under);
+         Assert (L.Cache_Name (L.Transformed_Fourth) = "q4t",
+                 "the transformed Q4 cache has no stable public name");
+         Assert
+           (L."="
+              (L.Values_Held (L.Transformed_Fourth, L.Same_As_Keys), L.Fourth),
+            "q4t did not keep its values as ordinary q4");
+
+         declare
+            use type Interfaces.Unsigned_64;
+            Plain, Transformed : Model_Runner.Memory.Session_Plan;
+         begin
+            L.Plan_Session
+              (Under.Ready, 32, Plain, Status, Cache => L.Fourth);
+            Assert (E.Is_Ok (Status), "the q4 cache plan was refused");
+            L.Plan_Session
+              (Under.Ready, 32, Transformed, Status,
+               Cache => L.Transformed_Fourth);
+            Assert (E.Is_Ok (Status), "the q4t cache plan was refused");
+            Assert (Plain.KV_Cache_Bytes = Transformed.KV_Cache_Bytes,
+                    "q4t did not retain the q4 byte budget");
+         end;
+
+         Run (True, Batched);
+         Run (False, Stepped);
+         for Index in Batched'Range loop
+            Assert (abs (Batched (Index) - Stepped (Index)) <= 1.0e-5,
+                    "the q4t batch and token paths differ at"
+                    & N.Element_Count'Image (Index));
+         end loop;
+
+         Run (True, Mixed_Batched, L.Value_Eighth);
+         Run (False, Mixed_Stepped, L.Value_Eighth);
+         for Index in Mixed_Batched'Range loop
+            Assert
+              (abs (Mixed_Batched (Index) - Mixed_Stepped (Index)) <= 1.0e-5,
+               "the q4t/q8 batch and token paths differ at"
+               & N.Element_Count'Image (Index));
+         end loop;
+
+         --  The device's paged cache packs and attends the transformed
+         --  keys with their explicit codec identity; the whole layer stays
+         --  there and says what the host session says within the device
+         --  kernels' ordinary rounding tolerance.
+         declare
+            Awake, Able : Boolean;
+         begin
+            Model_Runner.Backend.Device.Open (Awake);
+            if Awake then
+               declare
+                  Over : Harness (Held'Access);
+                  Live : L.Session;
+                  Answer : Logit_Vector;
+                  Whole_Was : Natural;
+                  Handed_Was : Natural;
+                  Device_Worst : N.Real := 0.0;
+               begin
+                  Start (Over, Model_Runner.Backend.Backend_Device, Able);
+                  Assert (Able, "the q4t device model did not prepare");
+                  L.Open
+                    (Live, Over.Ready, Context => 32,
+                     Cache => L.Transformed_Fourth, Paged => True,
+                     Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the q4t device session did not open");
+                  Whole_Was := Model_Runner.Backend.Device.Layers_Whole;
+                  Handed_Was := Model_Runner.Backend.Device.Layers_Handed;
+                  L.Evaluate_Batch
+                    (Live, Over.Ready, Prompt, Answer, Status => Status);
+                  Assert (E.Is_Ok (Status),
+                          "the q4t device session did not evaluate");
+                  Assert
+                    (Model_Runner.Backend.Device.Layers_Whole > Whole_Was
+                     and then Model_Runner.Backend.Device.Layers_Handed
+                                = Handed_Was,
+                     "q4t attention was handed back to the host");
+                  for Index in Batched'Range loop
+                     Device_Worst := N.Real'Max
+                       (Device_Worst,
+                        abs (Batched (Index) - Answer (Index)));
+                  end loop;
+                  Assert (Device_Worst <= 0.05,
+                          "q4t device attention moved a logit by "
+                          & N.Real'Image (Device_Worst));
+                  L.Close (Live);
+                  L.Close (Over.Ready, Status);
+                  Containers.Close (Over.Parsed);
+               end;
+               Model_Runner.Backend.Device.Close;
+            end if;
+         exception
+            when others =>
+               Model_Runner.Backend.Device.Close;
+               raise;
+         end;
+
+         declare
+            Live  : L.Session;
+            Saved : B.Byte_Array_Access;
+         begin
+            L.Open
+              (Live, Under.Ready, Context => 32,
+               Cache => L.Transformed_Fourth, Status => Status);
+            Assert (E.Is_Ok (Status), "the saved q4t session did not open");
+            L.Evaluate_Batch
+              (Live, Under.Ready, Prompt, Continued, Status => Status);
+            Assert (E.Is_Ok (Status), "the saved q4t prompt failed");
+            L.Shift (Live, Under.Ready, 1, 2, Status);
+            Assert (E.Is_Ok (Status), "the q4t context did not shift");
+            L.Snapshot (Live, Under.Ready, Saved, Status);
+            Assert (E.Is_Ok (Status), "the q4t context did not save");
+            L.Evaluate
+              (Live, Under.Ready, 15, Continued, Status => Status);
+            Assert (E.Is_Ok (Status), "the shifted q4t context did not continue");
+            L.Close (Live);
+
+            L.Open
+              (Live, Under.Ready, Context => 32,
+               Cache => L.Transformed_Fourth, Status => Status);
+            Assert (E.Is_Ok (Status), "the restored q4t session did not open");
+            L.Adopt (Live, Under.Ready, Saved.all, Status);
+            Assert (E.Is_Ok (Status), "the q4t context did not restore");
+            L.Evaluate
+              (Live, Under.Ready, 15, Restored, Status => Status);
+            Assert (E.Is_Ok (Status), "the restored q4t context did not continue");
+            Assert (N."=" (Continued, Restored),
+                    "the restored q4t context changed its continuation");
+            L.Close (Live);
+            B.Free (Saved);
+         end;
+
+         L.Close (Under.Ready, Status);
+         Containers.Close (Under.Parsed);
+      end;
+      B.Free (Image);
+
+      --  A windowed layer takes the same transformed-cache path with a
+      --  different visible range. Cross the four-position window in both
+      --  evaluation shapes so a whole-context-only implementation fails.
+      Tiny_Model.Build
+        (Image, Format => Tiny_Model.Q4_K, Room => 32, Window => 4);
+      declare
+         Held   : aliased constant B.Byte_Array := Image.all;
+         Under  : Harness (Held'Access);
+         Status : E.Error_Info;
+         Batch_Answer, Step_Answer : Logit_Vector := [others => 0.0];
+
+         procedure Run (Batch : Boolean; Answer : out Logit_Vector) is
+            Live : L.Session;
+         begin
+            L.Open
+              (Live, Under.Ready, Context => 32,
+               Cache => L.Transformed_Fourth, Status => Status);
+            Assert (E.Is_Ok (Status), "the windowed q4t session did not open");
+            if Batch then
+               L.Evaluate_Batch
+                 (Live, Under.Ready, Prompt, Answer, Status => Status);
+            else
+               for Token of Prompt loop
+                  L.Evaluate
+                    (Live, Under.Ready, Token, Answer, Status => Status);
+                  exit when E.Is_Error (Status);
+               end loop;
+            end if;
+            Assert (E.Is_Ok (Status), "the windowed q4t session did not evaluate");
+            L.Close (Live);
+         end Run;
+      begin
+         Start (Under);
+         Run (True, Batch_Answer);
+         Run (False, Step_Answer);
+         for Index in Batch_Answer'Range loop
+            Assert
+              (abs (Batch_Answer (Index) - Step_Answer (Index)) <= 1.0e-5,
+               "the windowed q4t batch and token paths differ at"
+               & N.Element_Count'Image (Index));
+         end loop;
+         L.Close (Under.Ready, Status);
+         Containers.Close (Under.Parsed);
+      end;
+      B.Free (Image);
+   end A_Transformed_Q4_Cache_Holds_A_Conversation;
 
    --  A model in any format the program reads loads on the device.
    --
@@ -22192,6 +22447,128 @@ package body Tests.Inference_Cases is
               "completion on a closed session was not a lifecycle failure");
    end Public_Inference_Session_Is_Reusable;
 
+   ---------------------------------------------------
+   -- Public_Inference_Device_Ownership_Is_Exclusive --
+   ---------------------------------------------------
+
+   procedure Device_Leases_Do_Not_Need_Hardware_To_Be_Checked
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package O renames Model_Runner.Backend.Device_Ownership;
+      Item : O.Coordinator;
+      First, Stale, Second : O.Lease;
+      Granted, Released : Boolean;
+   begin
+      O.Claim_Ordinary (Item, Granted);
+      Assert (Granted, "the free coordinator refused its ordinary owner");
+      O.Claim_Exclusive (Item, Granted, First);
+      Assert
+        (not Granted,
+         "an exclusive lease entered an ordinarily owned coordinator");
+      O.Release_Ordinary (Item);
+
+      O.Claim_Exclusive (Item, Granted, First);
+      Assert
+        (Granted and then O.Owns_Exclusive (Item, First),
+         "the free coordinator refused its exclusive owner");
+      Stale := First;
+      O.Release_Exclusive (Item, First, Released);
+      Assert
+        (Released,
+         "releasing the first lease did not consume it");
+
+      O.Claim_Exclusive (Item, Granted, Second);
+      Assert (Granted, "the next exclusive lease was refused");
+      O.Release_Exclusive (Item, Stale, Released);
+      Assert
+        (not Released and then O.Owns_Exclusive (Item, Second),
+         "a stale lease released the next acquisition");
+      O.Claim_Ordinary (Item, Granted);
+      Assert (not Granted, "an ordinary owner entered an exclusive lease");
+      O.Release_Exclusive (Item, Second, Released);
+      Assert (Released, "the current exclusive lease did not release");
+      O.Claim_Ordinary (Item, Granted);
+      Assert (Granted, "the released coordinator remained owned");
+      O.Release_Ordinary (Item);
+   end Device_Leases_Do_Not_Need_Hardware_To_Be_Checked;
+
+   procedure Public_Inference_Device_Ownership_Is_Exclusive
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package I renames Model_Runner.Inference;
+      use type Model_Runner.Backend.Device.Open_Disposition;
+      Model   : constant String := "obj/public-inference-device.gguf";
+      First, Second : I.Session;
+      Status  : E.Error_Info;
+      Direct  : Boolean;
+      Granted : Boolean;
+      Lease, Stale, Next_Lease :
+        Model_Runner.Backend.Device.Exclusive_Lease;
+      Disposition : Model_Runner.Backend.Device.Open_Disposition;
+      Options : constant I.Open_Options :=
+        (Backend => Model_Runner.Backend.Backend_Device, others => <>);
+   begin
+      Tiny_Model.Write (Model, Byte_Pair => True);
+      I.Open (First, Model, Options, Status);
+      if E.Is_Error (Status) then
+         --  Device coverage is optional on hosts without a hardware or
+         --  software Vulkan implementation. Any other error means the
+         --  fixture or integration failed and must not turn into a skip.
+         Assert
+           (Status.Code = E.Backend_No_Device,
+            "the first public device session failed before ownership was tested");
+         return;
+      end if;
+
+      Model_Runner.Backend.Device.Open (Direct);
+      Assert (not Direct,
+              "a direct backend caller entered an exclusively owned device");
+      Model_Runner.Backend.Device.Close;
+
+      I.Open (Second, Model, Options, Status);
+      Assert
+        (Status.Code = E.Backend_Device_Refused
+         and then I.Is_Open (First) and then not I.Is_Open (Second),
+         "a second public session acquired or disrupted the owned device");
+
+      I.Close (First, Status);
+      Assert (E.Is_Ok (Status), "the first device session did not close");
+      I.Open (Second, Model, Options, Status);
+      Assert
+        (E.Is_Ok (Status) and then I.Is_Open (Second),
+         "releasing the public device lease did not permit its next owner");
+      I.Close (Second, Status);
+
+      Model_Runner.Backend.Device.Open (Direct);
+      Assert (Direct, "the direct backend could not acquire the released device");
+      I.Open (First, Model, Options, Status);
+      Assert
+        (Status.Code = E.Backend_Device_Refused and then not I.Is_Open (First),
+         "an embedded session entered a device owned by a direct caller");
+      Model_Runner.Backend.Device.Close;
+
+      Model_Runner.Backend.Device.Open_Exclusive
+        (Direct, Granted, Lease);
+      Assert (Direct and then Granted,
+              "a direct exclusive lease could not acquire the free device");
+      Stale := Lease;
+      Model_Runner.Backend.Device.Close_Exclusive (Lease);
+
+      Model_Runner.Backend.Device.Open_Exclusive
+        (Direct, Granted, Next_Lease);
+      Assert (Direct and then Granted,
+              "the next exclusive lease could not acquire the released device");
+      Model_Runner.Backend.Device.Close_Exclusive (Stale);
+      Model_Runner.Backend.Device.Open (Direct, Disposition);
+      Assert
+        (not Direct
+         and then Disposition = Model_Runner.Backend.Device.Open_Owned,
+         "a stale exclusive lease released a later owner's device");
+      Model_Runner.Backend.Device.Close_Exclusive (Next_Lease);
+   end Public_Inference_Device_Ownership_Is_Exclusive;
+
    --------------------------------------------------
    -- Public_Inference_Reports_Each_Bounded_Stop --
    --------------------------------------------------
@@ -22417,6 +22794,12 @@ package body Tests.Inference_Cases is
       Register_Routine
         (T, Public_Inference_Session_Is_Reusable'Access,
          "the public inference session owns, resets and releases its model");
+      Register_Routine
+        (T, Device_Leases_Do_Not_Need_Hardware_To_Be_Checked'Access,
+         "device lease authority is checked without requiring hardware");
+      Register_Routine
+        (T, Public_Inference_Device_Ownership_Is_Exclusive'Access,
+         "public inference sessions cannot share ownership of the global device");
       Register_Routine
         (T, Public_Inference_Reports_Each_Bounded_Stop'Access,
          "the public inference API distinguishes output, time, cancellation and schema failures");
@@ -23049,6 +23432,11 @@ package body Tests.Inference_Cases is
         (T, An_E4M3_Cache_Holds_A_Conversation'Access,
          "an OCP E4M3 KV cache evaluates batches and tokens consistently "
          & "and remains close to the exact cache");
+      Register_Routine
+        (T, A_Transformed_Q4_Cache_Holds_A_Conversation'Access,
+         "a transformed q4 cache and mixed q8 values evaluate batches and "
+         & "tokens and a window consistently, run through a paged device "
+         & "cache, shift, snapshot and restore");
       Register_Routine
         (T, Device_Reads_A_Model_In_Any_Format'Access,
          "a model in any format the program reads loads on the device, "

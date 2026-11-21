@@ -3,6 +3,7 @@ with System;
 
 with Model_Runner.Bytes;
 
+with Model_Runner.Backend.Device_Ownership;
 with Model_Runner.Cancellation;
 with Model_Runner.Errors;
 with Model_Runner.Numerics;
@@ -39,6 +40,19 @@ with Model_Runner.Tensors;
 --  Task safety: one task at a time. The device is a single queue and this
 --  makes no attempt to feed it from several.
 package Model_Runner.Backend.Device is
+
+   --  Result of resolving launch tuning while the device was opened.
+   type Tuning_Disposition is
+     (Tuning_Defaults, Tuning_Disabled, Tuning_Applied, Tuning_Refused);
+
+   --  Why an ordinary Open did or did not make the device available.
+   type Open_Disposition is
+     (Open_Ready, Open_Unavailable, Open_Owned, Open_Tuning_Refused);
+
+   --  Unforgeable authority to release one exclusive acquisition.  A lease
+   --  becomes invalid when it is closed; a copied stale lease cannot release
+   --  a later acquisition.
+   subtype Exclusive_Lease is Model_Runner.Backend.Device_Ownership.Lease;
 
    --  Blocks the device's cache is dealt out in.
    --
@@ -105,16 +119,79 @@ package Model_Runner.Backend.Device is
    --    them in. Out of range is a refusal rather than a fallback: a caller
    --    that named a device and got another one would be told the wrong
    --    thing about what ran.
+   --  @param Tuning_Profile Empty loads this build's exact automatic profile;
+   --    "none" keeps the compiled defaults; any other value names a profile
+   --    whose absence, corruption or key mismatch refuses the open.
    procedure Open
      (Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
       Share_Host : Boolean := False;
       Slice      : Duration := 0.020;
       Patience   : Duration := 60.0;
-      Which      : Positive := 1);
+      Which      : Positive := 1;
+      Tuning_Profile : String := "");
+
+   --  Open as above and report whether failure was availability, ownership,
+   --  or tuning-policy refusal.
+   --
+   --  @param Ready True when a device is ready for work.
+   --  @param Disposition Exact result of the acquisition attempt.
+   --  @param Budget Bytes of device memory available for model matrices.
+   --  @param Share_Host Whether weights may remain in host memory.
+   --  @param Slice Maximum duration of one cancellable device wait.
+   --  @param Patience Total duration allowed for an unresponsive device.
+   --  @param Which Device index, counting from one.
+   --  @param Tuning_Profile Automatic, disabled, or explicitly named tuning.
+   procedure Open
+     (Ready       : out Boolean;
+      Disposition : out Open_Disposition;
+      Budget      : Interfaces.Unsigned_64 := 0;
+      Share_Host  : Boolean := False;
+      Slice       : Duration := 0.020;
+      Patience    : Duration := 60.0;
+      Which       : Positive := 1;
+      Tuning_Profile : String := "");
+
+   --  Open the process-global device for one exclusive owner. Ordinary Open
+   --  calls are refused until that owner calls Close_Exclusive. Conversely,
+   --  an existing ordinary owner prevents this call from acquiring the
+   --  device. This is the ownership boundary used by reusable sessions.
+   --
+   --  @param Ready True when the exclusively owned device is ready.
+   --  @param Granted True when no other device owner existed.
+   --  @param Lease Authority to release this acquisition; invalid on failure.
+   --  @param Budget Bytes of device memory the model's matrices may take.
+   --  @param Share_Host Whether weights may remain in host memory.
+   --  @param Slice Maximum duration of one cancellable device wait.
+   --  @param Patience Total duration allowed for an unresponsive device.
+   --  @param Which Device index, counting from one.
+   --  @param Tuning_Profile Automatic, disabled, or explicitly named tuning.
+   procedure Open_Exclusive
+     (Ready      : out Boolean;
+      Granted    : out Boolean;
+      Lease      : out Exclusive_Lease;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0;
+      Which      : Positive := 1;
+      Tuning_Profile : String := "");
+
+   --  @return How the current or most recently refused open resolved tuning.
+   function Tuning_Status return Tuning_Disposition;
+
+   --  @return Applied profile path, or the explicit path that was refused.
+   function Tuning_Profile return String;
 
    --  Release the device and everything it holds. Idempotent.
    procedure Close;
+
+   --  Release a device acquired by Open_Exclusive. An invalid or stale lease
+   --  cannot release another acquisition. A failed release keeps the exclusive
+   --  claim so another caller cannot use uncertain state.
+   --
+   --  @param Lease Authority returned by Open_Exclusive; invalidated on close.
+   procedure Close_Exclusive (Lease : in out Exclusive_Lease);
 
    --  Slices the last product spent waiting for the device.
    --
@@ -968,6 +1045,8 @@ package Model_Runner.Backend.Device is
    --  @param Causal True where a position may see only what precedes it.
    --  @param Max_Bias How steeply a head's attention falls off with
    --    distance, or zero for none.
+   --  @param K_Codec Meaning of the packed key codes.
+   --  @param V_Codec Meaning of the packed value codes.
    procedure Attend_Packed
      (K_Bits     : Positive;
       V_Bits     : Positive;
@@ -993,7 +1072,11 @@ package Model_Runner.Backend.Device is
       Positions  : Natural := 1;
       Window     : Natural := 0;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      K_Codec    : Model_Runner.Platform.Device.Products.Cache_Codec :=
+        Model_Runner.Platform.Device.Products.Scaled_Integer_Cache;
+      V_Codec    : Model_Runner.Platform.Device.Products.Cache_Codec :=
+        Model_Runner.Platform.Device.Products.Scaled_Integer_Cache);
 
    --  And back out of it, which is how the host's copy of the cache is
    --  brought up to date after a batch the device took whole.
@@ -1139,6 +1222,14 @@ package Model_Runner.Backend.Device is
    --  what the fused sequences below are given so that their attention
    --  step reads the packed kernel rather than the exact one.
    subtype Packed_Cache is Model_Runner.Platform.Device.Products.Packed_Cache;
+
+   subtype Cache_Codec is Model_Runner.Platform.Device.Products.Cache_Codec;
+   Scaled_Integer_Cache : constant Cache_Codec :=
+     Model_Runner.Platform.Device.Products.Scaled_Integer_Cache;
+   OCP_E4M3_Cache : constant Cache_Codec :=
+     Model_Runner.Platform.Device.Products.OCP_E4M3_Cache;
+   Transformed_Four_Bit_Cache : constant Cache_Codec :=
+     Model_Runner.Platform.Device.Products.Transformed_Four_Bit_Cache;
 
    --  The Packed_Cache and Packing_Shape code for unscaled OCP E4M3FN
    --  bytes, distinct from scaled q8's eight.

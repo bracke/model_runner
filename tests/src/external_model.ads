@@ -132,6 +132,9 @@ package External_Model is
    --  @param Auxiliary Explicit GGUF tensor sources, in precedence order.
    --    This is the real-artifact path for separately distributed PLE and
    --    engram weights; numbered backbone shards remain auto-discovered.
+   --  @param Require_External_PLE Require the backbone not to contain a PLE
+   --    tensor. This makes a sidecar differential run prove that the sidecar
+   --    was consumed instead of accepting an identical in-backbone tensor.
    --  @param Cache KV storage precision, including the E4M3FN byte format.
    --  @param Expert_Cache Device bytes reserved for adaptive MoE experts.
    --  @param Panel_Cache Combined-model panel cache file, or empty for none.
@@ -149,6 +152,7 @@ package External_Model is
       Repack  : Model_Runner.Llama.Repack_Mode :=
         Model_Runner.Llama.No_Repack;
       Auxiliary : Model_Runner.Text.Bounded_List := [1 .. 0 => <>];
+      Require_External_PLE : Boolean := False;
       Cache : Model_Runner.Llama.Cache_Precision :=
         Model_Runner.Llama.Exact;
       Expert_Cache : Interfaces.Unsigned_64 := 0;

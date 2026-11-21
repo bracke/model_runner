@@ -50,6 +50,8 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       Audio_Path : constant String := Model_Runner.Text.To_String (Item.Audio_Path);
       Whisper    : aliased W.Model;
       On_Device  : Boolean := False;
+      Device_Disposition : Model_Runner.Backend.Device.Open_Disposition :=
+        Model_Runner.Backend.Device.Open_Unavailable;
       Samples    : Tn.Real_Array_Access;
       Condition  : E.Error_Info;
       Ignored    : E.Error_Info;
@@ -73,23 +75,33 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       task type Opener is
          --  Whether the device opened; asked once, before anything else
          --  asks the device.
-         entry Finish (Ready : out Boolean);
+         entry Finish
+           (Ready       : out Boolean;
+            Disposition : out Model_Runner.Backend.Device.Open_Disposition);
       end Opener;
 
       task body Opener is
-         Got : Boolean := False;
+         Got             : Boolean := False;
+         Got_Disposition : Model_Runner.Backend.Device.Open_Disposition :=
+           Model_Runner.Backend.Device.Open_Unavailable;
       begin
          begin
             Model_Runner.Backend.Device.Open
-              (Got, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-               Which => Item.Device_Index);
+              (Got, Got_Disposition, Item.Device_Memory, Item.Device_Share,
+               Patience => Item.Device_Patience,
+               Which => Item.Device_Index,
+               Tuning_Profile => Model_Runner.Text.To_String (Item.Device_Tuning));
          exception
             when others =>
                Got := False;
          end;
          select
-            accept Finish (Ready : out Boolean) do
+            accept Finish
+              (Ready       : out Boolean;
+               Disposition : out Model_Runner.Backend.Device.Open_Disposition)
+            do
                Ready := Got;
+               Disposition := Got_Disposition;
             end Finish;
          or
             terminate;
@@ -103,9 +115,10 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       --  is used.
       procedure Abandon is
          Got : Boolean;
+         Disposition : Model_Runner.Backend.Device.Open_Disposition;
       begin
          if Opening /= null then
-            Opening.Finish (Got);
+            Opening.Finish (Got, Disposition);
             Opening := null;
             if Got then
                Model_Runner.Backend.Device.Close;
@@ -220,7 +233,7 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       --  (45 s of Danish 0.93 against 0.76), as does any larger model
       --  (small, JFK: 1.25 against 0.67).
       if Opening /= null then
-         Opening.Finish (On_Device);
+         Opening.Finish (On_Device, Device_Disposition);
          Opening := null;
       elsif not Item.Backend_Set
         and then Model_Runner.Bytes."<=" (W.Weight_Bytes (Whisper), Processor_Model_Most)
@@ -229,8 +242,10 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
          null;
       elsif Device_Wanted then
          Model_Runner.Backend.Device.Open
-           (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-            Which => Item.Device_Index);
+           (On_Device, Device_Disposition, Item.Device_Memory,
+            Item.Device_Share, Patience => Item.Device_Patience,
+            Which => Item.Device_Index,
+            Tuning_Profile => Model_Runner.Text.To_String (Item.Device_Tuning));
       end if;
       --  The device named and none answering is refused, as run refuses
       --  it, rather than heard on the processor without a word.
@@ -239,7 +254,9 @@ package body Model_Runner.CLI.Execute.Transcribe_Command is
       then
          Tn.Free (Samples);
          W.Close (Whisper, Ignored);
-         Fail (E.Make (E.Backend_No_Device));
+         Fail
+           (Model_Runner.CLI.Execute.Support.Device_Open_Error
+              (Device_Disposition));
          return;
       end if;
       declare

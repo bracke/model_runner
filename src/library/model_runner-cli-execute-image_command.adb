@@ -155,6 +155,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
 
          --  When the last step ended, or the steps began.
          Last_Step : Ada.Calendar.Time := Ada.Calendar.Clock;
+         Owns_Device : Boolean := False;
 
          procedure Say_Step (Step : Positive; Steps : Positive) is
             use type Ada.Calendar.Time;
@@ -224,7 +225,9 @@ package body Model_Runner.CLI.Execute.Image_Command is
                      if On_Device then
                         Model_Runner.Backend.Device.Open
                           (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-                           Which => Item.Device_Index);
+                           Which => Item.Device_Index,
+                           Tuning_Profile => T.To_String (Item.Device_Tuning));
+                        Owns_Device := Ready;
                      end if;
                      --  On the processor in the panels a run takes unasked:
                      --  the prompt in rows read 0.19 s against 3.9 s, and
@@ -276,6 +279,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
                      Shards.Close (Source);
                      if Ready then
                         Model_Runner.Backend.Device.Close;
+                        Owns_Device := False;
                      end if;
                   end;
                end if;
@@ -351,8 +355,10 @@ package body Model_Runner.CLI.Execute.Image_Command is
          --  opens, its products and attention there; on the processor in
          --  panels otherwise.
          declare
-            Model   : Q.Denoiser;
-            On_Device : Boolean := False;
+            Model       : Q.Denoiser;
+            On_Device   : Boolean := False;
+            Disposition : Model_Runner.Backend.Device.Open_Disposition :=
+              Model_Runner.Backend.Device.Open_Unavailable;
 
             --  The references' latents as the denoiser takes them.
             function Pictured return Q.Reference_List is
@@ -372,11 +378,16 @@ package body Model_Runner.CLI.Execute.Image_Command is
             if not Item.Backend_Set or else Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device)
             then
                Model_Runner.Backend.Device.Open
-                 (On_Device, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-                  Which => Item.Device_Index);
+                 (On_Device, Disposition, Item.Device_Memory,
+                  Item.Device_Share, Patience => Item.Device_Patience,
+                  Which => Item.Device_Index,
+                  Tuning_Profile => T.To_String (Item.Device_Tuning));
+               Owns_Device := On_Device;
                --  Named and not answering: refused, as run refuses it.
                if Item.Backend_Set and then not On_Device then
-                  Condition := E.Make (E.Backend_No_Device);
+                  Condition :=
+                    Model_Runner.CLI.Execute.Support.Device_Open_Error
+                      (Disposition);
                end if;
             end if;
             declare
@@ -416,6 +427,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
             Tk.Free (Init_Latent);
             if E.Is_Error (Condition) then
                Model_Runner.Backend.Device.Close;
+               Owns_Device := False;
                Fail (Condition);
                return;
             end if;
@@ -477,6 +489,7 @@ package body Model_Runner.CLI.Execute.Image_Command is
             Dec.Close (VAE);
             --  Open since the denoiser's, and its convolutions' too.
             Model_Runner.Backend.Device.Close;
+            Owns_Device := False;
             Tk.Free (Planes);
             if E.Is_Error (Condition) then
                Fail (Condition);
@@ -488,6 +501,16 @@ package body Model_Runner.CLI.Execute.Image_Command is
          end;
          Release_References;
          Status := E.Exit_Success;
+      exception
+         when others =>
+            if Owns_Device then
+               begin
+                  Model_Runner.Backend.Device.Close;
+               exception
+                  when others => null;
+               end;
+            end if;
+            raise;
       end Draw;
    begin
       Status := E.Exit_Success;
@@ -499,16 +522,29 @@ package body Model_Runner.CLI.Execute.Image_Command is
       --  eight billion parameters are read for nothing.
       if Item.Backend_Set and then Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_Device) then
          declare
-            Ready : Boolean;
+            Ready       : Boolean;
+            Disposition : Model_Runner.Backend.Device.Open_Disposition;
          begin
             Model_Runner.Backend.Device.Open
-              (Ready, Item.Device_Memory, Item.Device_Share, Patience => Item.Device_Patience,
-               Which => Item.Device_Index);
+              (Ready, Disposition, Item.Device_Memory, Item.Device_Share,
+               Patience => Item.Device_Patience,
+               Which => Item.Device_Index,
+               Tuning_Profile => T.To_String (Item.Device_Tuning));
             if not Ready then
-               Fail (E.Make (E.Backend_No_Device));
+               Fail
+                 (Model_Runner.CLI.Execute.Support.Device_Open_Error
+                    (Disposition));
                return;
             end if;
             Model_Runner.Backend.Device.Close;
+         exception
+            when others =>
+               begin
+                  Model_Runner.Backend.Device.Close;
+               exception
+                  when others => null;
+               end;
+               raise;
          end;
       end if;
       --  Each reference at the size it is encoded at.

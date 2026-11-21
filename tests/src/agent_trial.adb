@@ -17,6 +17,7 @@ with Hostkit.Metadata;
 with Hostkit.Process;
 with Hostkit.Pty;
 with Hostkit.Spawn;
+with Child_Guards;
 
 package body Agent_Trial is
 
@@ -868,6 +869,7 @@ package body Agent_Trial is
                      Pair    : Hostkit.Pty.Pair;
                      Spawned : Hostkit.Spawn.Options;
                      Child   : Hostkit.Spawn.Process_Handle;
+                     Watcher : Child_Guards.Guard;
                      Ended   : Hostkit.Spawn.Status;
                      Seen    : Unbounded_String;
                      --  What the screen showed wrongly, said with the outcome.
@@ -1206,6 +1208,7 @@ package body Agent_Trial is
                         Clean := False;
                         return;
                      end if;
+                     Child_Guards.Watch (Watcher, Child);
                      Hostkit.Pty.Close_Device (Pair);
 
                      --  The session, as a person would drive it.
@@ -1336,7 +1339,8 @@ package body Agent_Trial is
                      end;
 
                      declare
-                        Ignored : constant Boolean := Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Ended);
+                        Ignored : constant Boolean :=
+                          Child_Guards.Wait (Watcher, 30.0, Ended);
                      begin
                         null;
                      end;

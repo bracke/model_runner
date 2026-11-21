@@ -26,6 +26,8 @@
 const uint LANES = 64u;
 const uint BLOCK = 32u;
 const uint E4M3_BITS = 9u;
+const uint TRANSFORMED_FOUR_BIT_CODEC = 2u;
+const uint Q4T_SIGN_MASK = 0xD6E8FEB8u;
 
 layout(local_size_x = LANES) in;
 
@@ -67,6 +69,9 @@ layout(push_constant) uniform Shape {
     uint pages_at;
     uint page_shift;
     uint first_position;
+
+    //  Explicit codec identity, matching pack.comp's append-only codes.
+    uint codec;
 } shape;
 
 float e4m3_value (uint raw) {
@@ -135,6 +140,57 @@ void main() {
                     float held = float (int ((word >> (8u * j)) & 0xFFu) - 128) * scale;
                     kvh[into + c] = float16_t (held);
                 }
+            }
+        }
+        return;
+    }
+
+    if (shape.codec == TRANSFORMED_FOUR_BIT_CODEC) {
+        //  Decode each transformed group, apply D.H (the inverse of H.D),
+        //  and write the key in the model's basis into the half copy.
+        for (uint b = lane; b * BLOCK < shape.width; b += LANES) {
+            uint start = b * BLOCK;
+            uint span = min (BLOCK, shape.width - start);
+            float rotated[32];
+            double scratch[32];
+
+            for (uint i = 0u; i < span; i++) {
+                uint at = row_at + (start + i) / 2u;
+                uint word = kvw[at >> 2u];
+                uint raw =
+                  (word >> (8u * (at & 3u)
+                             + 4u * ((start + i) & 1u))) & 0xFu;
+                rotated[i] = float (int (raw) - 8) * kvf[scale_at + b];
+            }
+
+            uint used = 0u;
+            while (used < span) {
+                uint width = 1u;
+                while (width * 2u <= span - used) {
+                    width *= 2u;
+                }
+                for (uint i = 0u; i < width; i++) {
+                    scratch[i] = double (rotated[used + i]);
+                }
+                for (uint step = 1u; step < width; step *= 2u) {
+                    for (uint block = 0u; block < width; block += step * 2u) {
+                        for (uint i = 0u; i < step; i++) {
+                            double a = scratch[block + i];
+                            double z = scratch[block + step + i];
+                            scratch[block + i] = a + z;
+                            scratch[block + step + i] = a - z;
+                        }
+                    }
+                }
+                double normalizer = 1.0lf / sqrt (double (width));
+                for (uint i = 0u; i < width; i++) {
+                    double value = scratch[i] * normalizer;
+                    if (((Q4T_SIGN_MASK >> (used + i)) & 1u) != 0u) {
+                        value = -value;
+                    }
+                    kvh[into + start + used + i] = float16_t (float (value));
+                }
+                used += width;
             }
         }
         return;

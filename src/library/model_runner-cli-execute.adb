@@ -298,7 +298,7 @@ package body Model_Runner.CLI.Execute is
       Screen        : in out Model_Runner.Presentation.Console;
       Context_Size  : Natural := 0;
       Cache         : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Halved;
+        Model_Runner.Llama.Transformed_Fourth;
       Paged         : Boolean := True;
       Draft_Path    : String := "")
       return Model_Runner.Backend.Backend_Kind
@@ -321,6 +321,25 @@ package body Model_Runner.CLI.Execute is
       end if;
       return Resolved_Backend (Item, Screen).Backend;
    end Unasked_Backend;
+
+   function Unasked_Cache
+     (Model_Path : String;
+      Screen     : in out Model_Runner.Presentation.Console;
+      Cache      : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Transformed_Fourth;
+      Named      : Boolean := False)
+      return Model_Runner.Llama.Cache_Precision
+   is
+      Item : Opt.Command;
+   begin
+      Item.Kind := Opt.Command_Run;
+      Item.Model_Path := Model_Runner.Text.To_Bounded (Model_Path);
+      Item.Backend := Model_Runner.Backend.Backend_CPU;
+      Item.Backend_Set := True;
+      Item.Cache := Cache;
+      Item.Cache_Asked := Named;
+      return Resolved_Backend (Item, Screen).Cache;
+   end Unasked_Cache;
 
    function Unasked_Arithmetic
      (Named    : String;

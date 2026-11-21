@@ -5,7 +5,6 @@ with Ada.Strings.Fixed;
 with Ada.Text_IO;
 with Interfaces;
 with Hostkit.Metadata;
-with Model_Runner.Backend.Device;
 with Model_Runner.Platform.Device.Products;
 with Model_Runner.Backend.Reference;
 with Model_Runner.Config;
@@ -20,6 +19,26 @@ package body Model_Runner.CLI.Execute.Support is
    use type Interfaces.Unsigned_64;
    use type Model_Runner.CLI.Options.Text_Access;
    use type L.Repack_Mode;
+
+   function Device_Open_Error
+     (Disposition : Model_Runner.Backend.Device.Open_Disposition)
+      return E.Error_Info is
+      Result : E.Error_Info := E.Make (E.Backend_No_Device);
+   begin
+      case Disposition is
+         when Model_Runner.Backend.Device.Open_Owned =>
+            Result := E.Make (E.Backend_Device_Refused);
+         when Model_Runner.Backend.Device.Open_Tuning_Refused =>
+            Result := E.Make (E.Backend_Tuning_Profile);
+            E.Add_Text
+              (Result, "path", Model_Runner.Backend.Device.Tuning_Profile,
+               E.Param_Path);
+         when Model_Runner.Backend.Device.Open_Ready
+            | Model_Runner.Backend.Device.Open_Unavailable =>
+            null;
+      end case;
+      return Result;
+   end Device_Open_Error;
 
    --  A string as a JSON string body: the characters JSON must not carry raw
    --  -- the quote, the backslash, the control characters -- become escapes,
@@ -808,8 +827,51 @@ package body Model_Runner.CLI.Execute.Support is
         or else Item.Device_Memory_Set
         or else Item.Expert_Cache_Set
         or else Item.Device_Index_Set
-        or else Item.Device_Patience_Set;
+        or else Item.Device_Patience_Set
+        or else Item.Device_Tuning_Set;
+
+      --  Metadata read for the unnamed q4t compatibility choice is also
+      --  reused by automatic device placement. Thus making the safer
+      --  choice does not read a model twice on the ordinary path.
+      Default_Seen : Measures := (others => <>);
+
+      function Placement_Measure
+        (Path    : String;
+         Weights : Interfaces.Unsigned_64;
+         Holds   : Interfaces.Unsigned_64) return Measures
+      is
+      begin
+         if Weights = 0 or else Holds = 0 or else Item.Auxiliary_Count /= 0
+         then
+            return (others => <>);
+         elsif Default_Seen.Measured then
+            return Default_Seen;
+         else
+            return Measure (Path);
+         end if;
+      end Placement_Measure;
    begin
+      --  Silence means q4t where its groups preserve head boundaries, and
+      --  f16 otherwise. A caller who names q4t gets its precise refusal
+      --  from Plan/Open rather than having that request silently changed.
+      if not Item.Cache_Asked
+        and then L."=" (Item.Cache, L.Transformed_Fourth)
+      then
+         declare
+            Path : constant String :=
+              Model_Runner.Platform.Resolve_Model_Path
+                (T.To_String (Item.Model_Path));
+         begin
+            Default_Seen := Measure (Path);
+            if not Default_Seen.Measured
+              or else not L.Cache_Compatible
+                            (Default_Seen.Settings, L.Transformed_Fourth)
+            then
+               Result.Cache := L.Halved;
+            end if;
+         end;
+      end if;
+
       if Item.Backend_Set and then not (Named_Device and then Item.Cache_Fit)
       then
          return Result;
@@ -825,7 +887,8 @@ package body Model_Runner.CLI.Execute.Support is
       Model_Runner.Backend.Device.Open
         (Ready, Item.Device_Memory, Item.Device_Share,
          Patience => Item.Device_Patience,
-         Which => Item.Device_Index);
+         Which => Item.Device_Index,
+         Tuning_Profile => T.To_String (Item.Device_Tuning));
 
       if not Ready then
          return Result;
@@ -844,10 +907,7 @@ package body Model_Runner.CLI.Execute.Support is
            Model_Runner.Backend.Device.Describe.Memory_Bytes;
 
          Seen : constant Measures :=
-           (if Weights > 0 and then Holds > 0
-                 and then Item.Auxiliary_Count = 0
-            then Measure (Path)
-            else (others => <>));
+           Placement_Measure (Path, Weights, Holds);
 
          --  An adapter is merged into binary32 weights, and those are what
          --  the device would hold: a 2 GB four-bit 3B is twelve.
@@ -873,7 +933,7 @@ package body Model_Runner.CLI.Execute.Support is
          --  the device and was refused there.
          Dense : constant Boolean :=
            Seen.Measured and then Seen.Settings.Experts = 0;
-         On_Device : Opt.Command := Item;
+         On_Device : Opt.Command := Result;
          Room : Interfaces.Unsigned_64 := 0;
 
          Takes : Boolean := False;
@@ -976,7 +1036,7 @@ package body Model_Runner.CLI.Execute.Support is
       --  size: the run reports that itself, on the backend asked for.
       when Ada.IO_Exceptions.Name_Error | Ada.IO_Exceptions.Use_Error =>
          Model_Runner.Backend.Device.Close;
-         return Item;
+         return Result;
       --  Anything else is a fault in the choosing, said as one at the
       --  command's boundary rather than passed off as the default choice.
       when others =>

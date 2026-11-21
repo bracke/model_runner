@@ -804,24 +804,42 @@ package body Model_Runner.CLI.Execute.Embed_Command is
       then
          Pres.Put_Note (Screen, "cli.note.device_memory_unused");
       end if;
+      if Item.Device_Tuning_Set
+        and then Model_Runner.Backend."/=" (Item.Backend,
+                                            Model_Runner.Backend.Backend_Device)
+      then
+         Pres.Put_Note (Screen, "cli.note.device_tuning_unused");
+      end if;
 
       case Item.Backend is
       when Model_Runner.Backend.Backend_Device =>
          declare
-            Ready : Boolean;
+            Ready       : Boolean;
+            Disposition : Model_Runner.Backend.Device.Open_Disposition;
          begin
             Model_Runner.Backend.Device.Open
-              (Ready, Item.Device_Memory, Item.Device_Share,
+              (Ready, Disposition, Item.Device_Memory, Item.Device_Share,
                Patience => Item.Device_Patience,
-               Which => Item.Device_Index);
+               Which => Item.Device_Index,
+               Tuning_Profile => T.To_String (Item.Device_Tuning));
 
             if not Ready then
-               Fail (E.Make (E.Backend_No_Device));
+               Fail (Device_Open_Error (Disposition));
                return;
             end if;
 
-            Embed_With (null);
-            Model_Runner.Backend.Device.Close;
+            begin
+               Embed_With (null);
+               Model_Runner.Backend.Device.Close;
+            exception
+               when others =>
+                  begin
+                     Model_Runner.Backend.Device.Close;
+                  exception
+                     when others => null;
+                  end;
+                  raise;
+            end;
          end;
 
       when Model_Runner.Backend.Backend_Reference =>

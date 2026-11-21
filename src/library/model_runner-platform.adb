@@ -6,7 +6,11 @@ with GNAT.OS_Lib;
 with Ada.Strings.Unbounded;
 with Ada.Directories;
 with Ada.Environment_Variables;
+with Ada.Streams;
+with Ada.Streams.Stream_IO;
 with System.Multiprocessors;
+
+with CryptoLib.Hashes;
 
 with Hostkit.Fs;
 with Hostkit.Host;
@@ -14,6 +18,7 @@ with Hostkit.Metadata;
 
 with Model_Runner.Platform.Instructions;
 with Model_Runner.Platform.Topology;
+with Model_Runner.Race_Points;
 with Model_Runner.Text;
 
 with Ada.Containers;
@@ -1078,19 +1083,131 @@ package body Model_Runner.Platform is
    -- Program_Stamp --
    -------------------
 
-   function Program_Stamp return String is
-      Path : constant String := Hostkit.Fs.Own_Executable;
+   function Program_Stamp (Path : String) return String is
+      package Stream_IO renames Ada.Streams.Stream_IO;
+      use Ada.Streams;
+      Context : CryptoLib.Hashes.SHA256_Context;
+      File    : Stream_IO.File_Type;
+      Buffer  : Stream_Element_Array (1 .. 64 * 1_024);
+      Last    : Stream_Element_Offset;
+      Digest  : CryptoLib.Hashes.SHA256_Digest;
+      Hex     : constant String := "0123456789abcdef";
+      Result  : String (1 .. 64);
+
+      procedure Close_Quietly is
+      begin
+         if Stream_IO.Is_Open (File) then
+            Stream_IO.Close (File);
+         end if;
+      exception
+         when others =>
+            null;
+      end Close_Quietly;
    begin
       if Path = "" or else not Ada.Directories.Exists (Path) then
          return "";
       end if;
-      return Ada.Directories.File_Size'Image (Ada.Directories.Size (Path))
-        & "@" & Ada.Calendar.Formatting.Image
-                  (Ada.Directories.Modification_Time (Path),
-                   Include_Time_Fraction => True);
+      CryptoLib.Hashes.Initialize_SHA256 (Context);
+      Stream_IO.Open (File, Stream_IO.In_File, Path, Form => "shared=no");
+      while not Stream_IO.End_Of_File (File) loop
+         Stream_IO.Read (File, Buffer, Last);
+         if Last >= Buffer'First then
+            CryptoLib.Hashes.Update
+              (Context, Buffer (Buffer'First .. Last));
+         end if;
+      end loop;
+      Stream_IO.Close (File);
+      Digest := CryptoLib.Hashes.Finalize (Context);
+      for Index in Digest'Range loop
+         Result (2 * Index - 1) :=
+           Hex (Natural (Digest (Index)) / 16 + 1);
+         Result (2 * Index) := Hex (Natural (Digest (Index)) mod 16 + 1);
+      end loop;
+      return Result;
    exception
       when others =>
+         Close_Quietly;
          return "";
+   end Program_Stamp;
+
+   --  Development executables are hundreds of megabytes. The running image
+   --  has one identity for this process, so reading all of it for every cache
+   --  key and device open is both unnecessary and observably expensive.
+   subtype Stamp_Buffer is String (1 .. 64);
+   type Stamp_State is (Stamp_Empty, Stamp_Computing, Stamp_Ready);
+
+   protected Running_Stamp is
+      procedure Claim
+        (Compute : out Boolean;
+         Value   : out Stamp_Buffer;
+         Last    : out Natural);
+      procedure Publish (Value : String);
+   private
+      State : Stamp_State := Stamp_Empty;
+      Held  : Stamp_Buffer := [others => ' '];
+      Used  : Natural range 0 .. Stamp_Buffer'Length := 0;
+   end Running_Stamp;
+
+   protected body Running_Stamp is
+      procedure Claim
+        (Compute : out Boolean;
+         Value   : out Stamp_Buffer;
+         Last    : out Natural) is
+      begin
+         --  A caller arriving while another task computes also computes.
+         --  Hashing the executable twice during this rare race is cheaper
+         --  than leaving every future caller blocked if the first task is
+         --  aborted outside this protected object.
+         Compute := State /= Stamp_Ready;
+         if Compute then
+            State := Stamp_Computing;
+         end if;
+         Value := Held;
+         Last := Used;
+      end Claim;
+
+      procedure Publish (Value : String) is
+      begin
+         if State = Stamp_Ready then
+            return;
+         end if;
+         if Value'Length = 0 then
+            State := Stamp_Empty;
+            return;
+         end if;
+         Used := Natural'Min (Value'Length, Held'Length);
+         Held := [others => ' '];
+         if Used > 0 then
+            Held (1 .. Used) := Value (Value'First .. Value'First + Used - 1);
+         end if;
+         State := Stamp_Ready;
+      end Publish;
+   end Running_Stamp;
+
+   function Program_Stamp return String is
+      Compute : Boolean;
+      Value   : Stamp_Buffer;
+      Last    : Natural;
+   begin
+      Running_Stamp.Claim (Compute, Value, Last);
+      if Compute then
+         --  A test may stop the claiming task here.  In use nobody arms the
+         --  point and the inline null check is the whole cost.
+         Model_Runner.Race_Points.Here
+           (Model_Runner.Race_Points.Program_Stamp_Claimed);
+         declare
+            Found : constant String :=
+              Program_Stamp (Hostkit.Fs.Own_Executable);
+         begin
+            Running_Stamp.Publish (Found);
+            return Found;
+         exception
+            when others =>
+               Running_Stamp.Publish ("");
+               return "";
+         end;
+      end if;
+      return Value (1 .. Last);
    end Program_Stamp;
 
 end Model_Runner.Platform;

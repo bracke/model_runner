@@ -10,6 +10,8 @@ procedure Do_Run
    Catalog : Loc.Catalog;
    Status  : out Natural)
 is
+   use type Model_Runner.Backend.Device.Tuning_Disposition;
+
    Source    : Shards.Shard_Set;
    Container : Containers.Container;
    Prepared  : aliased L.Model;
@@ -430,6 +432,13 @@ begin
       Pres.Put_Note (Screen, "cli.note.device_unused");
    end if;
 
+   if Item.Device_Tuning_Set
+     and then Model_Runner.Backend."/=" (Item.Backend,
+                                         Model_Runner.Backend.Backend_Device)
+   then
+      Pres.Put_Note (Screen, "cli.note.device_tuning_unused");
+   end if;
+
    case Item.Backend is
    when Model_Runner.Backend.Backend_Reference =>
       --  No pool: this backend runs on the calling task and says so.
@@ -441,12 +450,14 @@ begin
       --  loaded: being refused after a minute of loading is being refused
       --  a minute late.
       declare
-         Ready : Boolean;
+         Ready       : Boolean;
+         Disposition : Model_Runner.Backend.Device.Open_Disposition;
       begin
          Model_Runner.Backend.Device.Open
-           (Ready, Item.Device_Memory, Item.Device_Share,
+           (Ready, Disposition, Item.Device_Memory, Item.Device_Share,
             Patience => Item.Device_Patience,
-            Which => Item.Device_Index);
+            Which => Item.Device_Index,
+            Tuning_Profile => T.To_String (Item.Device_Tuning));
 
          --  What the host offered, said once where a device was
          --  actually opened. The engine uses one queue; whether the
@@ -462,6 +473,16 @@ begin
                         (Model_Runner.Backend.Device.Queues)))]);
          end if;
 
+         if Ready
+           and then Model_Runner.Backend.Device.Tuning_Status
+             = Model_Runner.Backend.Device.Tuning_Applied
+         then
+            Screen.Put_Message
+              ("cli.note.device_tuning",
+               [Loc.Named
+                  ("path", Model_Runner.Backend.Device.Tuning_Profile)]);
+         end if;
+
          if not Ready then
             --  A condition of its own rather than a borrowed one. This
             --  used to report a missing capability with no capability
@@ -469,7 +490,7 @@ begin
             --  not there does not render at all: what a machine with no
             --  device got was the message key in angle brackets, which is
             --  the diagnostic for a diagnostic that failed.
-            Fail (E.Make (E.Backend_No_Device));
+            Fail (Device_Open_Error (Disposition));
             return;
          end if;
 

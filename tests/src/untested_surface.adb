@@ -54,7 +54,8 @@ package body Untested_Surface is
    --
    --  The command line's commands and what they share. Do_Run, Do_Embed,
    --  Do_Inspect, Do_Models, Choose_Model, Show_Help and Show_Version, and
-   --  the helpers Read_File, Read_Standard_Input, Say_Device_Room,
+   --  the helpers Read_File, Read_Standard_Input, Device_Open_Error,
+   --  Say_Device_Room,
    --  Free_Reals and Free_Text, are private packages of the command line's
    --  execution, which a test cannot name; every command-line test reaches
    --  them through Dispatch, as a command run from the shell does.
@@ -68,9 +69,8 @@ package body Untested_Surface is
    --  grid format's product test runs through them, against the reference
    --  decoding; being private, no test names them.
    --
-   --  Asked of the device. Has_Matrix_Instruction, Has_Subgroup_Arithmetic,
-   --  Has_Sized_Subgroups, Has_Integer_Dot and Shares_Memory answer
-   --  differently on every device and cannot be asserted against a value;
+   --  Asked of the device. Shares_Memory answers differently on every
+   --  device and cannot be asserted against a fixed value;
    --  each decides which kernel runs, and the device's product tests run
    --  whichever it picks against the processor's answer. Room_Beside is what
    --  a model beside the first may take of the room the first claimed: a
@@ -166,6 +166,7 @@ package body Untested_Surface is
          | "Free_Reals"
          | "Free_Text"
          | "Read_Standard_Input"
+         | "Device_Open_Error"
          | "Say_Device_Room"
          | "Do_Run"
          | "Choose_Model"
@@ -195,10 +196,6 @@ package body Untested_Surface is
          | "Scale_Shuffle_Address"
          | "Sign_Shuffle_Address"
          | "Entry_Point"
-         | "Has_Matrix_Instruction"
-         | "Has_Subgroup_Arithmetic"
-         | "Has_Sized_Subgroups"
-         | "Has_Integer_Dot"
          | "Shares_Memory"
          | "Room_Beside"
          | "Is_Live"
@@ -216,6 +213,6 @@ package body Untested_Surface is
    -- Count --
    -----------
 
-   function Count return Natural is (76);
+   function Count return Natural is (77);
 
 end Untested_Surface;

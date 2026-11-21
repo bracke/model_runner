@@ -14,6 +14,8 @@ with Model_Runner.Markup;
 with Ada.Strings.Hash;
 with Ada.Containers.Indefinite_Hashed_Maps;
 with AUnit.Test_Cases;
+
+with Child_Guards;
 with Ada.Real_Time;
 with Ada.IO_Exceptions;
 with Ada.Unchecked_Deallocation;
@@ -112,6 +114,8 @@ with Perplexity_Run;
 with Restamping;
 with Speed_Run;
 with Tiny_Model;
+with Model_Runner.Cache_Codecs.Transformed_Four_Bit;
+with Transformed_Four_Bit_Reference;
 
 package body Tests.CLI_Cases is
 
@@ -431,6 +435,40 @@ package body Tests.CLI_Cases is
       Opt.Release (Item);
       Assert (Status = E.Exit_Status (E.Make (E.Backend_No_Device)),
               "image on a device not there ended with" & Status'Image);
+
+      --  A present device held by another in-process owner is contention,
+      --  not absence. Image checks that boundary before loading its models.
+      declare
+         Ready, Granted : Boolean;
+         Lease : Model_Runner.Backend.Device.Exclusive_Lease;
+      begin
+         Model_Runner.Backend.Device.Open_Exclusive
+           (Ready, Granted, Lease);
+         if Ready and then Granted then
+            Source.Used := 0;
+            Add (Source, "image");
+            Add (Source, "--prompt");
+            Add (Source, "a cat");
+            Add (Source, "--out");
+            Add (Source, "obj/owned-device.png");
+            Add (Source, "--backend");
+            Add (Source, "device");
+            Opt.Parse (Source, Item, Parsed);
+            Assert (E.Is_Ok (Parsed),
+                    "image's owned-device flags were refused while parsing");
+            Model_Runner.CLI.Execute.Dispatch
+              (Item, Screen, Catalog, Status);
+            Opt.Release (Item);
+            Assert
+              (Status = E.Exit_Status (E.Make (E.Backend_Device_Refused)),
+               "image on an owned device ended with" & Status'Image);
+         end if;
+         Model_Runner.Backend.Device.Close_Exclusive (Lease);
+      exception
+         when others =>
+            Model_Runner.Backend.Device.Close_Exclusive (Lease);
+            raise;
+      end;
    end Transcribe_Refuses_A_Device_Not_There;
 
    --  The reference backend is refused by the commands that have none,
@@ -5338,6 +5376,7 @@ package body Tests.CLI_Cases is
          Require ("--shard");
          Require ("--ple");
          Require ("--device-patience");
+         Require ("--device-tuning");
          Require ("--mmap");
          Require ("--no-mmap");
          Require ("--quiet");
@@ -6198,6 +6237,7 @@ package body Tests.CLI_Cases is
       --  storages.
       Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q8 --kv-values q4");
       Expect (E.No_Error, "run m.gguf --prompt a --kv-cache f8_e4m3");
+      Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q4t");
 
       --  A reranker's query pairs with the prompt on embed, and is not an
       --  option run takes.
@@ -6206,7 +6246,9 @@ package body Tests.CLI_Cases is
       Expect (E.No_Error, "run m.gguf --prompt a --kv-cache q4 --kv-values q8");
       Expect (E.CLI_Option_Combination,
               "run m.gguf --prompt a --kv-cache f16 --kv-values q4");
-      Expect (E.CLI_Option_Combination,
+      --  q4t is the unnamed cache and stores ordinary q4 values, so naming
+      --  that value side alone is now the default pairing.
+      Expect (E.No_Error,
               "run m.gguf --prompt a --kv-values q4");
       Expect (E.CLI_Invalid_Option_Value,
               "run m.gguf --prompt a --kv-cache q8 --kv-values f16");
@@ -8719,6 +8761,13 @@ package body Tests.CLI_Cases is
               "a command without --repack says it asked for one");
       Assert (Read ("--context-size", "512").Context_Size = 512,
               "--context-size did not reach the context size");
+      Assert
+        (Model_Runner.Llama."="
+           (Read ("--context-size", "512").Cache,
+            Model_Runner.Llama.Transformed_Fourth),
+         "a run without --kv-cache did not default to q4t");
+      Assert (not Read ("--context-size", "512").Cache_Asked,
+              "a run without --kv-cache says one was named");
       Assert (Read ("--max-tokens", "9").Max_Tokens = 9,
               "--max-tokens did not reach the token bound");
 
@@ -8726,20 +8775,46 @@ package body Tests.CLI_Cases is
       --  byte storage, and leaves the halved one set until it does.
       Assert (Read ("--kv-cache", "fit").Cache_Fit,
               "--kv-cache fit did not reach the run");
+      Assert (Read ("--kv-cache", "fit").Cache_Asked,
+              "--kv-cache fit was not recorded as an explicit policy");
       Assert (Model_Runner.Llama."="
                 (Read ("--kv-cache", "fit").Cache, Model_Runner.Llama.Halved),
               "--kv-cache fit set a storage before the run chose one");
       Assert (not Read ("--kv-cache", "q8").Cache_Fit,
               "--kv-cache q8 asked the run to choose");
+      Assert (Read ("--kv-cache", "q8").Cache_Asked,
+              "--kv-cache q8 was not recorded as explicitly named");
       Assert
         (Model_Runner.Llama."="
            (Read ("--kv-cache", "f8_e4m3").Cache,
             Model_Runner.Llama.Float_Eighth),
          "--kv-cache f8_e4m3 did not reach the OCP FP8 storage");
+      Assert
+        (Model_Runner.Llama."="
+           (Read ("--kv-cache", "q4t").Cache,
+            Model_Runner.Llama.Transformed_Fourth),
+         "--kv-cache q4t did not reach the transformed Q4 storage");
+      Assert (Read ("--kv-cache", "q4t").Cache_Asked,
+              "--kv-cache q4t was not recorded as explicitly named");
       Assert (Read ("--batch-size", "7").Batch_Size = 7,
               "--batch-size did not reach the batch size");
       Assert (Read ("--threads", "3").Threads = 3,
               "--threads did not reach the worker count");
+      declare
+         Profile : constant Opt.Command :=
+           Read ("--device-tuning", "chosen.tuning");
+         Disabled : constant Opt.Command :=
+           Read ("--device-tuning", "none");
+      begin
+         Assert
+           (Profile.Device_Tuning_Set
+            and then T.To_String (Profile.Device_Tuning) = "chosen.tuning",
+            "--device-tuning did not reach the explicit profile path");
+         Assert
+           (Disabled.Device_Tuning_Set
+            and then T.To_String (Disabled.Device_Tuning) = "none",
+            "--device-tuning none was not preserved as an explicit choice");
+      end;
 
       --  The sampler's settings, which had no path from a command line to
       --  the configuration that any test walked.
@@ -13756,7 +13831,294 @@ package body Tests.CLI_Cases is
                  "rows of different widths were compared rather than "
                  & "refused");
       end;
+
+      --  A cache comparison's one-line artifact carries every number needed
+      --  to make the quality/memory/speed decision without reconstructing
+      --  it from a log.
+      declare
+         Item : constant P.Report :=
+           (Ran                    => True,
+            Tokens                 => 128,
+            Chunks                 => 1,
+            Scored                 => 63,
+            Perplexity             => 4.25,
+            Entropy                => 1.45,
+            Baseline_Perplexity    => 4.20,
+            Baseline_Entropy       => 1.44,
+            Compared               => True,
+            Divergence             => 0.00125,
+            Agreed                 => 61,
+            Worst                  => 0.0125,
+            Worst_Position         => 73,
+            Cache_Bytes            => 1_024,
+            Baseline_Cache_Bytes   => 4_096,
+            Candidate_Seconds      => 1.25,
+            Baseline_Seconds       => 1.75,
+            Candidate_Cache        => Model_Runner.Llama.Fourth,
+            Baseline_Cache         => Model_Runner.Llama.Halved,
+            Cache_Comparison       => True,
+            Seconds                => 3.0,
+            others                 => <>);
+         Said : constant String := P.Summary (Item);
+      begin
+         Assert
+           (Ada.Strings.Fixed.Index (Said, "candidate q4 perplexity") > 0
+            and then Ada.Strings.Fixed.Index
+                       (Said, "baseline f16 perplexity") > 0
+            and then Ada.Strings.Fixed.Index (Said, "mean KL") > 0
+            and then Ada.Strings.Fixed.Index
+                       (Said, "at position 73") > 0
+            and then Ada.Strings.Fixed.Index
+                       (Said, "KV bytes 1024 vs 4096") > 0
+            and then Ada.Strings.Fixed.Index (Said, "arm time") > 0,
+            "a cache comparison omitted a decision field: " & Said);
+      end;
+
+      --  Asking to compare a storage with itself is almost certainly a
+      --  campaign typo, and must fail before model or corpus I/O begins.
+      declare
+         Item : P.Report;
+      begin
+         P.Run
+           (Path => "", Against => "", Text => "", Threads => 1,
+            Cache => Model_Runner.Llama.Fourth,
+            Compare_Cache => True,
+            Against_Cache => Model_Runner.Llama.Fourth,
+            Result => Item);
+         Assert
+           (not Item.Ran
+            and then Ada.Strings.Fixed.Index
+                       (P.Summary (Item), "cache modes are identical") > 0,
+            "an identical cache comparison was not refused");
+      end;
    end The_Perplexity_Numbers_Are_What_They_Claim;
+
+   -------------------------------------------------------
+   -- The_Transformed_Four_Bit_Codec_Has_A_Second_Answer --
+   -------------------------------------------------------
+
+   procedure The_Transformed_Four_Bit_Codec_Has_A_Second_Answer
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+
+      package C renames
+        Model_Runner.Cache_Codecs.Transformed_Four_Bit;
+      package R renames Transformed_Four_Bit_Reference;
+
+      use type C.Byte_Array;
+      use type C.Byte;
+      use type C.Real_Array;
+      use type C.Element_Count;
+      use type C.Wide_Real;
+
+      procedure Check (Source : C.Real_Array; What : String) is
+         Length : constant C.Element_Count := C.Element_Count (Source'Length);
+         Codes, Reference_Codes :
+           C.Byte_Array (0 .. C.Code_Bytes (Length) - 1);
+         Scales, Reference_Scales :
+           C.Real_Array (0 .. C.Scale_Count (Length) - 1);
+         Decoded, Reference_Decoded, Query : C.Real_Array (Source'Range);
+         Valid, Reference_Valid : Boolean;
+      begin
+         C.Encode_Key (Source, Codes, Scales, Valid);
+         R.Encode_Key
+           (Source, Reference_Codes, Reference_Scales, Reference_Valid);
+         Assert (Valid and then Reference_Valid,
+                 What & " would not encode");
+         Assert (Codes = Reference_Codes,
+                 What & " disagreed with the direct-matrix reference codes");
+         for Index in Scales'Range loop
+            Assert
+              (abs (Scales (Index) - Reference_Scales (Index)) < 1.0E-6,
+               What & " disagreed with the direct-matrix reference scale");
+         end loop;
+
+         C.Decode_Key (Codes, Scales, Decoded, Valid);
+         R.Decode_Key
+           (Reference_Codes, Reference_Scales,
+            Reference_Decoded, Reference_Valid);
+         Assert (Valid and then Reference_Valid,
+                 What & " would not decode");
+         for Index in Decoded'Range loop
+            Assert
+              (abs (Decoded (Index) - Reference_Decoded (Index)) < 1.0E-5,
+               What & " disagreed with the direct-matrix reference decode");
+            Query (Index) :=
+              C.Real (Integer (Index mod 7) - 3) / 4.0;
+         end loop;
+
+         declare
+            Expected : C.Wide_Real := 0.0;
+            Got, Reference_Got : C.Wide_Real;
+            Reference_Score_Valid : Boolean;
+         begin
+            for Index in Query'Range loop
+               Expected := Expected
+                 + C.Wide_Real (Query (Index))
+                   * C.Wide_Real (Decoded (Index));
+            end loop;
+            Got := C.Score_Key (Query, Codes, Scales, Valid);
+            Reference_Got :=
+              R.Score_Key
+                (Query, Reference_Codes, Reference_Scales,
+                 Reference_Score_Valid);
+            Assert
+              (Valid and then Reference_Score_Valid
+               and then abs (Got - Expected) < 1.0E-4
+               and then abs (Got - Reference_Got) < 1.0E-4,
+               What & " scored in a basis other than the decoded key's");
+         end;
+
+         --  Re-encoding what the bytes represent is stable. This matters to
+         --  snapshots, which serialize represented values rather than stale
+         --  input values.
+         declare
+            Again_Codes : C.Byte_Array (Codes'Range);
+            Again_Scales : C.Real_Array (Scales'Range);
+         begin
+            C.Encode_Key
+              (Decoded, Again_Codes, Again_Scales, Valid);
+            Assert (Valid and then Again_Codes = Codes,
+                    What & " changed codes after decode and re-encode");
+         end;
+      end Check;
+
+      Zero        : constant C.Real_Array (0 .. 31) := [others => 0.0];
+      One_Outlier : C.Real_Array (0 .. 31) := [others => 0.0];
+      Alternating : C.Real_Array (0 .. 31);
+      Partial     : C.Real_Array (0 .. 44);
+   begin
+      --  These are public size functions over all of Element_Count.  Ceiling
+      --  division must not overflow merely because the requested count is at
+      --  the top of that type, even though no real allocation is that large.
+      Assert
+        (C.Code_Bytes (C.Element_Count'Last)
+           = C.Element_Count'Last / 2 + C.Element_Count'Last mod 2,
+         "the transformed cache's code size overflowed at the type bound");
+      Assert
+        (C.Scale_Count (C.Element_Count'Last)
+           = C.Element_Count'Last / C.Group_Size,
+         "the transformed cache's scale count overflowed at the type bound");
+      Assert
+        (C.Scale_Count (C.Element_Count'Last - 1)
+           = (C.Element_Count'Last - 1) / C.Group_Size + 1,
+         "the transformed cache's partial scale count overflowed near the "
+         & "type bound");
+
+      Check (Zero, "the zero row");
+
+      declare
+         Codes  : C.Byte_Array (0 .. 15);
+         Scales : C.Real_Array (0 .. 0);
+         Valid  : Boolean;
+      begin
+         C.Encode_Key (Zero, Codes, Scales, Valid);
+         Assert
+           (Valid and then (for all Code of Codes => Code = 16#88#)
+            and then Scales (0) = 0.0,
+            "the zero row did not have the format's golden encoding");
+      end;
+
+      One_Outlier (7) := 12.0;
+      Check (One_Outlier, "the one-outlier row");
+
+      for Index in Alternating'Range loop
+         Alternating (Index) :=
+           (if Index mod 2 = 0 then C.Real (Index + 1)
+            else -C.Real (Index + 1));
+      end loop;
+      Check (Alternating, "the alternating-sign row");
+
+      for Index in Partial'Range loop
+         Partial (Index) := C.Real (Integer (Index mod 11) - 5) / 3.0;
+      end loop;
+      Check (Partial, "the partial final block");
+
+      --  R is orthonormal before quantization, including the dyadic tail used
+      --  by a row whose width is not a multiple of thirty-two.
+      declare
+         Left, Right, Rotated_Left, Rotated_Right :
+           C.Real_Array (Partial'Range);
+         Before, After : C.Wide_Real := 0.0;
+         Left_Valid, Right_Valid : Boolean;
+      begin
+         for Index in Partial'Range loop
+            Left (Index) := Partial (Index);
+            Right (Index) := C.Real (Integer (Index mod 9) - 4) / 5.0;
+            Before := Before
+              + C.Wide_Real (Left (Index)) * C.Wide_Real (Right (Index));
+         end loop;
+         C.Rotate_Key (Left, Rotated_Left, Left_Valid);
+         C.Rotate_Key (Right, Rotated_Right, Right_Valid);
+         for Index in Partial'Range loop
+            After := After
+              + C.Wide_Real (Rotated_Left (Index))
+                * C.Wide_Real (Rotated_Right (Index));
+         end loop;
+         Assert
+           (Left_Valid and then Right_Valid
+            and then abs (After - Before) < 1.0E-5,
+            "the key transform did not preserve a dot product");
+      end;
+
+      --  Half-way rounding and value accumulation use the untransformed Q4
+      --  body. A negative largest magnitude makes its scale exactly one.
+      declare
+         Values : constant C.Real_Array (0 .. 3) :=
+           [-8.0, -7.5, -6.51, -6.49];
+         Codes  : C.Byte_Array (0 .. 1);
+         Reference_Codes : C.Byte_Array (0 .. 1);
+         Scales : C.Real_Array (0 .. 0);
+         Reference_Scales : C.Real_Array (0 .. 0);
+         Total  : C.Real_Array (0 .. 3) := [others => 0.0];
+         Reference_Decoded : C.Real_Array (0 .. 3);
+         Valid, Reference_Valid : Boolean;
+      begin
+         C.Encode_Value (Values, Codes, Scales, Valid);
+         R.Encode_Value
+           (Values, Reference_Codes, Reference_Scales, Reference_Valid);
+         Assert
+           (Valid and then Scales (0) = 1.0
+            and then Codes = [16#10#, 16#21#],
+            "the value body's half-way rounding changed");
+         Assert
+           (Reference_Valid and then Reference_Codes = Codes
+            and then Reference_Scales = Scales,
+            "the value body disagreed with its independent reference");
+         R.Decode_Value
+           (Reference_Codes, Reference_Scales,
+            Reference_Decoded, Reference_Valid);
+         Assert
+           (Reference_Valid
+            and then Reference_Decoded = [-8.0, -7.0, -7.0, -6.0],
+            "the reference decoded different value bytes");
+         C.Accumulate_Value (0.5, Codes, Scales, Total, Valid);
+         Assert
+           (Valid and then Total = [-4.0, -3.5, -3.5, -3.0],
+            "a decoded value row was not accumulated");
+         C.Finish_Value (Total, Valid);
+         Assert (Valid, "the identity value finish refused finite values");
+      end;
+
+      --  NaN and a finite input whose orthonormal image cannot fit binary32
+      --  are refused, not turned into arbitrary cache bytes.
+      declare
+         Bad : C.Real_Array (0 .. 31) := [others => 0.0];
+         Codes : C.Byte_Array (0 .. 15);
+         Scales : C.Real_Array (0 .. 0);
+         Valid : Boolean;
+         pragma Suppress (Validity_Check);
+      begin
+         Bad (0) := Model_Runner.Numerics.From_Bits (16#7FC0_0000#);
+         C.Encode_Key (Bad, Codes, Scales, Valid);
+         Assert (not Valid, "a NaN key was encoded");
+
+         Bad := [others => C.Real'Last];
+         C.Encode_Key (Bad, Codes, Scales, Valid);
+         Assert (not Valid, "an overflowing key transform was encoded");
+      end;
+   end The_Transformed_Four_Bit_Codec_Has_A_Second_Answer;
 
    procedure The_Bound_Is_Below_One_Busy_Processor
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -15483,6 +15845,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
@@ -15519,6 +15882,7 @@ package body Tests.CLI_Cases is
       Words.Append (U.To_Unbounded_String ("hello"));
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the run did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       while Hostkit.Descriptors.Wait_Readable (Pair.From_Child, 30_000) loop
          exit when Hostkit.Descriptors."/="
@@ -15529,7 +15893,7 @@ package body Tests.CLI_Cases is
             U.Append (Drawn, Character'Val (B));
          end loop;
       end loop;
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the run was not waited for");
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the run was not waited for");
       Hostkit.Pty.Close (Pair);
       return U.To_String (Drawn);
    end Run_Drawn;
@@ -15999,6 +16363,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
@@ -16088,13 +16453,14 @@ package body Tests.CLI_Cases is
       Words.Append (U.To_Unbounded_String ("1"));
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the session did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       Take (5000);
       Send ("hi" & ASCII.CR);
       Take (5000);
       Send ("/exit" & ASCII.CR);
       Take (3000);
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the session was not waited for");
       Hostkit.Pty.Close (Pair);
 
       declare
@@ -16170,6 +16536,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
@@ -16262,6 +16629,7 @@ package body Tests.CLI_Cases is
       end if;
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the session did not start");
+      Child_Guards.Watch (Watcher, Child);
       Reused_Session := U.To_Unbounded_String
         (Ada.Directories.Containing_Directory (Model_Runner.Platform.Cache_Directory)
          & "/session/"
@@ -16299,7 +16667,7 @@ package body Tests.CLI_Cases is
       Take (3000);
       Send ("/exit" & ASCII.CR);
       Take (3000);
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the session was not waited for");
       Hostkit.Pty.Close (Pair);
 
       Model_Runner.Localization.Open (Catalog, Model_Runner.Platform.Catalog_Path, "en");
@@ -16371,6 +16739,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
@@ -16525,6 +16894,7 @@ package body Tests.CLI_Cases is
       Words.Append (U.To_Unbounded_String ("1"));
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the session did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       Take (5000);
       --  A command, its output shown and kept; one that fails, its status
@@ -16623,7 +16993,7 @@ package body Tests.CLI_Cases is
               "the long background job did not start");
       Send ("/exit" & ASCII.CR);
       Take (3000);
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the session was not waited for");
       Hostkit.Pty.Close (Pair);
       Assert (not Ada.Directories.Exists (U.To_String (Long_Job_File)),
               "a background job's output was left behind after the conversation ended");
@@ -16691,6 +17061,7 @@ package body Tests.CLI_Cases is
          Pair    : Hostkit.Pty.Pair;
          Options : Hostkit.Spawn.Options;
          Child   : Hostkit.Spawn.Process_Handle;
+         Watcher : Child_Guards.Guard;
          Result  : Hostkit.Spawn.Status;
          pragma Warnings (Off, Result);
          Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
@@ -16743,6 +17114,7 @@ package body Tests.CLI_Cases is
                  "the pseudo-terminal was not made ready");
          Assert (Hostkit.Spawn.Start (Binary, Arguments, Options, Child) = Hostkit.Spawn.Spawn_Ok,
                  "the session did not start");
+         Child_Guards.Watch (Watcher, Child);
          Hostkit.Pty.Close_Device (Pair);
          Take (5000);
          Send (First_Line & ASCII.CR);
@@ -16751,7 +17123,7 @@ package body Tests.CLI_Cases is
          Take (3000);
          Send ("/exit" & ASCII.CR);
          Take (3000);
-         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+         Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the session was not waited for");
          Hostkit.Pty.Close (Pair);
          return U.To_String (Drawn);
       end Session;
@@ -17016,6 +17388,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       pragma Warnings (Off, Result);
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
@@ -17079,13 +17452,14 @@ package body Tests.CLI_Cases is
       Words.Append (U.To_Unbounded_String ("{""command"": ""true""}"));
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the probe did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       Take (3000);
       Send (ASCII.ESC & "[B" & ASCII.CR);
       Take (2000);
       Send ([1 => ASCII.ESC]);
       Take (3000);
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the probe was not waited for");
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the probe was not waited for");
       Hostkit.Pty.Close (Pair);
       declare
          Said : constant String := U.To_String (Drawn);
@@ -17770,6 +18144,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       --  Waited for, not read: the session's end is what is asked.
       pragma Warnings (Off, Result);
@@ -17904,6 +18279,7 @@ package body Tests.CLI_Cases is
       Words.Append (U.To_Unbounded_String ("cpu"));
       Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
               "the session did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       Take (5000);
       declare
@@ -17926,7 +18302,7 @@ package body Tests.CLI_Cases is
          Take (2000);
          Send ("/exit" & ASCII.CR);
          Take (3000);
-         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+         Assert (Child_Guards.Wait (Watcher, 30.0, Result), "the session was not waited for");
          Hostkit.Pty.Close (Pair);
          declare
             Offered : constant String := U.Slice (Drawn, Before + 1, U.Length (Drawn));
@@ -19552,6 +19928,70 @@ package body Tests.CLI_Cases is
               & "its kernels support");
    end Binary32_Keeps_The_Files_Layout;
 
+   --  Q4t's transform groups must not cross an attention-head boundary.
+   --  Silence therefore falls back to f16 for an eighty-wide head, while
+   --  naming q4t remains a precise request for Plan/Open to refuse.
+   procedure The_Default_Cache_Falls_Back_But_A_Named_One_Does_Not
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Path    : constant String := "obj/q4t-fallback-model.gguf";
+      Builder : Fixtures.Builder;
+      Image   : Model_Runner.Bytes.Byte_Array_Access;
+      File    : Ada.Streams.Stream_IO.File_Type;
+      Catalog : aliased Model_Runner.Localization.Catalog;
+      Screen  : Model_Runner.Presentation.Console;
+      Chosen  : Opt.Command;
+   begin
+      Fixtures.Add_String (Builder, "general.architecture", "llama");
+      Fixtures.Add_U32 (Builder, "llama.block_count", 1);
+      Fixtures.Add_U32 (Builder, "llama.embedding_length", 2_560);
+      Fixtures.Add_U32 (Builder, "llama.feed_forward_length", 64);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count", 32);
+      Fixtures.Add_U32 (Builder, "llama.attention.head_count_kv", 32);
+      Fixtures.Add_U32 (Builder, "llama.context_length", 128);
+      Fixtures.Add_F32
+        (Builder, "llama.attention.layer_norm_rms_epsilon", 1.0E-5);
+      Fixtures.Add_Tensor
+        (Builder, "output.weight", [8, 2], Model_Runner.GGUF.Type_F32,
+         Fixtures.Encode_F32 ([0 .. 15 => 0.5]));
+      Fixtures.Build (Builder, Image);
+
+      Ada.Streams.Stream_IO.Create
+        (File, Ada.Streams.Stream_IO.Out_File, Path);
+      declare
+         Bytes : Ada.Streams.Stream_Element_Array
+           (1 .. Ada.Streams.Stream_Element_Offset (Image'Length))
+           with Import, Address => Image.all'Address;
+      begin
+         Ada.Streams.Stream_IO.Write (File, Bytes);
+      end;
+      Ada.Streams.Stream_IO.Close (File);
+      Model_Runner.Bytes.Free (Image);
+
+      Model_Runner.Localization.Open
+        (Catalog, Model_Runner.Platform.Catalog_Path, "en");
+      Model_Runner.Presentation.Open
+        (Screen, Catalog'Unchecked_Access, Opt.Color_Never,
+         (Output_Is_Terminal => False, Error_Is_Terminal => False,
+          Input_Is_Terminal  => False, Colour_Suppressed => True),
+         Opt.Normal);
+
+      Chosen.Cache := Model_Runner.CLI.Execute.Unasked_Cache
+        (Path, Screen);
+      Assert
+        (L."=" (Chosen.Cache, L.Halved),
+         "the unnamed q4t cache did not fall back for an 80-wide head");
+
+      Chosen.Cache := Model_Runner.CLI.Execute.Unasked_Cache
+        (Path, Screen, Cache => L.Transformed_Fourth, Named => True);
+      Assert
+        (L."=" (Chosen.Cache, L.Transformed_Fourth),
+         "an explicitly named q4t cache was silently changed");
+
+      Ada.Directories.Delete_File (Path);
+   end The_Default_Cache_Falls_Back_But_A_Named_One_Does_Not;
+
    --  The device run takes unasked is the one whose load will hold the
    --  model: a dense model's matrices weighed against the room the load
    --  counts -- the device's heaps less the context at the length the run
@@ -19765,6 +20205,7 @@ package body Tests.CLI_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
@@ -19859,6 +20300,7 @@ package body Tests.CLI_Cases is
          Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child)
                  = Hostkit.Spawn.Spawn_Ok, "the session did not start");
       end;
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       Drain (5000);
 
@@ -19889,7 +20331,7 @@ package body Tests.CLI_Cases is
       Drain (5000);
       Send ("/exit" & ASCII.CR);
       Drain (3000);
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result),
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result),
               "the session was not waited for");
       Hostkit.Pty.Close (Pair);
 
@@ -20162,6 +20604,10 @@ package body Tests.CLI_Cases is
         (T, Binary32_Keeps_The_Files_Layout'Access,
          "a processor run at --arith f32 keeps the file's layout unasked");
       Register_Routine
+        (T, The_Default_Cache_Falls_Back_But_A_Named_One_Does_Not'Access,
+         "the q4t default falls back on an incompatible head but a named "
+         & "q4t does not");
+      Register_Routine
         (T, The_Unasked_Device_Counts_The_Context'Access,
          "the device run takes unasked counts the context the load will "
          & "keep beside a dense model, and a draft named beside it");
@@ -20417,6 +20863,10 @@ package body Tests.CLI_Cases is
         (T, The_Perplexity_Numbers_Are_What_They_Claim'Access,
          "a perplexity of a flat row is the vocabulary, and nothing "
          & "diverges from itself");
+      Register_Routine
+        (T, The_Transformed_Four_Bit_Codec_Has_A_Second_Answer'Access,
+         "the transformed four-bit cache codec agrees with an independent "
+         & "direct-matrix reference");
       Register_Routine
         (T, The_Bound_Is_Below_One_Busy_Processor'Access,
          "the load a figure is gated on is below one busy processor");

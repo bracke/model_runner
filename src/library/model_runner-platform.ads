@@ -118,15 +118,22 @@ package Model_Runner.Platform is
    --  @return The path, or an empty string when there is no directory.
    function Cache_File (Key : String) return String;
 
-   --  Which build of the program is running: the running file's size and
-   --  when it was written. A saved state is the engine's arithmetic as it
-   --  was, and a cache keyed without this was read back by the next
+   --  Which build of the program is running: the process-cached SHA-256 identity of the
+   --  executable's complete contents. A saved state is the engine's arithmetic
+   --  as it was, and a cache keyed without this was read back by the next
    --  build -- a fix to how a model is computed went on answering from the
-   --  states the broken build had saved. Empty where the file cannot be
-   --  looked at.
+   --  states the broken build had saved. Empty where the file cannot be read.
    --
    --  @return The stamp.
    function Program_Stamp return String;
+
+   --  The same content-derived build stamp for a named executable. Measurement tools use
+   --  this to key artifacts for the production program they exercise rather
+   --  than for the separate measurement executable.
+   --
+   --  @param Path Executable file to identify.
+   --  @return Its stamp, or empty text when it cannot be inspected.
+   function Program_Stamp (Path : String) return String;
 
    --  A panel cache file path for a key: the key hashed, under the cache
    --  home's panels directory beside the prefill one. Empty when no home

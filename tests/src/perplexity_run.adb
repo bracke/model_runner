@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Finalization;
 with Ada.Real_Time;
 
 with Host_Load;
@@ -26,10 +27,36 @@ package body Perplexity_Run is
    package CPU renames Model_Runner.Backend.CPU;
 
    use type Model_Runner.Backend.Backend_Kind;
+   use type Model_Runner.Llama.Cache_Precision;
+   use type Model_Runner.Llama.Value_Precision;
    use type Element_Count;
    use type Model_Runner.Numerics.Real;
    use type Model_Runner.Tensors.Real_Array_Access;
    use type Ada.Real_Time.Time;
+
+   type Device_Guard is
+     new Ada.Finalization.Limited_Controlled with record
+        Owned : Boolean := False;
+     end record;
+
+   overriding procedure Finalize (Item : in out Device_Guard);
+
+   procedure Claim (Item : in out Device_Guard) is
+   begin
+      Item.Owned := True;
+   end Claim;
+
+   overriding procedure Finalize (Item : in out Device_Guard) is
+   begin
+      if Item.Owned then
+         begin
+            Model_Runner.Backend.Device.Close;
+         exception
+            when others => null;
+         end;
+         Item.Owned := False;
+      end if;
+   end Finalize;
 
    --  The project's own exponential and logarithm, in the wide arithmetic
    --  they are written for. Long_Float has no such attributes and a
@@ -139,6 +166,13 @@ package body Perplexity_Run is
 
    function Summary (Item : Report) return String is
       package Say renames Model_Runner.Text;
+
+      function Cache_Image
+        (Cache  : L.Cache_Precision;
+         Values : L.Value_Precision) return String
+      is (if Values = L.Same_As_Keys then L.Cache_Name (Cache)
+          else L.Cache_Name (Cache) & " keys/"
+               & L.Cache_Name (L.Values_Held (Cache, Values)) & " values");
    begin
       if Item.Missing then
          return "nothing measured: " & Item.Detail (1 .. Item.Detail_Up);
@@ -152,16 +186,39 @@ package body Perplexity_Run is
         Natural'Image (Item.Tokens) & " tokens,"
         & Natural'Image (Item.Chunks) & " chunks,"
         & Natural'Image (Item.Scored) & " positions scored"
-        & "; perplexity " & Say.Image (Item.Perplexity, 4)
-        & ", " & Say.Image (Item.Entropy, 4) & " nats a token"
+        & "; candidate "
+        & Cache_Image (Item.Candidate_Cache, Item.Candidate_Values)
+        & " perplexity " & Say.Image (Item.Perplexity, 4)
+        & ", " & Say.Image (Item.Entropy, 4) & " nats/token"
         & (if not Item.Compared then ""
-           else "; divergence " & Say.Image (Item.Divergence, 6)
+           else "; baseline "
+                & Cache_Image (Item.Baseline_Cache, Item.Baseline_Values)
+                & " perplexity " & Say.Image (Item.Baseline_Perplexity, 4)
+                & "; mean KL " & Say.Image (Item.Divergence, 6)
                 & " nats, worst " & Say.Image (Item.Worst, 4)
+                & " at position" & Natural'Image (Item.Worst_Position)
+                & " (wanted" & Natural'Image (Item.Worst_Wanted)
+                & ", top" & Natural'Image (Item.Worst_Candidate_Top)
+                & " vs" & Natural'Image (Item.Worst_Baseline_Top)
+                & ", wanted log-p "
+                & Say.Image (Item.Worst_Candidate_Wanted_Logp, 3)
+                & " vs "
+                & Say.Image (Item.Worst_Baseline_Wanted_Logp, 3) & ")"
                 & ", top token agreed "
                 & Say.Image
                     (Long_Float (Item.Agreed) * 100.0
                      / Long_Float (Natural'Max (Item.Scored, 1)), 1)
-                & " per cent")
+                & " per cent"
+                & "; KV bytes"
+                & Model_Runner.Memory.U64'Image (Item.Cache_Bytes)
+                & " vs"
+                & Model_Runner.Memory.U64'Image
+                    (Item.Baseline_Cache_Bytes)
+                & "; arm time "
+                & Say.Image (Long_Float (Item.Candidate_Seconds), 2)
+                & " vs "
+                & Say.Image (Long_Float (Item.Baseline_Seconds), 2)
+                & " s")
         & "; took " & Say.Image (Long_Float (Item.Seconds), 2) & " s"
         & "; load " & Say.Image (Item.Load_Before, 2)
         & " to " & Say.Image (Item.Load_After, 2)
@@ -189,7 +246,16 @@ package body Perplexity_Run is
       Stretch : String := "";
       Factor  : Model_Runner.Numerics.Wide_Real := 0.0;
       Repack  : Model_Runner.Llama.Repack_Mode :=
-        Model_Runner.Llama.No_Repack)
+        Model_Runner.Llama.No_Repack;
+      Cache   : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Values  : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys;
+      Compare_Cache : Boolean := False;
+      Against_Cache : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Against_Values : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys)
    is
       procedure Note (Item : String);
 
@@ -291,11 +357,41 @@ package body Perplexity_Run is
       end Give;
 
       Started : Ada.Real_Time.Time;
+      Device  : Device_Guard;
       Ok      : Boolean;
    begin
       Result := (others => <>);
+      Result.Candidate_Cache := Cache;
+      Result.Candidate_Values := Values;
+      Result.Baseline_Cache :=
+        (if Compare_Cache then Against_Cache else Cache);
+      Result.Baseline_Values :=
+        (if Compare_Cache then Against_Values else Values);
+      Result.Cache_Comparison := Compare_Cache;
       Result.Load_Before := Host_Load.Now;
       Result.Warm_Before := Host_Load.Warmth;
+
+      if Compare_Cache and then Against /= "" then
+         Note ("choose either --against or --against-kv-cache, not both");
+         return;
+      end if;
+
+      if Compare_Cache
+        and then Cache = Against_Cache
+        and then Values = Against_Values
+      then
+         Note ("candidate and baseline cache modes are identical");
+         return;
+      end if;
+
+      if not L.Stores_Pair (Cache, Values)
+        or else
+          (Compare_Cache
+           and then not L.Stores_Pair (Against_Cache, Against_Values))
+      then
+         Note ("the requested key/value cache pairing is not stored");
+         return;
+      end if;
 
       if not Ada.Directories.Exists (Path) then
          Result.Missing := True;
@@ -345,6 +441,7 @@ package body Perplexity_Run is
                Note ("no device answered");
                return;
             end if;
+            Claim (Device);
          end;
       end if;
 
@@ -354,7 +451,9 @@ package body Perplexity_Run is
          Under : Reader;
          Base  : Reader;
 
-         Comparing : constant Boolean := Against /= "";
+         Comparing_Files : constant Boolean := Against /= "";
+         Comparing       : constant Boolean :=
+           Comparing_Files or Compare_Cache;
       begin
          Take (Under, Path, Ok);
          if not Ok then
@@ -362,7 +461,7 @@ package body Perplexity_Run is
             return;
          end if;
 
-         if Comparing then
+         if Comparing_Files then
             Take (Base, Against, Ok);
             if not Ok then
                Give (Base);
@@ -385,6 +484,45 @@ package body Perplexity_Run is
                return;
             end if;
          end if;
+
+         declare
+            Candidate_Plan : Model_Runner.Memory.Session_Plan;
+            Baseline_Plan  : Model_Runner.Memory.Session_Plan;
+            Plan_Status    : E.Error_Info;
+         begin
+            L.Plan_Session
+              (Under.Engine, Chunk, Candidate_Plan, Plan_Status,
+               Cache, Values);
+            if E.Is_Error (Plan_Status) then
+               Note ("the candidate cache could not be planned: "
+                     & E.Error_Code'Image (Plan_Status.Code));
+               Give (Base);
+               Give (Under);
+               return;
+            end if;
+            Result.Cache_Bytes := Candidate_Plan.KV_Cache_Bytes;
+
+            if Comparing then
+               if Comparing_Files then
+                  L.Plan_Session
+                    (Base.Engine, Chunk, Baseline_Plan, Plan_Status,
+                     Cache, Values);
+               else
+                  L.Plan_Session
+                    (Under.Engine, Chunk, Baseline_Plan, Plan_Status,
+                     Against_Cache, Against_Values);
+               end if;
+               if E.Is_Error (Plan_Status) then
+                  Note ("the baseline cache could not be planned: "
+                        & E.Error_Code'Image (Plan_Status.Code));
+                  Give (Base);
+                  Give (Under);
+                  return;
+               end if;
+               Result.Baseline_Cache_Bytes :=
+                 Baseline_Plan.KV_Cache_Bytes;
+            end if;
+         end;
 
          declare
             --  The pool the products are divided across. Without one every
@@ -442,20 +580,35 @@ package body Perplexity_Run is
 
                First_Scored : constant Natural := Chunk / 2;
 
-               Live, Baseline_Live : L.Session;
-
-               Logits : T.Real_Array_Access;
-               Every  : T.Real_Array_Access;
-               Base_Every : T.Real_Array_Access;
+               Logits     : T.Real_Array_Access := null;
+               Every      : T.Real_Array_Access := null;
+               Base_Every : T.Real_Array_Access := null;
 
                Surprise : Long_Float := 0.0;
+               Baseline_Surprise : Long_Float := 0.0;
                Apart    : Long_Float := 0.0;
 
                --  One pass's worth of rows, copied into the chunk's own
                --  array afterwards. A pass writes from the front of what it
                --  is given and there is no way to hand it an offset, so the
                --  offset is done here.
-               Pass_Rows : T.Real_Array_Access;
+               Pass_Rows : T.Real_Array_Access := null;
+
+               procedure Release_Buffers is
+               begin
+                  if Logits /= null then
+                     T.Free (Logits);
+                  end if;
+                  if Pass_Rows /= null then
+                     T.Free (Pass_Rows);
+                  end if;
+                  if Every /= null then
+                     T.Free (Every);
+                  end if;
+                  if Base_Every /= null then
+                     T.Free (Base_Every);
+                  end if;
+               end Release_Buffers;
 
                --  Evaluate a chunk in as many passes as it takes, into one
                --  session. A pass holds at most Max_Batch positions; a
@@ -500,6 +653,68 @@ package body Perplexity_Run is
                      end;
                   end loop;
                end Score_Chunk;
+
+               --  Open, evaluate and close one arm. Closing before the
+               --  other arm opens makes a same-model comparison exercise
+               --  one prepared set of weights without requiring two cache
+               --  allocations to coexist.
+               procedure Score_Arm
+                 (Engine  : in out L.Model;
+                  Storage : L.Cache_Precision;
+                  Values  : L.Value_Precision;
+                  From    : Natural;
+                  Upto    : Natural;
+                  Into    : T.Real_Array_Access;
+                  Elapsed : in out Duration;
+                  Status  : out E.Error_Info)
+               is
+                  Live    : L.Session;
+                  Started : constant Ada.Real_Time.Time :=
+                    Ada.Real_Time.Clock;
+               begin
+                  L.Open
+                    (Live, Engine, Context => Chunk,
+                     Workers => Where, Cache => Storage,
+                     Values => Values, Status => Status);
+                  if E.Is_Error (Status) then
+                     Elapsed := Elapsed
+                       + Ada.Real_Time.To_Duration
+                           (Ada.Real_Time.Clock - Started);
+                     return;
+                  end if;
+
+                  Score_Chunk
+                    (Live, Engine, From, Upto, Into, Logits, Status);
+                  L.Close (Live);
+                  Elapsed := Elapsed
+                    + Ada.Real_Time.To_Duration
+                        (Ada.Real_Time.Clock - Started);
+               end Score_Arm;
+
+               procedure Score_Candidate
+                 (From, Upto : Natural;
+                  Status     : out E.Error_Info) is
+               begin
+                  Score_Arm
+                    (Under.Engine, Cache, Values, From, Upto, Every,
+                     Result.Candidate_Seconds, Status);
+               end Score_Candidate;
+
+               procedure Score_Baseline
+                 (From, Upto : Natural;
+                  Status     : out E.Error_Info) is
+               begin
+                  if Comparing_Files then
+                     Score_Arm
+                       (Base.Engine, Cache, Values, From, Upto,
+                        Base_Every, Result.Baseline_Seconds, Status);
+                  else
+                     Score_Arm
+                       (Under.Engine, Against_Cache, Against_Values,
+                        From, Upto, Base_Every,
+                        Result.Baseline_Seconds, Status);
+                  end if;
+               end Score_Baseline;
             begin
                T.Allocate (Width, Logits);
                T.Allocate
@@ -508,9 +723,32 @@ package body Perplexity_Run is
                T.Allocate (Width * Element_Count (Chunk), Every);
                if Comparing then
                   T.Allocate (Width * Element_Count (Chunk), Base_Every);
+
+                  --  Fault mapped weights, allocate each cache layout and
+                  --  exercise both session-opening paths before either arm's
+                  --  clock starts. Alternating timed order cannot remove the
+                  --  first arm's cold-start cost when the corpus has only one
+                  --  chunk, which is a common comparison.
+                  if Vocab.Adds_Beginning
+                       (L.Vocabulary (Under.Engine).all)
+                  then
+                     Held (1) :=
+                       Vocab.Beginning_Token
+                         (L.Vocabulary (Under.Engine).all);
+                  end if;
+                  Score_Candidate (1, Chunk, Status);
+                  if not E.Is_Error (Status) then
+                     Score_Baseline (1, Chunk, Status);
+                  end if;
+                  Result.Candidate_Seconds := 0.0;
+                  Result.Baseline_Seconds := 0.0;
+                  if E.Is_Error (Status) then
+                     Note ("a cache-comparison arm would not warm up");
+                  end if;
                end if;
 
                for Round in 1 .. Rounds loop
+                  exit when E.Is_Error (Status);
                   declare
                      From : constant Natural := (Round - 1) * Chunk + 1;
                      Upto : constant Natural := From + Chunk - 1;
@@ -528,18 +766,27 @@ package body Perplexity_Run is
                      --  than the model's trained context is scored rather
                      --  than truncated to it. The engine refuses this
                      --  unless the rotation was stretched for it.
-                     L.Open
-                       (Live, Under.Engine, Context => Chunk,
-                        Workers => Where, Status => Status);
-                     if E.Is_Error (Status) then
-                        Note ("a session would not open: "
-                              & E.Error_Code'Image (Status.Code));
-                        exit;
+                     --  Alternate which arm runs first. Session opening and
+                     --  cache allocation are part of the reported arm time;
+                     --  a fixed candidate-then-baseline order therefore
+                     --  measured warm-up order as if it were cache speed.
+                     if Comparing and then Round mod 2 = 0 then
+                        Score_Baseline (From, Upto, Status);
+                        if E.Is_Error (Status) then
+                           Note ("the baseline would not evaluate a chunk");
+                           exit;
+                        end if;
+                        Score_Candidate (From, Upto, Status);
+                     else
+                        Score_Candidate (From, Upto, Status);
+                        if not E.Is_Error (Status) and then Comparing then
+                           Score_Baseline (From, Upto, Status);
+                           if E.Is_Error (Status) then
+                              Note ("the baseline would not evaluate a chunk");
+                              exit;
+                           end if;
+                        end if;
                      end if;
-
-                     Score_Chunk
-                       (Live, Under.Engine, From, Upto, Every, Logits,
-                        Status);
 
                      if E.Is_Error (Status) then
                         Note ("a chunk would not evaluate: "
@@ -547,34 +794,7 @@ package body Perplexity_Run is
                               & (if E.Text_Of (Status, "layer") /= ""
                                  then " at layer " & E.Text_Of (Status, "layer")
                                  else ""));
-                        L.Close (Live);
                         exit;
-                     end if;
-
-                     if Comparing then
-                        --  At the chunk's length, as the session under test:
-                        --  opened at the model's own, a 128k model's baseline
-                        --  asked for its whole context every chunk, and a
-                        --  chunk stretched past the trained one overflowed it.
-                        L.Open
-                          (Baseline_Live, Base.Engine, Context => Chunk,
-                           Workers => Where, Status => Status);
-                        if E.Is_Error (Status) then
-                           Note ("a baseline session would not open");
-                           L.Close (Live);
-                           exit;
-                        end if;
-
-                        Score_Chunk
-                          (Baseline_Live, Base.Engine, From, Upto,
-                           Base_Every, Logits, Status);
-
-                        if E.Is_Error (Status) then
-                           Note ("the baseline would not evaluate a chunk");
-                           L.Close (Baseline_Live);
-                           L.Close (Live);
-                           exit;
-                        end if;
                      end if;
 
                      --  The second half only: the first token of a chunk has
@@ -608,10 +828,10 @@ package body Perplexity_Run is
                                  Best_Mine, Best_Theirs : Element_Count :=
                                    Mine'First;
                               begin
+                                 Baseline_Surprise := Baseline_Surprise
+                                   - Log_Probability
+                                       (Theirs, Theirs'First + Wanted);
                                  Apart := Apart + Gap;
-                                 Result.Worst :=
-                                   Long_Float'Max (Result.Worst, Gap);
-
                                  for Index in Mine'Range loop
                                     if Mine (Index) > Mine (Best_Mine) then
                                        Best_Mine := Index;
@@ -625,6 +845,22 @@ package body Perplexity_Run is
                                     end if;
                                  end loop;
 
+                                 if Gap > Result.Worst then
+                                    Result.Worst := Gap;
+                                    Result.Worst_Position := From + Row;
+                                    Result.Worst_Wanted := Natural (Wanted);
+                                    Result.Worst_Candidate_Top :=
+                                      Natural (Best_Mine - Mine'First);
+                                    Result.Worst_Baseline_Top :=
+                                      Natural (Best_Theirs - Theirs'First);
+                                    Result.Worst_Candidate_Wanted_Logp :=
+                                      Log_Probability
+                                        (Mine, Mine'First + Wanted);
+                                    Result.Worst_Baseline_Wanted_Logp :=
+                                      Log_Probability
+                                        (Theirs, Theirs'First + Wanted);
+                                 end if;
+
                                  if Best_Mine - Mine'First
                                     = Best_Theirs - Theirs'First
                                  then
@@ -635,21 +871,11 @@ package body Perplexity_Run is
                         end;
                      end loop;
 
-                     if Comparing then
-                        L.Close (Baseline_Live);
-                     end if;
-                     L.Close (Live);
-
                      Result.Chunks := Result.Chunks + 1;
                   end;
                end loop;
 
-               T.Free (Logits);
-               T.Free (Pass_Rows);
-               T.Free (Every);
-               if Base_Every /= null then
-                  T.Free (Base_Every);
-               end if;
+               Release_Buffers;
 
                if Result.Scored > 0 then
                   Result.Entropy :=
@@ -657,6 +883,10 @@ package body Perplexity_Run is
                   Result.Perplexity := Exp_Of (Result.Entropy);
                   Result.Compared := Comparing;
                   if Comparing then
+                     Result.Baseline_Entropy :=
+                       Baseline_Surprise / Long_Float (Result.Scored);
+                     Result.Baseline_Perplexity :=
+                       Exp_Of (Result.Baseline_Entropy);
                      Result.Divergence :=
                        Apart / Long_Float (Result.Scored);
                   end if;
@@ -664,6 +894,10 @@ package body Perplexity_Run is
                else
                   Note ("nothing was scored");
                end if;
+            exception
+               when others =>
+                  Release_Buffers;
+                  raise;
             end;
 
             --  The workers, given back before the block that holds them
@@ -681,6 +915,19 @@ package body Perplexity_Run is
 
          Give (Base);
          Give (Under);
+      exception
+         when others =>
+            begin
+               Give (Base);
+            exception
+               when others => null;
+            end;
+            begin
+               Give (Under);
+            exception
+               when others => null;
+            end;
+            raise;
       end;
 
       Result.Seconds :=

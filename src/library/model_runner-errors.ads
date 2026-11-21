@@ -312,6 +312,10 @@ package Model_Runner.Errors is
       Backend_Device_Refused,
       Backend_Product_Too_Large,
 
+      --  A launch profile explicitly named by the caller that was absent,
+      --  malformed, stale, or for another exact device/build key.
+      Backend_Tuning_Profile,
+
       --  Memory planning and allocation.
       Memory_Limit_Exceeded,
       Memory_Allocation_Failed,

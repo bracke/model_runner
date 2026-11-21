@@ -1,4 +1,5 @@
 with Ada.Directories;
+with Ada.Exceptions;
 with Ada.Streams;
 with Ada.Unchecked_Deallocation;
 
@@ -6,7 +7,6 @@ with CryptoLib.Hashes;
 
 with Model_Runner.Bytes;
 with Model_Runner.Grammar;
-with Model_Runner.Backend.Device;
 with Model_Runner.Heap_Buffers;
 with Model_Runner.Output;
 with Model_Runner.Schema;
@@ -16,6 +16,7 @@ package body Model_Runner.Inference is
    use Ada.Strings.Unbounded;
    use type Model_Runner.Bytes.Byte_Count;
    use type Model_Runner.Backend.Backend_Kind;
+   use type Model_Runner.Backend.Device.Tuning_Disposition;
    use type Model_Runner.Generation.Completion_Reason;
 
    package CPU renames Model_Runner.Backend.CPU;
@@ -99,53 +100,98 @@ package body Model_Runner.Inference is
    function Is_Ready (Item : Prepared_Schema) return Boolean is
      (Item.Ready);
 
-   procedure Close (Item : in out Session) is
-      Ignored : E.Error_Info;
+   procedure Close
+     (Item   : in out Session;
+      Status : out E.Error_Info)
+   is
+      procedure Note_Failure
+        (Failure : Ada.Exceptions.Exception_Occurrence;
+         Doing   : String) is
+      begin
+         if E.Is_Ok (Status) then
+            Status := E.Unexpected (Failure, Doing);
+         end if;
+      end Note_Failure;
+
+      Model_Status : E.Error_Info;
    begin
+      Status := E.Success;
+
       --  Stop owned tasks first.  Every later release is best effort so a
       --  finalizer cannot strand the worker pool if another component's
       --  cleanup unexpectedly raises.
       if Item.Pool /= null then
-         CPU.Close (Item.Pool.all);
-         Free_Pool (Item.Pool);
+         begin
+            CPU.Close (Item.Pool.all);
+            Free_Pool (Item.Pool);
+         exception
+            when Failure : others =>
+               Note_Failure (Failure, "closing the embedded CPU pool");
+         end;
       end if;
       begin
          L.Close (Item.Context);
       exception
-         when others => null;
+         when Failure : others =>
+            Note_Failure (Failure, "closing the embedded inference context");
       end;
       begin
-         L.Close (Item.Engine, Ignored);
+         L.Close (Item.Engine, Model_Status);
+         if E.Is_Error (Model_Status) and then E.Is_Ok (Status) then
+            Status := Model_Status;
+            E.Add_Frame (Status, "closing the embedded inference model");
+         end if;
       exception
-         when others => null;
+         when Failure : others =>
+            Note_Failure (Failure, "closing the embedded inference model");
       end;
       begin
          Model_Runner.GGUF.Containers.Close (Item.Container);
       exception
-         when others => null;
+         when Failure : others =>
+            Note_Failure (Failure, "closing the embedded GGUF container");
       end;
       begin
          Model_Runner.GGUF.Shards.Close (Item.Source);
       exception
-         when others => null;
+         when Failure : others =>
+            Note_Failure (Failure, "closing the embedded GGUF shards");
       end;
       if Item.Device_Owned then
          begin
-            Device.Close;
+            Device.Close_Exclusive (Item.Device_Lease);
+            Item.Device_Owned := False;
          exception
-            when others => null;
+            when Failure : others =>
+               Note_Failure (Failure, "closing the embedded compute device");
          end;
-         Item.Device_Owned := False;
       end if;
+      --  Close always ends the public lifetime: a partly released session
+      --  must never remain usable.  The resource objects themselves, and
+      --  Device_Owned when its release failed, remain in Item so a later
+      --  Close or finalization can retry the failed cleanup.
       Item.Bounds := Model_Runner.Limits.Default_Session_Limits;
       Item.Path := Null_Unbounded_String;
       Item.Canonical_Path := Null_Unbounded_String;
       Item.Opened := False;
    end Close;
 
-   overriding procedure Finalize (Item : in out Session) is
+   procedure Close (Item : in out Session) is
+      Status : E.Error_Info;
    begin
-      Close (Item);
+      Close (Item, Status);
+      if E.Is_Error (Status) then
+         raise Program_Error with E.Diagnostic_Code (Status.Code);
+      end if;
+   end Close;
+
+   overriding procedure Finalize (Item : in out Session) is
+      Status : E.Error_Info;
+   begin
+      --  A finalizer cannot report a status and must not mask an exception
+      --  already leaving the owning scope.  Operational callers use the
+      --  status-bearing Close above instead.
+      Close (Item, Status);
    end Finalize;
 
    procedure Open
@@ -153,17 +199,52 @@ package body Model_Runner.Inference is
       Path    : String;
       Options : Open_Options := (others => <>);
       Status  : out E.Error_Info) is
-      Ready : Boolean;
+      Ready   : Boolean;
+      Granted : Boolean;
+
+      --  Preserve the operation's primary diagnostic. Open is a
+      --  status-returning boundary, so a second failure during cleanup must
+      --  not turn an ordinary refusal into Program_Error.
+      procedure Close_After_Failure is
+         Primary : constant E.Error_Info := Status;
+         Cleanup : E.Error_Info;
+      begin
+         Close (Item, Cleanup);
+         Status := Primary;
+         if E.Is_Error (Cleanup) then
+            E.Add_Frame
+              (Status, "cleanup also reported "
+               & E.Diagnostic_Code (Cleanup.Code));
+         end if;
+      end Close_After_Failure;
    begin
-      Close (Item);
+      Close (Item, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
 
       if Options.Backend = Model_Runner.Backend.Backend_Device then
-         Device.Open
-           (Ready, Budget => Options.Device_Memory,
+         Device.Open_Exclusive
+           (Ready, Granted, Item.Device_Lease,
+            Budget => Options.Device_Memory,
             Share_Host => Options.Device_Share_Host,
-            Patience => Options.Device_Patience, Which => Options.Device_Index);
+            Patience => Options.Device_Patience,
+            Which => Options.Device_Index,
+            Tuning_Profile =>
+              Model_Runner.Text.To_String (Options.Device_Tuning));
+         if not Granted then
+            Status := E.Make (E.Backend_Device_Refused);
+            E.Add_Frame (Status, "another process-global device owner exists");
+            return;
+         end if;
          if not Ready then
-            Status := E.Make (E.Backend_No_Device);
+            if Device.Tuning_Status = Device.Tuning_Refused then
+               Status := E.Make (E.Backend_Tuning_Profile);
+               E.Add_Text
+                 (Status, "path", Device.Tuning_Profile, E.Param_Path);
+            else
+               Status := E.Make (E.Backend_No_Device);
+            end if;
             return;
          end if;
          Item.Device_Owned := True;
@@ -183,7 +264,7 @@ package body Model_Runner.Inference is
             Status => Status);
       end;
       if E.Is_Error (Status) then
-         Close (Item);
+         Close_After_Failure;
          return;
       end if;
 
@@ -197,7 +278,7 @@ package body Model_Runner.Inference is
          Context => Options.Context_Tokens, Cache => Options.Cache,
          Paged => Options.Paged, Status => Status);
       if E.Is_Error (Status) then
-         Close (Item);
+         Close_After_Failure;
          return;
       end if;
 
@@ -209,7 +290,7 @@ package body Model_Runner.Inference is
          Workers => CPU.Pool_Reference (Item.Pool), Cache => Options.Cache,
          Values => Options.Values, Paged => Options.Paged, Status => Status);
       if E.Is_Error (Status) then
-         Close (Item);
+         Close_After_Failure;
          return;
       end if;
 
@@ -217,6 +298,10 @@ package body Model_Runner.Inference is
       Item.Path := To_Unbounded_String (Path);
       Item.Canonical_Path := To_Unbounded_String (Ada.Directories.Full_Name (Path));
       Item.Opened := True;
+   exception
+      when Failure : others =>
+         Status := E.Unexpected (Failure, "opening an embedded inference session");
+         Close_After_Failure;
    end Open;
 
    procedure Complete

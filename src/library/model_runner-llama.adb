@@ -7,6 +7,7 @@ with Ada.Unchecked_Deallocation;
 with System.Storage_Elements;
 
 with Model_Runner.Arithmetic;
+with Model_Runner.Cache_Codecs.Transformed_Four_Bit;
 with Model_Runner.Conversation;
 with Model_Runner.Delta_Rule;
 with Model_Runner.Backend.Device;
@@ -17,6 +18,8 @@ with Model_Runner.Quantization.Interleave;
 with Model_Runner.Zeroed_Storage;
 
 package body Model_Runner.Llama is
+
+   package Q4T renames Model_Runner.Cache_Codecs.Transformed_Four_Bit;
 
    --  A counter the workers of a pool job take items from.
    type Take_Counter is new Integer with Atomic;
@@ -479,7 +482,7 @@ package body Model_Runner.Llama is
    Cache_Element_Sixteenths :
      constant array (Cache_Precision) of Interfaces.Unsigned_64 :=
        [Exact => 64, Halved => 32, Eighth => 16, Fourth => 10,
-        Float_Eighth => 16];
+        Float_Eighth => 16, Transformed_Fourth => 10];
 
    --  The per-layer tensors jina-bert-v2's code variant carries and its text
    --  variant does not. Named here so that the loading below asks for
@@ -5016,23 +5019,25 @@ package body Model_Runner.Llama is
 
    function Row_Bytes
      (Held : Cache_Precision; Width : Element_Count) return B.Byte_Count
-   is (if Held = Fourth then B.Byte_Count ((Width + 1) / 2)
+   is (if Held in Fourth | Transformed_Fourth
+       then B.Byte_Count ((Width + 1) / 2)
        else B.Byte_Count (Width));
 
    function Blocks_Of
      (Held : Cache_Precision; Width : Element_Count) return Element_Count
-   is (if Held = Fourth then (Width + Block - 1) / Block else 1);
+   is (if Held in Fourth | Transformed_Fourth
+       then (Width + Block - 1) / Block else 1);
 
    function Byte_Of
      (Held : Cache_Precision; Element, Width : Element_Count) return B.Byte_Count
-   is (if Held = Fourth
+   is (if Held in Fourth | Transformed_Fourth
        then B.Byte_Count (Element / Width) * Row_Bytes (Held, Width)
             + B.Byte_Count ((Element mod Width) / 2)
        else B.Byte_Count (Element));
 
    function Scale_Of
      (Held : Cache_Precision; Element, Width : Element_Count) return Element_Count
-   is (if Held = Fourth
+   is (if Held in Fourth | Transformed_Fourth
        then (Element / Width) * Blocks_Of (Held, Width)
             + (Element mod Width) / Block
        else Element / Width);
@@ -5143,6 +5148,7 @@ package body Model_Runner.Llama is
    --  the exact cache's.
    function Device_Held (Item : Session) return Boolean
    is (Item.Held in Exact | Eighth | Fourth | Float_Eighth
+                    | Transformed_Fourth
        or else (Item.Paged and then Item.Held = Halved));
 
    --  How wide a session's block is, in elements: the exact cache's keys
@@ -5152,7 +5158,7 @@ package body Model_Runner.Llama is
        then (if Item.Keys = null or else Item.Values = null then 0
              elsif Item.Values_In_Keys then Item.Keys.all'Length
              else Item.Keys.all'Length + Item.Values.all'Length)
-       elsif Item.Held in Eighth | Fourth | Float_Eighth
+       elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth
        then Packed_Layout (Item).Span
        else 0);
 
@@ -5170,7 +5176,7 @@ package body Model_Runner.Llama is
    --  half of.
    function Copy_Span_Of (Item : Session) return Element_Count
    is (if Item.Held = Exact then Block_Span_Of (Item)
-       elsif Item.Held in Eighth | Fourth | Float_Eighth
+       elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth
        then Element_Count
               ((Key_Row_Width (Item.Owner.Settings) + Value_Row_Width (Item.Owner.Settings)))
             * (if Item.Cells = null then 0 else Widest_Cells (Item.Cells.all))
@@ -5270,7 +5276,7 @@ package body Model_Runner.Llama is
          end if;
 
          --  Then the packed kernel's own rule, for a session that packs.
-         if Item.Held in Eighth | Fourth | Float_Eighth
+         if Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth
            and then not Model_Runner.Backend.Device.Attends_Packed_Heads
                           (Head_Size, Value_Size)
          then
@@ -6056,7 +6062,7 @@ package body Model_Runner.Llama is
    --  values, or their rows of keys alone where the values are packed in
    --  them (Packs_Values), or a packed cache's regions.
    function Page_Want (Item : Session; Layer : Natural) return Element_Count
-   is (if Item.Held in Eighth | Fourth | Float_Eighth
+   is (if Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth
        then Packed_Page_Layout (Item).Span
        elsif not Item.Values_In_Keys
          and then Packs_Values (Item.Owner.Settings, Layer, Item.Held, Item.Paged)
@@ -6565,7 +6571,9 @@ package body Model_Runner.Llama is
                   Read_Packed_Pages_Layer
                     (Item, Natural (Index), KV_Width, V_Width,
                      Cell, Span, Read);
-               elsif Item.Held in Eighth | Fourth | Float_Eighth then
+               elsif Item.Held in Eighth | Fourth | Float_Eighth
+                                     | Transformed_Fourth
+               then
                   Read_Back_Packed
                     (Item, Base, V_At, Span, KV_Width, V_Width, Read);
                else
@@ -6676,6 +6684,7 @@ package body Model_Runner.Llama is
       if Item = null
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
         or else Item.Held not in Eighth | Fourth | Float_Eighth
+                                     | Transformed_Fourth
       then
          return;
       end if;
@@ -6739,6 +6748,14 @@ package body Model_Runner.Llama is
    function Values_Front (Item : Session) return Element_Count
    is (if Item.Values_In_Keys then 0 else Exact_Keys (Item));
 
+   function Device_Codec_Of
+     (Held : Cache_Precision) return Model_Runner.Backend.Device.Cache_Codec
+   is (case Held is
+         when Float_Eighth => Model_Runner.Backend.Device.OCP_E4M3_Cache,
+         when Transformed_Fourth =>
+           Model_Runner.Backend.Device.Transformed_Four_Bit_Cache,
+         when others => Model_Runner.Backend.Device.Scaled_Integer_Cache);
+
    --  A packed session's block on the device, for this layer's rows: the
    --  rows' bases in bytes and the scales' in floats, each from where the
    --  layer's rows begin, and how many bits an element each side holds.
@@ -6768,7 +6785,9 @@ package body Model_Runner.Llama is
       Laid : constant Packed_Block :=
         (if Paged then Packed_Page_Layout (Item) else Packed_Layout (Item));
    begin
-      if Item.Held not in Eighth | Fourth | Float_Eighth then
+      if Item.Held not in Eighth | Fourth | Float_Eighth
+                               | Transformed_Fourth
+      then
          return Model_Runner.Backend.Device.Not_Packed;
       end if;
 
@@ -6779,8 +6798,10 @@ package body Model_Runner.Llama is
       --  reads its own page.
       if Paged then
          return
-           (K_Bits   =>
-              (if Item.Held = Fourth then 4
+           (K_Codec  => Device_Codec_Of (Item.Held),
+            V_Codec  => Device_Codec_Of (Item.Held_Values),
+            K_Bits   =>
+              (if Item.Held in Fourth | Transformed_Fourth then 4
                elsif Item.Held = Float_Eighth
                then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
             V_Bits   =>
@@ -6796,8 +6817,10 @@ package body Model_Runner.Llama is
       end if;
 
       return
-        (K_Bits   =>
-           (if Item.Held = Fourth then 4
+        (K_Codec  => Device_Codec_Of (Item.Held),
+         V_Codec  => Device_Codec_Of (Item.Held_Values),
+         K_Bits   =>
+           (if Item.Held in Fourth | Transformed_Fourth then 4
             elsif Item.Held = Float_Eighth
             then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
          V_Bits   =>
@@ -6847,7 +6870,9 @@ package body Model_Runner.Llama is
       Held : constant Cache_Precision :=
         (if Keys then Item.Held else Item.Held_Values);
    begin
-      if Item.Held not in Eighth | Fourth | Float_Eighth then
+      if Item.Held not in Eighth | Fourth | Float_Eighth
+                               | Transformed_Fourth
+      then
          return Model_Runner.Backend.Device.Not_Packing;
       end if;
 
@@ -6857,8 +6882,9 @@ package body Model_Runner.Llama is
       --  the row.
       if Paged then
          return
-           (Bits      =>
-              (if Held = Fourth then 4
+           (Codec     => Device_Codec_Of (Held),
+            Bits      =>
+              (if Held in Fourth | Transformed_Fourth then 4
                elsif Held = Float_Eighth
                then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
             Row_Bytes => Natural (Row_Bytes (Held, Width)),
@@ -6870,8 +6896,9 @@ package body Model_Runner.Llama is
       end if;
 
       return
-        (Bits      =>
-           (if Held = Fourth then 4
+        (Codec     => Device_Codec_Of (Held),
+         Bits      =>
+           (if Held in Fourth | Transformed_Fourth then 4
             elsif Held = Float_Eighth
             then Model_Runner.Backend.Device.E4M3_Cache_Code else 8),
          Row_Bytes => Natural (Row_Bytes (Held, Width)),
@@ -7002,6 +7029,7 @@ package body Model_Runner.Llama is
       Base : constant Element_Count := (if Paged then 0 else Block_Base (Item));
    begin
       if Item.Held not in Eighth | Fourth | Float_Eighth
+                               | Transformed_Fourth
         or else Cells = 0
       then
          return Model_Runner.Backend.Device.Not_Unpacked;
@@ -7109,6 +7137,7 @@ package body Model_Runner.Llama is
 
       if Sinks = null
         and then Item.Held in Eighth | Fourth | Float_Eighth
+                              | Transformed_Fourth
       then
          --  Over the packed block: the rows' bases in bytes and the
          --  scales' in floats, each from where the layer's rows begin.
@@ -7125,7 +7154,8 @@ package body Model_Runner.Llama is
                Block.KS_At, Block.VS_At, Block.K_Blocks, Block.V_Blocks,
                Scale, Source.Settings.Attention_Cap, Target, Took,
                Positions => Natural (Positions), Window => Window,
-               Causal => Causal, Max_Bias => Source.Settings.Max_Bias);
+               Causal => Causal, Max_Bias => Source.Settings.Max_Bias,
+               K_Codec => Block.K_Codec, V_Codec => Block.V_Codec);
          end;
       elsif Sinks = null then
          Model_Runner.Backend.Device.Attend
@@ -7183,7 +7213,9 @@ package body Model_Runner.Llama is
             --  Out of whichever storage the session keeps: a packed
             --  session's bytes and scales, whose row scales begin a row
             --  a position from the layer's first row.
-            if Item.Held in Eighth | Fourth | Float_Eighth then
+            if Item.Held in Eighth | Fourth | Float_Eighth
+                              | Transformed_Fourth
+            then
                Blend_Eighth
                  (Item.Held, Item.Held_Values,
                   Query (Query'First + Q_At .. Query'First + Q_At
@@ -7263,6 +7295,31 @@ package body Model_Runner.Llama is
       At_Scale : constant Element_Count :=
         Scales'First + Scale_Of (Held, Origin, Width);
    begin
+      if Held = Transformed_Fourth then
+         declare
+            Codes : Q4T.Byte_Array
+              (0 .. Q4T.Code_Bytes (Element_Count (Source'Length)) - 1);
+            Held_Scales : Real_Array
+              (0 .. Q4T.Scale_Count (Element_Count (Source'Length)) - 1);
+            Valid : Boolean;
+         begin
+            Q4T.Encode_Key (Source, Codes, Held_Scales, Valid);
+            if not Valid then
+               raise Constraint_Error with "non-finite transformed cache row";
+            end if;
+            for Offset in Codes'Range loop
+               Into
+                 (At_Byte + B.Byte_Count (Offset - Codes'First)) :=
+                    B.Byte (Codes (Offset));
+            end loop;
+            for Offset in Held_Scales'Range loop
+               Scales (At_Scale + Offset - Held_Scales'First) :=
+                 Held_Scales (Offset);
+            end loop;
+         end;
+         return;
+      end if;
+
       if Held = Float_Eighth then
          Scales (At_Scale) := 1.0;
          for Offset in 0 .. Element_Count (Source'Length) - 1 loop
@@ -7368,6 +7425,55 @@ package body Model_Runner.Llama is
          return Real (Integer (Held_Byte) - 128) * Scale;
       end if;
    end Unpack;
+
+   --  A complete packed row in the model's basis. Transformed_Fourth is
+   --  stored in the fixed Hadamard basis, so its elements cannot be
+   --  reconstructed independently as the other packed formats can.
+   procedure Unpack_Row
+     (From   : B.Byte_Array;
+      Origin : Element_Count;
+      Width  : Element_Count;
+      Scales : Real_Array;
+      Held   : Cache_Precision;
+      Target : out Real_Array)
+   is
+   begin
+      if Element_Count (Target'Length) /= Width then
+         raise Constraint_Error with "packed cache row width mismatch";
+      end if;
+
+      if Held = Transformed_Fourth then
+         declare
+            At_Byte : constant B.Byte_Count :=
+              Byte_Of (Held, Origin, Width);
+            At_Scale : constant Element_Count :=
+              Scales'First + Scale_Of (Held, Origin, Width);
+            Codes : Q4T.Byte_Array (0 .. Q4T.Code_Bytes (Width) - 1);
+            Held_Scales : Real_Array
+              (0 .. Q4T.Scale_Count (Width) - 1);
+            Valid : Boolean;
+         begin
+            for Offset in Codes'Range loop
+               Codes (Offset) :=
+                 Q4T.Byte
+                   (From (At_Byte + B.Byte_Count (Offset - Codes'First)));
+            end loop;
+            for Offset in Held_Scales'Range loop
+               Held_Scales (Offset) :=
+                 Scales (At_Scale + Offset - Held_Scales'First);
+            end loop;
+            Q4T.Decode_Key (Codes, Held_Scales, Target, Valid);
+            if not Valid then
+               raise Constraint_Error with "invalid transformed cache row";
+            end if;
+         end;
+      else
+         for Offset in 0 .. Width - 1 loop
+            Target (Target'First + Offset) :=
+              Unpack (From, Origin + Offset, Width, Scales, Held);
+         end loop;
+      end if;
+   end Unpack_Row;
 
    --  Attention over a cache stored packed: bytes and row scales, or
    --  nibbles and block scales, as Held says.
@@ -8677,6 +8783,29 @@ package body Model_Runner.Llama is
       Plan_For (Item.Settings, Context, Plan, Status, Cache, Values);
    end Plan_Session;
 
+   ----------------------
+   -- Cache_Compatible --
+   ----------------------
+
+   function Cache_Compatible
+     (Settings : Configuration;
+      Cache    : Cache_Precision) return Boolean
+   is
+   begin
+      if Cache /= Transformed_Fourth then
+         return True;
+      elsif Settings.Layers = 0 then
+         return False;
+      end if;
+
+      for Layer in 0 .. Settings.Layers - 1 loop
+         if Head_Of (Settings, Layer) mod Natural (Q4T.Group_Size) /= 0 then
+            return False;
+         end if;
+      end loop;
+      return True;
+   end Cache_Compatible;
+
    ---------------
    -- Plan_For --
    ---------------
@@ -8751,6 +8880,19 @@ package body Model_Runner.Llama is
         / A.To_Checked (Interfaces.Unsigned_64'(16));
    begin
       Plan := (others => <>);
+
+      --  The host experiment rotates flat query and key rows in groups of
+      --  thirty-two. Keep every head boundary on a group boundary until an
+      --  arbitrary-width session layout is specified. Plan and Open share
+      --  this refusal so a plan never promises a session Open cannot make.
+      if not Cache_Compatible (Settings, Cache) then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text
+           (Status, "feature",
+            "q4t cache with a head width not divisible by 32",
+            E.Param_Identifier);
+         return;
+      end if;
 
       if not A.Is_Valid (Room) then
          Status := E.Make (E.Memory_Plan_Overflow);
@@ -8995,7 +9137,7 @@ package body Model_Runner.Llama is
       begin
          return
            (case Held is
-              when Eighth | Fourth | Float_Eighth =>
+              when Eighth | Fourth | Float_Eighth | Transformed_Fourth =>
                 --  The packed words in the binary32 buffer: paged, a copy
                 --  of every page beside them and the tables' front in
                 --  both; a block, the room a layer unpacks into.
@@ -9883,8 +10025,8 @@ package body Model_Runner.Llama is
             Layers   => Item.Owner.Settings.Layers,
             Experts  => Item.Owner.Settings.Experts,
             Capacity => Natural'Min
-              (Item.Owner.Settings.Experts,
-               2 * Item.Owner.Settings.Experts_Used));
+               (Item.Owner.Settings.Experts,
+                2 * Item.Owner.Settings.Experts_Used));
       end if;
 
       --  A context dropped is a context nothing will read, so the

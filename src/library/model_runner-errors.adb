@@ -251,6 +251,9 @@ package body Model_Runner.Errors is
          when Framework_Context_Overflow =>
             return Recovery_User_Correctable;
 
+         when Backend_Tuning_Profile =>
+            return Recovery_User_Correctable;
+
          when Template_Refused =>
             --  The template's author said no to this conversation, and
             --  the message says what to change about it.

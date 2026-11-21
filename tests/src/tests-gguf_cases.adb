@@ -43,6 +43,7 @@ with BPE_Vocabulary;
 with Project_Tools.Files;
 with Tiny_Model;
 with Fixtures;
+with External_PLE_Evidence;
 with Fuzzing;
 
 package body Tests.GGUF_Cases is
@@ -60,6 +61,7 @@ package body Tests.GGUF_Cases is
    use type Model_Runner.Bytes.Byte_Array;
    use type Model_Runner.Numerics.Real;
    use type Model_Runner.Numerics.Wide_Real;
+   use type External_PLE_Evidence.Backbone_State;
 
    package B renames Model_Runner.Bytes;
    package E renames Model_Runner.Errors;
@@ -9922,6 +9924,7 @@ package body Tests.GGUF_Cases is
       package Shards renames Model_Runner.GGUF.Shards;
 
       Main_Path : constant String := "obj/auxiliary-main.gguf";
+      Bare_Path : constant String := "obj/auxiliary-bare.gguf";
       PLE_Path  : constant String := "obj/auxiliary-ple.gguf";
       More_Path : constant String := "obj/auxiliary-more.gguf";
       Bad_Path  : constant String := "obj/auxiliary-bad.gguf";
@@ -9994,10 +9997,45 @@ package body Tests.GGUF_Cases is
       Put
         (Main_Path, "token_embd.weight", Token,
          "per_layer_token_embd.weight", Old_PLE);
+      Put (Bare_Path, "token_embd.weight", Token);
       Put
         (PLE_Path, "per_layer_token_embd.weight", New_PLE,
          Split_Marks => True);
       Put (More_Path, "output_norm.weight", Norm);
+
+      --  The real-artifact evidence rule is deterministic on tiny files: a
+      --  backbone carrying the tensor is refused, while the same model split
+      --  into a bare backbone and an explicit PLE sidecar is admissible.
+      declare
+         State : External_PLE_Evidence.Backbone_State;
+      begin
+         External_PLE_Evidence.Check (Main_Path, State, Status);
+         Assert
+           (E.Is_Ok (Status)
+            and then State = External_PLE_Evidence.PLE_Still_In_Backbone,
+            "a backbone containing PLE was accepted as external-PLE evidence");
+
+         External_PLE_Evidence.Check (Bare_Path, State, Status);
+         Assert
+           (E.Is_Ok (Status)
+            and then State = External_PLE_Evidence.External_PLE_Required,
+            "a bare backbone was not accepted as external-PLE evidence");
+      end;
+
+      declare
+         Source : Shards.Shard_Set;
+         Held   : Containers.Container;
+         Extra  : constant Model_Runner.Text.Bounded_List :=
+           [1 => Model_Runner.Text.To_Bounded (PLE_Path)];
+      begin
+         Shards.Open_Model
+           (Source, Held, Bare_Path, Extra, Status => Status);
+         Assert
+           (E.Is_Ok (Status),
+            "a bare backbone and external PLE sidecar would not open");
+         Same (Held, Source, "per_layer_token_embd.weight", New_PLE);
+         Shards.Close (Source);
+      end;
 
       declare
          Source : Shards.Shard_Set;
@@ -10064,6 +10102,7 @@ package body Tests.GGUF_Cases is
       for Path of
         Model_Runner.Text.Bounded_List'
           ([Model_Runner.Text.To_Bounded (Main_Path),
+            Model_Runner.Text.To_Bounded (Bare_Path),
             Model_Runner.Text.To_Bounded (PLE_Path),
             Model_Runner.Text.To_Bounded (More_Path),
             Model_Runner.Text.To_Bounded (Bad_Path)])

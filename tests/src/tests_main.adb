@@ -5,6 +5,7 @@ with Model_Runner.CLI.Execute;
 with Ada.IO_Exceptions;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
+with Ada.Synchronous_Task_Control;
 with Model_Runner.CLI.Options;
 with Model_Runner.Presentation;
 with Model_Runner.Localization;
@@ -30,6 +31,7 @@ with AUnit.Test_Results;
 with Suite_Filter;
 with Case_Timing;
 with Device_Bench;
+with Device_Tune;
 with Ada.Environment_Variables;
 with AUnit.Options;
 with AUnit.Run;
@@ -81,6 +83,7 @@ with Hostkit.Host;
 with Hostkit.Terminal_Control;
 with Model_Runner.Cancellation;
 with Model_Runner.Platform;
+with Model_Runner.Race_Points;
 with Model_Runner.Platform.Signals;
 with Project_Tools.Files;
 with Project_Tools.Text;
@@ -167,6 +170,64 @@ procedure Tests_Main is
    --  The token the probe's interrupt handling is bound to: here, as the
    --  handler outlives the call that installed it.
    Probe_Token : aliased Model_Runner.Cancellation.Token;
+
+   procedure Probe_Aborted_Program_Stamp is
+      package STC renames Ada.Synchronous_Task_Control;
+
+      Claimed : STC.Suspension_Object;
+      Release : STC.Suspension_Object;
+
+      procedure Hold_Claim is
+      begin
+         STC.Set_True (Claimed);
+         STC.Suspend_Until_True (Release);
+      end Hold_Claim;
+
+      task Worker is
+         entry Start;
+      end Worker;
+
+      task body Worker is
+      begin
+         accept Start;
+         declare
+            Stamp : constant String := Model_Runner.Platform.Program_Stamp;
+         begin
+            pragma Unreferenced (Stamp);
+         end;
+      end Worker;
+   begin
+      Model_Runner.Race_Points.Arm
+        (Model_Runner.Race_Points.Program_Stamp_Claimed,
+         Hold_Claim'Unrestricted_Access);
+      Worker.Start;
+      STC.Suspend_Until_True (Claimed);
+      abort Worker;
+      STC.Set_True (Release);
+      while not Worker'Terminated loop
+         delay 0.001;
+      end loop;
+
+      declare
+         Stamp : constant String := Model_Runner.Platform.Program_Stamp;
+      begin
+         if Stamp'Length = 64 then
+            Ada.Text_IO.Put_Line ("recovered " & Stamp);
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "the program stamp did not recover after its claimant ended");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+   exception
+      when others =>
+         Model_Runner.Race_Points.Disarm
+           (Model_Runner.Race_Points.Program_Stamp_Claimed);
+         STC.Set_True (Release);
+         abort Worker;
+         raise;
+   end Probe_Aborted_Program_Stamp;
 
    --  A backend named the way --backend names it. An unknown name is the
    --  processor rather than a refusal: these are measuring and validating
@@ -2453,6 +2514,52 @@ begin
             return False;
          end Given;
 
+         function Cache_Of
+           (Word : String) return Model_Runner.Llama.Cache_Precision
+         is
+         begin
+            for Mode in Model_Runner.Llama.Cache_Precision loop
+               if Model_Runner.Llama.Cache_Name (Mode) = Word then
+                  return Mode;
+               end if;
+            end loop;
+            return Model_Runner.Llama.Exact;
+         end Cache_Of;
+
+         function Cache_Is_Named (Word : String) return Boolean is
+         begin
+            for Mode in Model_Runner.Llama.Cache_Precision loop
+               if Model_Runner.Llama.Cache_Name (Mode) = Word then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Cache_Is_Named;
+
+         function Values_Of
+           (Word : String) return Model_Runner.Llama.Value_Precision
+         is
+         begin
+            if Word = Model_Runner.Llama.Cache_Name
+                        (Model_Runner.Llama.Eighth)
+            then
+               return Model_Runner.Llama.Value_Eighth;
+            elsif Word = Model_Runner.Llama.Cache_Name
+                           (Model_Runner.Llama.Fourth)
+            then
+               return Model_Runner.Llama.Value_Fourth;
+            else
+               return Model_Runner.Llama.Same_As_Keys;
+            end if;
+         end Values_Of;
+
+         function Values_Are_Named (Word : String) return Boolean
+         is (Word = ""
+             or else Word = Model_Runner.Llama.Cache_Name
+                              (Model_Runner.Llama.Eighth)
+             or else Word = Model_Runner.Llama.Cache_Name
+                              (Model_Runner.Llama.Fourth));
+
          Result : Perplexity_Run.Report;
 
          --  The rotation's factor, a real number: read as a whole one, 1.5
@@ -2460,11 +2567,41 @@ begin
          --  factor without a word.
          Scale_Text : constant String := Option ("--rope-scale", "");
          Scale      : Model_Runner.Numerics.Wide_Real := 0.0;
+
+         Cache_Text : constant String := Option ("--kv-cache", "f32");
+         Value_Text : constant String := Option ("--kv-values", "");
+         Against_Cache_Text : constant String :=
+           Option ("--against-kv-cache", "f32");
+         Against_Value_Text : constant String :=
+           Option ("--against-kv-values", "");
+         Comparing_Caches : constant Boolean :=
+           Given ("--against-kv-cache") or else
+           Given ("--against-kv-values");
          use type Model_Runner.Numerics.Wide_Real;
       begin
          if Option ("--model", "") = "" then
             Ada.Text_IO.Put_Line
               (Ada.Text_IO.Standard_Error, "perplexity: --model is required");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         if not Cache_Is_Named (Cache_Text)
+           or else not Cache_Is_Named (Against_Cache_Text)
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "perplexity: cache modes are f32, f16, q8, q4, f8_e4m3, or q4t");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+            return;
+         end if;
+
+         if not Values_Are_Named (Value_Text)
+           or else not Values_Are_Named (Against_Value_Text)
+         then
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "perplexity: --kv-values modes are q8 or q4");
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
             return;
          end if;
@@ -2510,7 +2647,12 @@ begin
                          (Option ("--model", ""),
                           Backend_Of (Option ("--backend", "cpu"))),
             Stretch => Option ("--rope-scaling", ""),
-            Factor  => Scale);
+            Factor  => Scale,
+            Cache   => Cache_Of (Cache_Text),
+            Values  => Values_Of (Value_Text),
+            Compare_Cache => Comparing_Caches,
+            Against_Cache => Cache_Of (Against_Cache_Text),
+            Against_Values => Values_Of (Against_Value_Text));
 
          Ada.Text_IO.Put_Line
            (Ada.Text_IO.Standard_Error, Perplexity_Run.Summary (Result));
@@ -2888,6 +3030,16 @@ begin
                return 0;
          end Bytes;
 
+         function Present (Name : String) return Boolean is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return True;
+               end if;
+            end loop;
+            return False;
+         end Present;
+
          function Auxiliary_Count return Natural is
             Count : Natural := 0;
          begin
@@ -2926,6 +3078,7 @@ begin
             Draft_Tokens => Number ("--draft-tokens", 4),
             Repack  => Mode_Of (Option ("--repack", "none")),
             Auxiliary => Auxiliary,
+            Require_External_PLE => Present ("--require-external-ple"),
             Cache => Cache_Of (Option ("--kv-cache", "f32")),
             Expert_Cache => Bytes ("--expert-cache"),
             Panel_Cache => Option ("--panel-cache", ""),
@@ -3497,9 +3650,14 @@ begin
          Ada.Text_IO.Put_Line
            (Natural'Image (Model_Runner.Platform.Processor_Count)
             & Natural'Image (Model_Runner.Platform.Core_Count));
+      elsif Ada.Command_Line.Argument_Count >= 2
+        and then Ada.Command_Line.Argument (2) = "program-stamp-abort"
+      then
+         Probe_Aborted_Program_Stamp;
       else
          Ada.Text_IO.Put_Line (Ada.Text_IO.Standard_Error,
-                               "usage: tests probe leave-signals | processors");
+                               "usage: tests probe leave-signals | processors"
+                               & " | program-stamp-abort");
          Ada.Command_Line.Set_Exit_Status (2);
       end if;
 
@@ -3519,33 +3677,133 @@ begin
       --  format's product, each cell the median of --rounds rounds; or with
       --  --tiles, only every format's prompt tile, at --vectors vectors.
       declare
-         Rounds  : Positive := 5;
-         Vectors : Positive := 128;
+         Rounds       : Positive := 5;
+         Vectors      : Positive := 128;
+         Formats_Only : Boolean := False;
+         Tiles_Only   : Boolean := False;
+         Valid        : Boolean := True;
+         Index        : Natural := 2;
       begin
-         for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
-            begin
-               if Ada.Command_Line.Argument (Index) = "--rounds" then
+         while Index <= Ada.Command_Line.Argument_Count loop
+            if Ada.Command_Line.Argument (Index) = "--rounds" then
+               if Index = Ada.Command_Line.Argument_Count then
+                  Valid := False;
+                  exit;
+               end if;
+               begin
                   Rounds :=
                     Positive'Value (Ada.Command_Line.Argument (Index + 1));
-               elsif Ada.Command_Line.Argument (Index) = "--vectors" then
+               exception
+                  when Constraint_Error =>
+                     Valid := False;
+               end;
+               Index := Index + 2;
+            elsif Ada.Command_Line.Argument (Index) = "--vectors" then
+               if Index = Ada.Command_Line.Argument_Count then
+                  Valid := False;
+                  exit;
+               end if;
+               begin
                   Vectors :=
                     Positive'Value (Ada.Command_Line.Argument (Index + 1));
-               end if;
-            exception
-               when Constraint_Error =>
-                  null;
-            end;
+               exception
+                  when Constraint_Error =>
+                     Valid := False;
+               end;
+               Index := Index + 2;
+            elsif Ada.Command_Line.Argument (Index) = "--formats" then
+               Formats_Only := True;
+               Index := Index + 1;
+            elsif Ada.Command_Line.Argument (Index) = "--tiles" then
+               Tiles_Only := True;
+               Index := Index + 1;
+            else
+               Valid := False;
+               exit;
+            end if;
          end loop;
 
-         Device_Bench.Report
-           (Formats_Only =>
-              (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
-                 Ada.Command_Line.Argument (Index) = "--formats"),
-            Format_Rounds => Rounds,
-            Tiles_Only =>
-              (for some Index in 2 .. Ada.Command_Line.Argument_Count =>
-                 Ada.Command_Line.Argument (Index) = "--tiles"),
-            Tile_Vectors => Vectors);
+         if Formats_Only and Tiles_Only then
+            Valid := False;
+         end if;
+
+         if Valid then
+            Device_Bench.Report
+              (Formats_Only  => Formats_Only,
+               Format_Rounds => Rounds,
+               Tiles_Only    => Tiles_Only,
+               Tile_Vectors  => Vectors);
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "usage: tests device-bench [--formats [--rounds N]"
+               & " | --tiles [--vectors N]]");
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "device-tune" then
+      --  Compare explicit launch choices only after every measured answer
+      --  has matched the default.  Profile writing is permitted only after
+      --  the product, attention, and packed-cache campaigns all pass.
+      declare
+         Rounds        : Positive := 7;
+         Passed        : Boolean := False;
+         Write_Profile : Boolean := False;
+         Check_Profile : Ada.Strings.Unbounded.Unbounded_String;
+         Valid         : Boolean := True;
+         Index         : Natural := 2;
+      begin
+         while Index <= Ada.Command_Line.Argument_Count loop
+            if Ada.Command_Line.Argument (Index) = "--rounds" then
+               if Index = Ada.Command_Line.Argument_Count then
+                  Valid := False;
+                  exit;
+               end if;
+               begin
+                  Rounds :=
+                    Positive'Value (Ada.Command_Line.Argument (Index + 1));
+               exception
+                  when Constraint_Error =>
+                     Valid := False;
+               end;
+               Index := Index + 2;
+            elsif Ada.Command_Line.Argument (Index) = "--write" then
+               Write_Profile := True;
+               Index := Index + 1;
+            elsif Ada.Command_Line.Argument (Index) = "--check" then
+               if Index = Ada.Command_Line.Argument_Count then
+                  Valid := False;
+                  exit;
+               end if;
+               Check_Profile := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Ada.Command_Line.Argument (Index + 1));
+               Index := Index + 2;
+            else
+               Valid := False;
+               exit;
+            end if;
+         end loop;
+
+         if Write_Profile
+           and then Ada.Strings.Unbounded.Length (Check_Profile) /= 0
+         then
+            Valid := False;
+         end if;
+
+         if Valid then
+            Device_Tune.Report
+              (Rounds, Write_Profile,
+               Ada.Strings.Unbounded.To_String (Check_Profile), Passed);
+         else
+            Ada.Text_IO.Put_Line
+              (Ada.Text_IO.Standard_Error,
+               "usage: tests device-tune [--rounds N]"
+               & " [--write | --check PROFILE]");
+         end if;
+         if not Passed then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
       end;
 
    elsif Command = "fixture-likeness" then
@@ -3917,26 +4175,18 @@ begin
             end if;
          end Check_Cache_Baseline;
 
-         --  The storage the session keeps its context in, named the way
-         --  the command names it: f32, f16, q8 or q4, and by default what
-         --  the command keeps by default.
+         --  The storage the benchmark keeps its context in. Its historical
+         --  published figures are f16, so changing run's interactive default
+         --  does not silently turn those commands into different measurements.
          function Cache_Asked return Model_Runner.Llama.Cache_Precision is
             Named : constant String := Option ("--kv-cache", "f16");
          begin
-            return
-              (if Named = Model_Runner.Llama.Cache_Name
-                           (Model_Runner.Llama.Halved)
-               then Model_Runner.Llama.Halved
-               elsif Named = Model_Runner.Llama.Cache_Name
-                               (Model_Runner.Llama.Eighth)
-               then Model_Runner.Llama.Eighth
-               elsif Named = Model_Runner.Llama.Cache_Name
-                               (Model_Runner.Llama.Fourth)
-               then Model_Runner.Llama.Fourth
-               elsif Named = Model_Runner.Llama.Cache_Name
-                               (Model_Runner.Llama.Exact)
-               then Model_Runner.Llama.Exact
-               else Model_Runner.Llama.Halved);
+            for Mode in Model_Runner.Llama.Cache_Precision loop
+               if Named = Model_Runner.Llama.Cache_Name (Mode) then
+                  return Mode;
+               end if;
+            end loop;
+            return Model_Runner.Llama.Halved;
          end Cache_Asked;
 
          --  A count of bytes, which is past what a Natural holds, with the
@@ -4105,9 +4355,8 @@ begin
                              Exact => Given ("--arith")
                                       and then Option ("--arith", "") = "f32")),
 
-                  --  The storage the session keeps its context in, named the way
-                  --  the command names it: f32, f16, q8 or q4, and by default
-                  --  what the command keeps by default.
+                  --  The benchmark's named storage, or its published f16
+                  --  baseline where none is named.
                   Cache       => Cache_Asked,
                   Backend     => Backend_Of (Chosen_Backend),
                   --  run's own default unless named: it stayed at 1.1 here

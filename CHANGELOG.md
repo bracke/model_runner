@@ -53,6 +53,44 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Changed
 
+- **Q4t is the default key-value cache.** An unnamed cache now uses transformed
+  four-bit keys with ordinary four-bit values: the same bytes as Q4, with
+  75.7% lower aggregate mean KL and 12.5 percentage points more top-token
+  agreement over the completed four-model sweep. Device generation is level
+  with Q4 at short and 17K-token depths. Models whose attention-head width is
+  not divisible by the transform's 32-element group fall back to f16; an
+  explicit `--kv-cache q4t` remains strict. `--kv-cache fit` keeps its explicit
+  f16/q8 policy, and all other named cache modes are unchanged.
+- **Shared projects have one source-ownership and build policy boundary.** Core
+  and framework unit lists are declared once for every consumer, the neutral
+  core has separate release, validation and development object directories,
+  and a downstream smoke project imports inference and framework together.
+  The device engine's large `Open` and `Run` operations are now cohesive Ada
+  subunits compiled with the same large-unit switches as their parent.
+- **Windows and Intel macOS now dispatch the existing native SIMD kernels.**
+  Their host bodies query the architected CPUID feature bits and XGETBV state
+  instead of always declining AVX2 and AVX-512 VNNI. An absent CPU bit or an
+  operating system that does not save the required vector state still selects
+  the portable implementation.
+- **The reusable inference project is tested as a downstream dependency.** A
+  separate project imports inference and the independently consumable task
+  framework together, proving their shared core has one project owner. It
+  links only through public APIs, opens a GGUF prepared by a separate fixture
+  builder, completes through a bounded session and verifies status-bearing
+  cleanup. Linux, macOS and Windows CI build and run that consumer independently
+  of the repository's internal test-support, main and AUnit projects.
+- **A real PLE sidecar has a reproducible differential check.** The optional
+  external-model harness now carries a llama.cpp recording for the published
+  Gemma 4 E4B QAT model. `--require-external-ple` first proves that the
+  backbone lacks the table, so a matching run cannot pass while ignoring the
+  separate GGUF supplied through `--ple`. Artifact hashes and the rejected
+  smaller E2B candidate are documented without adding multi-gigabyte weights
+  to the repository.
+- **Processor pools shut down reliably after inference.** Closing a pool now
+  publishes a final wake ticket before joining its worker tasks, covering a
+  worker racing between an idle wake and its next wait. Explicit close is
+  idempotent, and an explicit fresh/open/closing/closed state prevents storage
+  from being reclaimed or a retry from returning before every worker joined.
 - **Native SIMD support is documented as implemented.** The processor backend
   has native Ada AVX2/FMA/F16C and AVX-512 VNNI kernels, selected only after
   positive host-feature detection, with portable fallbacks and equivalence
@@ -20968,7 +21006,7 @@ Keep a Changelog and the project uses semantic versioning.
   from execution.
 - Interactive conversation with committed history, per-turn template rendering,
   cache-prefix verification and the stable `/` command set.
-- Localization through `messages`, with a catalog entry for all 228 diagnostic
+- Localization through `messages`, with a catalog entry for all 229 diagnostic
   codes and an emergency path that cannot recurse.
 - Terminal presentation through `terminal_styles`, confined to the presentation
   layer, with per-destination automatic styling.

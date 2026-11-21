@@ -66,6 +66,13 @@ jobs:
       - name: Run aggregate release checker
         working-directory: model_runner
         run: tools/bin/check_all --short
+      - name: Build and run the embedded-inference consumer
+        working-directory: model_runner
+        run: |
+          alr --non-interactive exec -- gprbuild -P tests/inference_fixture/inference_fixture.gpr -j0
+          alr --non-interactive exec -- gprbuild -P tests/inference_consumer/inference_consumer.gpr -j0
+          tests/inference_fixture/bin/inference_fixture tests/inference_consumer/obj/consumer-model.gguf
+          tests/inference_consumer/bin/inference_consumer tests/inference_consumer/obj/consumer-model.gguf
 
   # macOS and Windows verify the library and its AUnit suite build and run
   # natively. model_runner is pure Ada -- it reads a model file and does
@@ -118,6 +125,13 @@ jobs:
       - name: Run the repository checks
         working-directory: model_runner/tests
         run: ./bin/tests check .. --repository
+      - name: Build and run the embedded-inference consumer
+        working-directory: model_runner
+        run: |
+          alr --non-interactive exec -- gprbuild -P tests/inference_fixture/inference_fixture.gpr -j0
+          alr --non-interactive exec -- gprbuild -P tests/inference_consumer/inference_consumer.gpr -j0
+          tests/inference_fixture/bin/inference_fixture tests/inference_consumer/obj/consumer-model.gguf
+          tests/inference_consumer/bin/inference_consumer tests/inference_consumer/obj/consumer-model.gguf
 
   windows-build-check:
     name: Windows native build check
@@ -170,3 +184,10 @@ jobs:
       - name: Run the repository checks
         working-directory: model_runner/tests
         run: ./bin/tests.exe check .. --repository
+      - name: Build and run the embedded-inference consumer
+        working-directory: model_runner
+        run: |
+          alr --non-interactive exec -- gprbuild -P tests/inference_fixture/inference_fixture.gpr -j0
+          alr --non-interactive exec -- gprbuild -P tests/inference_consumer/inference_consumer.gpr -j0
+          ./tests/inference_fixture/bin/inference_fixture.exe tests/inference_consumer/obj/consumer-model.gguf
+          ./tests/inference_consumer/bin/inference_consumer.exe tests/inference_consumer/obj/consumer-model.gguf

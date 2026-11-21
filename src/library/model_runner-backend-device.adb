@@ -3,6 +3,9 @@ with Ada.Strings.Unbounded;
 with Ada.Unchecked_Conversion;
 with System.Storage_Elements;
 
+with Model_Runner.Platform;
+with Model_Runner.Platform.Device.Tuning;
+
 package body Model_Runner.Backend.Device is
 
    use type System.Address;
@@ -16,6 +19,8 @@ package body Model_Runner.Backend.Device is
 
    package Devices renames Model_Runner.Platform.Device;
    package Products renames Model_Runner.Platform.Device.Products;
+   package Tunings renames Model_Runner.Platform.Device.Tuning;
+   package Own renames Model_Runner.Backend.Device_Ownership;
    package E renames Model_Runner.Errors;
    package T renames Model_Runner.Tensors;
 
@@ -42,6 +47,19 @@ package body Model_Runner.Backend.Device is
    Prompt_Held : Boolean := False;
 
    Ready_Now : Boolean := False;
+
+   --  Set when an exceptional Open could not put the process-global backend
+   --  back into a known state. Open remains refused until Close retries and
+   --  completes the cleanup.
+   Poisoned_Now : Boolean := False;
+
+   --  Ownership belongs beside the process-global engine, not in one of its
+   --  callers. The ordinary API remains the documented single-task global
+   --  owner and may reopen it with new settings; an embedded session instead
+   --  holds one exclusive lease that ordinary Open and Close cannot disrupt.
+   Ownership : Own.Coordinator;
+
+   procedure Close_Unchecked;
 
    --  The layers' outcomes, as Note_Layer counts them.
    Whole_Count  : Natural := 0;
@@ -114,6 +132,11 @@ package body Model_Runner.Backend.Device is
    --  are kept: an Open naming a different device must not be answered with
    --  this one.
    Opened_Which : Positive := 1;
+
+   --  Part of an open backend's identity, beside its memory and wait policy.
+   Opened_Tuning_Request : Ada.Strings.Unbounded.Unbounded_String;
+   Tuning_Path_Now       : Ada.Strings.Unbounded.Unbounded_String;
+   Tuning_State_Now      : Tuning_Disposition := Tuning_Defaults;
 
    Named      : String (1 .. Devices.Max_Name_Bytes) := [others => ' '];
    Named_Last : Natural := 0;
@@ -478,13 +501,14 @@ package body Model_Runner.Backend.Device is
    -- Open --
    ----------
 
-   procedure Open
+   procedure Open_Unchecked
      (Ready      : out Boolean;
       Budget     : Interfaces.Unsigned_64 := 0;
       Share_Host : Boolean := False;
       Slice      : Duration := 0.020;
       Patience   : Duration := 60.0;
-      Which      : Positive := 1)
+      Which      : Positive := 1;
+      Tuning_Profile : String := "")
    is
       Found : Boolean;
    begin
@@ -504,16 +528,19 @@ package body Model_Runner.Backend.Device is
         and then Opened_Slice = Slice
         and then Opened_Patience = Patience
         and then Opened_Which = Which
+        and then Ada.Strings.Unbounded.To_String (Opened_Tuning_Request)
+          = Tuning_Profile
       then
          Ready := True;
          return;
       end if;
 
-      Close;
+      Close_Unchecked;
       Ready := False;
 
       Devices.Open (Held, Found);
       if not Found or else Devices.Count (Held) = 0 then
+         Devices.Close (Held);
          return;
       end if;
 
@@ -523,11 +550,13 @@ package body Model_Runner.Backend.Device is
       --  device and silently got the first would be told the wrong thing
       --  about what its figures describe.
       if Which > Devices.Count (Held) then
+         Devices.Close (Held);
          return;
       end if;
 
       Devices.Open (Opened, Held, Which, Found);
       if not Found then
+         Devices.Close (Held);
          return;
       end if;
 
@@ -535,7 +564,52 @@ package body Model_Runner.Backend.Device is
                      Slice, Patience);
       if not Found then
          Devices.Close (Opened);
+         Devices.Close (Held);
          return;
+      end if;
+
+      --  A missing automatic record is an ordinary cache miss. A path the
+      --  caller named is instead a promise that must match this device,
+      --  driver, shader set and executable exactly.
+      Tuning_State_Now := Tuning_Defaults;
+      Tuning_Path_Now := Ada.Strings.Unbounded.Null_Unbounded_String;
+      if Tuning_Profile = "none" then
+         Tuning_State_Now := Tuning_Disabled;
+      else
+         declare
+            Key : constant Tunings.Tuning_Key := Tunings.Create_Key
+              (Devices.Identity (Opened), Tunings.Shader_Stamp,
+               Model_Runner.Platform.Program_Stamp);
+            Path : constant String :=
+              (if Tuning_Profile = ""
+               then Tunings.Profile_Path (Key)
+               else Tuning_Profile);
+            Choices  : Tunings.Launch_Choices;
+            Loaded   : Boolean := False;
+            Accepted : Boolean := False;
+         begin
+            if Path /= "" then
+               Tunings.Load (Path, Key, Choices, Loaded);
+            end if;
+            if Loaded then
+               Products.Use_Tuning (Engine, Choices, Accepted);
+            end if;
+            if Loaded and then Accepted then
+               Tuning_State_Now := Tuning_Applied;
+               Tuning_Path_Now := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Path);
+            elsif Tuning_Profile /= "" then
+               Products.Close (Engine);
+               Devices.Close (Opened);
+               Devices.Close (Held);
+               Tuning_State_Now := Tuning_Refused;
+               Tuning_Path_Now := Ada.Strings.Unbounded.To_Unbounded_String
+                 (Tuning_Profile);
+               Opened_Tuning_Request :=
+                 Ada.Strings.Unbounded.To_Unbounded_String (Tuning_Profile);
+               return;
+            end if;
+         end;
       end if;
 
       declare
@@ -571,9 +645,135 @@ package body Model_Runner.Backend.Device is
       Beside := [others => 0];
       Opened_Slice := Slice;
       Opened_Patience := Patience;
+      Opened_Tuning_Request :=
+        Ada.Strings.Unbounded.To_Unbounded_String (Tuning_Profile);
       Ready_Now := True;
       Ready := True;
+   end Open_Unchecked;
+
+   procedure Open
+     (Ready      : out Boolean;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0;
+      Which      : Positive := 1;
+      Tuning_Profile : String := "")
+   is
+      Disposition : Open_Disposition;
+   begin
+      Open
+        (Ready, Disposition, Budget, Share_Host, Slice, Patience, Which,
+         Tuning_Profile);
    end Open;
+
+   procedure Open
+     (Ready       : out Boolean;
+      Disposition : out Open_Disposition;
+      Budget      : Interfaces.Unsigned_64 := 0;
+      Share_Host  : Boolean := False;
+      Slice       : Duration := 0.020;
+      Patience    : Duration := 60.0;
+      Which       : Positive := 1;
+      Tuning_Profile : String := "")
+   is
+      Granted : Boolean;
+   begin
+      if Poisoned_Now then
+         Ready := False;
+         Disposition := Open_Unavailable;
+         return;
+      end if;
+
+      Own.Claim_Ordinary (Ownership, Granted);
+      if not Granted then
+         Ready := False;
+         Disposition := Open_Owned;
+         return;
+      end if;
+      begin
+         Open_Unchecked
+           (Ready, Budget, Share_Host, Slice, Patience, Which,
+            Tuning_Profile);
+      exception
+         when others =>
+            begin
+               Close_Unchecked;
+            exception
+               when others =>
+                  --  Do not let another Open use state whose cleanup failed.
+                  Poisoned_Now := True;
+                  Ready_Now := False;
+            end;
+            Own.Release_Ordinary (Ownership);
+            raise;
+      end;
+      if not Ready then
+         Own.Release_Ordinary (Ownership);
+      end if;
+      Disposition :=
+        (if Ready then Open_Ready
+         elsif Tuning_State_Now = Tuning_Refused
+         then Open_Tuning_Refused
+         else Open_Unavailable);
+   end Open;
+
+   procedure Open_Exclusive
+     (Ready      : out Boolean;
+      Granted    : out Boolean;
+      Lease      : out Exclusive_Lease;
+      Budget     : Interfaces.Unsigned_64 := 0;
+      Share_Host : Boolean := False;
+      Slice      : Duration := 0.020;
+      Patience   : Duration := 60.0;
+      Which      : Positive := 1;
+      Tuning_Profile : String := "") is
+   begin
+      Own.Claim_Exclusive (Ownership, Granted, Lease);
+      if not Granted then
+         Ready := False;
+         return;
+      end if;
+      if Poisoned_Now then
+         declare
+            Released : Boolean;
+         begin
+            Own.Release_Exclusive (Ownership, Lease, Released);
+         end;
+         Granted := False;
+         Ready := False;
+         return;
+      end if;
+      begin
+         Open_Unchecked
+           (Ready, Budget, Share_Host, Slice, Patience, Which,
+            Tuning_Profile);
+      exception
+         when others =>
+            begin
+               Close_Unchecked;
+            exception
+               when others =>
+                  --  Release the lease so its out parameter cannot be lost
+                  --  while retaining a process-wide refusal to reopen.
+                  Poisoned_Now := True;
+                  Ready_Now := False;
+            end;
+            declare
+               Released : Boolean;
+            begin
+               Own.Release_Exclusive (Ownership, Lease, Released);
+            end;
+            raise;
+      end;
+      if not Ready then
+         declare
+            Released : Boolean;
+         begin
+            Own.Release_Exclusive (Ownership, Lease, Released);
+         end;
+      end if;
+   end Open_Exclusive;
 
    --  What Bias_There found, an array at a place in a file a row, kept
    --  while the models it was asked for are open: every model's going
@@ -596,7 +796,7 @@ package body Model_Runner.Backend.Device is
    -- Close --
    -----------
 
-   procedure Close is
+   procedure Close_Unchecked is
    begin
       Bias_Answered := 0;
       Claimed := 0;
@@ -610,6 +810,9 @@ package body Model_Runner.Backend.Device is
       Devices.Close (Opened);
       Devices.Close (Held);
       Ready_Now := False;
+      Opened_Tuning_Request := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Tuning_Path_Now := Ada.Strings.Unbounded.Null_Unbounded_String;
+      Tuning_State_Now := Tuning_Defaults;
       Sharing := False;
       Named_Last := 0;
       Whole_Count := 0;
@@ -618,13 +821,54 @@ package body Model_Runner.Backend.Device is
       Handed_First := Not_Handed;
       Moved_Blocks := 0;
       Moved_Rings := 0;
+      Poisoned_Now := False;
+   end Close_Unchecked;
+
+   procedure Close is
+   begin
+      --  An ordinary caller cannot tear down an exclusively owned engine.
+      if Own.Is_Exclusive (Ownership) then
+         return;
+      end if;
+      Close_Unchecked;
+      Own.Release_Ordinary (Ownership);
+   exception
+      when others =>
+         --  Keep future Opens away from state that Close could not finish.
+         --  The ordinary claim remains held and a later Close may retry it.
+         Poisoned_Now := True;
+         Ready_Now := False;
+         raise;
    end Close;
+
+   procedure Close_Exclusive (Lease : in out Exclusive_Lease) is
+      Released : Boolean;
+   begin
+      if not Own.Owns_Exclusive (Ownership, Lease) then
+         Own.Release_Exclusive (Ownership, Lease, Released);
+         return;
+      end if;
+      Close_Unchecked;
+      Own.Release_Exclusive (Ownership, Lease, Released);
+   exception
+      when others =>
+         --  Do not consume Lease or release its claim when cleanup failed.
+         --  Its owner can retry Close_Exclusive; every other Open is refused.
+         Poisoned_Now := True;
+         Ready_Now := False;
+         raise;
+   end Close_Exclusive;
 
    --------------
    -- Is_Ready --
    --------------
 
    function Is_Ready return Boolean is (Ready_Now);
+
+   function Tuning_Status return Tuning_Disposition is (Tuning_State_Now);
+
+   function Tuning_Profile return String is
+     (Ada.Strings.Unbounded.To_String (Tuning_Path_Now));
 
    protected Turn is
       procedure Lend;
@@ -979,7 +1223,7 @@ package body Model_Runner.Backend.Device is
 
    procedure Keep_Route_Shares (Keep : Boolean) is
    begin
-      Products.Keep_Route_Shares (Keep);
+      Products.Keep_Route_Shares (Engine, Keep);
    end Keep_Route_Shares;
 
    function Tiled_Products return Natural is (Products.Tiled_Products);
@@ -1806,7 +2050,9 @@ package body Model_Runner.Backend.Device is
       Positions  : Natural := 1;
       Window     : Natural := 0;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0) is
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      K_Codec    : Products.Cache_Codec := Products.Scaled_Integer_Cache;
+      V_Codec    : Products.Cache_Codec := Products.Scaled_Integer_Cache) is
    begin
       if not Ready_Now then
          Ok := False;
@@ -1817,7 +2063,7 @@ package body Model_Runner.Backend.Device is
         (Engine, K_Bits, V_Bits, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Bytes, V_Bytes, KV_Width, V_Width, KS_At, VS_At,
          K_Blocks, V_Blocks, Scale, Cap, Target, Ok, Positions, Window,
-         Causal, Max_Bias);
+         Causal, Max_Bias, K_Codec, V_Codec);
    end Attend_Packed;
 
    ---------------

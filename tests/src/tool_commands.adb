@@ -32,6 +32,7 @@ package body Tool_Commands is
    Name_Likeness       : aliased constant String := "fixture-likeness";
    Name_Slow           : aliased constant String := "slow";
    Name_Device_Bench   : aliased constant String := "device-bench";
+   Name_Device_Tune    : aliased constant String := "device-tune";
    Name_Perplexity     : aliased constant String := "perplexity";
    Name_Dump_States    : aliased constant String := "dump-states";
    Name_Token_Cross    : aliased constant String := "tokenizer-cross";
@@ -52,6 +53,8 @@ package body Tool_Commands is
    Opts_Knowledge : aliased constant String := " --tasks --files --observations ";
    Opts_Restamp   : aliased constant String := " --all --root ";
    Opts_Bench     : aliased constant String := " --formats --rounds --tiles --vectors ";
+   Opts_Device_Tune : aliased constant String :=
+     " --rounds --write --check ";
    Opts_Check     : aliased constant String :=
      " --repository --record-warnings --short ";
    Opts_Fuzz      : aliased constant String := " --seed --cases ";
@@ -94,7 +97,9 @@ package body Tool_Commands is
      " --model --format --out --against --imatrix ";
    Opts_Perplex   : aliased constant String :=
      " --model --against --text --chunk --chunks --threads --backend"
-     & " --anyway --wait --rope-scaling --rope-scale --arith ";
+     & " --anyway --wait --rope-scaling --rope-scale --arith"
+     & " --kv-cache --kv-values --against-kv-cache"
+     & " --against-kv-values ";
 
    Takes_Check     : aliased constant String :=
      "[ROOT] [--repository] [--record-warnings] [--short]";
@@ -150,6 +155,8 @@ package body Tool_Commands is
    Takes_Likeness  : aliased constant String := "--model PATH [--names]";
    Takes_Slow      : aliased constant String := "[NAME]";
    Takes_Bench     : aliased constant String := "[--formats] [--rounds N] [--tiles] [--vectors N]";
+   Takes_Device_Tune : aliased constant String :=
+     "[--rounds N] [--write | --check PROFILE]";
    Takes_Probe     : aliased constant String := "leave-signals | processors | hold-screen";
    Takes_Approve   : aliased constant String := "NAME ARGUMENTS [NAME ARGUMENTS ...]";
    Takes_Fake      : aliased constant String := "[MODE]";
@@ -181,6 +188,8 @@ package body Tool_Commands is
      & " product at one, four and eight vectors, each the median of its"
      & " rounds; with --tiles, every format's prompt tile at --vectors"
      & " vectors (128)";
+   Says_Device_Tune : aliased constant String :=
+     "correctness-gate and compare device launch choices over representative products";
    Says_Slow : aliased constant String :=
      "where the suite's time goes: each case on its own, or one test named"
      & " by the prefix AUnit's filter understands";
@@ -270,7 +279,9 @@ package body Tool_Commands is
    Takes_Perplexity : aliased constant String :=
      "--model PATH [--against PATH] [--text PATH] [--chunk N] [--chunks N]"
      & " [--threads N] [--backend NAME] [--anyway] [--wait MINUTES]"
-     & " [--rope-scaling NAME] [--rope-scale N] [--arith MODE]";
+     & " [--rope-scaling NAME] [--rope-scale N] [--arith MODE]"
+     & " [--kv-cache MODE] [--kv-values q8|q4]"
+     & " [--against-kv-cache MODE] [--against-kv-values q8|q4]";
 
    Says_Agent_Eval : aliased constant String :=
      "score the agent loop on tool-use tasks against a real model";
@@ -343,7 +354,7 @@ package body Tool_Commands is
    Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N] [--device]";
    Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads --device ";
 
-   Held : constant array (1 .. 43) of Command :=
+   Held : constant array (1 .. 44) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -411,6 +422,8 @@ package body Tool_Commands is
        Opts_None'Access),
       (Name_Device_Bench'Access, Takes_Bench'Access, Says_Bench'Access,
        Opts_Bench'Access),
+      (Name_Device_Tune'Access, Takes_Device_Tune'Access,
+       Says_Device_Tune'Access, Opts_Device_Tune'Access),
       (Name_Agent_Eval'Access, Takes_Agent_Eval'Access,
        Says_Agent_Eval'Access, Opts_Agent_Eval'Access),
       (Name_Agent_Trial'Access, Takes_Trial'Access,

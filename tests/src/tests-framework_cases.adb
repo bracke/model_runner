@@ -15,6 +15,7 @@ with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 
 with AUnit.Assertions;
+with Child_Guards;
 
 with Model_Runner.Agent;
 with Model_Runner.Byte_Sources.Memory;
@@ -4524,6 +4525,7 @@ package body Tests.Framework_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Before  : Hostkit.Terminal_Control.Mode;
       During  : Hostkit.Terminal_Control.Mode;
@@ -4565,6 +4567,7 @@ package body Tests.Framework_Cases is
       Words.Append (To_Unbounded_String ("new"));
       Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("bin/tests"), Words, Options, Child)
               = Hostkit.Spawn.Spawn_Ok, "model_runner did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
 
       --  The kinds are drawn once raw mode is set; then Ctrl-C.
@@ -4598,7 +4601,7 @@ package body Tests.Framework_Cases is
                                              Hostkit.Descriptors.Transfer_Ok)
            or else Last < Buffer'First;
       end loop;
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result),
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result),
               "task new was not waited for");
       Assert (Hostkit.Terminal_Control.Save_Mode (Pair.To_Child, After),
               "the terminal's mode was not read afterwards");
@@ -4630,6 +4633,7 @@ package body Tests.Framework_Cases is
          Pair    : Hostkit.Pty.Pair;
          Options : Hostkit.Spawn.Options;
          Child   : Hostkit.Spawn.Process_Handle;
+         Watcher : Child_Guards.Guard;
          Result  : Hostkit.Spawn.Status;
          Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
          Last    : Ada.Streams.Stream_Element_Offset;
@@ -4702,6 +4706,7 @@ package body Tests.Framework_Cases is
             Assert (Hostkit.Spawn.Start (Dirs.Full_Name ("bin/tests"), Line, Options, Child)
                     = Hostkit.Spawn.Spawn_Ok, "the session's command did not start");
          end;
+         Child_Guards.Watch (Watcher, Child);
          Hostkit.Pty.Close_Device (Pair);
          Gather;
          Act (Pair, To_String (Said));
@@ -4715,7 +4720,7 @@ package body Tests.Framework_Cases is
                Append (Said, Character'Val (Byte));
             end loop;
          end loop;
-         Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "not waited for");
+         Assert (Child_Guards.Wait (Watcher, 30.0, Result), "not waited for");
          Hostkit.Pty.Close (Pair);
          return To_String (Said);
       end Run_On_Terminal;

@@ -17,8 +17,18 @@ package Model_Runner.Race_Points is
    --  yet in; a file's failure to be indexed, being noted; and a task's
    --  context, built and not yet checked against its tree.
    type Point is
-     (Take_In_Writes, Read_File_Stamps, Large_Copy_Renames, Stage_Files_Kept, Index_Claims, Index_Installs,
-      Index_Midway, Index_Failure_Noted, Context_Built);
+     (Take_In_Writes,
+      Read_File_Stamps,
+      Large_Copy_Renames,
+      Stage_Files_Kept,
+      Index_Claims,
+      Index_Installs,
+      Index_Midway,
+      Index_Failure_Noted,
+      Context_Built,
+      CPU_Worker_Pre_Sleep,
+      CPU_Shutdown_Published,
+      Program_Stamp_Claimed);
 
    --  What a test does at a point.
    type Action is access procedure;
@@ -29,9 +39,19 @@ package Model_Runner.Race_Points is
    --  @param Then_Do What is done there.
    procedure Arm (Where : Point; Then_Do : not null Action);
 
+   --  Remove an action that has not yet been taken. Exception cleanup in a
+   --  test uses this before a nested callback's lifetime ends.
+   --
+   --  @param Where The place to disarm.
+   procedure Disarm (Where : Point);
+
    --  The code's own mark of a place: what was armed for it is done.
    --
    --  @param Where This place.
    procedure Here (Where : Point);
+   --  This mark sits at a worker's idle boundary.  Leaving the empty case
+   --  out of line cost the panel prompt 14--17 per cent; keep its null check
+   --  in the caller while retaining the deterministic race point for tests.
+   pragma Inline_Always (Here);
 
 end Model_Runner.Race_Points;

@@ -211,7 +211,7 @@ is
                      Item.Values.all (First + Index) := Value;
                   end if;
                end;
-            elsif Item.Held in Eighth | Fourth | Float_Eighth then
+            elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth then
                declare
                   Value : constant Real := N.From_Bits (Bits);
                begin

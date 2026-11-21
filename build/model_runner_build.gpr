@@ -1,0 +1,29 @@
+with "../config/model_runner_config.gpr";
+
+--  Compiler policy shared by the executable and reusable inference project.
+--  Multiversioned units must never drift: their runtime gates describe these
+--  exact target levels, so duplicating the switch lists is a safety defect as
+--  well as a maintenance cost.
+abstract project Model_Runner_Build is
+   Common_Ada_Switches :=
+     Model_Runner_Config.Ada_Compiler_Switches
+     & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
+        "-fstack-usage", "-gnatyM120");
+
+   Large_Unit_Switches :=
+     Common_Ada_Switches & ("-fno-var-tracking-assignments");
+
+   --  On a non-x86 host the alternate instantiations remain valid scalar
+   --  bodies and their runtime feature gates always answer False.  Passing
+   --  an x86 -march flag there would make an otherwise portable build fail.
+   X86_64_V3_Switches := Common_Ada_Switches & ("-ffp-contract=off");
+   X86_64_V4_Switches := Common_Ada_Switches & ("-ffp-contract=off");
+   case Model_Runner_Config.Alire_Host_Arch is
+      when "x86_64" =>
+         X86_64_V3_Switches :=
+           Common_Ada_Switches & ("-march=x86-64-v3", "-ffp-contract=off");
+         X86_64_V4_Switches :=
+           Common_Ada_Switches & ("-march=x86-64-v4", "-ffp-contract=off");
+      when others => null;
+   end case;
+end Model_Runner_Build;

@@ -1,0 +1,41 @@
+--  Units shared by independently consumable Model_Runner libraries.
+--  Keeping these in a neutral project prevents the inference API from
+--  importing the task framework merely to acquire the root package and its
+--  error/text value types.
+with "../build/model_runner_sources.gpr";
+
+project Model_Runner_Core is
+   type Build_Profile_Kind is
+     ("release", "validation", "development");
+   Build_Profile : Build_Profile_Kind :=
+     External ("MODEL_RUNNER_CORE_PROFILE", "release");
+
+   Profile_Switches := External_As_List ("ADAFLAGS", " ");
+   case Build_Profile is
+      when "release" =>
+         Profile_Switches := Profile_Switches
+           & ("-O3", "-gnatn", "-ffunction-sections", "-fdata-sections",
+              "-gnatW8");
+      when "validation" =>
+         Profile_Switches := Profile_Switches
+           & ("-O2", "-gnatVa", "-ffunction-sections", "-fdata-sections",
+              "-gnatW8");
+      when "development" =>
+         Profile_Switches := Profile_Switches
+           & ("-Og", "-gnatVa", "-ffunction-sections", "-fdata-sections",
+              "-gnatW8");
+   end case;
+
+   for Languages use ("Ada");
+   for Source_Dirs use ("../src/library");
+   for Source_Files use Model_Runner_Sources.Core_Sources;
+   for Object_Dir use "obj/" & Build_Profile;
+   for Create_Missing_Dirs use "True";
+
+   package Compiler is
+      for Default_Switches ("Ada") use
+        Profile_Switches
+        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
+           "-fstack-usage", "-gnatyM120");
+   end Compiler;
+end Model_Runner_Core;

@@ -161,12 +161,13 @@ begin
                   V_Into : constant Element_Count := V_Base + Now * V_Width;
                begin
                   if not Absent then
-                     if Item.Held in Eighth | Fourth | Float_Eighth then
-                        for Offset in 0 .. KV_Width - 1 loop
-                           Item.Key_Row.all (Offset) :=
-                             Unpack (Item.Byte_Keys.all, From + Offset,
-                                     KV_Width, Item.Key_Scales.all, Item.Held);
-                        end loop;
+                     if Item.Held in Eighth | Fourth | Float_Eighth
+                                           | Transformed_Fourth
+                     then
+                        Unpack_Row
+                          (Item.Byte_Keys.all, From, KV_Width,
+                           Item.Key_Scales.all, Item.Held,
+                           Item.Key_Row.all (0 .. KV_Width - 1));
                      elsif Item.Held = Exact then
                         Item.Key_Row.all (0 .. KV_Width - 1) :=
                           Item.Keys.all (From .. From + KV_Width - 1);
@@ -191,7 +192,9 @@ begin
                         Turn_Scaling (Settings, Natural (Index)), Turns (Source, Item, Natural (Index)),
                         Settings.Pairing, Backwards => True);
 
-                     if Item.Held in Eighth | Fourth | Float_Eighth then
+                     if Item.Held in Eighth | Fourth | Float_Eighth
+                                           | Transformed_Fourth
+                     then
                         --  Turned back and written again, which is a second
                         --  rounding of a row that was already rounded once.
                         --  A rolling context in this storage loses a little
@@ -378,6 +381,7 @@ begin
    --  current, up to the count just committed.
    if Item.Seat >= 0
      and then Item.Held in Eighth | Fourth | Float_Eighth
+                           | Transformed_Fourth
    then
       declare
          Written : Boolean;

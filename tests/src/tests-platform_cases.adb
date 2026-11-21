@@ -7,6 +7,7 @@ with Ada.Text_IO;
 
 with AUnit.Assertions;
 with AUnit.Test_Cases;
+with Child_Guards;
 
 with GNAT.OS_Lib;
 with Interfaces;
@@ -28,6 +29,8 @@ with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
 with Model_Runner.Config;
 with Model_Runner.Platform;
+with Model_Runner.Platform.Device;
+with Model_Runner.Platform.Device.Tuning;
 with Model_Runner.Platform.Mapped_Ranges;
 with Model_Runner.Platform.Mapping;
 with Model_Runner.Platform.Signals;
@@ -249,6 +252,7 @@ package body Tests.Platform_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Before, After : Hostkit.Terminal_Control.Mode;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
@@ -324,6 +328,7 @@ package body Tests.Platform_Cases is
       Words.Append (To_Unbounded_String (Model));
       Assert (Hostkit.Spawn.Start (Ada.Directories.Full_Name (Plain), Words, Options, Child)
               = Hostkit.Spawn.Spawn_Ok, "model_runner did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
 
       --  The session's prompt, and then a command that offers a list.
@@ -360,7 +365,7 @@ package body Tests.Platform_Cases is
               Hostkit.Signals.Send_To_Process
                 (Hostkit.Spawn.Process_Id (Child), Hostkit.Signals.Signal_Kill);
             Waited : constant Boolean :=
-              Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result);
+              Child_Guards.Wait (Watcher, 5.0, Result);
          begin
             Hostkit.Pty.Close (Pair);
             Assert (False, "told to end at a list, the session had not ended in three "
@@ -395,6 +400,7 @@ package body Tests.Platform_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Before, After : Hostkit.Terminal_Control.Mode;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
@@ -443,6 +449,7 @@ package body Tests.Platform_Cases is
       Words.Append (To_Unbounded_String ("hold-screen"));
       Assert (Hostkit.Spawn.Start (Tests_Program, Words, Options, Child)
               = Hostkit.Spawn.Spawn_Ok, "the probe did not start");
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       for Try in 1 .. 200 loop
          Gather;
@@ -469,7 +476,7 @@ package body Tests.Platform_Cases is
               Hostkit.Signals.Send_To_Process
                 (Hostkit.Spawn.Process_Id (Child), Hostkit.Signals.Signal_Kill);
             Waited : constant Boolean :=
-              Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result);
+              Child_Guards.Wait (Watcher, 5.0, Result);
          begin
             Hostkit.Pty.Close (Pair);
             Assert (False, "told to end with nothing to stop, the probe had not ended in "
@@ -889,6 +896,20 @@ package body Tests.Platform_Cases is
    is
       pragma Unreferenced (T);
       Stamp : constant String := Model_Runner.Platform.Program_Stamp;
+      First_Path  : constant String := "obj/program-stamp-first.bin";
+      Second_Path : constant String := "obj/program-stamp-second.bin";
+      Same_Time   : constant GNAT.OS_Lib.OS_Time :=
+        GNAT.OS_Lib.GM_Time_Of (2020, 1, 1, 0, 0, 0);
+
+      procedure Write (Path, Content : String) is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create
+           (File, Ada.Text_IO.Out_File, Path, Form => "shared=no");
+         Ada.Text_IO.Put (File, Content);
+         Ada.Text_IO.Close (File);
+         GNAT.OS_Lib.Set_File_Last_Modify_Time_Stamp (Path, Same_Time);
+      end Write;
    begin
       Assert (Stamp /= "", "the running program gave no stamp");
       Assert (Model_Runner.Platform.Program_Stamp = Stamp,
@@ -896,7 +917,162 @@ package body Tests.Platform_Cases is
       Assert (Model_Runner.Platform.Cache_File ("k|" & Stamp)
               /= Model_Runner.Platform.Cache_File ("k|other"),
               "a cache keyed by the stamp is the cache of another build");
+      Ada.Directories.Create_Path ("obj");
+      Write (First_Path, "same-size-A");
+      Write (Second_Path, "same-size-B");
+      Assert
+        (Model_Runner.Platform.Program_Stamp (First_Path)
+           /= Model_Runner.Platform.Program_Stamp (Second_Path),
+         "same-size files with one timestamp shared a build stamp");
+
+      declare
+         Words    : Hostkit.String_Vectors.Vector;
+         Happened : Hostkit.Process.Process_Outcome;
+         Output   : constant String := "obj/probe-program-stamp-abort.out";
+      begin
+         Words.Append (To_Unbounded_String ("probe"));
+         Words.Append (To_Unbounded_String ("program-stamp-abort"));
+         Happened := Hostkit.Process.Run_Captured
+           (Tests_Program, Words, Stdout_Path => Output,
+            Timeout_Ms => 20_000);
+         Assert
+           (Happened.Started and then not Happened.Timed_Out
+            and then Happened.Exit_Status = 0,
+            "an interrupted program-stamp claimant prevented the next one");
+         Assert
+           (Ada.Strings.Fixed.Index (Read_Whole (Output), "recovered ") > 0,
+            "the fresh-process stamp probe did not demonstrate recovery");
+      end;
    end The_Program_Says_Which_Build_It_Is;
+
+   procedure Inference_Switches_Name_Inference_Sources
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Root : constant String :=
+        (if Ada.Directories.Exists ("../build/model_runner_sources.gpr")
+         then ".." else ".");
+      Sources : constant String :=
+        Read_Whole (Root & "/build/model_runner_sources.gpr");
+      Project : constant String :=
+        Read_Whole (Root & "/inference/model_runner_inference.gpr");
+      Root_Project : constant String :=
+        Read_Whole (Root & "/model_runner.gpr");
+      First : constant Natural :=
+        Ada.Strings.Fixed.Index (Sources, "Inference_Sources :=");
+      Last : constant Natural :=
+        Ada.Strings.Fixed.Index (Sources, "Framework_Sources :=");
+   begin
+      Assert
+        (First > 0 and then Last > First,
+         "the inference source closure could not be found");
+      declare
+         Closure : constant String := Sources (First .. Last - 1);
+         Cursor  : Natural := Project'First;
+
+         function Policy_At
+           (Text : String;
+            Mark : Natural) return String
+         is
+            Uses : constant Natural :=
+              Ada.Strings.Fixed.Index (Text, "use", Mark);
+            Stop : constant Natural :=
+              Ada.Strings.Fixed.Index (Text, ";", Uses);
+         begin
+            if Uses = 0 or else Stop = 0 then
+               return "";
+            end if;
+            return Ada.Strings.Fixed.Trim
+              (Text (Uses + 3 .. Stop - 1), Ada.Strings.Both);
+         end Policy_At;
+
+         procedure Check_Policy
+           (Name   : String;
+            Policy : String;
+            Other  : String;
+            What   : String)
+         is
+            Other_Mark : constant Natural := Ada.Strings.Fixed.Index
+              (Other, "for Switches (""" & Name & """)");
+         begin
+            Assert
+              (Other_Mark > 0,
+               What & " has no matching switch policy for " & Name);
+            Assert
+              (Policy /= "" and then Policy = Policy_At (Other, Other_Mark),
+               What & " gives a different switch policy to " & Name);
+         end Check_Policy;
+      begin
+         loop
+            exit when Cursor > Project'Last;
+            declare
+               Mark : constant Natural := Ada.Strings.Fixed.Index
+                 (Project, "for Switches (", Cursor);
+            begin
+               exit when Mark = 0;
+               declare
+                  Quote : constant Natural := Ada.Strings.Fixed.Index
+                    (Project, """", Mark);
+                  End_Quote : constant Natural := Ada.Strings.Fixed.Index
+                    (Project, """", Quote + 1);
+               begin
+                  Assert
+                    (Quote > 0 and then End_Quote > Quote + 1,
+                     "an inference per-unit switch has no source name");
+                  declare
+                     Name : constant String :=
+                       Project (Quote + 1 .. End_Quote - 1);
+                  begin
+                     if Name /= "Ada" then
+                        Assert
+                          (Ada.Strings.Fixed.Index
+                             (Closure, """" & Name & """") > 0,
+                           "the inference project sets switches for unowned "
+                           & Name);
+                        Check_Policy
+                          (Name, Policy_At (Project, Mark), Root_Project,
+                           "the root project");
+                     end if;
+                  end;
+                  Cursor := End_Quote + 1;
+               end;
+            end;
+         end loop;
+
+         --  Check the other direction as well.  Merely proving that every
+         --  inference association belongs to the inference closure would
+         --  still let the standalone library silently omit a new SIMD or
+         --  large-unit policy added to the root project.
+         Cursor := Root_Project'First;
+         loop
+            exit when Cursor > Root_Project'Last;
+            declare
+               Mark : constant Natural := Ada.Strings.Fixed.Index
+                 (Root_Project, "for Switches (", Cursor);
+            begin
+               exit when Mark = 0;
+               declare
+                  Quote : constant Natural := Ada.Strings.Fixed.Index
+                    (Root_Project, """", Mark);
+                  End_Quote : constant Natural := Ada.Strings.Fixed.Index
+                    (Root_Project, """", Quote + 1);
+                  Name : constant String :=
+                    Root_Project (Quote + 1 .. End_Quote - 1);
+               begin
+                  if Name /= "Ada"
+                    and then Ada.Strings.Fixed.Index
+                      (Closure, """" & Name & """") > 0
+                  then
+                     Check_Policy
+                       (Name, Policy_At (Root_Project, Mark), Project,
+                        "the inference project");
+                  end if;
+                  Cursor := End_Quote + 1;
+               end;
+            end;
+         end loop;
+      end;
+   end Inference_Switches_Name_Inference_Sources;
 
    --------------------
    -- Register_Tests --
@@ -1072,12 +1248,168 @@ package body Tests.Platform_Cases is
                                "more memory was available than the machine has");
    end The_Environment_Is_Read_As_Said;
 
+   procedure A_Device_Has_A_Stable_Identity
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package D renames Model_Runner.Platform.Device;
+      Inventory : D.Inventory;
+      Context   : D.Context;
+      Found     : Boolean;
+      Ready     : Boolean;
+      Checked   : Boolean := False;
+   begin
+      D.Open (Inventory, Found);
+      if Found then
+         for Index in 1 .. D.Count (Inventory) loop
+            D.Open (Context, Inventory, Index, Ready);
+            if Ready then
+               declare
+                  Identity : constant D.Device_Identity := D.Identity (Context);
+               begin
+                  Assert (Identity.Present,
+                          "an open device had no identity");
+                  Assert
+                    (Identity.Device_Name (1 .. Identity.Name_Length)
+                       = D.Name (Inventory, Index),
+                     "a device identity did not retain its reporting name");
+                  Assert
+                    (Identity.Matrix_Instruction
+                       = D.Has_Matrix_Instruction (Context)
+                     and then Identity.Subgroup_Arithmetic
+                       = D.Has_Subgroup_Arithmetic (Context)
+                     and then Identity.Sized_Subgroups
+                       = D.Has_Sized_Subgroups (Context)
+                     and then Identity.Integer_Dot
+                       = D.Has_Integer_Dot (Context),
+                     "a device identity did not retain its capabilities");
+               end;
+               D.Close (Context);
+               Assert (not D.Identity (Context).Present,
+                       "closing a device retained its identity");
+               Checked := True;
+               exit;
+            end if;
+         end loop;
+      end if;
+      D.Close (Context);
+      D.Close (Inventory);
+      if not Checked then
+         Ada.Text_IO.Put_Line
+           (Ada.Text_IO.Standard_Error,
+            "note: no device identity was available here");
+      end if;
+   end A_Device_Has_A_Stable_Identity;
+
+   procedure A_Tuning_Record_Is_Exact_And_Whole
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package D renames Model_Runner.Platform.Device;
+      package Tune renames Model_Runner.Platform.Device.Tuning;
+      use type Tune.Launch_Choices;
+
+      Root : constant String := Ada.Directories.Full_Name ("obj/tuning-record");
+      Path : constant String := Hostkit.Fs.Join (Root, "profile.tuning");
+
+      Identity : D.Device_Identity;
+      Key, Other : Tune.Tuning_Key;
+      Given : Tune.Launch_Choices := Tune.Default_Choices;
+      Read  : Tune.Launch_Choices;
+      Written, Found : Boolean;
+
+      procedure Put (Text : String) is
+         File : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Path);
+         Ada.Text_IO.Put (File, Text);
+         Ada.Text_IO.Close (File);
+      end Put;
+
+      function Replaced (Text, Was, By : String) return String is
+         Place : constant Natural := Ada.Strings.Fixed.Index (Text, Was);
+      begin
+         if Place = 0 then
+            return Text;
+         end if;
+         return Text (Text'First .. Place - 1) & By
+           & Text (Place + Was'Length .. Text'Last);
+      end Replaced;
+   begin
+      if Ada.Directories.Exists (Root) then
+         Ada.Directories.Delete_Tree (Root);
+      end if;
+      Ada.Directories.Create_Path (Root);
+
+      Identity.Present := True;
+      Identity.Vendor_Id := 16#1002#;
+      Identity.Device_Id := 16#1681#;
+      Identity.Driver_Version := 16#0402_0100#;
+      for Index in Identity.Pipeline_Cache_UUID'Range loop
+         Identity.Pipeline_Cache_UUID (Index) := Interfaces.Unsigned_8 (Index);
+      end loop;
+      Identity.Subgroup_Arithmetic := True;
+      Identity.Sized_Subgroups := True;
+      Key := Tune.Create_Key (Identity, "shader-a", "program-a");
+      Other := Tune.Create_Key (Identity, "shader-b", "program-a");
+      Assert (Tune.Is_Valid (Key) and then Tune.Image (Key) /= Tune.Image (Other),
+              "a tuning key did not cover the shader stamp");
+
+      Given.Attention_Workgroups := 512;
+      Given.Attention_Slice_Least := 512;
+      Given.Attention_Slice_Limit := 8;
+      Given.Row_Product_Workgroup := 128;
+      Given.Packed_Bundle_Least := 512;
+      Given.Packed_Cuts_A_Round := True;
+      Given.Matrix_Row_Crossover := 17;
+      Tune.Store (Path, Key, Given, Written);
+      Assert (Written, "a tuning record was not written");
+      Tune.Load (Path, Key, Read, Found);
+      Assert (Found and then Read = Given,
+              "a tuning record did not round-trip");
+
+      declare
+         Canonical : constant String := Read_Whole (Path);
+      begin
+         Put (Canonical & "unknown=1" & ASCII.LF);
+         Tune.Load (Path, Key, Read, Found);
+         Assert (not Found and then Read = Tune.Default_Choices,
+                 "a tuning record with an unknown field was accepted");
+
+         Put (Canonical & "attention_workgroups=256" & ASCII.LF);
+         Tune.Load (Path, Key, Read, Found);
+         Assert (not Found,
+                 "a tuning record with a duplicate field was accepted");
+
+         Put (Replaced (Canonical, "attention_slice_limit=8",
+                        "attention_slice_limit=0"));
+         Tune.Load (Path, Key, Read, Found);
+         Assert (not Found,
+                 "a tuning record with an out-of-range field was accepted");
+
+         Put (Replaced (Canonical, "packed_cuts_a_round=true",
+                        "packed_cuts_a_round=false"));
+         Tune.Load (Path, Key, Read, Found);
+         Assert (not Found,
+                 "an unmeasured tuning alternative was accepted");
+
+         Put (Canonical);
+         Tune.Load (Path, Other, Read, Found);
+         Assert (not Found,
+                 "a tuning record with a mismatched key was accepted");
+      end;
+      Ada.Directories.Delete_Tree (Root);
+   end A_Tuning_Record_Is_Exact_And_Whole;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
         (T, The_Program_Says_Which_Build_It_Is'Access,
          "the running program says which build it is");
+      Register_Routine
+        (T, Inference_Switches_Name_Inference_Sources'Access,
+         "the inference project's per-unit switches name owned sources");
       Register_Routine
         (T, A_Process_Leaving_Its_Handler_Installed_Ends'Access,
          "a process that ends with its interrupt handling installed ends");
@@ -1126,6 +1458,12 @@ package body Tests.Platform_Cases is
       Register_Routine
         (T, The_Environment_Is_Read_As_Said'Access,
          "what the environment says is read as the platform says it reads it");
+      Register_Routine
+        (T, A_Device_Has_A_Stable_Identity'Access,
+         "an open device has a stable identity and its reported capabilities");
+      Register_Routine
+        (T, A_Tuning_Record_Is_Exact_And_Whole'Access,
+         "a tuning record is exact, bounded and applied only as a whole");
    end Register_Tests;
 
 end Tests.Platform_Cases;

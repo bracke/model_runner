@@ -32,6 +32,7 @@ begin
      or else Item.Owner = null
      or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
      or else Item.Held not in Exact | Halved | Eighth | Fourth | Float_Eighth
+                                  | Transformed_Fourth
      or else Item.Pages = null
      --  A cache dealt in blocks and one dealt in pages both grow from
      --  the front of the one buffer, so a device holds one kind or the

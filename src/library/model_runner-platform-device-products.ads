@@ -4,6 +4,7 @@ with System;
 with Model_Runner.Bytes;
 with Model_Runner.Cancellation;
 with Model_Runner.Numerics;
+with Model_Runner.Platform.Device.Tuning;
 
 --  Matrix-vector products on a device.
 --
@@ -27,8 +28,10 @@ with Model_Runner.Numerics;
 --  the precision binary32 carries and not beyond it, which is a thing to
 --  measure rather than to assume.
 --
---  Task safety: an Engine belongs to one task. Two tasks wanting a device
---  want two engines.
+--  Task safety: one open Engine per process, used by one task at a time. The
+--  implementation owns background copier and keeper tasks and process-wide
+--  Vulkan dispatch state, so a second Engine is refused until the first is
+--  closed rather than sharing that state unsafely.
 package Model_Runner.Platform.Device.Products is
 
    --  Largest product this will attempt, in elements.
@@ -368,7 +371,8 @@ package Model_Runner.Platform.Device.Products is
    --
    --  @param Item Engine to fill; released first.
    --  @param On Open device.
-   --  @param Ready True when the device took the shader and the pipeline.
+   --  @param Ready True when the device took the shader and the pipeline;
+   --    False when another Engine is already open.
    --  @param Budget Bytes of device memory the resident matrices may take,
    --    or zero for the share of the device's own heap described below. A
    --    caller that knows the device is doing something else can say so, and
@@ -408,6 +412,24 @@ package Model_Runner.Platform.Device.Products is
    --  @param Item Engine to inspect.
    --  @return True when it is ready to compute.
    function Is_Ready (Item : Engine) return Boolean;
+
+   --  Select one of the launch policies whose pipelines and buffer geometry
+   --  this build already carries. Unsupported values are refused as a
+   --  whole, leaving the previous policy in place.
+   --
+   --  @param Item Ready engine to configure.
+   --  @param Choices Proposed launch choices.
+   --  @param Accepted True when every choice is supported.
+   procedure Use_Tuning
+     (Item     : in out Engine;
+      Choices  : Model_Runner.Platform.Device.Tuning.Launch_Choices;
+      Accepted : out Boolean);
+
+   --  @param Item Engine to inspect.
+   --  @return Its current launch choices.
+   function Tuning_Of
+     (Item : Engine)
+      return Model_Runner.Platform.Device.Tuning.Launch_Choices;
 
    --  Whether this engine may dispatch the heads step, which a device
    --  that refused its pipeline cannot: the caller records the three steps
@@ -702,7 +724,20 @@ package Model_Runner.Platform.Device.Products is
    --  read.
    E4M3_Cache_Code : constant Positive := 9;
 
+   --  What the packed bytes mean, independently of how many bits one code
+   --  occupies. A future codec must not masquerade as scaled Q4 merely
+   --  because both use four bits. These identifiers are carried through the
+   --  host-side shapes and the packed shader push layouts.
+   type Cache_Codec is
+     (Scaled_Integer_Cache, OCP_E4M3_Cache, Transformed_Four_Bit_Cache,
+      Inferred_From_Bits_Cache);
+   --  Positions of the first three are part of the device ABI; never
+   --  reorder them. Inferred_From_Bits_Cache is an API compatibility
+   --  sentinel and is resolved before a shape reaches a shader.
+
    type Packed_Cache is record
+      K_Codec  : Cache_Codec := Scaled_Integer_Cache;
+      V_Codec  : Cache_Codec := Scaled_Integer_Cache;
       K_Bits   : Natural := 0;
       V_Bits   : Natural := 0;
       K_Bytes  : Interfaces.Unsigned_64 := 0;
@@ -722,6 +757,7 @@ package Model_Runner.Platform.Device.Products is
    --  scales a row has. Bits uses the same four, eight and nine codes as
    --  Packed_Cache. Zero is a row placed as it is, into the exact cache.
    type Packing_Shape is record
+      Codec     : Cache_Codec := Scaled_Integer_Cache;
       Bits      : Natural := 0;
       Row_Bytes : Natural := 0;
       At_Byte   : Interfaces.Unsigned_64 := 0;
@@ -1169,8 +1205,11 @@ package Model_Runner.Platform.Device.Products is
    --  other mixture here renormalizes. Set when a model prepares, before
    --  any sequence routes.
    --
+   --  @param Item Engine whose routing policy changes.
    --  @param Keep True to leave them.
-   procedure Keep_Route_Shares (Keep : Boolean);
+   procedure Keep_Route_Shares
+     (Item : in out Engine;
+      Keep : Boolean);
 
    --  Name a mixture's routing for a sequence to perform.
    --
@@ -2829,6 +2868,9 @@ package Model_Runner.Platform.Device.Products is
    --  @param Causal True where a position may see only what precedes it.
    --  @param Max_Bias How steeply a head's attention falls off with
    --    distance, or zero for a model told where a token is otherwise.
+   --  @param K_Codec Meaning of the key codes. The default preserves the
+   --    legacy four/eight/E4M3 call surface.
+   --  @param V_Codec Meaning of the value codes.
    procedure Attend_Packed
      (Item       : in out Engine;
       K_Bits     : Positive;
@@ -2855,7 +2897,9 @@ package Model_Runner.Platform.Device.Products is
       Positions  : Natural := 1;
       Window     : Natural := 0;
       Causal     : Boolean := True;
-      Max_Bias   : Model_Runner.Numerics.Real := 0.0);
+      Max_Bias   : Model_Runner.Numerics.Real := 0.0;
+      K_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
+      V_Codec    : Cache_Codec := Inferred_From_Bits_Cache);
 
    --  Whether the packed attention kernel was made.
    --
@@ -3788,7 +3832,23 @@ private
    type Special_Lines is array (1 .. Special_Most) of System.Address;
    type Special_Packings is array (1 .. Special_Most) of Weight_Packing;
 
+   type Tile_Policy_State is record
+      Mid_Ready      : Boolean := False;
+      Mid_Wide_Ready : Boolean := False;
+      Wider_Ready    : Boolean := False;
+      Narrow_Run     : Boolean := False;
+      Route_Keeps    : Boolean := False;
+   end record;
+
    type Engine is limited record
+      --  Authority over the package-wide Vulkan and worker state. Only the
+      --  Engine that owns the slot may operate or release that state.
+      Owns_Slot : Boolean := False;
+
+      Launch : Model_Runner.Platform.Device.Tuning.Launch_Choices :=
+        Model_Runner.Platform.Device.Tuning.Default_Choices;
+      Tile_Plan : Tile_Policy_State;
+
       --  Where the last Run told to leave its answers left the first.
       Kept_At : System.Address := System.Null_Address;
 

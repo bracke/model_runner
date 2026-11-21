@@ -33,6 +33,29 @@ package Model_Runner.Platform.Device is
    --  them fixes this at 256.
    Max_Name_Bytes : constant := 256;
 
+   --  Bytes in Vulkan's pipeline-cache identifier.
+   UUID_Bytes : constant := 16;
+
+   type Device_UUID is
+     array (Positive range 1 .. UUID_Bytes) of Interfaces.Unsigned_8;
+
+   --  Stable facts naming an open device and the driver that opened it.
+   --  Device_Name is reporting text only: matching uses the numeric IDs,
+   --  driver version, UUID and capabilities, never a localized name.
+   type Device_Identity is record
+      Present             : Boolean := False;
+      Vendor_Id           : Interfaces.Unsigned_32 := 0;
+      Device_Id           : Interfaces.Unsigned_32 := 0;
+      Driver_Version      : Interfaces.Unsigned_32 := 0;
+      Pipeline_Cache_UUID : Device_UUID := [others => 0];
+      Name_Length         : Natural range 0 .. Max_Name_Bytes := 0;
+      Device_Name         : String (1 .. Max_Name_Bytes) := [others => ' '];
+      Matrix_Instruction  : Boolean := False;
+      Subgroup_Arithmetic : Boolean := False;
+      Sized_Subgroups     : Boolean := False;
+      Integer_Dot         : Boolean := False;
+   end record;
+
    --  Report whether this build can reach a device interface at all.
    --
    --  False on a host with no loader, and on a host this build has no body
@@ -129,6 +152,14 @@ package Model_Runner.Platform.Device is
    --  @param Item Context to inspect.
    --  @return True when it is open.
    function Is_Open (Item : Context) return Boolean;
+
+   --  Stable identity and tuning-relevant capabilities of an open device.
+   --  A closed context, and a host body with no device interface, returns a
+   --  value whose Present field is False.
+   --
+   --  @param Item Context to inspect.
+   --  @return The device identity, or no identity for a closed context.
+   function Identity (Item : Context) return Device_Identity;
 
    --  Which family of queues the compute queue came from.
    --
@@ -399,6 +430,8 @@ private
       --  host pointer can be taken as some kinds and not others, and the one
       --  chosen has to be in both sets.
       Plain_Kinds : Interfaces.Unsigned_32 := 0;
+
+      Identity_Of : Device_Identity;
    end record;
 
    type Address_List is array (1 .. Max_Devices) of System.Address;

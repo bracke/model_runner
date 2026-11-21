@@ -4,6 +4,7 @@ with Ada.Unchecked_Deallocation;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Backend.CPU;
+with Model_Runner.Backend.Device;
 with Model_Runner.Conversation;
 with Model_Runner.GGUF;
 with Model_Runner.Generation;
@@ -100,6 +101,15 @@ private package Model_Runner.CLI.Execute.Support is
    --  @param Item The command.
    --  @return True to page the context.
    function Session_Paging (Item : Opt.Command) return Boolean;
+
+   --  Distinguish ownership, tuning, and availability failures after
+   --  Device.Open returns False.
+   --
+   --  @param Disposition Exact acquisition result.
+   --  @return Structured device-open failure.
+   function Device_Open_Error
+     (Disposition : Model_Runner.Backend.Device.Open_Disposition)
+      return E.Error_Info;
 
    --  Say how much of the device a session left free, where it opened on
    --  the device and the device does not hold it whole.

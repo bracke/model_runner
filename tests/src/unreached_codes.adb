@@ -56,14 +56,6 @@ package body Unreached_Codes is
          --  make one until the shader is taught it too.
             | E.Backend_Unsupported_Format
 
-         --  A product the device declined for a reason this program cannot
-         --  name. Every reason it can name has its own answer -- a format
-         --  the shader has not got, a buffer past what the device says it
-         --  reads, a device that stopped answering -- so what is left here
-         --  is a driver refusing work that is within everything it stated,
-         --  and there is no way to ask one to do that.
-            | E.Backend_Device_Refused
-
          --  A matrix larger than the device says one buffer may hold. The
          --  device this suite runs against says four gigabytes, and a test
          --  that allocated four gigabytes to be refused would be a test
@@ -77,6 +69,12 @@ package body Unreached_Codes is
          --  reason on this list -- unreachable from inside the suite, and
          --  said clearly enough that somebody can reach it outside one.
             | E.Backend_Product_Too_Large
+
+         --  A caller-supplied tuning profile is checked only after a real
+         --  hardware device opens. The suite's portable device path may have
+         --  no hardware at all (and deliberately refuses its software Vulkan
+         --  renderer), so it cannot require this refusal on every host.
+            | E.Backend_Tuning_Profile
 
          --  A distribution that is not one. Sampling refuses non-finite
          --  logits before it normalizes, so the state this names is one the

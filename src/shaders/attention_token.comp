@@ -96,10 +96,14 @@ layout(push_constant, std430) uniform Shape {
     uint pages_at;
     uint page_shift;
     uint first_position;
+    uint k_codec;
+    uint v_codec;
 } shape;
 
 const uint BLOCK = 32u;
 const uint E4M3_BITS = 9u;
+const uint TRANSFORMED_FOUR_BIT_CODEC = 2u;
+const uint Q4T_SIGN_MASK = 0xD6E8FEB8u;
 
 float e4m3_value (uint raw) {
     uint sign = (raw & 0x80u) << 24u;
@@ -303,6 +307,66 @@ void main() {
                   * shape.scale;
     }
     barrier ();
+
+#ifdef PACKED
+    //  Q4t stores H.D times each 32-coordinate key group. Rotate every
+    //  query group once in shared memory so the packed walk below keeps
+    //  its eight-at-a-time key reads and computes the preserved dot.
+    if (shape.k_codec == TRANSFORMED_FOUR_BIT_CODEC) {
+        uint groups = HS / BLOCK;
+        if (gl_SubgroupSize >= BLOCK) {
+            uint cohort = tid / BLOCK;
+            uint within = tid % BLOCK;
+            uint cohorts = LANES / BLOCK;
+            for (uint task = cohort; task < ROWS * groups; task += cohorts) {
+                uint r = task / groups;
+                uint base = (task % groups) * BLOCK;
+                uint c = base + within;
+                float v = qsh[r * HS4 + c / 4u][c % 4u];
+                if (((Q4T_SIGN_MASK >> within) & 1u) != 0u) {
+                    v = -v;
+                }
+                for (uint step = 1u; step < BLOCK; step *= 2u) {
+                    float other = subgroupShuffleXor (v, step);
+                    v = (within & step) == 0u ? v + other : other - v;
+                }
+                qsh[r * HS4 + c / 4u][c % 4u] =
+                  v * inversesqrt (float (BLOCK));
+            }
+        } else {
+            //  A Vulkan subgroup may be only eight or sixteen lanes. Such a
+            //  subgroup cannot carry a 32-point butterfly, so one lane does
+            //  one group through local storage instead of shuffling outside
+            //  its subgroup.
+            for (uint task = tid; task < ROWS * groups; task += LANES) {
+                uint r = task / groups;
+                uint base = (task % groups) * BLOCK;
+                float scratch[32];
+                for (uint i = 0u; i < BLOCK; i++) {
+                    uint c = base + i;
+                    float v = qsh[r * HS4 + c / 4u][c % 4u];
+                    scratch[i] = ((Q4T_SIGN_MASK >> i) & 1u) == 0u ? v : -v;
+                }
+                for (uint step = 1u; step < BLOCK; step *= 2u) {
+                    for (uint part = 0u; part < BLOCK; part += step * 2u) {
+                        for (uint i = 0u; i < step; i++) {
+                            float a = scratch[part + i];
+                            float z = scratch[part + step + i];
+                            scratch[part + i] = a + z;
+                            scratch[part + step + i] = a - z;
+                        }
+                    }
+                }
+                float normalizer = inversesqrt (float (BLOCK));
+                for (uint i = 0u; i < BLOCK; i++) {
+                    uint c = base + i;
+                    qsh[r * HS4 + c / 4u][c % 4u] = scratch[i] * normalizer;
+                }
+            }
+        }
+        barrier ();
+    }
+#endif
 
     vec4 o[ROWS][MINE4];
     float m[ROWS];

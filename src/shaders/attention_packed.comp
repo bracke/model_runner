@@ -160,6 +160,11 @@ layout(push_constant, std430) uniform Shape {
     uint pages_at;
     uint page_shift;
     uint first_position;
+
+    //  Append-only codec identities: zero scaled integer, one E4M3 and
+    //  two transformed Q4. The bit widths alone never select a codec.
+    uint k_codec;
+    uint v_codec;
 } shape;
 
 //  The widest query head this takes, and the widest value head: four
@@ -172,6 +177,8 @@ const uint BLOCK = 32u;
 const uint BUNDLE = 8u;
 const uint ROWS = BUNDLE;
 const uint E4M3_BITS = 9u;
+const uint TRANSFORMED_FOUR_BIT_CODEC = 2u;
+const uint Q4T_SIGN_MASK = 0xD6E8FEB8u;
 
 //  The rows' queries, four at a time, since the keys come four at a time.
 shared vec4 qs[ROWS * QUERY_ROOM / 4u];
@@ -444,6 +451,42 @@ void main () {
             : 0.0;
     }
     barrier ();
+
+    //  Q4t stores H.D times each 32-coordinate key group. Rotate each
+    //  query group the same way once in shared memory; the ordinary Q4
+    //  key loop below then computes the preserved dot product. Head widths
+    //  are held to a multiple of 32 by the host shape check.
+    if (shape.k_codec == TRANSFORMED_FOUR_BIT_CODEC) {
+        uint groups = shape.head_size / BLOCK;
+        for (uint task = lane; task < rows * groups; task += LANES) {
+            uint r = task / groups;
+            uint base = (task % groups) * BLOCK;
+            float scratch[32];
+
+            for (uint i = 0u; i < BLOCK; i++) {
+                uint c = base + i;
+                float v = qs[r * (QUERY_ROOM / 4u) + c / 4u][c % 4u];
+                scratch[i] = ((Q4T_SIGN_MASK >> i) & 1u) == 0u ? v : -v;
+            }
+            for (uint step = 1u; step < BLOCK; step *= 2u) {
+                for (uint part = 0u; part < BLOCK; part += step * 2u) {
+                    for (uint i = 0u; i < step; i++) {
+                        float a = scratch[part + i];
+                        float z = scratch[part + step + i];
+                        scratch[part + i] = a + z;
+                        scratch[part + step + i] = a - z;
+                    }
+                }
+            }
+            float normalizer = inversesqrt (float (BLOCK));
+            for (uint i = 0u; i < BLOCK; i++) {
+                uint c = base + i;
+                qs[r * (QUERY_ROOM / 4u) + c / 4u][c % 4u] =
+                  scratch[i] * normalizer;
+            }
+        }
+        barrier ();
+    }
 
     uint k_row = row_bytes (shape.k_bits, shape.kv_width);
     uint v_row = row_bytes (shape.v_bits, shape.v_width);

@@ -386,6 +386,23 @@ begin
                Put_Halves (Item.Half_Keys.all, First,
                            Element_Count (Run_Of (Layer_Index) * KV_Width));
             end if;
+         elsif Item.Held = Transformed_Fourth then
+            if Run_Of (Layer_Index) > 0 then
+               for Row in 0 .. Element_Count (Run_Of (Layer_Index)) - 1 loop
+                  declare
+                     Origin : constant Element_Count :=
+                       First + Row * Element_Count (KV_Width);
+                  begin
+                     Unpack_Row
+                       (Item.Byte_Keys.all, Origin, Element_Count (KV_Width),
+                        Item.Key_Scales.all, Item.Held,
+                        Item.Key_Row.all (0 .. Element_Count (KV_Width) - 1));
+                     for Offset in 0 .. Element_Count (KV_Width) - 1 loop
+                        Put_Bits (N.Bits (Item.Key_Row.all (Offset)));
+                     end loop;
+                  end;
+               end loop;
+            end if;
          else
             for Index in 0 .. Element_Count (Run_Of (Layer_Index) * KV_Width)
                                - 1
@@ -438,7 +455,9 @@ begin
                --  unpacked as the keys were: the byte cache's values
                --  went through the halved arm here, which holds nothing
                --  for it, and a byte session could not snapshot at all.
-               if Item.Held in Eighth | Fourth | Float_Eighth then
+               if Item.Held in Eighth | Fourth | Float_Eighth
+                                     | Transformed_Fourth
+               then
                   Put_Bits
                     (N.Bits
                        (Unpack

@@ -1,29 +1,37 @@
 with "../config/model_runner_config.gpr";
-with "../framework/model_runner_framework.gpr";
+with "../build/model_runner_build.gpr";
+with "../build/model_runner_sources.gpr";
+with "../core/model_runner_core.gpr";
 
 project Model_Runner_Inference is
+   Arch_Dir := "../src/platform/non_x86";
+   case Model_Runner_Config.Alire_Host_Arch is
+      when "x86_64" => Arch_Dir := "../src/platform/x86_64";
+      when others => null;
+   end case;
+
    case Model_Runner_Config.Alire_Host_OS is
       when "windows" =>
          for Source_Dirs use
-           ("../src/library", "../src/platform/windows");
+           ("../src/library", "../src/platform/windows", Arch_Dir);
       when "linux" =>
          for Source_Dirs use
            ("../src/library", "../src/platform/posix",
-            "../src/platform/linux");
+            "../src/platform/linux", Arch_Dir);
       when "macos" =>
          for Source_Dirs use
            ("../src/library", "../src/platform/posix",
-            "../src/platform/macos");
+            "../src/platform/macos", Arch_Dir);
       when others =>
          for Source_Dirs use
-           ("../src/library", "../src/platform/unsupported");
+           ("../src/library", "../src/platform/unsupported", Arch_Dir);
    end case;
 
-   --  The task framework owns these units in its own project.  Excluding its
-   --  explicit source closure lets an embedding import both projects without
-   --  assigning Model_Runner or a Framework child to two project views.
-   for Excluded_Source_List_File use
-     "../framework/model_runner_framework_sources.txt";
+   --  The neutral core owns Model_Runner and the shared error/text units.
+   --  This positive closure owns only inference and its implementation;
+   --  sharing src/library must not make a no-main library build every CLI,
+   --  agent, Code Health, and task-framework unit in the repository.
+   for Source_Files use Model_Runner_Sources.Inference_Sources;
 
    for Object_Dir use
      "obj/" & Model_Runner_Config.Build_Profile;
@@ -32,42 +40,31 @@ project Model_Runner_Inference is
 
    package Compiler is
       for Default_Switches ("Ada") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120");
+        Model_Runner_Build.Common_Ada_Switches;
 
       --  Keep the engine's deliberately multi-versioned instantiations on
       --  the same targets as the root project. Runtime feature checks guard
       --  every call into these units.
       for Switches ("model_runner-platform-device-products.adb") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120", "-fno-var-tracking-assignments");
+        Model_Runner_Build.Large_Unit_Switches;
+
+      for Switches ("model_runner-platform-device-products-open.adb") use
+        Model_Runner_Build.Large_Unit_Switches;
+
+      for Switches ("model_runner-platform-device-products-run.adb") use
+        Model_Runner_Build.Large_Unit_Switches;
 
       for Switches ("model_runner-quantization-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120", "-march=x86-64-v3", "-ffp-contract=off");
-
-      for Switches ("model_runner-vision-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120", "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
 
       for Switches ("model_runner-delta_rule-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120", "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
 
       for Switches ("model_runner-quantization-integers-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120", "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
 
       for Switches ("model_runner-quantization-integers-deep.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
-           "-fstack-usage", "-gnatyM120", "-march=x86-64-v4", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V4_Switches;
    end Compiler;
 
    package Binder is

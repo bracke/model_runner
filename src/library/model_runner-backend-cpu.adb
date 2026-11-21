@@ -11,6 +11,7 @@ with Model_Runner.Delta_Rule;
 with Model_Runner.Float_Panels;
 with Model_Runner.Platform;
 with Model_Runner.Quantization;
+with Model_Runner.Race_Points;
 
 package body Model_Runner.Backend.CPU is
 
@@ -178,6 +179,8 @@ package body Model_Runner.Backend.CPU is
       --  sees the job, or the poster sees a worker to wake.
       if Waking.Ticket = Mine and then not Closing then
          Waking.Sleeping (Position) := 1;
+         Model_Runner.Race_Points.Here
+           (Model_Runner.Race_Points.CPU_Worker_Pre_Sleep);
 
          if Waking.Ticket = Mine then
             Ada.Synchronous_Task_Control.Suspend_Until_True
@@ -1340,7 +1343,7 @@ package body Model_Runner.Backend.CPU is
 
    procedure Open (Item : in out Pool) is
    begin
-      if Item.Started then
+      if Item.State /= Fresh then
          return;
       end if;
 
@@ -1349,7 +1352,7 @@ package body Model_Runner.Backend.CPU is
            (Index, Item.Control'Unchecked_Access,
             Item.Waking'Unchecked_Access);
       end loop;
-      Item.Started := True;
+      Item.State := Opened;
    end Open;
 
    --------------
@@ -1372,7 +1375,7 @@ package body Model_Runner.Backend.CPU is
    -------------
 
    function Is_Open (Item : Pool) return Boolean
-   is (Item.Started and then Item.Control.Accepting);
+   is (Item.State = Opened and then Item.Control.Accepting);
 
    -----------
    -- Close --
@@ -1406,6 +1409,25 @@ package body Model_Runner.Backend.CPU is
 
    procedure Close (Item : in out Pool) is
    begin
+      --  Close is also called by controlled finalization.  A caller that
+      --  closed explicitly has already joined and finalized these task
+      --  objects; asking 'Terminated of them again is not a second join.
+      if Item.State = Closed then
+         Free_Packed (Item);
+         return;
+      end if;
+
+      if Item.State = Fresh then
+         Free_Packed (Item);
+         Item.State := Closed;
+         return;
+      end if;
+
+      --  Closing may be entered again if a cleanup exception interrupted an
+      --  earlier attempt.  It never means that the worker storage is safe to
+      --  free; only the completed join below establishes Closed.
+      Item.State := Closing;
+
       Item.Waking.Hold := 0;
       Item.Control.Shut_Down;
 
@@ -1413,26 +1435,32 @@ package body Model_Runner.Backend.CPU is
       --  every gate: a worker asleep on one is waiting for a job that will
       --  never come, and the flag is what tells it so when it wakes.
       Item.Waking.Shut := 1;
+
+      --  Publish a new ticket as well as opening the sleeping workers'
+      --  gates.  A worker may be between its last gate wake and the next
+      --  Watch call; without a changed ticket it can consume the gate's
+      --  one wake while leaving that call still looking at an old, idle
+      --  generation.  The shutdown ticket makes every spin and every
+      --  pre-sleep recheck observe a change and return to the loop, where
+      --  Shut ends the task.
+      AC.Increment (Item.Waking.Ticket);
       for Index in 1 .. Item.Workers loop
          Ada.Synchronous_Task_Control.Set_True (Item.Waking.Gate (Index));
       end loop;
+      Model_Runner.Race_Points.Here
+        (Model_Runner.Race_Points.CPU_Shutdown_Published);
 
       --  Most pools live in a declaring frame, whose master waits for the
       --  worker tasks.  An embedded inference session owns its pool through
       --  an access value, however, so Close must also be a join point before
       --  that storage can be reclaimed or reused by another pool.
-      if Item.Started then
-         for Index in 1 .. Item.Workers loop
-            while not Item.Team (Index)'Terminated loop
-               delay 0.0;
-            end loop;
+      for Index in 1 .. Item.Workers loop
+         while not Item.Team (Index)'Terminated loop
+            delay 0.0;
          end loop;
-      end if;
-
+      end loop;
       Free_Packed (Item);
-   exception
-      when others =>
-         null;
+      Item.State := Closed;
    end Close;
 
    --------------

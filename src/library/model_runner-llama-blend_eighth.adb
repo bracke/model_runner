@@ -48,6 +48,26 @@ procedure Blend_Eighth
    --  that catches a wrap left in place.
    pragma Suppress (Overflow_Check);
 begin
+   if Held = Transformed_Fourth then
+      declare
+         Rotated : Real_Array (Query'Range);
+         Valid   : Boolean;
+      begin
+         Q4T.Rotate_Key (Query, Rotated, Valid);
+         if not Valid then
+            Ok := False;
+            return;
+         end if;
+         Blend_Eighth
+           (Fourth, V_Held, Rotated, Keys, Values, Key_Scales, Val_Scales,
+            K_Base, V_Base, Rows, KV_Width, V_Width, Heads, Head_Size,
+            Value_Size, Group_Size, First, Last, Scale, Cap, Max_Bias,
+            Query_At, Sinks, From_Head, To_Head, Score_Room, Scores,
+            Target, Ok);
+         return;
+      end;
+   end if;
+
    Ok := True;
 
    for Head in From_Head .. To_Head loop

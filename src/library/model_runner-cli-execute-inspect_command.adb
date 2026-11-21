@@ -364,13 +364,17 @@ package body Model_Runner.CLI.Execute.Inspect_Command is
             declare
                Plan   : Model_Runner.Memory.Session_Plan;
                Detail2 : E.Error_Info;
+               Cache : constant L.Cache_Precision :=
+                 Unasked_Cache
+                   (T.To_String (Item.Model_Path), Screen, Item.Cache,
+                    Item.Cache_Asked);
             begin
                --  In the storage the caller named, so that what a session
                --  would take can be asked of each of them rather than only
                --  of the one this defaults to. A storage offered for what it
                --  saves should be able to say what it saves.
                L.Plan_For (Settings, Item.Context_Size, Plan, Detail2,
-                           Cache => Item.Cache, Values => Item.Values);
+                           Cache => Cache, Values => Item.Values);
                Pres.Put_Heading (Screen, "cli.inspect.heading.memory", Pres.Answer, Gap => True);
                Pres.Put_Field
                  (Screen, "cli.inspect.label.model_bytes",

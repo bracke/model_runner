@@ -17,6 +17,7 @@ with Model_Runner.Sampling;
 with Model_Runner.Text;
 
 private with Model_Runner.Grammar.Rooms;
+private with Model_Runner.Backend.Device;
 
 --  Bounded, schema-constrained inference over one local GGUF model.
 --
@@ -58,6 +59,7 @@ package Model_Runner.Inference is
       Device_Share_Host : Boolean := False;
       Device_Index   : Positive := 1;
       Device_Patience : Duration := 60.0;
+      Device_Tuning  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Cancel         : Model_Runner.Cancellation.Token_Reference := null;
       Observer       : Model_Runner.Progress.Observer_Reference := null;
       Model_Bounds   : Model_Runner.Limits.Model_Limits :=
@@ -82,6 +84,8 @@ package Model_Runner.Inference is
    --  @field Device_Share_Host Read weights from host memory on the device.
    --  @field Device_Index One-based device selected for a device backend.
    --  @field Device_Patience Maximum duration to wait for the device.
+   --  @field Device_Tuning Empty loads an exact cached profile, "none"
+   --    disables tuning, and another value requires that exact profile path.
    --  @field Cancel Cooperative cancellation for loading and preparation.
    --  @field Observer Semantic model-loading progress receiver, or null.
    --  @field Model_Bounds Limits applied while reading and preparing GGUF.
@@ -197,6 +201,17 @@ package Model_Runner.Inference is
    --  @param Item Session to close.
    procedure Close (Item : in out Session);
 
+   --  Release every owned resource and report the first cleanup failure.
+   --  Cleanup continues after a failure so one faulty component does not
+   --  strand unrelated resources.  The status-bearing form is preferred at
+   --  operational boundaries; the parameterless form raises Program_Error
+   --  when this form reports an error.
+   --  @param Item Session to close.
+   --  @param Status Success or the first cleanup failure.
+   procedure Close
+     (Item   : in out Session;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Return whether a model and generation session are ready.
    --  @param Item Session to inspect.
    --  @return True after successful Open and before Close.
@@ -266,6 +281,7 @@ private
       Canonical_Path : UString;
       Opened         : Boolean := False;
       Device_Owned   : Boolean := False;
+      Device_Lease   : Model_Runner.Backend.Device.Exclusive_Lease;
    end record;
 
    overriding procedure Finalize (Item : in out Session);

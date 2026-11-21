@@ -1,9 +1,12 @@
 with "config/model_runner_framework_config.gpr";
+with "../core/model_runner_core.gpr";
+with "../build/model_runner_sources.gpr";
+with "hostkit.gpr";
 
 project Model_Runner_Framework is
    for Languages use ("Ada");
    for Source_Dirs use ("../src/library", "config");
-   for Source_List_File use "model_runner_framework_sources.txt";
+   for Source_Files use Model_Runner_Sources.Framework_Sources;
    for Object_Dir use "obj/" & Model_Runner_Framework_Config.Build_Profile;
    for Create_Missing_Dirs use "True";
 

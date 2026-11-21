@@ -1046,8 +1046,12 @@ package Model_Runner.Llama is
    --  quantization: independently produced caches can name the format and
    --  every value has the same interpretation.  It is appended so snapshot
    --  precision codes written by earlier versions retain their meaning.
+   --  Transformed_Fourth appends q4t keys: a
+   --  fixed orthonormal transform followed by Fourth's byte/scale body.
+   --  Its values remain ordinary Fourth when Same_As_Keys is requested.
+   --  Appending it likewise leaves every older snapshot code unchanged.
    type Cache_Precision is
-     (Exact, Halved, Eighth, Fourth, Float_Eighth);
+     (Exact, Halved, Eighth, Fourth, Float_Eighth, Transformed_Fourth);
 
    --  How the values are stored where a caller asks for something other
    --  than the keys' storage: the keys', or one of the two packed storages.
@@ -1055,7 +1059,9 @@ package Model_Runner.Llama is
    --  coarser one.
    type Value_Precision is (Same_As_Keys, Value_Eighth, Value_Fourth);
 
-   --  What the values' storage is beside the keys'.
+   --  What the values' storage is beside the keys'. Same_As_Keys is
+   --  ordinary Fourth beside Transformed_Fourth: q4t is asymmetric by
+   --  design and transforms keys only.
    --
    --  @param Cache The keys' storage.
    --  @param Values The values' choice.
@@ -1063,7 +1069,8 @@ package Model_Runner.Llama is
    function Values_Held
      (Cache : Cache_Precision; Values : Value_Precision) return Cache_Precision
    is (case Values is
-         when Same_As_Keys => Cache,
+         when Same_As_Keys =>
+           (if Cache = Transformed_Fourth then Fourth else Cache),
          when Value_Eighth => Eighth,
          when Value_Fourth => Fourth);
 
@@ -1076,7 +1083,18 @@ package Model_Runner.Llama is
    function Stores_Pair
      (Cache : Cache_Precision; Values : Value_Precision) return Boolean
    is (Values = Same_As_Keys
-       or else Cache in Eighth | Fourth | Float_Eighth);
+       or else Cache in Eighth | Fourth | Float_Eighth | Transformed_Fourth);
+
+   --  Whether a model's layer geometry can use this key-cache storage.
+   --  Most storages accept every supported configuration. Q4T additionally
+   --  requires each key head to contain whole transform groups.
+   --
+   --  @param Settings The model configuration to inspect.
+   --  @param Cache Proposed key-cache storage.
+   --  @return True when Plan/Open can represent the pairing.
+   function Cache_Compatible
+     (Settings : Configuration;
+      Cache    : Cache_Precision) return Boolean;
 
    --  Whether a session keeps its values in its keys' rows: a latent read
    --  absorbed (Configuration.Latent_Attention), whose value is its key
@@ -1138,7 +1156,8 @@ package Model_Runner.Llama is
          when Halved => "f16",
          when Eighth => "q8",
          when Fourth => "q4",
-         when Float_Eighth => "f8_e4m3");
+         when Float_Eighth => "f8_e4m3",
+         when Transformed_Fourth => "q4t");
 
    --  How a matrix product multiplies.
    --

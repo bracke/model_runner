@@ -26,7 +26,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 152) of Registry_Row :=
+   Registry : constant array (1 .. 153) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -283,6 +283,9 @@ package body Model_Runner.CLI.Options is
       (Text ("--device"),
        [Command_Run | Command_Embed | Command_Image | Command_Transcribe => True, others => False],
        Text ("device")),
+      (Text ("--device-tuning"),
+       [Command_Run | Command_Embed | Command_Image | Command_Transcribe => True, others => False],
+       Text ("device_tuning")),
       (Text ("--mmap"),
        [Command_Run | Command_Embed => True, others => False], Text ("mmap")),
       (Text ("--no-mmap"), [Command_Run | Command_Embed => True, others => False], Text ("no_mmap")),
@@ -962,7 +965,7 @@ package body Model_Runner.CLI.Options is
          Flag_Mirostat, Flag_Mirostat_Tau, Flag_Mirostat_Eta,
          Flag_Seed, Flag_Memory, Flag_Device_Memory, Flag_Expert_Cache,
          Flag_Device_Patience,
-         Flag_Device_Index,
+         Flag_Device_Index, Flag_Device_Tuning,
          Flag_Logprobs,
          Flag_Picture_Out, Flag_Picture_Size, Flag_Picture_Steps, Flag_Text_Encoder, Flag_VAE, Flag_Turbo,
          Flag_Negative, Flag_Guidance, Flag_Picture_Count, Flag_Init_Image, Flag_Strength,
@@ -1769,6 +1772,7 @@ package body Model_Runner.CLI.Options is
                              = T.To_String (Asked)
                            then
                               Result.Cache := Mode;
+                              Result.Cache_Asked := True;
                               Found := True;
                            end if;
                         end loop;
@@ -1776,6 +1780,8 @@ package body Model_Runner.CLI.Options is
                         if T.To_String (Asked) = Fit_Name
                           and then Result.Kind = Command_Run
                         then
+                           Result.Cache := Model_Runner.Llama.Halved;
+                           Result.Cache_Asked := True;
                            Result.Cache_Fit := True;
                            Found := True;
                         end if;
@@ -3108,6 +3114,25 @@ package body Model_Runner.CLI.Options is
                         Result.Device_Index_Set := True;
                         Free_Text (Held);
                      end;
+
+                  elsif Name = "--device-tuning" then
+                     Mark (Flag_Device_Tuning, Name, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     Take_Value (Name, Value_Present, Value_First, Argument,
+                                 Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Held.all'Length = 0 then
+                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                        Free_Text (Held);
+                        return;
+                     end if;
+                     Result.Device_Tuning := Kept (Name, Held.all);
+                     Result.Device_Tuning_Set := True;
+                     Free_Text (Held);
 
                   elsif Name = "--device-patience" then
                      declare

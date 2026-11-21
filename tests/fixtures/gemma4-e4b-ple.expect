@@ -1,0 +1,9 @@
+# Recorded from the llama.cpp completion runtime; see docs/reference-runtime.md.
+# The model and extracted PLE sidecar are not committed. Their provenance and
+# exact digests are recorded in docs/fixture-provenance.md.
+
+runtime llama.cpp b12017-5047748f1
+model gemma-4-E4B_q4_0-it.gguf
+prompt The capital of France is
+tokens 2 818 5279 529 7001 563
+greedy_text \sParis

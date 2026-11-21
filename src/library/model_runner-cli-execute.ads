@@ -71,10 +71,27 @@ package Model_Runner.CLI.Execute is
       Screen        : in out Model_Runner.Presentation.Console;
       Context_Size  : Natural := 0;
       Cache         : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Halved;
+        Model_Runner.Llama.Transformed_Fourth;
       Paged         : Boolean := True;
       Draft_Path    : String := "")
       return Model_Runner.Backend.Backend_Kind;
+
+   --  The cache a run takes where none is named: q4t where its transform
+   --  groups preserve every attention-head boundary, f16 otherwise. Named
+   --  is strict and returns Cache unchanged, as a command that named it is.
+   --
+   --  @param Model_Path The model, as run would be given it.
+   --  @param Screen The console run would use while resolving its choices.
+   --  @param Cache The candidate cache.
+   --  @param Named Whether the candidate was explicitly named.
+   --  @return The cache the command proceeds with.
+   function Unasked_Cache
+     (Model_Path : String;
+      Screen     : in out Model_Runner.Presentation.Console;
+      Cache      : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Transformed_Fourth;
+      Named      : Boolean := False)
+      return Model_Runner.Llama.Cache_Precision;
 
    --  The room on the device run leaves beside a model for the draft it was
    --  asked to draft with: the draft's file, which is about what its

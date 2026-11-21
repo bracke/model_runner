@@ -1,24 +1,35 @@
 with "config/model_runner_config.gpr";
+with "build/model_runner_build.gpr";
 
 project Model_Runner is
+   --  Only x86-64 carries the CPUID/XGETBV body.  Other hosts keep the same
+   --  public feature queries, answered conservatively by a portable body.
+   Arch_Dir := "src/platform/non_x86";
+   case Model_Runner_Config.Alire_Host_Arch is
+      when "x86_64" => Arch_Dir := "src/platform/x86_64";
+      when others => null;
+   end case;
+
    --  One body per host for the parts that exist only because operating
    --  systems differ, selected the way hostkit selects its own. Everything
    --  else is portable Ada and lives in src/library.
    case Model_Runner_Config.Alire_Host_OS is
       when "windows" =>
          for Source_Dirs use
-           ("src/library", "src/main", "src/platform/windows", "config");
+           ("src/library", "src/main", "src/platform/windows", Arch_Dir,
+            "config");
       when "linux" =>
          for Source_Dirs use
            ("src/library", "src/main", "src/platform/posix",
-            "src/platform/linux", "config");
+            "src/platform/linux", Arch_Dir, "config");
       when "macos" =>
          for Source_Dirs use
            ("src/library", "src/main", "src/platform/posix",
-            "src/platform/macos", "config");
+            "src/platform/macos", Arch_Dir, "config");
       when others =>
          for Source_Dirs use
-           ("src/library", "src/main", "src/platform/unsupported", "config");
+           ("src/library", "src/main", "src/platform/unsupported", Arch_Dir,
+            "config");
    end case;
    for Object_Dir use "obj/" & Model_Runner_Config.Build_Profile;
    for Exec_Dir use "bin";
@@ -41,11 +52,7 @@ project Model_Runner is
       --  level: every profile compiled at -O0, so measurements comparing
       --  profiles compared nothing.
       for Default_Switches ("Ada") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage",
-           --  This project documents a 120 column limit; the
-           --  generated profile would otherwise impose 79.
-           "-gnatyM120");
+        Model_Runner_Build.Common_Ada_Switches;
 
       --  One unit compiled twice. Model_Runner.Quantization.Wide is an
       --  instantiation of the same generic as .Plain and differs from it
@@ -72,14 +79,16 @@ project Model_Runner is
       --  check takes for a warning. Asked without at the start, it says
       --  nothing; the code is the same.
       for Switches ("model_runner-platform-device-products.adb") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
-           "-fno-var-tracking-assignments");
+        Model_Runner_Build.Large_Unit_Switches;
+
+      for Switches ("model_runner-platform-device-products-open.adb") use
+        Model_Runner_Build.Large_Unit_Switches;
+
+      for Switches ("model_runner-platform-device-products-run.adb") use
+        Model_Runner_Build.Large_Unit_Switches;
 
       for Switches ("model_runner-quantization-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
-           "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
 
 
 
@@ -104,27 +113,19 @@ project Model_Runner is
       --  for the reason the others give: the two compilations answer bit
       --  for bit.
       for Switches ("model_runner-vision-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
-           "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
       for Switches ("model_runner-delta_rule-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
-           "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
 
       for Switches ("model_runner-quantization-integers-wide.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
-           "-march=x86-64-v3", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V3_Switches;
 
       --  And the third, for the set that carries the byte dot product. The
       --  whole set rather than the one instruction, because a processor
       --  offering the instruction offers the rest and the host question
       --  asks for all of it before this is ever entered.
       for Switches ("model_runner-quantization-integers-deep.ads") use
-        Model_Runner_Config.Ada_Compiler_Switches
-        & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g", "-fstack-usage", "-gnatyM120",
-           "-march=x86-64-v4", "-ffp-contract=off");
+        Model_Runner_Build.X86_64_V4_Switches;
    end Compiler;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the

@@ -431,7 +431,7 @@ is
          return;
       end if;
 
-      if Item.Held in Eighth | Fourth | Float_Eighth then
+      if Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth then
          Blend_Eighth
            (Item.Held, Item.Held_Values, Asked, Item.Byte_Keys.all,
             Item.Byte_Values.all,
@@ -1480,7 +1480,7 @@ begin
                   null;
                elsif Chaining then
                   Deferred (Index) := True;
-               elsif Item.Held in Eighth | Fourth | Float_Eighth then
+               elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth then
                   Pack_Row
                     (Item.Key_Row.all (0 .. KV_Width - 1),
                      Item.Byte_Keys.all, Slot, KV_Width,
@@ -1724,7 +1724,7 @@ begin
             --  wrote this position's keys and values already.
             if not Own_Cache then
                null;
-            elsif Item.Held in Eighth | Fourth | Float_Eighth then
+            elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth then
                Pack_Row
                  (Item.Key_Row.all (0 .. KV_Width - 1), Item.Byte_Keys.all,
                   Slot, KV_Width, Item.Key_Scales.all, Item.Held);
@@ -2243,7 +2243,9 @@ begin
                   Read_Packed_Pages_Layer
                     (Item, Natural (Index), KV_Width, V_Width,
                      Cell_Of (Item, Natural (Index), Reserved), 1, Read);
-               elsif Item.Held in Eighth | Fourth | Float_Eighth then
+               elsif Item.Held in Eighth | Fourth | Float_Eighth
+                                     | Transformed_Fourth
+               then
                   Read_Back_Packed
                     (Item, At_Key, At_Val, 1, KV_Width, V_Width, Read);
                else

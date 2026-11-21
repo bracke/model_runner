@@ -686,26 +686,31 @@ agreement with llama.cpp. The runner reports these counters whenever
 `--expert-cache` is named so an accepted but dormant option cannot be mistaken
 for an exercised cache.
 
-No compatible external PLE/engram or numbered split artifact was available in
-this validation environment. A separately distributed MTP block is not the
-same contract and was not presented as auxiliary-shard evidence; that path
-remains covered by the deterministic fixture suite until a matching real
-artifact and recording are supplied.
-
-When a compatible pair is available, the opt-in differential check is:
+The PLE differential uses Google's 5.15 GB Gemma 4 E4B QAT Q4_0 artifact as
+its source. The backbone supplied to the run must have
+`per_layer_token_embd.weight` removed, while the exact tensor payload is held
+in the one-tensor 2.31 GB GGUF sidecar. llama.cpp b12017 independently
+tokenized `The capital of France is` as `2 818 5279 529 7001 563` and greedily
+produced ` Paris`; the committed `fixtures/gemma4-e4b-ple.expect` records that
+result. The discriminating native run is:
 
 ```
 ./bin/tests external-model \
-  --model /path/to/backbone.gguf \
-  --ple /path/to/compatible-ple-or-engram.gguf \
-  --expect /path/to/reference.expect \
-  --backend cpu --max-tokens 2 --threads 4
+  --model /path/to/gemma-4-E4B_q4_0-it-without-ple.gguf \
+  --ple /path/to/gemma-4-E4B-ple.gguf \
+  --require-external-ple \
+  --expect fixtures/gemma4-e4b-ple.expect \
+  --backend cpu --max-tokens 1 --threads 1
 ```
 
-The command must report `external-model: ok`; a run without `--expect` is only
-self-consistency evidence and is not recorded as a differential result. This
-keeps the test reproducible without treating an unrelated auxiliary artifact
-as compatible evidence.
+The explicit requirement first parses the backbone alone and fails if it still
+contains the PLE tensor. A successful run therefore cannot obtain the table
+from the backbone while ignoring `--ple`. One worker deliberately omits the orthogonal
+worker-count-stability pass and keeps this multi-gigabyte opt-in comparison to
+three evaluations; the mandatory synthetic suite checks thread stability.
+A run without `--expect` is only self-consistency evidence and is not recorded
+as a differential result. Exact hashes and artifact provenance are in
+`docs/fixture-provenance.md`.
 
 ## Why identifiers rather than text
 

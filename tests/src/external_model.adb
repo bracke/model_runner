@@ -25,6 +25,8 @@ with Model_Runner.Numerics;
 with Model_Runner.Output;
 with Model_Runner.Sampling;
 with Model_Runner.Stops;
+
+with External_PLE_Evidence;
 with Model_Runner.Tokenizer;
 with Model_Runner.UTF8;
 
@@ -36,6 +38,7 @@ package body External_Model is
    use type Model_Runner.Generation.Completion_Reason;
    use type Model_Runner.Numerics.Element_Count;
    use type Interfaces.Unsigned_64;
+   use type External_PLE_Evidence.Backbone_State;
 
    package CPU renames Model_Runner.Backend.CPU;
    package Containers renames Model_Runner.GGUF.Containers;
@@ -128,6 +131,7 @@ package body External_Model is
       Draft_Tokens : Positive := 4;
       Repack  : L.Repack_Mode := L.No_Repack;
       Auxiliary : T.Bounded_List := [1 .. 0 => <>];
+      Require_External_PLE : Boolean := False;
       Cache : L.Cache_Precision := L.Exact;
       Expert_Cache : Interfaces.Unsigned_64 := 0;
       Panel_Cache : String := "";
@@ -421,6 +425,30 @@ package body External_Model is
       --  The device is opened before the model loads, because preparation
       --  asks the backend what it can read and a device that is not there
       --  answers for nothing.
+      if Require_External_PLE then
+         declare
+            Backbone_State  : External_PLE_Evidence.Backbone_State;
+            Backbone_Status : E.Error_Info;
+         begin
+            External_PLE_Evidence.Check
+              (Path, Backbone_State, Backbone_Status);
+            if E.Is_Error (Backbone_Status) then
+               Give_Up
+                 (Rejected,
+                  "backbone rejected before external-PLE check: "
+                  & E.Diagnostic_Code (Backbone_Status.Code));
+               return;
+            elsif Backbone_State /=
+                    External_PLE_Evidence.External_PLE_Required
+            then
+               Give_Up
+                 (Failed,
+                  "external-PLE evidence requires a backbone without the PLE tensor");
+               return;
+            end if;
+         end;
+      end if;
+
       if Backend = Model_Runner.Backend.Backend_Device then
          declare
             Ready : Boolean;

@@ -142,7 +142,9 @@ option always wins.
   in free memory and in one allocation; the panels are kept under
   `~/.cache/model_runner/panels` so the next load maps them. `--repack none`
   keeps the file's layout.
-- **How the context is stored.** Half precision (`--kv-cache f16`).
+- **How the context is stored.** Transformed four-bit keys and four-bit values
+  (`--kv-cache q4t`), with automatic `f16` fallback for a model whose head
+  width is not divisible by the transform's 32-element group.
 - **How long a reply may be.** In a conversation, no limit: a reply runs
   until the model ends it, Ctrl-C stops it, or the context is full, which is
   said. With a prompt, at most 4,096 tokens, or less where the context fills
@@ -1079,20 +1081,20 @@ recording one window of thirty seconds, which the processor hears sooner
 than the device can be opened; in a session it is borrowed while the conversation's model, there
 already, waits for the line -- never while that model runs, and not at
 all where the device has no room beside it. From the command line, its
-file read before: 45 s of Danish is heard in 4.2 s by small f16 on the
-processor (1.2 GB resident) and 2.2 s with the device (0.5 GB), 1.8 s by
-small Q8_0 with the device; 11 s of English in 0.29 s by tiny on the
-processor and 0.32 s with the device (opening it is 0.065 s of that), 45 s
-of Danish by tiny in 0.93 s and 0.76 s; 11 s of English in 0.64
-s by small (whisper.cpp 0.68) and 1.42 s by medium (whisper.cpp 1.78).
-Warm, a token of medium is 15.5 ms on the device, its products at the
-memory's rate. A window the reference decodes
-again draws its five candidates together, as the reference does: 5 s of
-noise tried at every temperature takes 22 s on the processor where it
+file read before: 45 s of Danish is heard in 4.0 s by small f16 on the
+processor (1.2 GB resident) and 1.9 s with the device (0.5 GB), 1.5 s by
+small Q8_0 with the device; 11 s of English in 0.18 s by tiny on the
+processor and 0.12 s with the device (opening it is 0.033 s more), 45 s
+of Danish by tiny in 0.83 s and 0.56 s; on the device, 11 s of English in
+0.38 s by small (whisper.cpp 0.68) and 1.04 s by medium (whisper.cpp 1.78).
+Warm, a token of medium was 15.5 ms on the device in the 2026-11-03
+campaign, its products at the memory's rate. In that same campaign, a window the reference decodes
+again drew its five candidates together, as the reference does: 5 s of
+noise tried at every temperature took 22 s on the processor where it
 took 52, and 12.5 s with the device. A model read cold adds 0.15 s
 (tiny) to 0.7 s (small). `transcribe --speech-detect-from-window` reads
 the language off the window it decodes, as dictation does, rather than by
-an encode of its own: 11 s in 0.67 s rather than 0.85. While Whisper hears,
+an encode of its own: 11 s read 0.67 s rather than 0.85. While Whisper heard,
 an LLM beside it shares the memory bus: TinyLlama's generation fell from
 39 to 31 t/s on the processor and from 58 to 50 t/s on the device. Held
 but idle it costs nothing measured -- 57.22 t/s without it and 57.23 with
@@ -1264,11 +1266,11 @@ is the same at every worker count and with none; xoshiro256++ seeded per session
 | Conversation | Structured roles, bounded history, system-message replacement, turn rollback, and the tool calls a turn asked for held beside its text rather than inside it -- so the next prompt carries the call as that model's own template writes one, not as the model happened to spell it |
 | CLI | `run`, `embed`, `inspect`, `help`, `version`; typed command parsing separated from execution; end-of-options; repeated, conflicting and out-of-range option detection. `--prompt` is repeatable: several prompts are several sequences from one loaded model, each with its own context and its own statistics, and standard error says which is which so that standard output stays nothing but generated text. It is refused together with a saved or restored context, which names one conversation. `--tools` offers the model tools and the calls it writes back are read out of the reply and reported; `--assistant` and `--tool-result` put the earlier turns back, in the order they are written, which is how one run closes the loop another opened |
 | Interactive | Committed structured history, template rendering per turn, prefix verification against the cache, `/exit` `/reset` `/help` `/settings` `/stats` `/context` `/system [TEXT]` `/tools` `/tool TEXT` `/save PATH` `/load PATH` `/model [PATH]` `!COMMAND` `/tools [on|off]` `/undo` `/compact` `/plan [on|off]` `/jobs` `/paste` `/mcp` `!&COMMAND` `@FILE` and the user's own `/NAME` commands (`docs/settings-file.md`), `/system` removing the system message when no text follows it, `/tool` handing back what a tool answered as a turn of its own, `/save`/`/load` writing the conversation to a file and replacing it with one, and `/model` going on with another model -- the one named, or one chosen from the models on hand in the selector -- the old one let go, the new one's backend, context and drafting decided as a run's are, and the conversation carried into it, or back to the model before where the new one will not load. A conversation's model has the built-in tools -- reading, listing and searching files, writing and editing them, a shell, Python, SQL and the rest `run --agent` has -- where the context holds at least 4,096 tokens and no `--tools` of the caller's were named: each turn is the agent loop's, every call shown as it is made, one that only reads run unasked and any other asked in the selector first (this once, the tool for the session, no, or stop the turn); `/tools off` and `/tools on` take them away and give them back. `/plan` is plan mode: a call that would change something is refused unasked, and the model is asked to read and answer with a plan. `tools.allow` and `tools.deny` in the settings file name calls that run unasked and calls refused unasked (`shell(alr build*)`, `write_file(src/*)`). `mcp.NAME = COMMAND` in the settings file names a Model Context Protocol server whose tools the conversation offers as `mcp__NAME__TOOL`, each call asked about as a shell's is, and `/mcp` lists them. The model may hand a part of the work to a helper with `delegate`: a fresh context on a session of its own, opened for the turn, whose calls are shown and asked about as the conversation's are, and which reports back only its result. The model keeps a to-do list with the `todo` tool, shown after a turn that changed it. `hook.after-edit` and `hook.after-turn` in the settings file run a command of the user's after an edit or a turn, and `lsp` names a language server whose problems with a written or edited file are put after the tool's answer. Before a tool call writes or edits a file its old content is kept, a turn at a time, and `/undo` puts back what the last such turn changed -- again, the turn before it; what a shell command changed is not kept. `/compact` makes the oldest turns a summary when asked, the last two kept whole. `@PATH` in a message, with Tab completing the path, sends the file's text with it, up to 64 KiB, a binary file or a folder left as the words they are. A conversation follows the user's standing instructions: `AGENTS.md` in the settings folder and in the session's folder and every folder above it, the outermost first, up to 32 KiB, stand before its system message (and before `--system` or `/system`), and the session names the files it follows. Every conversation is kept as it goes -- a file of its own under the data home's `conversations` folder (`conversations-dir`, `MODEL_RUNNER_CONVERSATIONS`), the model it is spoken with noted beside it -- and `model_runner --continue` takes up the latest, `model_runner --resume` one chosen in the selector by when it was, its model and its first message; with no model named, the conversation's own runs. `!COMMAND` runs a command in the host's shell -- what it writes shown as it comes, a failing status said -- and the command with what it wrote, the first 16 KiB of it, goes before the next message, so the model can be asked about it. Enter sends; Shift-Enter, Alt-Enter or Ctrl-J breaks the line. Needs a terminal on both standard input and standard output, whether it is chosen because no prompt was given or asked for with `--interactive` |
-| Localization | Every application-authored string through `messages`; 228 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a complete Danish translation, and a generated pseudo-locale, with per-key inheritance for a locale that is not yet whole; locale precedence with an emergency path that cannot recurse |
+| Localization | Every application-authored string through `messages`; 229 diagnostic codes each with a catalog entry; every catalog key has a reader and every key the code names has an entry, checked both ways; English, a complete Danish translation, and a generated pseudo-locale, with per-key inheritance for a locale that is not yet whole; locale precedence with an emergency path that cannot recurse |
 | Cancellation | An interrupt requests a clean cancellation rather than killing the process; observed between parser sections, tensors, layers and tokens, so a cancelled run releases everything and commits no cache position. The parser, preparation, the single-token pass and the batched pass are each held by a test; generation's own two checks stop the work a batch or a token earlier than the pass below would, which no test of the outcome can distinguish |
 | Presentation | `terminal_styles` in the presentation layer only; styling asks whether the stream a line is going to is a terminal, so redirecting one stream and not the other never puts escape sequences in the file — which it did, once the inspection report moved to standard output and the colour decision stayed on standard error; severity always carried by a word as well as a colour; `--color always` colours whatever the destination is, `auto` colours only a stream that is a terminal and honours `NO_COLOR`, and `never` colours nothing; generated text never styled |
 | Backends | Three, selected with `--backend`. `cpu`: an Ada worker pool with a protected coordinator, reusable worker tasks, deterministic row partitioning, a single-job bounded queue, worker-failure propagation and clean shutdown; `--threads` selects the count and the result is bit-identical whatever it is -- share boundaries fall where the row tile does, for the reason `### The same answer at every worker count, which it was not` gives. `reference`: one row at a time on the calling task, no pool and no batching, the same logits and about twelve times as long -- see below for the measurement -- for asking a suspicious result again by different code. `device`: the products run on a compute device, reached through the host's Vulkan loader opened by name at the moment it is asked for, from a shader compiled into the binary. The shader decodes every one of the sixteen formats this program reads, from the bytes the file holds, and takes a batch of eight vectors per invocation, so no model needs repacking to reach a device and a prompt is one reading of the weights rather than one a token. A second shader computes a batch as a matrix product instead, through `VK_KHR_cooperative_matrix` where the device offers it -- 413.5 tokens a second on a prompt against 207.9, and a `Q5_K_M` file 1.368 s against 0.305 -- and every device without it runs what it ran before. It is compiled twice, once for the six formats a published model is usually made of and once for the nine others, because a pipeline pays for every branch compiled into it whether or not the branch is taken; between the two it decodes every format but binary32, which it refuses on purpose because its operand is half precision. The engine binds whichever of the two decodes the weights it was handed. Each matrix is uploaded once and stays on the device. Measured faster than the pool on this machine, at the same generated text. A machine with no device is told so rather than quietly given another backend |
-| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests perplexity`, `tests dump-states`, `tests tokenizer-cross`, `tests probe`, `tests approve-probe`, `tests fake-mcp`, `tests fake-lsp`, `tests agent-eval`, `tests agent-trial`, `tests knowledge-bench`, `tests quantize`, `tests imatrix`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests tokenize`, `tests cut`, `tests render`, `tests cross`, `tests records`, `tests see`, `tests image`, `tests whisper-convert`, `tests hear`, `tests speech-corpus`, `tests docs`, `tests shader`, `tests restamp`, `tests schema`, `tests session-command`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. The approve and fake-server commands are deterministic helpers for terminal, MCP and LSP integration tests. `tests <command>` with no command lists them with what each takes. `tests restamp WHY GROUP...` records the fingerprints of the named groups in `docs/measured-figures.txt` that a change moved without moving what they measure, with WHY written above each; a moved group not named is left stale for the check to fail on, unless `--all` says the reason holds for every one. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
+| Tooling | `tests test`, `tests check`, `tests conformance`, `tests fuzz`, `tests speed`, `tests perplexity`, `tests dump-states`, `tests tokenizer-cross`, `tests probe`, `tests approve-probe`, `tests fake-mcp`, `tests fake-lsp`, `tests agent-eval`, `tests agent-trial`, `tests knowledge-bench`, `tests quantize`, `tests imatrix`, `tests benchmark`, `tests external-model`, `tests fixture-likeness`, `tests slow`, `tests device-bench`, `tests device-tune`, `tests tokenize`, `tests cut`, `tests render`, `tests cross`, `tests records`, `tests see`, `tests image`, `tests whisper-convert`, `tests hear`, `tests speech-corpus`, `tests docs`, `tests shader`, `tests restamp`, `tests schema`, `tests session-command`, `tests fixtures`, `tests fixture-check`, `tests package`, `tests pristine` — all Ada, all in the tests crate, and the set is a registry the checklist holds the dispatch and this row against, because two hand-kept copies of it had already drifted apart. The approve and fake-server commands are deterministic helpers for terminal, MCP and LSP integration tests. `tests <command>` with no command lists them with what each takes. `tests restamp WHY GROUP...` records the fingerprints of the named groups in `docs/measured-figures.txt` that a change moved without moving what they measure, with WHY written above each; a moved group not named is left stale for the check to fail on, unless `--all` says the reason holds for every one. `tests check` is the gate: it runs the suite, the repository checks, the conformance comparison, the fixture check and a short fuzzing campaign, and fails when a test is written and registered by nothing or when the suite has shrunk. The fixture check moves every tensor of every architecture's fixture in turn and requires an answer to move with it -- a logit, or for the architecture that has no distribution to give, what the model made of every position: a tensor nothing reads makes every comparison over that fixture weaker than its count suggests, and one that was written twice made two correct readers disagree about every logit before anything here asked. Each architecture is built in every shape it can hold and five formats and read by four combinations of backend and evaluation path, which is what makes the question specific: a tensor only the batched path reads, or only the shader, is a different tensor from the one every path reads. A shape an architecture cannot hold is built anyway and required to refuse, because a skip nothing needs any more is a skip costing comparisons; and a reading an architecture has not got -- a model that attends both ways has no token at a time, and so no run on the backend that declines batching -- is counted rather than asked, because asking produced a refusal that read as a fault. It also reports what it moved quietly: a tensor whose logits answer by less than a comparison would call a disagreement is read, but a mistake of that size in it would pass the sweep unremarked, and that is the measure the sweep cannot take of itself. The public operations the program itself never calls are listed in `Library_Surface` with the reason for each, and the list is held in both directions: this is a library as well as a command, so the interface is wider than the command uses, and how much wider is a thing somebody chose rather than a thing that happened. The separate commands are for looking closer |
 | Conformance | An independent reference transformer in the tests crate recomputes the forward pass in a different arithmetic, with its own float decoding, its own full key/value history and expanded rather than mapped attention heads. It implements both architectures, each with its own rotary pairing and its own attention bias, so the two agree by arriving at the same numbers rather than by sharing the code that produces them. The engine agrees to within 1.3e-6 absolute on the fixtures, against tolerances of 1e-4 absolute and 1e-3 relative, and `tests check` runs the comparison rather than leaving it to be remembered |
 
 ## Building and testing
@@ -1416,6 +1418,8 @@ cd tests && ./bin/tests slow                # where the suite's time goes
 cd tests && ./bin/tests device-bench        # what an attention call costs,
                                            # and what one vector costs a
                                            # row product in each format
+cd tests && ./bin/tests device-tune --write # correctness-gated launch tuning;
+                                           # replay with --check PROFILE
 ```
 
 `fixture-likeness` asks the question the rest of the suite cannot. Everything
@@ -1885,9 +1889,12 @@ command reports it, because the command counts what a chat run adds and the
 tool counts what the figure describes. Every prompt length quoted here is the
 tool's count.
 
-The cached figures are `--kv-cache f16`, which stores what a session has
-committed as binary16 rather than binary32 -- the default since 2026-10-03,
-as it is llama.cpp's, with `--kv-cache f32` for the exact storage: half the
+The cached figures are explicitly `--kv-cache f16`, which stores what a
+session has committed as binary16 rather than binary32. It was the default
+from 2026-10-03 through 2026-11-19; commands reproducing these figures should
+keep naming it. The `tests speed` benchmark retains f16 when no cache is named
+so historical recipes continue to reproduce these tables; `run` and the other
+model commands default to q4t. `--kv-cache f32` selects exact storage. F16 takes half the
 memory for the context,
 and **0.0327** worst absolute on these fixtures against 2.2e-05 for the exact
 cache. That is measured with and without a sliding window; without one it is
@@ -1951,6 +1958,16 @@ same way, in binary64, and there it reads **0.029** worst absolute, held to
 rounding's edges, an element a level off where its share sits on a half.
 On TinyLlama the four storages answer the same first sentence and the
 nibble one parts from the other three in the second.
+
+`--kv-cache q4t` has the same bytes as Q4 but applies a fixed orthonormal
+transform to keys before quantization; values remain ordinary Q4. Across the
+completed eight-chunk, four-model quality sweep it lowers aggregate mean KL
+by **75.7%** from Q4 and raises average top-token agreement by **12.5
+percentage points**. Its device generation rate is level with Q4 at short and
+17K-token depths. It is therefore the default since 2026-11-20. A model whose
+attention-head width is not divisible by 32 automatically uses `f16` when no
+cache was named; explicitly naming `--kv-cache q4t` remains strict and reports
+that incompatibility.
 
 `--kv-values q8|q4` beside a packed `--kv-cache` stores the values in the
 other packed storage from the keys. Attention reads the two sides
@@ -2301,10 +2318,13 @@ No item is currently listed here.
 The processor backend includes hand-written SIMD kernels in native Ada through
 `System.Machine_Code`: x86-64-v3 variants use AVX2, FMA and F16C, and
 x86-64-v4 variants add AVX-512 VNNI byte products. Runtime dispatch selects a
-wide kernel only when the platform has positively identified the required host
-features; the portable scalar path remains the fallback. Equivalence tests run
-the scalar and vector implementations over the same inputs, including half,
-floating-point and quantized products.
+wide kernel only when CPUID identifies every feature in the complete inherited
+ISA level and XGETBV confirms that the operating system saves the required
+vector state. The same predicate is used on Linux, Windows and Intel macOS;
+synthetic feature-mask tests remove each required member in turn. The portable
+scalar path remains the fallback. Equivalence tests run the scalar and vector
+implementations over the same inputs, including half, floating-point and
+quantized products.
 
 There is no separately compiled C, C++ or assembly source in the repository.
 `src/shaders/row_product.comp` is GLSL because the graphics driver compiles the
@@ -2754,7 +2774,8 @@ qwen3.6-35b-a3b, 21 GB against 12.7, reads a prompt at 91.9 tokens a second
 split against 71.1 on the processor alone and generates at 15.1 against 13.9
 (streamed whole through the device it generated at 2.9). A model that is
 neither goes to the processor. `--show-stats` counts the split layers. Naming a
-device option (`--device-memory`, `--device`, `--device-patience`) says the
+device option (`--device-memory`, `--device`, `--device-patience`,
+`--device-tuning`) says the
 device is wanted and takes it; `--backend cpu` or `--backend device` still
 decides outright.
 
@@ -3309,6 +3330,16 @@ stops rather than recording over a buffer the device may still be reading.
 How often the wait asks whether you want to stop is not an option and stays
 at twenty milliseconds; that is a responsiveness number rather than a
 hardware one.
+
+Launch tuning is an exact, durable optimization hint. An ordinary device open
+loads the matching profile produced by `tests device-tune --write`, keyed by
+the device and driver identity, affected shader digests, tuning schema and
+production-program build (the separate tests executable stamps the sibling
+`bin/model_runner`, not itself). It reports the path when one is applied. A missing, stale or
+corrupt automatic profile leaves the compiled launch constants unchanged.
+`--device-tuning none` disables lookup; `--device-tuning PATH` requires that
+specific profile and reports an error instead of silently falling back when it
+does not match. No ordinary model load runs a tuning benchmark.
 
 That is a memory decision and never a speed one, which is the opposite of
 what it was written expecting. The same model and prompt, three ways:
@@ -4351,9 +4382,10 @@ prompt cannot go below` measures the whole surround at 0.502 s for a
 1419-token prompt, and that prompt makes about 1710 product calls: 0.29 ms
 apiece is 0.50 s. The two measurements meet. **What a bigger batch would do
 about it is nothing**, and that was checked rather than assumed --
-`--batch-size` at 64, 128, 256, 512 and 1024 reads 1.729, 1.065, 1.047, 1.073
-and 1.061 seconds, so the default is within two per cent of the best and half
-the batch is much worse. The
+`--batch-size` at 64, 128, 256, 512 and 1024 reads 0.921, 0.775, 0.688, 0.668
+and 0.669 seconds, so the default of 512 is the best reading, 1024 is level,
+256 is three per cent slower, and only the smaller batches give substantial
+ground back. The
 floor is host loops over *positions*, which a batch does not divide.
 
 ### One core, and seven idle
@@ -7991,12 +8023,13 @@ somebody else's tool runs, not what it says.
 
 | | prompt, 110 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **642.2 t/s** | 40.5 t/s |
-| llama.cpp, processor | 390.4 t/s | 40.3 t/s |
-| model_runner, device | **1834.5 t/s** | **57.7 t/s** |
-| llama.cpp, device | 1628.0 t/s | 56.1 t/s |
+| model_runner, processor | **624.3 t/s** | 39.4 t/s |
+| llama.cpp, processor | 371.6 t/s | 39.7 t/s |
+| model_runner, device | **1858.8 t/s** | **57.8 t/s** |
+| llama.cpp, device | 1647.1 t/s | 57.2 t/s |
 
-This program's device row taken again on 2026-10-31, once a short span's
+Taken again on 2026-11-20, both sides through the same load gate; the rows
+retain the same standing. This program's device row taken again on 2026-10-31, once a short span's
 attention went to four subgroups a block (1775.1 and 57.7 before); the
 other rows are the sitting below. Taken again on the afternoon of 2026-10-30, the same way; the morning's
 sitting read 611.8, 366.9, 1765.8 and 1644.6 on the prompt and 39.5, 39.8,
@@ -8063,12 +8096,13 @@ every change in this section is actually judged on:
 
 | | prompt, 1419 tokens | generating, 64 tokens |
 | --- | ---: | ---: |
-| model_runner, processor | **473.0 t/s** | 40.5 t/s |
-| llama.cpp, processor | 301.4 t/s | 40.3 t/s |
-| model_runner, device | **2084.8 t/s** | **57.7 t/s** |
-| llama.cpp, device | 1797.7 t/s | 56.1 t/s |
+| model_runner, processor | **428.8 t/s** | 39.4 t/s |
+| llama.cpp, processor | 290.0 t/s | 39.7 t/s |
+| model_runner, device | **2171.7 t/s** | **57.8 t/s** |
+| llama.cpp, device | 1831.5 t/s | 57.2 t/s |
 
-(This program's device prompt taken again on 2026-10-31 at a load of 1.3,
+(Taken again on 2026-11-20 in the same sitting as the short table. This
+program's device prompt taken again on 2026-10-31 at a load of 1.3,
 after the short span's attention went to four subgroups a block; 2030.7
 before. The afternoon of 2026-10-30, as above; the device's prompt the mean of two
 quieter readings later in the sitting, 2005.2 and 2056.2 -- 1907.3 at a load
@@ -8082,12 +8116,11 @@ against 0.770 for the tile before it alternated beside it in the same
 sitting. The rows of 110 tokens never reach that tile, and the processor's
 and llama.cpp's do not run it.
 
-**Where the two tables stand** (the afternoon of 2026-10-30): this program's
-processor reads a prompt 1.65 times llama.cpp's rate at 110 tokens and 1.57
-times at 1419, and generates level with it (40.5 after the prompt against
-40.3 from empty); its device reads a prompt 1.09 times llama.cpp's device at
-110 and 1.13 times at 1419, and generates 1.03 times as fast (57.7 against
-56.1). The paragraphs below are this section's
+**Where the two tables stand** (2026-11-20): this program's processor reads
+a prompt 1.68 times llama.cpp's rate at 110 tokens and 1.48 times at 1419,
+and generates level with it (39.4 after the prompt against 39.7 from empty);
+its device reads a prompt 1.13 times llama.cpp's device at 110 and 1.19 times
+at 1419, and generates 1.01 times as fast (57.8 against 57.2). The paragraphs below are this section's
 record, sitting by sitting, each in the tense of its own day: where a figure
 in them differs from the tables, the tables are the reading that stands.
 
@@ -8340,9 +8373,9 @@ synthetic where this program's are a real text. What is being timed is the
 number of them.
 
 with `--backend device` in place of `--repack rows` for the device rows. `tests
-speed` reports seconds and this table reports rates: 110 tokens in 0.179 s
-and 64 in 1.616 s on the processor, 0.064 s and 1.086 s on the device, and
-the long prompt in 3.109 s and 0.768 s, medians of three as everywhere else
+speed` reports seconds and this table reports rates: 110 tokens in 0.176 s
+and 64 in 1.625 s on the processor, 0.059 s and 1.108 s on the device, and
+the long prompt in 3.310 s and 0.653 s, medians of three as everywhere else
 here. The 110-token file the prompt rows
 use is `speed-prompt-110.txt` rather than `speed-prompt.txt`, for the reason
 `### A prompt too short to wake the machine` gives.
@@ -8357,8 +8390,8 @@ should. The processor rows are at the
 default arithmetic and the device rows are not affected by it.
 
 `--device none` is doing work in that command. With `-ngl 0` and a Vulkan
-device present llama.cpp still evaluates the prompt on it -- 779.8 t/s rather
-than 388.0 -- so a reader who takes this again the obvious way will measure
+device present llama.cpp still evaluates the prompt on it -- 715.5 t/s rather
+than 371.6 -- so a reader who takes this again the obvious way will measure
 the device and read it as the processor, and will get a *smaller* gap than
 the true one for the processor row.
 
@@ -12944,6 +12977,14 @@ What it saves is passes over the big model's weights: however many proposals
 are accepted, they cost one pass. What it costs is the draft model's own
 passes, one per proposal, and the output projection once per checked position
 rather than once per token.
+
+A wider adaptive-window experiment (1, 2, 4, 8, 12 and 16) was not retained.
+It reached 48.19 generated tokens/s from 35.39 on the local
+Qwen3.6-35B-A3B MTP artifact, but fixed-window checks did not reproduce the
+undrafted greedy digest: target batches crossed numerical token decisions.
+Qwen3.5-4B was also slower widened (33.54 versus 35.09 tokens/s held at
+three). The existing narrow controller therefore remains the default until a
+batched verification path can meet the exact-output gate.
 
 So a draft earns its keep only when it is much faster than the model and
 usually right. Whether a particular one is can be worked out from three

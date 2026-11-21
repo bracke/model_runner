@@ -1,9 +1,10 @@
 # model_runner inference project
 
 `model_runner_inference.gpr` exposes the local GGUF inference engine without a
-main unit or the CLI presentation layer. It imports the lightweight task
-framework and excludes that project's explicit source closure, so an embedding
-may import both projects without duplicate Ada units.
+main unit, CLI presentation layer, agent runtime, Code Health engine, or task
+framework. It imports the neutral core project and owns an explicit inference
+source closure, so an embedding may import the inference and framework projects
+together without duplicate Ada units.
 
 The project is a linkage boundary, not a second implementation. Its public
 entry point is `Model_Runner.Inference`; loading, generation, cancellation,

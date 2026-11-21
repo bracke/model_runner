@@ -100,6 +100,44 @@ The following model is used for the optional `tests external-model` comparison.
 It is **not** committed to this repository and is not required by any mandatory
 test. Nothing in the build downloads it.
 
+### Gemma 4 E4B QAT Q4_0 and its PLE tensor
+
+| | |
+|---|---|
+| File | `gemma-4-E4B_q4_0-it.gguf` |
+| Size | 5 154 941 280 bytes |
+| SHA-256 | `676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee` |
+| Source | `google/gemma-4-E4B-it-qat-q4_0-gguf` on Hugging Face |
+| Upstream model | `google/gemma-4-E4B-it` |
+| Licence | Apache-2.0, as published with the artifact |
+| Quantisation | Google's QAT Q4_0 GGUF export |
+
+The real auxiliary-artifact comparison uses the file's
+`per_layer_token_embd.weight` tensor as a separate GGUF and a derived backbone
+from which that tensor has been removed. The tensor was extracted without
+changing its payload by llama.cpp b12017 tooling. The sidecar is
+2 312 110 272 bytes, has SHA-256
+`bc11fdb6122466aeeab59303e3e56ce294d3dc9b3e50f55eceacf698af8e7bbd`, and
+contains that one Q6_K tensor with shape 10 752 by 262 144. The stripped
+backbone and this sidecar carry the published model's tensor payloads between
+them, with the PLE table available only through `--ple`. The harness's
+`--require-external-ple` option parses the backbone alone and rejects a run if
+the named tensor is still present; this is mandatory for recorded sidecar
+evidence.
+
+`tests/fixtures/gemma4-e4b-ple.expect` records the independent llama.cpp
+b12017-5047748f1 tokenization and one-token greedy answer. The large files are
+not committed and the check remains opt-in; the expectation is small and is
+committed so a holder of the named bytes can repeat the differential run.
+
+The smaller `unsloth/gemma-4-E2B-it-GGUF` IQ2_M artifact was also examined
+(2 290 860 128 bytes, SHA-256
+`3d95ada2a122c9c0b42803317239b64b262ac9226a307ff895b3d87eec0c2acd`).
+It is the smallest complete PLE-bearing artifact found during this work, but
+it is not a compatible model_runner test input: Gemma 4 E2B records a distinct
+feed-forward width per layer, while this runtime currently accepts one scalar
+width. It is documented rather than misrepresented as passing evidence.
+
 ### TinyLlama-1.1B-Chat-v1.0, Q8_0
 
 | | |

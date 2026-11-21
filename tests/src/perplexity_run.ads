@@ -1,5 +1,6 @@
 with Model_Runner.Backend;
 with Model_Runner.Llama;
+with Model_Runner.Memory;
 with Model_Runner.Numerics;
 
 --  What a quantization costs the model's predictions.
@@ -27,12 +28,11 @@ with Model_Runner.Numerics;
 --  own guidance prefers it for comparing quantizations, and why the table
 --  this produces leads with it.
 --
---  THE BASELINE IS Q8_0 AND NOT F16, which is worth saying out loud. The
---  highest precision file of this model in this repository is eight-bit, so
---  every divergence below is measured from eight bits rather than from
---  sixteen. It bounds what the numbers can say: two formats are comparable
---  with each other, and none of them is comparable with a number measured
---  against a half-precision baseline elsewhere.
+--  A file comparison uses the precision of the file named by --against. A
+--  cache comparison is different: it prepares one model once, then opens two
+--  sessions whose key/value caches use the two requested storages. Thus the
+--  reported divergence isolates cache storage rather than confounding it
+--  with a second copy or quantization of the weights.
 --
 --  WHICH POSITIONS ARE SCORED. The second half of each chunk, which is
 --  llama.cpp's rule -- `const int first = n_ctx/2` -- and the reason for it
@@ -91,6 +91,11 @@ package Perplexity_Run is
       Perplexity : Long_Float := 0.0;
       Entropy    : Long_Float := 0.0;
 
+      --  The baseline's corresponding figures. They are zero where no
+      --  comparison was requested.
+      Baseline_Perplexity : Long_Float := 0.0;
+      Baseline_Entropy    : Long_Float := 0.0;
+
       --  Set only when a baseline was given.
       Compared   : Boolean := False;
       Divergence : Long_Float := 0.0;
@@ -103,6 +108,31 @@ package Perplexity_Run is
       --  And the worst single position, because a mean hides the case a
       --  reader of this table would want to know about.
       Worst      : Long_Float := 0.0;
+      Worst_Position : Natural := 0;
+      Worst_Wanted : Natural := 0;
+      Worst_Candidate_Top : Natural := 0;
+      Worst_Baseline_Top : Natural := 0;
+      Worst_Candidate_Wanted_Logp : Long_Float := 0.0;
+      Worst_Baseline_Wanted_Logp : Long_Float := 0.0;
+
+      --  Planned KV bytes and elapsed evaluation time for each arm. For a
+      --  cache comparison these are the direct price and speed of the two
+      --  storages; for a file comparison both caches use the requested
+      --  candidate storage.
+      Cache_Bytes          : Model_Runner.Memory.U64 := 0;
+      Baseline_Cache_Bytes : Model_Runner.Memory.U64 := 0;
+      Candidate_Seconds    : Duration := 0.0;
+      Baseline_Seconds     : Duration := 0.0;
+
+      Candidate_Cache  : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Candidate_Values : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys;
+      Baseline_Cache   : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Baseline_Values  : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys;
+      Cache_Comparison : Boolean := False;
 
       Seconds : Duration := 0.0;
       Load_Before, Load_After : Long_Float := 0.0;
@@ -136,6 +166,12 @@ package Perplexity_Run is
    --    Zero is unasked.
    --  @param Repack The weights' layout, as Llama.Prepare takes it: the
    --    command passes run's unasked one, the panels on the processor.
+   --  @param Cache Storage used by the measured session's keys.
+   --  @param Values Optional storage used by its values.
+   --  @param Compare_Cache Compare two sessions of Path rather than two
+   --    model files. Against must then be empty.
+   --  @param Against_Cache Storage used by the baseline session's keys.
+   --  @param Against_Values Optional storage used by its values.
    procedure Run
      (Path    : String;
       Against : String;
@@ -151,7 +187,16 @@ package Perplexity_Run is
       Stretch : String := "";
       Factor  : Model_Runner.Numerics.Wide_Real := 0.0;
       Repack  : Model_Runner.Llama.Repack_Mode :=
-        Model_Runner.Llama.No_Repack);
+        Model_Runner.Llama.No_Repack;
+      Cache   : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Values  : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys;
+      Compare_Cache : Boolean := False;
+      Against_Cache : Model_Runner.Llama.Cache_Precision :=
+        Model_Runner.Llama.Exact;
+      Against_Values : Model_Runner.Llama.Value_Precision :=
+        Model_Runner.Llama.Same_As_Keys);
 
    --  One line saying what it found.
    --

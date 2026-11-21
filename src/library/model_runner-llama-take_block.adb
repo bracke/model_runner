@@ -37,6 +37,7 @@ begin
                                         Item.Owner.Settings.Value_Size,
                                         Item.Owner.Settings.Heads)))
      or else (Item.Held in Eighth | Fourth | Float_Eighth
+                            | Transformed_Fourth
               and then (Item.Byte_Keys = null or else Item.Byte_Values = null
                         or else Item.Key_Scales = null
                         or else Item.Value_Scales = null

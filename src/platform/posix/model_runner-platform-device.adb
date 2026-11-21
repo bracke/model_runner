@@ -130,8 +130,12 @@ package body Model_Runner.Platform.Device is
 
    --  Where the fields this reads begin, counting from the first byte of the
    --  structure: four unsigned numbers, then the device kind, then the name.
+   Offset_Driver_Version : constant := 4;
+   Offset_Vendor_Id      : constant := 8;
+   Offset_Device_Id      : constant := 12;
    Offset_Device_Kind : constant := 16;
    Offset_Device_Name : constant := 20;
+   Offset_Pipeline_UUID : constant := Offset_Device_Name + Max_Name_Bytes;
 
    --  And where the limits begin, and the one limit this reads within them.
    --  The structure ahead of them is four unsigned numbers, the kind, the
@@ -895,6 +899,10 @@ package body Model_Runner.Platform.Device is
          return;
       end if;
 
+      Item.Identity_Of.Name_Length := From.Names (Index).Last;
+      Item.Identity_Of.Device_Name (1 .. From.Names (Index).Last) :=
+        From.Names (Index).Text (1 .. From.Names (Index).Last);
+
       --  A family that accepts compute. Graphics is not asked for and not
       --  wanted: nothing here draws.
       declare
@@ -1194,6 +1202,23 @@ package body Model_Runner.Platform.Device is
             Properties (Physical, Room'Address);
 
             declare
+               Driver : Interfaces.Unsigned_32;
+               for Driver'Address
+                 use Room (Offset_Driver_Version + 1)'Address;
+               pragma Import (Ada, Driver);
+
+               Vendor : Interfaces.Unsigned_32;
+               for Vendor'Address use Room (Offset_Vendor_Id + 1)'Address;
+               pragma Import (Ada, Vendor);
+
+               Device : Interfaces.Unsigned_32;
+               for Device'Address use Room (Offset_Device_Id + 1)'Address;
+               pragma Import (Ada, Device);
+
+               UUID : Device_UUID;
+               for UUID'Address use Room (Offset_Pipeline_UUID + 1)'Address;
+               pragma Import (Ada, UUID);
+
                Stated : C.unsigned;
                for Stated'Address use Room (Offset_Storage_Range + 1)'Address;
                pragma Import (Ada, Stated);
@@ -1211,6 +1236,10 @@ package body Model_Runner.Platform.Device is
                for Alignment'Address use Room (Offset_Storage_Alignment + 1)'Address;
                pragma Import (Ada, Alignment);
             begin
+               Item.Identity_Of.Driver_Version := Driver;
+               Item.Identity_Of.Vendor_Id := Vendor;
+               Item.Identity_Of.Device_Id := Device;
+               Item.Identity_Of.Pipeline_Cache_UUID := UUID;
                Item.Storage := Interfaces.Unsigned_64 (Stated);
                Item.Aligned := Alignment;
                Item.Tick :=
@@ -1619,6 +1648,11 @@ package body Model_Runner.Platform.Device is
       end;
 
       Ready := Item.Logical /= System.Null_Address;
+      Item.Identity_Of.Present := Ready;
+      Item.Identity_Of.Matrix_Instruction := Item.Matrices;
+      Item.Identity_Of.Subgroup_Arithmetic := Item.Subgroups;
+      Item.Identity_Of.Sized_Subgroups := Item.Sized_Subgroups;
+      Item.Identity_Of.Integer_Dot := Item.Integer_Dot;
    end Open;
 
    procedure Close (Item : in out Context) is
@@ -1672,10 +1706,14 @@ package body Model_Runner.Platform.Device is
       Item.Sized_Subgroups := False;
       Item.Integer_Dot := False;
       Item.Plain_Kinds := 0;
+      Item.Identity_Of := (others => <>);
    end Close;
 
    function Is_Open (Item : Context) return Boolean
    is (Item.Logical /= System.Null_Address);
+
+   function Identity (Item : Context) return Device_Identity
+   is (Item.Identity_Of);
 
    function Queue_Family (Item : Context) return Natural is (Item.Family);
 

@@ -88,9 +88,13 @@ package body Model_Runner.Platform.Device is
       Item.Heap := 0;
       Item.Second := -1;
       Item.Second_Heap := 0;
+      Item.Identity_Of := (others => <>);
    end Close;
 
    function Is_Open (Item : Context) return Boolean is (False);
+
+   function Identity (Item : Context) return Device_Identity
+   is (Item.Identity_Of);
 
    function Queue_Family (Item : Context) return Natural is (Item.Family);
 

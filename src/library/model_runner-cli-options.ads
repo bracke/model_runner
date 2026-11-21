@@ -645,6 +645,11 @@ package Model_Runner.CLI.Options is
       --  read where they lie rather than copied anywhere.
       Device_Share      : Boolean := False;
 
+      --  Empty selects the exact automatic profile, "none" disables launch
+      --  tuning, and every other value is an explicit profile path.
+      Device_Tuning     : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Device_Tuning_Set : Boolean := False;
+
       --  How long to wait for one product before giving up on the device,
       --  in seconds. The default is a minute, which is far longer than any
       --  product on any machine this has run on and is a bound rather than
@@ -689,14 +694,18 @@ package Model_Runner.CLI.Options is
       --  file's layout rather than taking the processor's default.
       Repack_Asked : Boolean := False;
 
-      --  How the session stores what it has committed. The default is
-      --  binary16, half the bytes a token reads at depth and what llama.cpp
-      --  keeps: binary32 cost a generated token four to five per cent at a
-      --  thousand positions and more past that. --kv-cache f32 keeps the
-      --  precision the engine computes in, which is what the published
-      --  figures before 2026-10-03 were measured against.
+      --  How the session stores what it has committed. The default is q4t:
+      --  Q4-sized storage whose transformed keys retain substantially more
+      --  of the exact cache's answer than ordinary Q4. A model whose head
+      --  width cannot be divided into its groups falls back to binary16.
+      --  An explicitly named q4t remains strict and is refused instead.
       Cache      : Model_Runner.Llama.Cache_Precision :=
-        Model_Runner.Llama.Halved;
+        Model_Runner.Llama.Transformed_Fourth;
+
+      --  Whether --kv-cache was named. Silence permits the q4t default's
+      --  compatibility fallback; a named storage is always honoured or
+      --  refused, never silently changed.
+      Cache_Asked : Boolean := False;
 
       --  --kv-cache fit: the halved cache where the context fits on the
       --  device beside a dense model's matrices, and the byte cache where

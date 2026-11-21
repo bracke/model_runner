@@ -3576,7 +3576,28 @@ package body Checks is
                            if Ada.Directories.Extension (Simple) = "stderr"
                              and then Ada.Directories.Size (Full) > 0
                            then
-                              Said := Said + 1;
+                              --  A diagnostics log left by a failed or
+                              --  deliberately ignored compilation is not a
+                              --  compilation "with warnings".  In
+                              --  particular versionlib keeps failed optional
+                              --  transport probes under obj/ignore.  Count a
+                              --  log only when that compilation also produced
+                              --  an object or ALI beside it.
+                              declare
+                                 Unit : constant String :=
+                                   Ada.Directories.Base_Name
+                                     (Ada.Directories.Base_Name (Simple));
+                                 Beside : constant String :=
+                                   Ada.Directories.Containing_Directory (Full)
+                                   & "/" & Unit;
+                              begin
+                                 if Ada.Directories.Exists (Beside & ".o")
+                                   or else Ada.Directories.Exists
+                                     (Beside & ".ali")
+                                 then
+                                    Said := Said + 1;
+                                 end if;
+                              end;
                            end if;
                         else
                            Consider (Full);
@@ -4381,6 +4402,8 @@ package body Checks is
          Gather_All ("src/platform/posix");
          Gather_All ("src/platform/windows");
          Gather_All ("src/platform/unsupported");
+         Gather_All ("src/platform/x86_64");
+         Gather_All ("src/platform/non_x86");
          Gather_All ("tests/src");
          Examine_All ("src/library");
 
@@ -6385,6 +6408,12 @@ package body Checks is
             Engine : constant String :=
               Contents
                 ("src/library/model_runner-platform-device-products.adb");
+            Plans : constant String :=
+              Contents
+                ("src/library/model_runner-platform-device-tile_plans.ads")
+              & Character'Val (10)
+              & Contents
+                ("src/library/model_runner-platform-device-tile_plans.adb");
 
             --  Skip says how many earlier matches to pass over, which
             --  the tile width needs: the shader states TILE_V twice, once
@@ -6450,15 +6479,15 @@ package body Checks is
             Vecs_Said : constant Natural :=
               Number_After (Shader, "const uint TILE_V = ", Skip => 5);
             Mid_Asked : constant Natural :=
-              Number_After (Engine, "Mid_Vectors : constant := ");
+              Number_After (Plans, "Mid_Vectors      : constant := ");
             Mid_Wide_Asked : constant Natural :=
-              Number_After (Engine, "Mid_Wide_Vectors : constant := ");
+              Number_After (Plans, "Mid_Wide_Vectors : constant := ");
             Rows_Asked : constant Natural :=
               Number_After (Engine, "Tile_Rows    : constant := ");
             Vecs_Asked : constant Natural :=
-              Number_After (Engine, "Tile_Vectors : constant := ");
+              Number_After (Plans, "Default_Vectors  : constant := ");
             Thin_Asked : constant Natural :=
-              Number_After (Engine, "Narrow_Vectors : constant := ");
+              Number_After (Plans, "Narrow_Vectors   : constant := ");
             Listed_Asked : constant Natural :=
               Number_After (Engine, "Listed_Vectors : constant := ");
             Wide_Asked : constant Natural :=
@@ -6490,7 +6519,8 @@ package body Checks is
                      & " Tile_Vectors, Narrow_Vectors, Mid_Vectors, "
                      & "Mid_Wide_Vectors, Narrow_Rows, "
                      & "Listed_Vectors, Listed_Wide_Vectors and Listed_Rows,"
-                     & " and this check "
+                     & " across the engine and its tile-policy package, and "
+                     & "this check "
                      & "reads them all as text");
             elsif Rows_Said /= Rows_Asked or else Vecs_Said /= Vecs_Asked
               or else Thin_Said /= Thin_Asked
@@ -8408,9 +8438,9 @@ package body Checks is
 
       --  Every host body parses, not only the ones this build compiles.
       --
-      --  src/platform holds five directories and a build uses two of them:
-      --  linux and posix here, windows or macos elsewhere. The other three
-      --  are production code that no compiler on this machine has ever seen,
+      --  src/platform holds five OS directories and two architecture
+      --  directories. A build uses its OS set and exactly one architecture
+      --  body. The others are production code this build has not compiled,
       --  and the checks above read them as text -- layering, line length,
       --  which constants are dead -- which no amount of reading turns into
       --  parsing.
@@ -8423,7 +8453,7 @@ package body Checks is
       --
       --  Semantics, not only syntax. -gnatc stops before code generation but
       --  after analysis, so the profiles in a body are checked against the
-      --  spec all five share, names are resolved, and types have to agree.
+      --  spec all variants share, names are resolved, and types have to agree.
       --  Nothing here needs the host's own libraries: these bodies bind to
       --  their host through Interfaces.C, whose declarations are the same
       --  everywhere, which is what makes the question askable at all from a
@@ -8460,12 +8490,14 @@ package body Checks is
          Scratch : constant String := Full & "/obj/host-bodies";
 
          type Name_Access is access constant String;
-         Hosts : constant array (1 .. 5) of Name_Access :=
+         Hosts : constant array (1 .. 7) of Name_Access :=
            [new String'("linux"),
             new String'("macos"),
             new String'("posix"),
             new String'("unsupported"),
-            new String'("windows")];
+            new String'("windows"),
+            new String'("non_x86"),
+            new String'("x86_64")];
 
          --  The two trees that hold per-host bodies. The tests crate has one
          --  too -- raise_interrupt, a body for each host -- and it was left
@@ -8495,15 +8527,21 @@ package body Checks is
             use type Hostkit.Host.Kind;
 
             Here : constant Hostkit.Host.Kind := Hostkit.Host.Current;
+            Machine : constant String := Hostkit.Host.Machine_Name;
             Own  : constant Boolean :=
               (if Host = "windows" then Here = Hostkit.Host.Windows
                elsif Host = "unsupported" then False
                else Here in Hostkit.Host.Linux | Hostkit.Host.MacOS);
          begin
-            return not Own
-              and then Ada.Strings.Fixed.Index
-                         (Project_Tools.Files.Read_Raw_File (Path),
-                          "Ada.Interrupts.Names") > 0;
+            return
+              (Host = "x86_64"
+               and then Ada.Strings.Fixed.Index (Machine, "x86_64") = 0
+               and then Ada.Strings.Fixed.Index (Machine, "AMD64") = 0)
+              or else
+                (not Own
+                 and then Ada.Strings.Fixed.Index
+                            (Project_Tools.Files.Read_Raw_File (Path),
+                             "Ada.Interrupts.Names") > 0);
          end Runtime_Bound;
 
          --  Every one of them failing is a statement about the compiler.
@@ -8513,7 +8551,7 @@ package body Checks is
 
          if Compiler = "" then
             Fail ("no gcc on the path, so no host body could be compiled and "
-                  & "the three directories this build does not build went "
+                  & "the platform directories this build does not use went "
                   & "unchecked");
          else
             Ada.Directories.Create_Path (Scratch);
@@ -8641,16 +8679,22 @@ package body Checks is
             --  round, and the project file would refuse it there.
             declare
                --  Each host as the directories the project file gives it.
-               type Host_Set is array (1 .. 2) of Name_Access;
+               type Host_Set is array (1 .. 3) of Name_Access;
 
                Nothing_More : constant Name_Access := new String'("");
                Posix        : constant Name_Access := new String'("posix");
+               X86          : constant Name_Access := new String'("x86_64");
+               Other_Arch   : constant Name_Access := new String'("non_x86");
 
-               Sets : constant array (1 .. 4) of Host_Set :=
-                 [[Hosts (1), Posix],
-                  [Hosts (2), Posix],
-                  [Hosts (4), Nothing_More],
-                  [Hosts (5), Nothing_More]];
+               Sets : constant array (1 .. 8) of Host_Set :=
+                 [[Hosts (1), Posix, X86],
+                  [Hosts (1), Posix, Other_Arch],
+                  [Hosts (2), Posix, X86],
+                  [Hosts (2), Posix, Other_Arch],
+                  [Hosts (4), Nothing_More, X86],
+                  [Hosts (4), Nothing_More, Other_Arch],
+                  [Hosts (5), Nothing_More, X86],
+                  [Hosts (5), Nothing_More, Other_Arch]];
 
                --  Every platform spec, by the body name it asks for.
                Specs : Natural := 0;

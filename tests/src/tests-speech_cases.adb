@@ -16,6 +16,7 @@ with Hostkit.Descriptors;
 with Hostkit.Pty;
 with Hostkit.Spawn;
 with AUnit.Test_Cases;
+with Child_Guards;
 
 with Model_Runner.Audio;
 with Model_Runner.Audio.Spectrograms;
@@ -1171,6 +1172,7 @@ package body Tests.Speech_Cases is
       Pair    : Hostkit.Pty.Pair;
       Options : Hostkit.Spawn.Options;
       Child   : Hostkit.Spawn.Process_Handle;
+      Watcher : Child_Guards.Guard;
       Result  : Hostkit.Spawn.Status;
       Buffer  : Ada.Streams.Stream_Element_Array (1 .. 4096);
       Last    : Ada.Streams.Stream_Element_Offset;
@@ -1271,6 +1273,7 @@ package body Tests.Speech_Cases is
          Assert (Hostkit.Spawn.Start (Binary, Words, Options, Child) = Hostkit.Spawn.Spawn_Ok,
                  "the session did not start");
       end;
+      Child_Guards.Watch (Watcher, Child);
       Hostkit.Pty.Close_Device (Pair);
       Drain (5000);
 
@@ -1289,7 +1292,8 @@ package body Tests.Speech_Cases is
       --  The turn sent, and out.
       Send ([1 => ASCII.CR], Quiet => 5000);
       Send ("/exit" & ASCII.CR, Quiet => 3000);
-      Assert (Hostkit.Spawn.Wait (Child, Hostkit.Spawn.Wait_Block, Result), "the session was not waited for");
+      Assert (Child_Guards.Wait (Watcher, 30.0, Result),
+              "the session was not waited for");
       Hostkit.Pty.Close (Pair);
 
       Ada.Text_IO.Open (Held, Ada.Text_IO.In_File, History);
