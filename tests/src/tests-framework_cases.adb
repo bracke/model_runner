@@ -30,6 +30,7 @@ with Model_Runner.Cancellation;
 with Model_Runner.Clocks;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
+with Model_Runner.CLI.Headless_Work;
 with Model_Runner.CLI.Options;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Project_Requests;
@@ -6052,6 +6053,113 @@ package body Tests.Framework_Cases is
               & " " & R.Get (Call, "call.0001"));
       S.Close (Store);
    end Work_Apart_Is_Accounted;
+
+   --  The noninteractive adapter binds one operation to one native execution:
+   --  an identical replay returns its recorded JSON and does not advance the
+   --  task generation. The deliberately tiny real model cannot hold the work
+   --  prompt; that negative native outcome is durable too.
+   procedure Headless_Work_Is_Idempotent
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Hw renames Model_Runner.CLI.Headless_Work;
+      Model : constant String := Dirs.Full_Name
+        ((if Dirs.Exists ("fixtures/tiny-model.gguf")
+          then "fixtures/tiny-model.gguf" else "tests/fixtures/tiny-model.gguf"));
+      Store   : S.Store;
+      Change  : S.Transaction;
+      Status  : E.Error_Info;
+      Id      : Unbounded_String;
+      Defined : R.Item;
+      Effective : R.Item;
+      Project : Unbounded_String;
+      Project_Id : Unbounded_String;
+      Source  : Unbounded_String;
+      Revision : Unbounded_String;
+      Policy  : Unbounded_String;
+      First   : Unbounded_String;
+      Again   : Unbounded_String;
+      Inspected : Unbounded_String;
+   begin
+      Task_Project
+        (Store, "headless-work",
+         "scalar work.model = " & Model & LF
+         & "map model.default = context=16,reserve=4" & LF);
+      Tk.Create (Store, Change, Fields ("Inspect the project", "analysis"), "user", "", Id, Status);
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+      S.Commit (Store, Change, Status);
+      Tk.Definition (Store, To_String (Id), Defined, Status);
+      Project := To_Unbounded_String (Fresh_Root (Store));
+      Project_Id := To_Unbounded_String (S.Project_Id (Store));
+      Source := To_Unbounded_String
+        (Model_Runner.Framework.Repository.Graph_Fingerprint
+           (Model_Runner.Framework.Repository.Now (Store)));
+      Revision := To_Unbounded_String (R.Fingerprint_Of (Defined));
+      Policy := To_Unbounded_String
+        (R.Fingerprint_Of (Model_Runner.Framework.Configurations.Required (Store)));
+      S.Close (Store);
+
+      Inspected := To_Unbounded_String
+        (Hw.Inspect_Task (To_String (Project), To_String (Id), Status));
+      Assert
+        (E.Is_Ok (Status)
+         and then Ada.Strings.Fixed.Index
+                    (To_String (Inspected), """task_revision"":""" & To_String (Revision) & """") > 0
+         and then Ada.Strings.Fixed.Index (To_String (Inspected), """execution_state"":""ready""") > 0,
+         "headless inspection did not expose the exact ready task identities: " & To_String (Inspected));
+
+      Again := To_Unbounded_String
+        (Hw.Execute_Task
+           (To_String (Project), To_String (Id), "test-headless-stale",
+            "stale-task-revision", To_String (Project_Id), To_String (Source),
+            To_String (Policy), 30, Status));
+      Assert
+        (Status.Code = E.Framework_Revision_Conflict,
+         "a stale exact task revision was not rejected before dispatch: " & To_String (Again));
+      Again := To_Unbounded_String
+        (Hw.Operation_Status (To_String (Project), "test-headless-stale", Status));
+      Assert
+        (Status.Code = E.Framework_Not_Found,
+         "a rejected precondition left a durable execution intent: " & To_String (Again));
+
+      First := To_Unbounded_String
+        (Hw.Execute_Task
+           (To_String (Project), To_String (Id), "test-headless-0001",
+            To_String (Revision), To_String (Project_Id), To_String (Source),
+            To_String (Policy), 30, Status));
+      Assert
+        (Status.Code = E.Framework_Agent_Failed
+         and then Ada.Strings.Fixed.Index (To_String (First), """result"":""execution_failed""") > 0,
+         "the real native run's negative result was not returned: " & Code_Of (Status)
+         & " " & To_String (First));
+
+      Again := To_Unbounded_String
+        (Hw.Execute_Task
+           (To_String (Project), To_String (Id), "test-headless-0001",
+            To_String (Revision), To_String (Project_Id), To_String (Source),
+            To_String (Policy), 30, Status));
+      Assert
+        (Status.Code = E.Framework_Agent_Failed and then Again = First,
+         "an identical operation did not replay its exact outcome: " & Code_Of (Status));
+
+      declare
+         Report : S.Recovery_Report;
+      begin
+         S.Open (Store, To_String (Project), Report, Status);
+      end;
+      Tk.Effective (Store, To_String (Id), Effective, Status);
+      Assert
+        (E.Is_Ok (Status) and then R.Get (Effective, "runtime.generation") = "1",
+         "the replay started a second native execution");
+      S.Close (Store);
+
+      Again := To_Unbounded_String
+        (Hw.Operation_Status (To_String (Project), "test-headless-0001", Status));
+      Assert
+        (Status.Code = E.Framework_Agent_Failed and then Again = First,
+         "durable operation lookup did not return the recorded outcome");
+   end Headless_Work_Is_Idempotent;
 
    ---------------------------------------------------------------------------
    --  Context and invocations.
@@ -23917,6 +24025,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Work_Apart_Is_Accounted'Access,
          "an agent run apart is accounted, and given the time the policy allows");
+      Register_Routine
+        (T, Headless_Work_Is_Idempotent'Access,
+         "headless work uses one durable operation for one native execution");
       Register_Routine
         (T, A_File_A_Check_Rewrote_Is_The_Works'Access,
          "a file the work wrote and a check then rewrote is the work's still");

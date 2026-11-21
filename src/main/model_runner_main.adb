@@ -8,6 +8,7 @@ pragma Unreserve_All_Interrupts;
 with Ada.Command_Line;
 
 with Model_Runner.CLI.Driver;
+with Model_Runner.CLI.Headless_Work;
 
 --  Entry point of the model_runner executable.
 --
@@ -18,6 +19,10 @@ with Model_Runner.CLI.Driver;
 procedure Model_Runner_Main is
    Status : Natural;
 begin
-   Model_Runner.CLI.Driver.Run_Process (Status);
+   if Ada.Command_Line.Argument_Count >= 1 and then Ada.Command_Line.Argument (1) = "work" then
+      Model_Runner.CLI.Headless_Work.Run_Process (Status);
+   else
+      Model_Runner.CLI.Driver.Run_Process (Status);
+   end if;
    Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Exit_Status (Status));
 end Model_Runner_Main;

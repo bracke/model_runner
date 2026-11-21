@@ -17,7 +17,6 @@ with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Intents;
 with Model_Runner.CLI.Project_Commands;
 with Model_Runner.CLI.Tasks;
-with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Framework.Configurations;
 with Model_Runner.Framework.Context;
@@ -2568,5 +2567,73 @@ package body Model_Runner.CLI.Work is
    begin
       Drive (Item, Screen, Runner'Unchecked_Access, Status);
    end Run_With;
+
+   ------------------
+   -- Run_Headless --
+   ------------------
+
+   procedure Run_Headless
+     (Project_Directory : String;
+      Task_Id           : String;
+      Timeout_Seconds   : Natural;
+      Result            : out Model_Runner.Framework.Work.Report;
+      Status            : out Model_Runner.Errors.Error_Info)
+   is
+      Directory : constant String := Ada.Directories.Full_Name (Project_Directory);
+      Store     : aliased S.Store;
+      Opened    : S.Recovery_Report;
+      Recovered : Model_Runner.Framework.Name_Lists.Vector;
+   begin
+      Result := (others => <>);
+      S.Open (Store, Directory, Opened, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      W.Recover_On_Opening (Store, Opened, Recovered, Status);
+      if E.Is_Error (Status) then
+         S.Close (Store);
+         return;
+      end if;
+
+      declare
+         Configuration : constant R.Item := Model_Runner.Framework.Configurations.Required (Store);
+         Named         : constant String := R.Get (Configuration, "scalar.work.model");
+         Located       : constant String :=
+           (if Named = "" then "" else Model_Runner.CLI.Project_Commands.From_Session_Start (Named));
+         Model_Path    : constant String :=
+           (if Located /= "" and then Ada.Directories.Exists (Located)
+            then Ada.Directories.Full_Name (Located)
+            else Named);
+         Profile_Name  : constant String := R.Get (Configuration, "scalar.work.profile");
+         Profile       : constant Model_Runner.Framework.Context.Model_Profile :=
+           Model_Runner.Framework.Context.Profile (Store, Profile_Name);
+         Native_Limit  : constant Natural := W.Time_Allowed (Store, Task_Id);
+         Effective_Limit : constant Natural :=
+           (if Timeout_Seconds = 0 then Native_Limit
+            elsif Native_Limit = 0 then Timeout_Seconds
+            else Natural'Min (Timeout_Seconds, Native_Limit));
+      begin
+         if Model_Path = "" then
+            Status := E.Make (E.Framework_Input_Missing);
+            E.Add_Text (Status, "name", "scalar.work.model");
+            E.Add_Text
+              (Status, "detail",
+               "headless work requires the same explicit model selection used by /work model=PATH");
+         else
+            W.Execute
+              (Store, Task_Id,
+               Model_Agent'
+                 (Model   => To_Unbounded_String (Model_Path),
+                  Steps   => To_Unbounded_String
+                    (Ada.Strings.Fixed.Trim
+                       (Positive'Image (W.Steps_Allowed (Store, Task_Id)), Ada.Strings.Both)),
+                  Timeout => Positive'Max (1, Effective_Limit),
+                  Context => Profile.Context_Limit,
+                  Screen  => null),
+               Profile, Result, Status);
+         end if;
+      end;
+      S.Close (Store);
+   end Run_Headless;
 
 end Model_Runner.CLI.Work;

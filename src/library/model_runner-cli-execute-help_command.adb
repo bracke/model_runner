@@ -299,6 +299,8 @@ package body Model_Runner.CLI.Execute.Help_Command is
                      [Loc.Named ("value", "")]);
                end if;
             end loop;
+            Screen.Put_Option
+              ("cli.general.command.work", [Loc.Named ("value", "")]);
 
             Screen.Put_Line ("");
             Screen.Put_Message ("cli.general.more");

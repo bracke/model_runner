@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://model-runner.invalid/schemas/headless-work-v1.schema.json",
+  "title": "model_runner headless work output, schema version 1",
+  "oneOf": [
+    { "$ref": "#/$defs/capabilities" },
+    { "$ref": "#/$defs/operation" },
+    { "$ref": "#/$defs/cancellation" },
+    { "$ref": "#/$defs/recovery" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["schema_version", "kind"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "type": "string" }
+      }
+    },
+    "capabilities": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["noninteractive", "idempotent_operations", "operation_lookup", "commands"],
+          "properties": { "kind": { "const": "work-capabilities" } }
+        }
+      ]
+    },
+    "operation": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": [
+            "operation_id", "project_identity", "source_fingerprint", "task_id",
+            "task_revision", "execution_policy", "execution_generation",
+            "execution_state", "native_task_state", "core_state", "ready",
+            "workspace_state", "result", "diagnostics", "audit_reference"
+          ],
+          "properties": {
+            "kind": { "const": "work-operation" },
+            "execution_state": {
+              "enum": [
+                "not_ready", "ready", "executing", "blocked", "awaiting_integration",
+                "verifying", "completed", "failed", "cancelled", "incompatible"
+              ]
+            },
+            "result": {
+              "enum": ["observed", "prepared", "reconciling", "success", "execution_error", "execution_failed", "integrated"]
+            }
+          }
+        }
+      ]
+    },
+    "cancellation": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "properties": { "kind": { "const": "work-cancellation" } } }
+      ]
+    },
+    "recovery": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        { "type": "object", "properties": { "kind": { "const": "work-recovery" } } }
+      ]
+    },
+    "error": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["error_code", "diagnostic"],
+          "properties": { "kind": { "const": "error" } }
+        }
+      ]
+    }
+  }
+}

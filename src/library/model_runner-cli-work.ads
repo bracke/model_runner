@@ -1,4 +1,5 @@
 with Model_Runner.CLI.Project_Requests;
+with Model_Runner.Errors;
 with Model_Runner.Framework.Work;
 with Model_Runner.Presentation;
 
@@ -25,5 +26,21 @@ package Model_Runner.CLI.Work is
       Screen : in out Model_Runner.Presentation.Console;
       Runner : Model_Runner.Framework.Work.Agent_Runner'Class;
       Status : out Natural);
+
+   --  Run one exact task noninteractively with the same model-backed agent
+   --  implementation used when /work names a model. The project configuration
+   --  must select scalar.work.model; no alternate inference engine is used.
+   --
+   --  @param Project_Directory Initialized model_runner project.
+   --  @param Task_Id Exact native task identity.
+   --  @param Timeout_Seconds Caller ceiling; zero retains the native ceiling.
+   --  @param Result Native work report.
+   --  @param Status Framework or runner setup failure.
+   procedure Run_Headless
+     (Project_Directory : String;
+      Task_Id           : String;
+      Timeout_Seconds   : Natural;
+      Result            : out Model_Runner.Framework.Work.Report;
+      Status            : out Model_Runner.Errors.Error_Info);
 
 end Model_Runner.CLI.Work;
