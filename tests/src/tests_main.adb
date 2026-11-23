@@ -41,6 +41,7 @@ with Tests.Suite;
 with Checks;
 with Agent_Trial;
 with Agent_Campaign;
+with Campaign_Probe;
 with Adapter_Inspection;
 with Adapter_Fixture;
 with Adapter_Benchmark;
@@ -3618,7 +3619,17 @@ begin
       --  as one whose run raised past its own clean-up did -- ends, and not
       --  waits for ever on the task that watched for them; and how many
       --  workers a process held to some processors would take.
-      if Ada.Command_Line.Argument_Count >= 2
+      if Ada.Command_Line.Argument_Count = 5
+        and then Ada.Command_Line.Argument (2) = "campaign-boundary"
+      then
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Exit_Status (Campaign_Probe.Run
+           (False, Ada.Command_Line.Argument (3), Ada.Command_Line.Argument (4), Ada.Command_Line.Argument (5))));
+      elsif Ada.Command_Line.Argument_Count = 3
+        and then Ada.Command_Line.Argument (2) = "campaign-write"
+      then
+         Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Exit_Status (Campaign_Probe.Run
+           (True, "", Ada.Command_Line.Argument (3), "")));
+      elsif Ada.Command_Line.Argument_Count >= 2
         and then Ada.Command_Line.Argument (2) = "leave-signals"
       then
          declare

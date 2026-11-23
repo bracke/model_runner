@@ -21,6 +21,15 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Confined adapter campaigns and resolved settings.** Linux campaigns require
+  a working Bubblewrap boundary, hide other attempts and verifier storage,
+  and run independent compilation and checks under filesystem confinement.
+  Scope checks use a protected repository baseline. Version-two records keep
+  actual session and fitted root/helper settings, full sampler controls and
+  project configuration before and after work. Missing or mismatched arm
+  controls cannot qualify a successful result or resume one. `/settings json`
+  exposes the native session snapshot.
+
 - **Before/after CPU timing probe.** An identical Ada main can be compiled
   against historical and current engines, with full warm-up, fixed work,
   output digests and JSON timings. The probe refuses invalid bounds,

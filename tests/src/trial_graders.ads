@@ -6,6 +6,10 @@ package Trial_Graders is
    --  @param Root Fresh trial project whose verifier source is preserved outside it.
    procedure Preserve (Root : String);
 
+   --  @param Root Project after trusted initialization, before its first /work call.
+   --  @return True when its fixture baseline is sealed without replacing the preserved verifier sources.
+   function Seal (Root : String) return Boolean;
+
    --  @param Root Trial project under version control.
    --  @param Task_Name Task defining the permitted source and document paths.
    --  @return Passed for a bounded diff, Failed for an unrelated change, or an infrastructure error.
@@ -16,9 +20,10 @@ package Trial_Graders is
    --  @param Expect Expected answer path for an external navigation task, or empty.
    --  @param Transcript Native session transcript, including the final report.
    --  @param Completed Whether the native workflow reported completion.
+   --  @param Confine Require OS confinement for compilation and execution of the submitted code.
    --  @return Independent outcome, keeping infrastructure failures distinct from wrong work.
    function Verify
      (Root, Task_Name, Expect, Transcript : String;
-      Completed : Boolean) return Agent_Trial.Verdict;
+      Completed : Boolean; Confine : Boolean := False) return Agent_Trial.Verdict;
 
 end Trial_Graders;

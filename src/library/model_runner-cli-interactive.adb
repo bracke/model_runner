@@ -34,6 +34,7 @@ with Model_Runner.CLI.Checkpoint;
 with Model_Runner.CLI.Choosers;
 with Model_Runner.CLI.Completion;
 with Model_Runner.CLI.Project_Commands;
+with Model_Runner.CLI.Run_Settings;
 with Model_Runner.CLI.Speech_Input;
 with Model_Runner.Clocks;
 with Model_Runner.Entropy;
@@ -365,7 +366,7 @@ package body Model_Runner.CLI.Interactive is
             then
                if Kind in Set_System | Tool_Result
                             | Save_Conversation | Load_Conversation
-                            | Show_Picture | Show_Video | Help | Switch_Model | Show_Tools | Plan_Mode
+                            | Show_Picture | Show_Video | Help | Switch_Model | Show_Tools | Plan_Mode | Settings
                then
                   return (Kind, First, Last);
                else
@@ -1403,7 +1404,22 @@ package body Model_Runner.CLI.Interactive is
             Put_Project_Help (Gap => True);
 
          elsif Asked.Kind = Settings then
-            Show_Settings;
+            if Asked.First > 0 and then Line (Asked.First .. Asked.Last) = "json" then
+               declare
+                  Request : Model_Runner.Generation.Request;
+               begin
+                  Request.Sampling := Opt.Sampling_For (Item, Prepared);
+                  Request.Seed := Item.Seed;
+                  Request.Has_Seed := Item.Has_Seed;
+                  Request.Max_Tokens := Opt.Reply_Tokens (Item, L.Capacity (Session));
+                  Request.Batch_Size := (if L.Capability (Prepared).Supports_Batched then Item.Batch_Size else 1);
+                  Pres.Put_Line
+                    (Screen, ASCII.LF & Model_Runner.CLI.Run_Settings.Marker & Model_Runner.CLI.Run_Settings.Describe
+                       (Item, Prepared, Session, Request, Item.Thinking, Item.Effort));
+               end;
+            else
+               Show_Settings;
+            end if;
 
          elsif Asked.Kind = Statistics then
             if Have_Stats then

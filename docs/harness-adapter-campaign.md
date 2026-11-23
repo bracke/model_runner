@@ -139,8 +139,10 @@ The last four tasks add negative multiplication, an Ada spec/body change, and C 
 
 The coding verifiers preserve their test source outside the agent's project. After work ends they rebuild
 into trusted storage with `gnatmake` or `cc` and run the preserved test. A changed in-project test is refused.
-These sibling verifier directories are not isolated by operating-system permissions from the agent process.
-The pilot therefore checks ordinary test edits; it does not yet satisfy the plan's stronger isolation requirement.
+Campaign execution now requires a working Linux Bubblewrap boundary around the entire session and its
+descendants. Only the current project is writable; other attempts and trusted verifier storage are hidden.
+Compilation and independent test execution are also confined. A protected Git baseline prevents commits
+inside the agent project from hiding unrelated changes. See [the boundary and evidence](campaign-hardening.md).
 The mandatory campaign tests qualify every pilot grader with no-op, reference and known-wrong controls,
 and reject unrelated source/document changes. Analysis grading reads the final report rather than tool
 traces and checks the requested path and declaration line. Documentation grading checks file contents;
@@ -148,7 +150,7 @@ it does not prove the quality of every explanation or independently reconstruct 
 
 ## Records and resume
 
-`manifest.json` binds exact model, program and campaign-harness SHA-256 digests, source revision, tasks,
+Version-two `manifest.json` binds exact model, program and campaign-harness SHA-256 digests, source revision, tasks,
 options, seed, repeat count and budgets. It also binds each arm's adapter path, whole-file SHA-256, runtime
 mode and scale. Adapter files are rehashed before starting each new attached attempt. Files with different
 paths or settings require a different output
@@ -158,6 +160,8 @@ Each attempt is marked `invoking` before work starts and `finished` only after i
 Repeat the same command to resume. Each finished attempt includes its manifest's SHA-256 and arm identity;
 both must match before reuse. A changed manifest is refused. Older records without this binding require a
 new campaign directory.
+The isolation backend digest is also pinned and checked before each new attempt. A real namespace preflight
+must succeed; unavailable confinement starts no attempt. Older schema-one records require a new directory.
 An `invoking`, corrupt or mismatched record stops the run for reconciliation. It is not replayed automatically.
 Preserve such a record and its project while investigating; use a new output directory for a deliberate rerun.
 `--mode check` reads existing records and rebuilds the summary without starting a model. Missing attempts
@@ -171,6 +175,13 @@ are JSON null when unavailable. Host peak memory and device residency are curren
 Startup time ends at the interactive prompt; lazy weight-page faults can occur during work. It is not a
 measurement of all cold weight reads. Elapsed time includes project setup and session shutdown; the separate
 independent verification is excluded from that timing.
+
+`resolved_settings` contains an initial `/settings json` snapshot and every fitted root/helper round captured
+from the native session. It includes actual context, workers and cache storage, all sampler fields, policy
+sources and effective call budgets. `configuration_before` and `configuration_after` retain the complete
+resolved project configuration. Successful results require fitted work evidence, matching campaign-owned
+seed/context/thinking/attachment controls and an unchanged configuration; missing evidence cannot qualify
+a result or resume it. Failed outcomes retain available observations, with absence represented explicitly.
 
 `summary.json` records all outcomes, per-arm medians and paired wins/losses, including a separate cost view
 for attempts both models solve. Infrastructure failures and ungraded results remain explicit. Comparisons

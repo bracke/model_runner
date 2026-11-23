@@ -8,7 +8,10 @@ with Agent_Trial;
 with Jsonlib.Documents;
 with Jsonlib.Errors;
 with Jsonlib.Parsers;
+with Jsonlib.Serializers;
 with Project_Tools.Files;
+with Project_Tools.Text;
+with Captured_Output;
 with Trial_Graders;
 with Trial_Metrics;
 with Adapter_Inspection;
@@ -18,6 +21,20 @@ with Campaign_Statistics;
 with GNAT.SHA256;
 with Model_Runner.Numerics;
 with Hostkit;
+with Hostkit.Fs;
+with Hostkit.Process;
+with Trial_Confinement;
+with Trial_Settings;
+with Model_Runner.CLI.Run_Settings;
+with Model_Runner.CLI.Options;
+with Model_Runner.CLI.Interactive;
+with Model_Runner.Generation;
+with Model_Runner.Templates;
+with Model_Runner.Llama;
+with Model_Runner.Byte_Sources.Files;
+with Model_Runner.GGUF.Containers;
+with Model_Runner.GGUF.Containers.Reader;
+with Model_Runner.Errors;
 
 package body Tests.Campaign_Cases is
 
@@ -27,6 +44,41 @@ package body Tests.Campaign_Cases is
    use type Jsonlib.Errors.Error_Code;
    package J renames Jsonlib.Documents;
    Root : constant String := "obj/campaign-tests";
+
+   Sampling_Settings : constant String :=
+     "{""temperature"":0.4,""dynatemp_range"":0,""dynatemp_exponent"":1,""top_k"":40,""top_p"":0.95,"
+     & """min_p"":0.05,""top_a"":0,""repeat_penalty"":1,""repeat_window"":64,""frequency_penalty"":0,"
+     & """presence_penalty"":0,""typical_p"":1,""tail_free"":1,""xtc_probability"":0,""xtc_threshold"":0.1,"
+     & """dry_multiplier"":0,""dry_base"":1.75,""dry_allowed_length"":2,"
+     & """mirostat"":0,""mirostat_tau"":5,""mirostat_eta"":0.1}";
+   Session_Settings : constant String :=
+     "{""schema_version"":1,""role"":""session"",""sampling"":" & Sampling_Settings & ",""context_size"":8192,"
+     & """threads"":1,""batch_size"":16,""backend"":""cpu"",""cache_keys"":""f32"","
+     & """cache_values"":""f32"",""arithmetic"":""f32"",""thinking"":""THINKING_OFF"",""seed_given"":true,"
+     & """seed"":""42"",""runtime_adapters"":0}";
+   Root_Settings : constant String :=
+     "{""schema_version"":1,""role"":""root"",""round"":1,""policy"":""fixed"",""sampling"":" & Sampling_Settings & ","
+     & """context_size"":8192,""threads"":1,""batch_size"":16,""backend"":""cpu"","
+     & """cache_keys"":""f32"",""cache_values"":""f32"",""arithmetic"":""f32"","
+     & """thinking"":""THINKING_OFF"",""seed_given"":true,""seed"":""42"",""runtime_adapters"":0}";
+
+   procedure Qualify (Item : in out Agent_Trial.Attempt; Thinking : Boolean := False; Adapters : Natural := 0) is
+      Doc : J.Document;
+      Error : Jsonlib.Errors.Error_Info;
+   begin
+      Jsonlib.Parsers.Parse ("[" & Session_Settings & "," & Root_Settings & "]", Doc, Error);
+      Assert (Error.Code = Jsonlib.Errors.No_Error, "invalid settings control");
+      for Index in 1 .. 2 loop
+         J.Set_Member (Doc, J.Element (Doc, J.Root (Doc), Index), "thinking",
+                       J.New_String (Doc, (if Thinking then "THINKING_ON" else "THINKING_OFF")));
+         J.Set_Member (Doc, J.Element (Doc, J.Root (Doc), Index), "runtime_adapters",
+                       J.New_Integer (Doc, Long_Long_Integer (Adapters)));
+      end loop;
+      Item.Resolved_Settings := To_Unbounded_String (Jsonlib.Serializers.To_String (Doc));
+      Item.Configuration_Before := To_Unbounded_String ("{""revision"":1,""fields"":{}}");
+      Item.Configuration_After := Item.Configuration_Before;
+      Item.Isolation := To_Unbounded_String ("bubblewrap-v1");
+   end Qualify;
 
    overriding function Name (T : Case_Type) return AUnit.Message_String is
       pragma Unreferenced (T);
@@ -73,11 +125,18 @@ package body Tests.Campaign_Cases is
       Clean : Boolean;
       Item : Agent_Trial.Attempt;
       Directory : constant String := Root & "/resume";
+      Output : Unbounded_String;
       procedure Run (Options : String := "--backend cpu") is
       begin
+         Captured_Output.Open (Root & "/resume-output.txt");
          Agent_Campaign.Run
            (Root & "/base", Root & "/adapted", Root & "/program", Directory, Clean,
             Only => "edit", Options => Options, Repeats => 1, Check_Only => True);
+         Output := To_Unbounded_String (Captured_Output.Close);
+      exception
+         when others =>
+            Output := To_Unbounded_String (Captured_Output.Close);
+            raise;
       end Run;
    begin
       Fresh;
@@ -107,6 +166,7 @@ package body Tests.Campaign_Cases is
       end;
       Item.Task_Name := To_Unbounded_String ("edit");
       Item.Grade := Agent_Trial.Passed;
+      Qualify (Item);
       for Arm in 1 .. 4 loop
          declare
             Name : constant String :=
@@ -114,6 +174,7 @@ package body Tests.Campaign_Cases is
                            when 3 => "base-on", when others => "adapted-on");
             Id : constant String := "edit-1-" & Name;
          begin
+            Qualify (Item, Thinking => Arm >= 3);
             Project_Tools.Files.Write_Raw_File
               (Directory & "/" & Id & ".json", Agent_Campaign.Attempt_JSON
                  (Id, Name, 42, Item,
@@ -122,6 +183,20 @@ package body Tests.Campaign_Cases is
       end loop;
       Run;
       Assert (Clean, "complete records were not resumed");
+      Assert (Ada.Strings.Fixed.Index (To_String (Output), "0 new attempts") > 0,
+              "resume claimed to start fresh attempts");
+      Item.Resolved_Settings := Null_Unbounded_String;
+      Project_Tools.Files.Write_Raw_File
+        (Directory & "/edit-1-base-off.json", Agent_Campaign.Attempt_JSON
+           ("edit-1-base-off", "base-off", 42, Item,
+            GNAT.SHA256.Digest (Project_Tools.Files.Read_Raw_File (Directory & "/manifest.json"))));
+      Run;
+      Assert (not Clean, "a result without native settings was reused");
+      Qualify (Item);
+      Project_Tools.Files.Write_Raw_File
+        (Directory & "/edit-1-base-off.json", Agent_Campaign.Attempt_JSON
+           ("edit-1-base-off", "base-off", 42, Item,
+            GNAT.SHA256.Digest (Project_Tools.Files.Read_Raw_File (Directory & "/manifest.json"))));
       Run ("--backend reference");
       Assert (not Clean, "changed settings reused old results");
       Project_Tools.Files.Write_Raw_File
@@ -173,6 +248,7 @@ package body Tests.Campaign_Cases is
               "adapter scale was not retained");
       Item.Task_Name := To_Unbounded_String ("edit");
       Item.Grade := Agent_Trial.Passed;
+      Qualify (Item);
       for Arm in 1 .. 4 loop
          declare
             Name : constant String :=
@@ -180,6 +256,7 @@ package body Tests.Campaign_Cases is
                            when 3 => "base-on", when others => "adapted-on");
             Id : constant String := "edit-1-" & Name;
          begin
+            Qualify (Item, Thinking => Arm >= 3, Adapters => (if Arm in 2 | 4 then 1 else 0));
             Project_Tools.Files.Write_Raw_File
               (Directory & "/" & Id & ".json", Agent_Campaign.Attempt_JSON
                  (Id, Name, 42, Item, GNAT.SHA256.Digest (To_String (Original_Manifest))));
@@ -274,6 +351,10 @@ package body Tests.Campaign_Cases is
       Assert (Grade = Agent_Trial.Failed, "doing nothing passed");
       Put ("calc.adb", "package body Calc is function Value return Integer is (42); end Calc;");
       Assert (Grade = Agent_Trial.Passed, "reference solution failed");
+      if Trial_Confinement.Ready (Project) then
+         Assert (Trial_Graders.Verify (Project, "edit", "", "", True, Confine => True) = Agent_Trial.Passed,
+                 "OS-confined independent grader refused the reference solution");
+      end if;
       Put ("calc.adb", "package body Calc is function Value return Integer is (41); end Calc;");
       Assert (Grade = Agent_Trial.Failed, "known-wrong solution passed");
       Put ("test_add.adb", "procedure Test_Add is begin null; end Test_Add;");
@@ -313,10 +394,44 @@ package body Tests.Campaign_Cases is
    procedure Pilot_Graders_Reject_Controls (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       Clean : Boolean;
+      Project : constant String := Ada.Directories.Full_Name (Root & "/graders/find");
+      Ran : Hostkit.Process.Process_Outcome;
    begin
       Fresh;
       Agent_Trial.Validate_Graders (Root & "/graders", Clean);
       Assert (Clean, "a pilot grader accepted a control or rejected its reference solution");
+      Project_Tools.Files.Write_Raw_File (Project & "/README.md", "trusted initialization");
+      Assert (Trial_Graders.Seal (Project), "trusted initialization could not seal its baseline");
+      Assert (Trial_Graders.Check_Changes (Project, "find") = Agent_Trial.Passed,
+              "trusted initialization was counted as model work");
+      Ada.Directories.Create_Path (Project & "/docs");
+      Project_Tools.Files.Write_Raw_File (Project & "/docs/hidden.md", "an unrelated edit");
+      Ran := Hostkit.Process.Run_Captured
+        ("git", [To_Unbounded_String ("-C"), To_Unbounded_String (Project), To_Unbounded_String ("add"),
+                 To_Unbounded_String ("docs/hidden.md")], Stdout_Path => Hostkit.Fs.Null_Device,
+         Stderr_Path => Hostkit.Fs.Null_Device);
+      Assert (Ran.Started and then Ran.Exit_Status = 0, "could not stage the repository-spoofing control");
+      Ran := Hostkit.Process.Run_Captured
+        ("git", [To_Unbounded_String ("-C"), To_Unbounded_String (Project),
+                 To_Unbounded_String ("-c"), To_Unbounded_String ("user.name=trial"),
+                 To_Unbounded_String ("-c"), To_Unbounded_String ("user.email=trial@example.invalid"),
+                 To_Unbounded_String ("commit"), To_Unbounded_String ("-qm"), To_Unbounded_String ("hide edit")],
+         Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Hostkit.Fs.Null_Device);
+      Assert (Ran.Started and then Ran.Exit_Status = 0, "could not commit the repository-spoofing control");
+      Assert (Trial_Graders.Check_Changes (Project, "find") = Agent_Trial.Failed,
+              "committing an unrelated edit hid it from independent grading");
+      Ada.Directories.Delete_File (Project & "/docs/hidden.md");
+      Assert (Trial_Graders.Check_Changes (Project, "find") = Agent_Trial.Passed,
+              "the protected baseline followed the agent's committed history");
+      Project_Tools.Files.Write_Raw_File
+        (Project & "-verifier/baseline.git/info/exclude", "docs/ignored.md" & ASCII.LF);
+      Project_Tools.Files.Write_Raw_File (Project & "/docs/ignored.md", "an ignored unrelated edit");
+      Assert (Trial_Graders.Check_Changes (Project, "find") = Agent_Trial.Failed,
+              "an ignored file escaped independent scope checking");
+      Ada.Directories.Delete_File (Project & "/docs/ignored.md");
+      Project_Tools.Files.Write_Raw_File (Project & "/.gitignore", "*");
+      Assert (Trial_Graders.Check_Changes (Project, "find") = Agent_Trial.Failed,
+              "a change to a tracked fixture input escaped source-only checking");
    end Pilot_Graders_Reject_Controls;
 
    procedure Paired_Costs_Exclude_Fast_Failures (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -360,9 +475,131 @@ package body Tests.Campaign_Cases is
       end;
    end Paired_Costs_Exclude_Fast_Failures;
 
+   procedure Settings_Are_Native_And_Required (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package L renames Model_Runner.Llama;
+      package E renames Model_Runner.Errors;
+      Item : Model_Runner.CLI.Options.Command;
+      Request : Model_Runner.Generation.Request;
+      Source : Model_Runner.Byte_Sources.Files.File_Source;
+      Container : Model_Runner.GGUF.Containers.Container;
+      Prepared : L.Model;
+      Session : L.Session;
+      Status : E.Error_Info;
+      Clean : Boolean;
+      Captured : Unbounded_String;
+      Doc : J.Document;
+      Error : Jsonlib.Errors.Error_Info;
+   begin
+      Fresh;
+      Tiny_Model.Write (Root & "/settings.gguf");
+      declare
+         Line : constant String := "/settings json";
+         Parsed : constant Model_Runner.CLI.Interactive.Parsed_Command := Model_Runner.CLI.Interactive.Parse (Line);
+      begin
+         Assert (Parsed.First > 0 and then Line (Parsed.First .. Parsed.Last) = "json",
+                 "the interactive parser discarded the machine-readable settings argument");
+      end;
+      Model_Runner.Byte_Sources.Files.Open (Source, Root & "/settings.gguf", Status => Status);
+      Assert (E.Is_Ok (Status), "settings fixture open failed");
+      Model_Runner.GGUF.Containers.Reader.Parse (Container, Source, Status => Status);
+      Assert (E.Is_Ok (Status), "settings fixture parse failed");
+      L.Prepare (Prepared, Container, Source, Threads => 1, Status => Status);
+      Assert (E.Is_Ok (Status), "settings fixture preparation failed");
+      L.Open (Session, Prepared, 16, Cache => L.Exact, Status => Status);
+      Assert (E.Is_Ok (Status), "settings fixture session failed");
+      Item.Context_Size := 8_192;
+      Item.Cache := L.Halved;
+      Request.Sampling.Temperature := 0.625;
+      Request.Batch_Size := 7;
+      declare
+         Native : constant String := Model_Runner.CLI.Run_Settings.Describe
+           (Item, Prepared, Session, Request, Model_Runner.Templates.Thinking_Off,
+            Model_Runner.Templates.Effort_Unstated);
+      begin
+         Captured := To_Unbounded_String (Trial_Settings.Extract
+           ("ordinary output" & ASCII.LF & Model_Runner.CLI.Run_Settings.Marker & Native & ASCII.LF, Clean));
+         Assert (Clean, "native settings were refused");
+         Jsonlib.Parsers.Parse (Native, Doc, Error);
+         Assert (Error.Code = Jsonlib.Errors.No_Error, "native settings are not JSON");
+         Assert (J.As_Integer (Doc, J.Member (Doc, J.Root (Doc), "context_size")) = 16,
+                 "requested context was reported in place of actual capacity");
+         Assert (J.As_String (Doc, J.Member (Doc, J.Root (Doc), "cache_keys")) = L.Cache_Name (L.Exact),
+                 "requested cache was reported in place of actual storage");
+         Assert (J.As_Float (Doc, J.Member (Doc, J.Member (Doc, J.Root (Doc), "sampling"), "temperature")) = 0.625,
+                 "fitted request sampling was replaced by command defaults");
+      end;
+      L.Close (Session);
+      L.Close (Prepared, Status);
+      Model_Runner.GGUF.Containers.Close (Container);
+      Model_Runner.Byte_Sources.Files.Close (Source);
+      Assert (not Trial_Settings.Valid (To_String (Captured), Need_Work => True),
+              "session settings alone qualified a successful work result");
+      Captured := To_Unbounded_String (Trial_Settings.Extract
+        (Model_Runner.CLI.Run_Settings.Marker & Session_Settings & ASCII.LF
+         & Model_Runner.CLI.Run_Settings.Marker & Root_Settings, Clean));
+      Assert (Clean and then Trial_Settings.Valid (To_String (Captured), Need_Work => True),
+              "session and fitted work settings did not qualify");
+      Assert (Trial_Settings.Matches (To_String (Captured), 42, 8_192, False, 0),
+              "matching campaign inference controls were refused");
+      Assert (not Trial_Settings.Matches (To_String (Captured), 43, 8_192, False, 0)
+                and then not Trial_Settings.Matches (To_String (Captured), 42, 4_096, False, 0)
+                and then not Trial_Settings.Matches (To_String (Captured), 42, 8_192, True, 0)
+                and then not Trial_Settings.Matches (To_String (Captured), 42, 8_192, False, 1),
+              "a fitted call changed a campaign-owned inference control");
+      Captured := To_Unbounded_String (Trial_Settings.Extract ("no settings", Clean));
+      Assert (not Clean and then Length (Captured) = 0, "missing settings were invented");
+      Captured := To_Unbounded_String (Trial_Settings.Extract
+        (Model_Runner.CLI.Run_Settings.Marker & "{broken", Clean));
+      Assert (not Clean and then Length (Captured) = 0, "malformed native settings were ignored");
+      Assert (not Trial_Settings.Valid ("[" & Session_Settings & "," & Session_Settings & "]"),
+              "duplicate session snapshots passed");
+   end Settings_Are_Native_And_Required;
+
+   procedure Isolation_Protects_Graders_And_Descendants (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Directory : constant String := Ada.Directories.Full_Name (Root & "/private");
+      Project : constant String := Directory & "/project";
+      Guarded : constant String := Directory & "/verifier.txt";
+      Outside : constant String := Ada.Directories.Full_Name (Root & "/outside.txt");
+      Ran : Hostkit.Process.Process_Outcome;
+      Clean : Boolean;
+   begin
+      Fresh;
+      Ada.Directories.Create_Path (Project);
+      Project_Tools.Files.Write_Raw_File (Guarded, "protected verifier");
+      Project_Tools.Files.Write_Raw_File (Outside, "protected outside");
+      if not Trial_Confinement.Ready (Directory) then
+         Agent_Campaign.Run
+           (Guarded, Outside, Hostkit.Fs.Own_Executable, Directory & "/refused", Clean,
+            Only => "edit", Repeats => 1, Max_Seconds => 1);
+         Assert (not Clean and then not Ada.Directories.Exists (Directory & "/refused/edit-1-base-off.json"),
+                 "an unavailable boundary started an unconfined model attempt");
+         return;
+      end if;
+      Ran := Hostkit.Process.Run_Captured
+        (Trial_Confinement.Executable,
+         Trial_Confinement.Wrap
+           (Hostkit.Fs.Own_Executable,
+            [To_Unbounded_String ("probe"), To_Unbounded_String ("campaign-boundary"),
+             To_Unbounded_String (Project), To_Unbounded_String (Guarded), To_Unbounded_String (Outside)],
+            Project, Directory),
+         Stdout_Path => Root & "/boundary.txt", Stderr_Path => Root & "/boundary-errors.txt", Timeout_Ms => 20_000);
+      Assert (Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0,
+              "native boundary or descendant attack failed: "
+              & To_String (Project_Tools.Text.Read_Text_File (Root & "/boundary-errors.txt")));
+      Assert (Project_Tools.Files.Read_Raw_File (Guarded) = "protected verifier"
+                and then Project_Tools.Files.Read_Raw_File (Outside) = "protected outside",
+              "an agent or descendant changed a trusted host file");
+      Assert (Ada.Directories.Exists (Project & "/allowed.txt"), "the agent could not write its own project");
+   end Isolation_Protects_Graders_And_Descendants;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine (T, Settings_Are_Native_And_Required'Access, "settings come from fitted native calls");
+      Register_Routine
+        (T, Isolation_Protects_Graders_And_Descendants'Access, "OS isolation protects verifiers from descendants");
       Register_Routine (T, Metrics_Keep_Missing_Values'Access, "metrics and JSON preserve unavailable values");
       Register_Routine (T, Resume_Is_Bound_To_The_Request'Access, "resume binds every attempt to the campaign");
       Register_Routine (T, Adapter_Arms_Bind_Content_And_Scale'Access, "adapter arms bind content and scale");

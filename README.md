@@ -1251,6 +1251,7 @@ generated text in `answer.txt` — no trailing newline, no styling, no prefix.
 | `LANG` | locale, when neither of the above is set |
 | `MODEL_RUNNER_CONFIG` | path to the settings file, overriding its default location |
 | `MODEL_RUNNER_INSTRUCTIONS` | `off` disables standing `AGENTS.md` instructions |
+| `MODEL_RUNNER_REPORT_SETTINGS` | `1` emits native fitted settings frames for campaign capture |
 | `HF_TOKEN` | Hugging Face token, sent when downloading a gated model |
 | `HTTPS_PROXY`, `https_proxy`, `ALL_PROXY` | proxy a hub download goes through, the first set of the three |
 | `NO_PROXY`, `no_proxy` | hosts a hub download reaches directly, not through the proxy |

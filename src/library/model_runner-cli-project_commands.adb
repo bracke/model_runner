@@ -26,6 +26,7 @@ with Model_Runner.CLI.Project_Requests;
 with Model_Runner.CLI.Repo;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.CLI.Work;
+with Model_Runner.CLI.Run_Settings;
 with Model_Runner.Clocks;
 with Model_Runner.Code_Health.Ada_Profiles;
 with Model_Runner.Code_Health.Engine;
@@ -1005,6 +1006,17 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
          --  One memory of the calls across the rounds: a second round
          --  knows what the first answered and which revisions it saw.
+         if Ada.Environment_Variables.Value ("MODEL_RUNNER_REPORT_SETTINGS", "") = "1" then
+            Pres.Put_Line
+              (Self.Screen.all, ASCII.LF & Model_Runner.CLI.Run_Settings.Marker & Model_Runner.CLI.Run_Settings.Describe
+                 (Self.Item.all, Self.Prepared.all, Using.all, Request, Policy.Thinking, Policy.Effort,
+                  Role => (if Root then "root" else "helper"), Round => Round,
+                  Policy => Model_Runner.Framework.Inference_Policy.Line_Of (Policy),
+                  Steps => Positive'Max ((if Round = 1 then 1 else 2),
+                                         Step_Limit - Natural'Min (Steps_Taken, Step_Limit)),
+                  Tokens => (if Budget = 0 then 0 else Natural'Max (1, Budget - Natural'Min (All_Spent, Budget))),
+                  Seconds => (if Host = null then 0.0 else Host.Time_Left)));
+         end if;
          Model_Runner.Agent.Run
            (Source      => Self.Prepared.all,
             Session     => Using.all,

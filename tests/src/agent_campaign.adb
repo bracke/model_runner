@@ -22,6 +22,8 @@ with Model_Runner.Errors;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Campaign_Statistics;
+with Trial_Confinement;
+with Trial_Settings;
 
 package body Agent_Campaign is
 
@@ -114,9 +116,20 @@ package body Agent_Campaign is
          J.Insert (Doc, Root, Name,
                    (if Value < 0.0 then J.New_Null (Doc) else J.New_Float (Doc, Long_Float (Value))));
       end Seconds;
+      procedure Object (Name, JSON : String) is
+         Value : J.Document;
+         Error : Jsonlib.Errors.Error_Info;
+      begin
+         if JSON /= "" then
+            Jsonlib.Parsers.Parse (JSON, Value, Error);
+         end if;
+         J.Insert (Doc, Root, Name,
+                   (if JSON = "" or else Error.Code /= Jsonlib.Errors.No_Error then J.New_Null (Doc)
+                    else J.Copy (Doc, Value, J.Root (Value))));
+      end Object;
    begin
       J.Set_Root (Doc, Root);
-      J.Insert (Doc, Root, "schema_version", J.New_Integer (Doc, 1));
+      J.Insert (Doc, Root, "schema_version", J.New_Integer (Doc, 2));
       Text ("state", "finished");
       Text ("attempt_id", Id);
       Text ("manifest_sha256", Manifest_SHA256);
@@ -126,6 +139,10 @@ package body Agent_Campaign is
       Text ("ending", To_String (Item.Ending));
       Text ("directory", To_String (Item.Directory));
       Text ("figures", To_String (Item.Figures));
+      Text ("isolation", To_String (Item.Isolation));
+      Object ("resolved_settings", To_String (Item.Resolved_Settings));
+      Object ("configuration_before", To_String (Item.Configuration_Before));
+      Object ("configuration_after", To_String (Item.Configuration_After));
       Metric ("seed", Long_Long_Integer (Seed));
       Metric ("calls", Item.Executed_Calls);
       Metric ("tool_requests", Long_Long_Integer (Item.Calls));
@@ -161,12 +178,12 @@ package body Agent_Campaign is
    function Read_Record (Path : String; Into : in out J.Document) return Boolean is
       Error : Jsonlib.Errors.Error_Info;
    begin
-      if not Ada.Directories.Exists (Path) or else Ada.Directories.Size (Path) > 1_048_576 then
+      if not Ada.Directories.Exists (Path) or else Ada.Directories.Size (Path) > 8_388_608 then
          return False;
       end if;
       Jsonlib.Parsers.Parse
         (Project_Tools.Files.Read_Raw_File (Path), Into, Error,
-         (Max_Depth => 16, Max_Length => 1_048_576, Duplicates => Jsonlib.Parsers.Refuse_Duplicates));
+         (Max_Depth => 32, Max_Length => 8_388_608, Duplicates => Jsonlib.Parsers.Refuse_Duplicates));
       return Error.Code = Jsonlib.Errors.No_Error and then J.Kind (Into, J.Root (Into)) = J.Object_Value;
    end Read_Record;
 
@@ -203,6 +220,7 @@ package body Agent_Campaign is
       Results : constant J.Node := J.New_Array (Summary);
       Base_Hash, Adapted_Hash, Program_Hash, Harness_Hash : Unbounded_String;
       Base_Adapter_Hash, Adapted_Adapter_Hash, Manifest_Hash : Unbounded_String;
+      Isolation_Hash : Unbounded_String;
 
       function Adapter_Path (Arm : Positive) return String
       is (if Arm in 1 | 3 then Base_Adapter else Adapted_Adapter);
@@ -316,22 +334,53 @@ package body Agent_Campaign is
          Item : Agent_Trial.Attempt;
          Doc : J.Document;
 
+         function Qualified (Data : J.Document) return Boolean;
+
          procedure Record_Attempt (Result : Agent_Trial.Attempt) is
             Data : J.Document;
             Error : Jsonlib.Errors.Error_Info;
+            Rejected : Agent_Trial.Attempt := Result;
          begin
             Jsonlib.Parsers.Parse
               (Attempt_JSON (Id, Arm_Name, Local_Seed, Result, To_String (Manifest_Hash)), Data, Error);
             if Error.Code /= Jsonlib.Errors.No_Error then
                raise Program_Error with "invalid campaign serialization";
             end if;
+            if not Qualified (Data) then
+               Rejected.Grade := Agent_Trial.Infrastructure_Error;
+               Rejected.Ending := To_Unbounded_String ("OS isolation or native settings do not qualify this attempt");
+               Jsonlib.Parsers.Parse
+                 (Attempt_JSON (Id, Arm_Name, Local_Seed, Rejected, To_String (Manifest_Hash)), Data, Error);
+               Blocked := True;
+            end if;
             Atomic_Write (Path, Jsonlib.Serializers.To_String (Data));
             Keep (Data);
             Seen := True;
          end Record_Attempt;
+         function Qualified (Data : J.Document) return Boolean is
+            Result : constant J.Node := J.Root (Data);
+            JSON : constant String := Jsonlib.Serializers.To_String
+              (Data, J.Member (Data, Result, "resolved_settings"));
+         begin
+            return J.As_Integer (Data, J.Member (Data, Result, "schema_version")) = 2
+              and then J.As_String (Data, J.Member (Data, Result, "isolation")) = "bubblewrap-v1"
+              and then J.Kind (Data, J.Member (Data, Result, "configuration_before")) = J.Object_Value
+              and then J.Kind (Data, J.Member (Data, Result, "configuration_after")) = J.Object_Value
+              and then Trial_Settings.Valid
+                (JSON, Need_Work => J.As_String (Data, J.Member (Data, Result, "grade")) = "passed")
+              and then Trial_Settings.Matches
+                (JSON, Local_Seed, Context_Size, Arm >= 3, (if Adapter_Path (Arm) = "" then 0 else 1))
+              and then (J.As_String (Data, J.Member (Data, Result, "grade")) /= "passed"
+                        or else Jsonlib.Serializers.To_String
+                          (Data, J.Member (Data, Result, "configuration_before"))
+                        = Jsonlib.Serializers.To_String (Data, J.Member (Data, Result, "configuration_after")));
+         exception
+            when others => return False;
+         end Qualified;
       begin
          if Ada.Directories.Exists (Path) then
             if Read_Record (Path, Doc)
+              and then Qualified (Doc)
               and then J.As_String (Doc, J.Member (Doc, J.Root (Doc), "state")) = "finished"
               and then J.As_String (Doc, J.Member (Doc, J.Root (Doc), "attempt_id")) = Id
               and then J.As_String (Doc, J.Member (Doc, J.Root (Doc), "arm")) = Arm_Name
@@ -356,6 +405,12 @@ package body Agent_Campaign is
             Save_Summary;
             return;
          end if;
+         if File_Digest (Trial_Confinement.Executable) /= To_String (Isolation_Hash) then
+            Say ("isolation backend changed during the campaign");
+            Blocked := True;
+            Save_Summary;
+            return;
+         end if;
          if Adapter_Path (Arm) /= ""
            and then File_Digest (Adapter_Path (Arm))
              /= To_String (if Arm in 1 | 3 then Base_Adapter_Hash else Adapted_Adapter_Hash)
@@ -376,7 +431,7 @@ package body Agent_Campaign is
             Only => Task_Name, Clean => Passed, Repeats => 1, Knowledge => False, Carry => False,
             Max_Seconds => Max_Seconds, Context_Size => Context_Size, Inference => "fixed",
             Output_Directory => Directory & "/" & Id, On_Attempt => Record_Attempt'Access,
-            Extra_Arguments => Adapter_Arguments (Arm));
+            Extra_Arguments => Adapter_Arguments (Arm), Isolation_Root => Directory);
          if not Seen then
             Item.Task_Name := To_Unbounded_String (Task_Name);
             Item.Ending := To_Unbounded_String ("trial returned before producing an attempt");
@@ -452,6 +507,7 @@ package body Agent_Campaign is
       Adapted_Hash := To_Unbounded_String (File_Digest (Adapted));
       Program_Hash := To_Unbounded_String (File_Digest (Program));
       Harness_Hash := To_Unbounded_String (File_Digest (Hostkit.Fs.Own_Executable));
+      Isolation_Hash := To_Unbounded_String (File_Digest (Trial_Confinement.Executable));
       if Base_Adapter /= "" then
          Base_Adapter_Hash := To_Unbounded_String (File_Digest (Base_Adapter));
       end if;
@@ -468,7 +524,11 @@ package body Agent_Campaign is
          return;
       end if;
       J.Set_Root (Manifest, Root);
-      J.Insert (Manifest, Root, "schema_version", J.New_Integer (Manifest, 1));
+      J.Insert (Manifest, Root, "schema_version", J.New_Integer (Manifest, 2));
+      Put ("isolation", "bubblewrap-v1");
+      Put ("isolation_program", Trial_Confinement.Executable);
+      Put ("isolation_sha256", To_String (Isolation_Hash));
+      Put ("settings_schema", "native-session-and-fitted-calls-v1");
       Put ("base", Ada.Directories.Full_Name (Base));
       Put ("adapted", Ada.Directories.Full_Name (Adapted));
       Put ("program", Ada.Directories.Full_Name (Program));
@@ -524,11 +584,18 @@ package body Agent_Campaign is
          end if;
       end;
       J.Set_Root (Summary, Summary_Root);
-      J.Insert (Summary, Summary_Root, "schema_version", J.New_Integer (Summary, 1));
+      J.Insert (Summary, Summary_Root, "schema_version", J.New_Integer (Summary, 2));
       J.Insert (Summary, Summary_Root, "attempts", Results);
       Save_Summary;
       --  Check-only mode never changes the process's inference environment.
       if not Check_Only then
+         if not Trial_Confinement.Ready (Directory) then
+            Say ("OS isolation is unavailable; no campaign attempt was started");
+            Blocked := True;
+            Save_Summary;
+            Hostkit.Locks.Release (Guard);
+            return;
+         end if;
          declare
             Variables : Hostkit.String_Vectors.Vector;
             procedure Collect (Name, Value : String) is

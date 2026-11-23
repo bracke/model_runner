@@ -38,6 +38,10 @@ package Agent_Trial is
       Compactions     : Long_Long_Integer := -1;
       Prompt_Read     : Long_Long_Integer := -1;
       Prompt_Reused   : Long_Long_Integer := -1;
+      Resolved_Settings : Ada.Strings.Unbounded.Unbounded_String;
+      Configuration_Before : Ada.Strings.Unbounded.Unbounded_String;
+      Configuration_After : Ada.Strings.Unbounded.Unbounded_String;
+      Isolation       : Ada.Strings.Unbounded.Unbounded_String;
    end record;
 
    --  @param Name One task name, without separators.
@@ -96,6 +100,7 @@ package Agent_Trial is
    --  @param Output_Directory Optional parent for isolated trial projects; empty retains the usual location.
    --  @param On_Attempt Receives the independently graded result after the retained project has its final name.
    --  @param Extra_Arguments Native arguments appended without splitting, preserving paths containing spaces.
+   --  @param Isolation_Root Campaign directory hidden from the confined session except its own project and inputs.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -113,6 +118,7 @@ package Agent_Trial is
       Inference      : String := "fixed";
       Output_Directory : String := "";
       On_Attempt : access procedure (Item : Attempt) := null;
-      Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector);
+      Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
+      Isolation_Root : String := "");
 
 end Agent_Trial;

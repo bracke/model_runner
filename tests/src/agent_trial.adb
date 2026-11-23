@@ -18,6 +18,9 @@ with Hostkit.Spawn;
 with Child_Guards;
 with Trial_Graders;
 with Trial_Metrics;
+with Trial_Confinement;
+with Trial_Settings;
+with Model_Runner.CLI.Run_Settings;
 with Project_Tools.Files;
 
 package body Agent_Trial is
@@ -759,7 +762,8 @@ package body Agent_Trial is
       Inference      : String := "fixed";
       Output_Directory : String := "";
       On_Attempt : access procedure (Item : Attempt) := null;
-      Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector)
+      Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
+      Isolation_Root : String := "")
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -1006,6 +1010,13 @@ package body Agent_Trial is
       end Ordered;
 
       Order : constant Task_Order := Ordered;
+      function Artifact_Ready (Path : String) return Boolean is
+      begin
+         --  The confined process has stopped. Unlink its entry before a parent
+         --  writer opens the name, so neither symbolic nor hard links are followed.
+         return (not Ada.Directories.Exists (Path) and then not Hostkit.Fs.Is_Link (Path))
+           or else Hostkit.Fs.Delete_File (Path);
+      end Artifact_Ready;
    begin
       Clean := True;
       --  A name no task has runs nothing: said, not an empty trial.
@@ -1113,7 +1124,11 @@ package body Agent_Trial is
 
                      procedure Keep_Variable (Variable, Value : String) is
                      begin
-                        if Variable /= "TERM" then
+                        if Variable /= "TERM"
+                          and then (Isolation_Root = ""
+                                    or else Variable not in "MODEL_RUNNER_REPORT_SETTINGS"
+                                      | "MODEL_RUNNER_CONVERSATIONS")
+                        then
                            Spawned.Environment.Append (To_Unbounded_String (String'(Variable & "=" & Value)));
                         end if;
                      end Keep_Variable;
@@ -1381,6 +1396,14 @@ package body Agent_Trial is
                      --  The copy ends with the trial: stopped, it ran on with
                      --  its model loaded.
                      Spawned.Environment.Append (To_Unbounded_String ("MODEL_RUNNER_END_WITH_PARENT=1"));
+                     if Isolation_Root /= "" then
+                        Ada.Directories.Create_Path (Root & "/.trial-runtime/conversations");
+                        Spawned.Environment.Append (To_Unbounded_String ("MODEL_RUNNER_REPORT_SETTINGS=1"));
+                        Spawned.Environment.Append
+                          (To_Unbounded_String
+                             ("MODEL_RUNNER_CONVERSATIONS=" & Root & "/.trial-runtime/conversations"));
+                        Result.Isolation := To_Unbounded_String ("bubblewrap-v1");
+                     end if;
                      Spawned.Replace_Environment := True;
                      Spawned.Working_Directory := To_Unbounded_String (Root);
                      if not (Hostkit.Pty.Set_Size (Pair, (Rows => 50, Columns => 200))
@@ -1410,8 +1433,26 @@ package body Agent_Trial is
                         end loop;
                      end;
                      Words.Append_Vector (Extra_Arguments);
+                     if Isolation_Root /= "" then
+                        declare
+                           Inputs : Hostkit.String_Vectors.Vector := [To_Unbounded_String (Model)];
+                           Config : constant String := Ada.Environment_Variables.Value ("MODEL_RUNNER_CONFIG", "");
+                        begin
+                           if Config /= "" then
+                              Inputs.Append (To_Unbounded_String (Config));
+                           end if;
+                           for Word of Extra_Arguments loop
+                              if Ada.Directories.Exists (To_String (Word)) then
+                                 Inputs.Append (Word);
+                              end if;
+                           end loop;
+                           Words := Trial_Confinement.Wrap (Own_Copy, Words, Root, Isolation_Root, Inputs);
+                        end;
+                     end if;
                      Loading_Began := Ada.Calendar.Clock;
-                     if Hostkit.Spawn."/=" (Hostkit.Spawn.Start (Own_Copy, Words, Spawned, Child),
+                     if Hostkit.Spawn."/=" (Hostkit.Spawn.Start
+                                            ((if Isolation_Root = "" then Own_Copy
+                                              else Trial_Confinement.Executable), Words, Spawned, Child),
                                             Hostkit.Spawn.Spawn_Ok)
                      then
                         Ada.Text_IO.Put_Line ("agent-trial: " & Program & " did not start");
@@ -1466,6 +1507,23 @@ package body Agent_Trial is
                                        end if;
                                     end loop;
                                  end if;
+                                 if Isolation_Root /= "" then
+                                    if not Trial_Graders.Seal (Root) then
+                                       Clean := False;
+                                       return;
+                                    end if;
+                                    Result.Configuration_Before := To_Unbounded_String
+                                      (Trial_Settings.Configuration (Root));
+                                    Send ("/settings json");
+                                    if not Wait_For (Model_Runner.CLI.Run_Settings.Marker, 30.0)
+                                      or else not Prompt_Ready
+                                    then
+                                       Project_Tools.Files.Write_Raw_File
+                                         (Root & "-verifier/settings-startup.txt", Plain (To_String (Seen)));
+                                       Clean := False;
+                                       return;
+                                    end if;
+                                 end if;
                                  Send ("/task new Trial " & Name & " kind=" & To_String (One.Kind)
                                        --  In another project's tree, the project
                                        --  itself by its crate's name, as /init
@@ -1501,6 +1559,15 @@ package body Agent_Trial is
                         null;
                      end;
                      Hostkit.Pty.Close (Pair);
+                     declare
+                        Ended : Hostkit.Spawn.Status;
+                     begin
+                        if not Child_Guards.Wait (Watcher, 10.0, Ended) then
+                           Ada.Text_IO.Put_Line ("agent-trial: session did not stop; independent grading refused");
+                           Clean := False;
+                           return;
+                        end if;
+                     end;
 
                      --  What the screen showed, kept beside the session: what
                      --  the person driving it would have read -- whether a
@@ -1509,6 +1576,10 @@ package body Agent_Trial is
                      declare
                         Shown : Ada.Text_IO.File_Type;
                      begin
+                        if not Artifact_Ready (Root & "/.trial-screen.txt") then
+                           Clean := False;
+                           return;
+                        end if;
                         Ada.Text_IO.Create
                           (Shown, Ada.Text_IO.Out_File, Root & "/.trial-screen.txt");
                         Ada.Text_IO.Put (Shown, Plain (To_String (Seen)));
@@ -1644,12 +1715,33 @@ package body Agent_Trial is
                               & "its messages came out as their names");
                            Halted := True;
                         end if;
+                        if Isolation_Root /= "" then
+                           declare
+                              Good : Boolean;
+                           begin
+                              Result.Resolved_Settings := To_Unbounded_String (Trial_Settings.Extract (Text, Good));
+                              Result.Configuration_After := To_Unbounded_String (Trial_Settings.Configuration (Root));
+                              if not Good or else Length (Result.Configuration_Before) = 0
+                                or else Length (Result.Configuration_After) = 0
+                                or else (Worked and then not Trial_Settings.Valid
+                                  (To_String (Result.Resolved_Settings), Need_Work => True))
+                              then
+                                 Halted := True;
+                              end if;
+                           end;
+                        end if;
                         Result.Grade := Trial_Graders.Verify
                           (Root, Name, To_String (One.Expect), Text,
                            Completed => Worked
-                             and then Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") = 1);
+                             and then Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") = 1,
+                           Confine => Isolation_Root /= "");
                         if Result.Grade = Passed then
                            Result.Grade := Trial_Graders.Check_Changes (Root, Name);
+                           if Isolation_Root /= ""
+                             and then Result.Configuration_Before /= Result.Configuration_After
+                           then
+                              Result.Grade := Failed;
+                           end if;
                         end if;
                         if Halted or else not Invoked then
                            Result.Grade := Infrastructure_Error;
@@ -1675,6 +1767,10 @@ package body Agent_Trial is
                            Said  : Unbounded_String;
                            File  : Ada.Text_IO.File_Type;
                         begin
+                           if not Artifact_Ready (Diff) then
+                              Clean := False;
+                              return;
+                           end if;
                            --  New files counted with the changed: what a helper
                            --  wrote is new.
                            declare
@@ -1682,7 +1778,8 @@ package body Agent_Trial is
                               Ignore : Hostkit.Process.Process_Outcome;
                            begin
                               for Word of Hostkit.String_Vectors.Vector'
-                                ([To_Unbounded_String ("-C"), To_Unbounded_String (Root), To_Unbounded_String ("add"),
+                                ([To_Unbounded_String ("--git-dir=" & Root & "-verifier/baseline.git"),
+                                  To_Unbounded_String ("--work-tree=" & Root), To_Unbounded_String ("add"),
                                   To_Unbounded_String ("--intent-to-add"), To_Unbounded_String ("--"),
                                   To_Unbounded_String ("src"), To_Unbounded_String ("docs")])
                               loop
@@ -1693,7 +1790,9 @@ package body Agent_Trial is
                                  Stderr_Path => Hostkit.Fs.Null_Device);
                            end;
                            for Word of Hostkit.String_Vectors.Vector'
-                             ([To_Unbounded_String ("-C"), To_Unbounded_String (Root), To_Unbounded_String ("diff"),
+                             ([To_Unbounded_String ("--git-dir=" & Root & "-verifier/baseline.git"),
+                               To_Unbounded_String ("--work-tree=" & Root), To_Unbounded_String ("diff"),
+                               To_Unbounded_String ("--no-ext-diff"), To_Unbounded_String ("--no-textconv"),
                                To_Unbounded_String ("--shortstat"), To_Unbounded_String ("--"),
                                To_Unbounded_String ("src"), To_Unbounded_String ("docs")])
                            loop
@@ -1832,6 +1931,10 @@ package body Agent_Trial is
                      declare
                         File : Ada.Text_IO.File_Type;
                      begin
+                        if not Artifact_Ready (Root & "/.trial-session.txt") then
+                           Clean := False;
+                           return;
+                        end if;
                         Ada.Text_IO.Create (File, Ada.Text_IO.Out_File, Root & "/.trial-session.txt");
                         Ada.Text_IO.Put (File, Plain (To_String (Seen)));
                         Ada.Text_IO.Close (File);

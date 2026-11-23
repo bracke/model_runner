@@ -13,7 +13,7 @@ package Agent_Campaign is
    --  @param Seed Sampling seed for this attempt.
    --  @param Item Independently graded attempt and native measurements.
    --  @param Manifest_SHA256 Digest binding this result to the exact campaign configuration.
-   --  @return Version-one JSON, with unavailable measurements represented as null.
+   --  @return Version-two attempt JSON, with unavailable measurements represented as null.
    function Attempt_JSON
      (Id, Arm : String; Seed : Natural; Item : Agent_Trial.Attempt;
       Manifest_SHA256 : String := "") return String;

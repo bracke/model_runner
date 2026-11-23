@@ -7,14 +7,17 @@ with Hostkit.Fs;
 with Hostkit.Process;
 with Project_Tools.Files;
 with Project_Tools.Text;
+with Trial_Confinement;
 
 package body Trial_Graders is
 
    use Ada.Strings.Unbounded;
    use type Ada.Directories.File_Size;
+   use type Agent_Trial.Verdict;
 
    procedure Preserve (Root : String) is
       Where : constant String := Root & "-verifier";
+      Ran : Hostkit.Process.Process_Outcome;
    begin
       if Ada.Directories.Exists (Where) then
          Ada.Directories.Delete_Tree (Where);
@@ -26,7 +29,61 @@ package body Trial_Graders is
       if Ada.Directories.Exists (Root & "/src/test_math.c") then
          Ada.Directories.Copy_File (Root & "/src/test_math.c", Where & "/test_math.c");
       end if;
+      Ran := Hostkit.Process.Run_Captured
+        ("git", [To_Unbounded_String ("clone"), To_Unbounded_String ("--quiet"),
+                 To_Unbounded_String ("--bare"), To_Unbounded_String ("--no-hardlinks"),
+                 To_Unbounded_String (Ada.Directories.Full_Name (Root)),
+                 To_Unbounded_String (Ada.Directories.Full_Name (Where & "/baseline.git"))],
+         Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Where & "/baseline-errors.txt",
+         Timeout_Ms => 10_000);
+      if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0 then
+         return;
+      end if;
+      Ran := Hostkit.Process.Run_Captured
+        ("git", [To_Unbounded_String ("--git-dir=" & Ada.Directories.Full_Name (Where & "/baseline.git")),
+                 To_Unbounded_String ("read-tree"), To_Unbounded_String ("HEAD")],
+         Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Where & "/baseline-errors.txt",
+         Timeout_Ms => 10_000);
+      if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0 then
+         return;
+      end if;
    end Preserve;
+
+   function Seal (Root : String) return Boolean is
+      Base : constant Hostkit.String_Vectors.Vector :=
+        [To_Unbounded_String ("--git-dir=" & Ada.Directories.Full_Name (Root & "-verifier/baseline.git")),
+         To_Unbounded_String ("--work-tree=" & Ada.Directories.Full_Name (Root)),
+         To_Unbounded_String ("-c"), To_Unbounded_String ("core.hooksPath=/dev/null"),
+         To_Unbounded_String ("-c"), To_Unbounded_String ("commit.gpgsign=false"),
+         To_Unbounded_String ("-c"), To_Unbounded_String ("user.name=trial"),
+         To_Unbounded_String ("-c"), To_Unbounded_String ("user.email=trial@example.invalid")];
+      Words : Hostkit.String_Vectors.Vector := Base;
+      Ran : Hostkit.Process.Process_Outcome;
+   begin
+      Words.Append_Vector
+        ([To_Unbounded_String ("add"), To_Unbounded_String ("--force"), To_Unbounded_String ("--all"),
+          To_Unbounded_String ("--"), To_Unbounded_String ("."), To_Unbounded_String (":(exclude).git"),
+          To_Unbounded_String (":(exclude).model_runner"), To_Unbounded_String (":(exclude).trial-runtime"),
+          To_Unbounded_String (":(exclude)model_runner"), To_Unbounded_String (":(exclude)obj"),
+          To_Unbounded_String (":(exclude).trial-screen.txt"), To_Unbounded_String (":(exclude).trial-session.txt"),
+          To_Unbounded_String (":(exclude).trial-diff")]);
+      Ran := Hostkit.Process.Run_Captured
+        ("git", Words, Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Root & "-verifier/seal-errors.txt",
+         Timeout_Ms => 10_000);
+      if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0 then
+         return False;
+      end if;
+      Words := Base;
+      Words.Append_Vector
+        ([To_Unbounded_String ("commit"), To_Unbounded_String ("--allow-empty"),
+          To_Unbounded_String ("-qm"), To_Unbounded_String ("trusted trial initialization")]);
+      Ran := Hostkit.Process.Run_Captured
+        ("git", Words, Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Root & "-verifier/seal-errors.txt",
+         Timeout_Ms => 10_000);
+      return Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0;
+   exception
+      when others => return False;
+   end Seal;
 
    function Check_Changes (Root, Task_Name : String) return Agent_Trial.Verdict is
       Words : Hostkit.String_Vectors.Vector;
@@ -42,30 +99,52 @@ package body Trial_Graders is
          then Name = "src/calc.adb"
          else False);
    begin
-      Words := [To_Unbounded_String ("-C"), To_Unbounded_String (Root),
-                To_Unbounded_String ("status"), To_Unbounded_String ("--porcelain"),
-                To_Unbounded_String ("--untracked-files=all"), To_Unbounded_String ("--"),
-                To_Unbounded_String ("src"), To_Unbounded_String ("docs")];
-      Ran := Hostkit.Process.Run_Captured
-        ("git", Words, Stdout_Path => Path, Stderr_Path => Hostkit.Fs.Null_Device, Timeout_Ms => 10_000);
-      if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0
-        or else Ada.Directories.Size (Path) > 65_536
-      then
-         return Agent_Trial.Infrastructure_Error;
+      if Hostkit.Fs.Is_Link (Root & "/src") or else Hostkit.Fs.Is_Link (Root & "/docs") then
+         return Agent_Trial.Failed;
       end if;
-      declare
-         Text : constant String := Project_Tools.Files.Read_Raw_File (Path);
-         Start : Positive := Text'First;
-      begin
-         for I in Text'First .. Text'Last + 1 loop
-            if I > Text'Last or else Text (I) = ASCII.LF then
-               if I > Start and then (I - Start < 4 or else not Allowed (Text (Start + 3 .. I - 1))) then
-                  return Agent_Trial.Failed;
+      for Pass in 1 .. 2 loop
+         Words := [To_Unbounded_String ("--git-dir=" & Ada.Directories.Full_Name (Root & "-verifier/baseline.git")),
+                   To_Unbounded_String ("--work-tree=" & Ada.Directories.Full_Name (Root)),
+                   To_Unbounded_String ("-c"), To_Unbounded_String ("core.fsmonitor=false")];
+         if Pass = 1 then
+            Words.Append_Vector
+              ([To_Unbounded_String ("diff"), To_Unbounded_String ("--name-only"),
+                To_Unbounded_String ("--no-ext-diff"), To_Unbounded_String ("--no-textconv"),
+                To_Unbounded_String ("HEAD"), To_Unbounded_String ("--")]);
+         else
+            --  No --exclude-standard: an ignore rule cannot hide an output.
+            --  Exclude only the native fixture's reserved runtime directories.
+            Words.Append_Vector
+              ([To_Unbounded_String ("ls-files"), To_Unbounded_String ("--others"),
+                To_Unbounded_String ("--full-name"), To_Unbounded_String ("--"), To_Unbounded_String ("."),
+                To_Unbounded_String (":(exclude).git"), To_Unbounded_String (":(exclude).model_runner"),
+                To_Unbounded_String (":(exclude).trial-runtime"), To_Unbounded_String (":(exclude)model_runner"),
+                To_Unbounded_String (":(exclude)obj"), To_Unbounded_String (":(exclude).trial-screen.txt"),
+                To_Unbounded_String (":(exclude).trial-session.txt"), To_Unbounded_String (":(exclude).trial-diff")]);
+         end if;
+         Ran := Hostkit.Process.Run_Captured
+           ("git", Words, Stdout_Path => Path, Stderr_Path => Hostkit.Fs.Null_Device, Timeout_Ms => 10_000);
+         if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0
+           or else Ada.Directories.Size (Path) > 65_536
+         then
+            return Agent_Trial.Infrastructure_Error;
+         end if;
+         declare
+            Text : constant String := Project_Tools.Files.Read_Raw_File (Path);
+            Start : Positive := Text'First;
+         begin
+            for I in Text'First .. Text'Last + 1 loop
+               if I > Text'Last or else Text (I) = ASCII.LF then
+                  if I > Start and then (not Allowed (Text (Start .. I - 1))
+                    or else Hostkit.Fs.Is_Link (Root & "/" & Text (Start .. I - 1)))
+                  then
+                     return Agent_Trial.Failed;
+                  end if;
+                  Start := I + 1;
                end if;
-               Start := I + 1;
-            end if;
-         end loop;
-      end;
+            end loop;
+         end;
+      end loop;
       return Agent_Trial.Passed;
    exception
       when others => return Agent_Trial.Infrastructure_Error;
@@ -73,11 +152,28 @@ package body Trial_Graders is
 
    function Verify
      (Root, Task_Name, Expect, Transcript : String;
-      Completed : Boolean) return Agent_Trial.Verdict
+      Completed : Boolean; Confine : Boolean := False) return Agent_Trial.Verdict
    is
-      Where : constant String := Root & "-verifier";
+      Where : constant String := Ada.Directories.Full_Name (Root & "-verifier");
       Words : Hostkit.String_Vectors.Vector;
       Ran   : Hostkit.Process.Process_Outcome;
+      function Run_Check (Program, Output, Errors : String; Timeout : Natural)
+        return Hostkit.Process.Process_Outcome
+      is
+         Native : constant String := Hostkit.Process.Locate (Program);
+      begin
+         if not Confine then
+            return Hostkit.Process.Run_Captured
+              (Program, Words, Stdout_Path => Output, Stderr_Path => Errors, Timeout_Ms => Timeout);
+         elsif Native = "" or else Trial_Confinement.Executable = "" then
+            return (others => <>);
+         end if;
+         return Hostkit.Process.Run_Captured
+           (Trial_Confinement.Executable, Trial_Confinement.Wrap
+              (Native, Words, Where & "/obj", Readable =>
+                 [To_Unbounded_String (Ada.Directories.Full_Name (Root)), To_Unbounded_String (Where)]),
+            Stdout_Path => Output, Stderr_Path => Errors, Timeout_Ms => Timeout);
+      end Run_Check;
       function Has (Text, Part : String) return Boolean
       is (Ada.Strings.Fixed.Index (Text, Part) > 0);
       function Final_Answer return String is
@@ -141,21 +237,18 @@ package body Trial_Graders is
          end if;
          Words := [To_Unbounded_String ("-std=c99"), To_Unbounded_String ("-Wall"),
                    To_Unbounded_String ("-Wextra"), To_Unbounded_String ("-Werror"),
-                   To_Unbounded_String ("-I" & Root & "/src"), To_Unbounded_String (Root & "/src/math.c"),
+                   To_Unbounded_String ("-I" & Ada.Directories.Full_Name (Root & "/src")),
+                   To_Unbounded_String (Ada.Directories.Full_Name (Root & "/src/math.c")),
                    To_Unbounded_String (Where & "/test_math.c"), To_Unbounded_String ("-o"),
-                   To_Unbounded_String (Where & "/check")];
-         Ran := Hostkit.Process.Run_Captured
-           ("cc", Words, Stdout_Path => Where & "/build.txt", Stderr_Path => Where & "/build-errors.txt",
-            Timeout_Ms => 60_000);
+                   To_Unbounded_String (Where & "/obj/check")];
+         Ran := Run_Check ("cc", Where & "/build.txt", Where & "/build-errors.txt", 60_000);
          if not Ran.Started or else Ran.Timed_Out then
             return Agent_Trial.Infrastructure_Error;
          elsif Ran.Exit_Status /= 0 then
             return Agent_Trial.Failed;
          end if;
          Words.Clear;
-         Ran := Hostkit.Process.Run_Captured
-           (Where & "/check", Words, Stdout_Path => Where & "/check.txt",
-            Stderr_Path => Where & "/check-errors.txt", Timeout_Ms => 10_000);
+         Ran := Run_Check (Where & "/obj/check", Where & "/check.txt", Where & "/check-errors.txt", 10_000);
          return (if not Ran.Started then Agent_Trial.Infrastructure_Error
                  elsif Ran.Timed_Out then Agent_Trial.Failed
                  elsif Ran.Exit_Status = 0 then Agent_Trial.Passed else Agent_Trial.Failed);
@@ -180,39 +273,26 @@ package body Trial_Graders is
          --  Force a rebuild into trusted storage, ignoring any objects produced by the agent.
          Words := [To_Unbounded_String ("-q"), To_Unbounded_String ("-f"),
                    To_Unbounded_String ("-D"), To_Unbounded_String (Where & "/obj"),
-                   To_Unbounded_String ("-aI" & Root & "/src"),
+                   To_Unbounded_String ("-aI" & Ada.Directories.Full_Name (Root & "/src")),
                    To_Unbounded_String (Where & "/test_add.adb"), To_Unbounded_String ("-o"),
-                   To_Unbounded_String (Where & "/check")];
+                   To_Unbounded_String (Where & "/obj/check")];
          if Task_Name = "styled" then
             Words.Append (To_Unbounded_String ("-gnatyy"));
             Words.Append (To_Unbounded_String ("-gnatwae"));
          end if;
-         Ran := Hostkit.Process.Run_Captured
-           ("gnatmake", Words, Stdout_Path => Where & "/build.txt", Stderr_Path => Where & "/build-errors.txt",
-            Timeout_Ms => 60_000);
+         Ran := Run_Check ("gnatmake", Where & "/build.txt", Where & "/build-errors.txt", 60_000);
          if not Ran.Started or else Ran.Timed_Out then
             return Agent_Trial.Infrastructure_Error;
          elsif Ran.Exit_Status /= 0 then
             return Agent_Trial.Failed;
          end if;
          Words.Clear;
-         Ran := Hostkit.Process.Run_Captured
-           (Where & "/check", Words, Stdout_Path => Where & "/check.txt",
-            Stderr_Path => Where & "/check-errors.txt", Timeout_Ms => 10_000);
+         Ran := Run_Check (Where & "/obj/check", Where & "/check.txt", Where & "/check-errors.txt", 10_000);
          return (if not Ran.Started then Agent_Trial.Infrastructure_Error
                  elsif Ran.Timed_Out then Agent_Trial.Failed
                  elsif Ran.Exit_Status = 0 then Agent_Trial.Passed else Agent_Trial.Failed);
       elsif Task_Name = "find" or else Expect /= "" then
-         Words := [To_Unbounded_String ("-C"), To_Unbounded_String (Root),
-                   To_Unbounded_String ("status"), To_Unbounded_String ("--porcelain"),
-                   To_Unbounded_String ("--untracked-files=all"), To_Unbounded_String ("--"),
-                   To_Unbounded_String ("src"), To_Unbounded_String ("docs")];
-         Ran := Hostkit.Process.Run_Captured
-           ("git", Words, Stdout_Path => Where & "/changes.txt", Stderr_Path => Hostkit.Fs.Null_Device,
-            Timeout_Ms => 10_000);
-         if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0 then
-            return Agent_Trial.Infrastructure_Error;
-         elsif Ada.Directories.Size (Where & "/changes.txt") /= 0 then
+         if Check_Changes (Root, Task_Name) /= Agent_Trial.Passed then
             return Agent_Trial.Failed;
          end if;
          return (if Expect /= "" then

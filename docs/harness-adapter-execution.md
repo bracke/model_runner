@@ -3,6 +3,8 @@
 Execution date: 2026-11-22. The [plan](plan-harness-adapters.md) is partially implemented.
 The published adapter has not been evaluated, and no inference default has changed.
 Per-arm runtime campaign qualification was added on 2026-11-23.
+Subsequent [campaign hardening](campaign-hardening.md) adds OS-isolated verifiers, protected baselines and
+native resolved-setting capture. Earlier isolation/reporting limitations below describe their checkpoints.
 
 The subsequent [repository audit repair](repository-audit-repair.md) resolves the dependency conflict and
 addresses the earlier findings. Validation counts and build limitations below describe their original

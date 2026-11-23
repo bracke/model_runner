@@ -17,13 +17,16 @@ paired synthetic rank-32 timing now document the CPU tradeoff. Per-arm runtime a
 qualified through the native campaign workflow, with adapter hashes/scales and manifest-bound attempts.
 The embedded API also accepts bounded CPU attachments and reports adapter ownership in provenance; its
 standalone consumer completes with and without an adapter.
+Campaign sessions and independent graders now use OS confinement and protected baselines. Version-two
+records capture actual session/root/helper settings and project configuration; see
+[campaign hardening and validation](campaign-hardening.md).
 The released trained-adapter campaign remains pending. A matched before/after comparison without adapters
 now passes the declared local 5% prompt/decode median gate in two seven-pair release-engine batches on the
 0.8B CPU case; see [the evidence and limits](harness-adapter-no-adapter-check.md).
-The mandatory full suite now passes 966/966. The subsequent
+The mandatory full suite now passes 968/968. The
 [repository repair](repository-audit-repair.md) fixes the dependency conflict and addresses the nineteen
-audit findings; the final repository audit passes 30,555 checks with zero failures. Bounded CPU tiles reduce
-observed prompt
+earlier audit findings. [Campaign hardening](campaign-hardening.md) records the subsequent validation.
+Bounded CPU tiles reduce observed prompt
 overhead from 44–46% to about 1–5% in the saved synthetic case; runtime contexts are versioned accordingly.
 Device attachment and complete training capture remain unimplemented.
 See [the execution report](harness-adapter-execution.md) and

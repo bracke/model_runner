@@ -172,12 +172,6 @@ package body Library_Surface is
       --  own asks the same.
       new String'("Head_Format"),
 
-      --  What a session holds its values in, where --kv-values stored them
-      --  otherwise than its keys. The command chose and has no reason to
-      --  ask back; a caller handed a session, or a test holding one to
-      --  what it asked for, does.
-      new String'("Value_Precision_Of"),
-
       --  Which of the packed kernels' two compilations is bound: the one
       --  through shared memory alone, which a device without subgroup
       --  operations gets and the suite asks for on one that has them.
