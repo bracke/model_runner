@@ -26,11 +26,27 @@ trained-adapter campaign, device execution or training-data stages.
 - The changelog records the earlier headless implementation and this repair. Its ancestry gate requires a
   local commit containing that record; editing the file alone is insufficient.
 
+The implementation and changelog checkpoint is model_runner commit `3b5cbdf5`; the linked database pin
+repair is database commit `fde9939`. Both commits are local.
+
 ## Validation
 
 Normal Alire application and test builds pass. The mandatory full suite passes **966/966**, with zero failed
 assertions and unexpected errors. The focused project-state suite passes **153/153**, and the release-gate
-suite passes **11/11**. The final repository audit follows the local changelog checkpoint.
+suite passes **11/11**. The final repository audit completes **30,555 checks with zero failures** (exit 0).
+All thirty-four previously blocked checks now run successfully.
+
+The audit reports no dependency-warning verdict for Ada_Quality or SSH_Lib because they have no qualifying
+compilation evidence in this tree. It also leaves its own duration unqualified: 223.56 CPU seconds exceeds
+the existing 195-second budget, but measured host load 3.54 exceeds the gate's idle-load requirement.
+No warning allowance, duration budget or load threshold was changed.
+
+Final logs:
+
+- `/tmp/model-runner-audit-repair-root-final-build.log`
+- `/tmp/model-runner-audit-repair-tests-final-build.log`
+- `/tmp/model-runner-audit-repair-full-suite.log`
+- `/tmp/model-runner-audit-repair-final-audit.log`
 
 Logs use the `/tmp/model-runner-audit-repair-` prefix. These are local validation artifacts, not durable
 benchmark evidence. Existing measurement JSON files retain the original campaign environment and results.

@@ -22,7 +22,8 @@ now passes the declared local 5% prompt/decode median gate in two seven-pair rel
 0.8B CPU case; see [the evidence and limits](harness-adapter-no-adapter-check.md).
 The mandatory full suite now passes 966/966. The subsequent
 [repository repair](repository-audit-repair.md) fixes the dependency conflict and addresses the nineteen
-audit findings; the final repository audit is running. Bounded CPU tiles reduce observed prompt
+audit findings; the final repository audit passes 30,555 checks with zero failures. Bounded CPU tiles reduce
+observed prompt
 overhead from 44–46% to about 1–5% in the saved synthetic case; runtime contexts are versioned accordingly.
 Device attachment and complete training capture remain unimplemented.
 See [the execution report](harness-adapter-execution.md) and
