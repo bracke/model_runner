@@ -49,3 +49,6 @@ with the reference's revision. Malformed reference arguments cannot fall back to
 The feature addresses editing uncertainty observed in the
 [Mellum trace review](mellum-trajectory-review.md). Deterministic structural safety and a bounded real-model
 check are separate evidence: successful structural replacement alone does not establish better task completion.
+
+See [validation and limits](reference-editing-validation.md). The one completed Mellum check uses passage
+editing, so it supplies no evidence of real-model adoption of reference mode.

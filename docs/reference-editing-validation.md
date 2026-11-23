@@ -29,3 +29,8 @@ and integration cases remain green in the complete suite.
 The model check is one ordinary task with the actual configured Mellum model and unchanged task wording.
 It must report whether reference mode was used and retain any failure. These structural results do not
 establish improved model completion rates.
+
+The [completed model check](mellum-reference-edit-results.md) passes the coding task and capture/export
+validation, including validation with original evidence hidden. Mellum chooses ordinary `old_text`
+editing and makes no reference-mode call. Real-model use and any completion benefit of the new mode
+remain unqualified; no further attempt or training run is started.
