@@ -84,6 +84,12 @@ only from finished
 attempts; transcripts, diffs, configurations and verifier results are retained. The process holds a temporary
 idle/sleep inhibitor and the existing hard deadline.
 
+A separate lightweight operational monitor samples host load every 45 seconds and removes generated panel
+files from finished attempts. It retains the native summary and every transcript. After the campaign exits,
+it attempts native check-only reuse if at least two minutes remain before the same deadline, records the
+exit status and whether the summary hash changed, and writes `pilot-result.json` in the pilot directory.
+That result file is not present while the pilot is running; no completed pilot result is claimed here.
+
 The user authorized sixteen hours and reported the machine quiet. The shared screen/pilot deadline is
 2026-11-24 04:07:54 UTC. Confirmation remains conditional on a promising pilot and its separate frozen-suite
 and uncertainty requirements. No model default has changed.
