@@ -81,3 +81,6 @@ transcript, source diff, protected verifier outputs, capture, verdict and `full-
 Full event content is retained locally rather than committed. The source checkpoint is `b5d35726`;
 no product or inference implementation changes are needed for this check. The run log is
 `/tmp/model-runner-mellum-capture-run.log`.
+
+The subsequent [offline trace review](mellum-trajectory-review.md) checks actual feedback delivery,
+repeated inspections and both forced continuations without starting another model run.

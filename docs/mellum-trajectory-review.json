@@ -1,0 +1,380 @@
+{
+  "schema": "model_runner.mellum_trace_review.v1",
+  "date": "2026-11-23",
+  "state": "complete",
+  "method": "Read-only inspection of the existing capture and corresponding source; no generation, tool replay or numerical comparison",
+  "capture_sha256": "91a229abe871988975653bd99eab4daebd035223150cd212fbc5b131fac5a7f2",
+  "export_sha256": "a707a226265a68e829b7f4cab91869de5459fe156b744a4b6fb9280f46cf362c",
+  "original_result": "docs/mellum-trajectory-results.json",
+  "feedback": {
+    "tool_result_sequence": 6771,
+    "characters": 462,
+    "text": "checks failed, VER-000001\nbuild: passed\ntest: passed\nrun: failed\n\nraised CONSTRAINT_ERROR : calc.adb:5 overflow check failed\n\nsrc/calc.adb line 5 is: if (B > 0 and A > Integer'Last - B) or -- in Ada: and works out both sides even where the first is False; a guard that keeps the second from overflowing needs and then; or works out both sides even where the first is True; a guard needs or else; as Ada writes it: if (B > 0 and then A > Integer'Last - B) or else",
+    "first_subsequent_input": 6774,
+    "first_model_acknowledgement_reply": 8815,
+    "all_subsequent_inputs_preserve_entire_feedback": true,
+    "subsequent_input_sequences": [
+      6774,
+      8820,
+      12867,
+      19013,
+      19142,
+      19991,
+      24481
+    ],
+    "first_model_response_misclassifies_runtime_overflow_as_possible_syntax_problem": true
+  },
+  "tool_delivery": [
+    {
+      "call": 1,
+      "result_sequence": 6558,
+      "next_input": 6561,
+      "returned_characters": 239,
+      "delivered_verbatim": true
+    },
+    {
+      "call": 2,
+      "result_sequence": 6771,
+      "next_input": 6774,
+      "returned_characters": 462,
+      "delivered_verbatim": true
+    },
+    {
+      "call": 3,
+      "result_sequence": 8817,
+      "next_input": 8820,
+      "returned_characters": 557,
+      "delivered_verbatim": true
+    },
+    {
+      "call": 4,
+      "result_sequence": 12864,
+      "next_input": 12867,
+      "returned_characters": 557,
+      "delivered_verbatim": true
+    },
+    {
+      "call": 5,
+      "result_sequence": 19139,
+      "next_input": 19142,
+      "returned_characters": 149,
+      "delivered_verbatim": true
+    },
+    {
+      "call": 6,
+      "result_sequence": 19988,
+      "next_input": 19991,
+      "returned_characters": 557,
+      "delivered_verbatim": true
+    },
+    {
+      "call": 7,
+      "result_sequence": 24478,
+      "next_input": 24481,
+      "returned_characters": 744,
+      "delivered_verbatim": true
+    }
+  ],
+  "inspection_after_failure": {
+    "read_file_calls": [
+      3,
+      4,
+      5,
+      6
+    ],
+    "whole_file_calls": [
+      3,
+      4,
+      6
+    ],
+    "whole_file_result_contains_complete_unchanged_source": true,
+    "source_characters": 529,
+    "source_sha256": "5ae00fe7c7c12873ef4e6cafbcd1a589cd52e2909b587f04b7c8be6f1be81d92",
+    "ranged_read_call": 5,
+    "ranged_read_arguments": {
+      "first_line": 4,
+      "last_line": 6
+    },
+    "declaration_lookup_call": 7,
+    "additional_edit_attempts": 0,
+    "observed_reply_concerns": [
+      "Misinterpreting the runtime overflow as a possible syntax or indentation issue, despite successful compilation",
+      "Repeatedly doubting the exact old_text and indentation needed to issue another edit",
+      "Continuing to propose Integer'First + B for the negative bound, which is arithmetically wrong for negative B"
+    ],
+    "initial_source_snapshot_remains_in_conversation_history": true,
+    "initial_source_snapshot_characters": 503,
+    "all_inputs_retain_initial_source_snapshot": true,
+    "wrong_negative_bound_precedes_first_closure": true,
+    "wrong_negative_bound_offset_in_first_reply": 1935
+  },
+  "forced_closures": [
+    {
+      "forced_sequence": 6148,
+      "ending_sequence": 6147,
+      "preceding_input": 4,
+      "continuation_input": 6150,
+      "prior_prompt_retained": true,
+      "closing_exact": true,
+      "appended_characters": 7089,
+      "tail_before_closing": "lse\n         return Integer'First;\n      end if;\nelse\n   return A + B;\nend if;\n\nBut we need to place it inside the function. The function currently has:\n\n4:    begin\n5:       return A + B;\n6:    end Add;\n\nWe can replace line 5 with the above conditional block.\n\nSo new_text could be:\n\nif (B > 0 and A > Integer'Last - B) or\n   (B < 0 and A < Integer'",
+      "next_reply_sequence": 6556,
+      "emitted_characters": 7078,
+      "continuation_exactly_prior_plus_emitted_plus_closing": true,
+      "loss_mask": 0,
+      "closing": "\n</think>\n\n",
+      "budget_tokens": 2048,
+      "continuation_max_tokens": 4096
+    },
+    {
+      "forced_sequence": 19011,
+      "ending_sequence": 19010,
+      "preceding_input": 12867,
+      "continuation_input": 19013,
+      "prior_prompt_retained": true,
+      "closing_exact": true,
+      "appended_characters": 6780,
+      "tail_before_closing": "ents and the end Add; but the end Add; is also part of the body? Actually the structure is:\n\nfunction Add (A, B : Integer) return Integer is\nbegin\n   ... body ...\nend Add;\n\nIn the file, it's:\n\n4:    begin\n5:       return A + B;\n6:    end Add;\n\nSo the body is just the statements between begin and end Add;. The begin is on line 4, and the end Add; is",
+      "next_reply_sequence": 19137,
+      "emitted_characters": 6769,
+      "continuation_exactly_prior_plus_emitted_plus_closing": true,
+      "loss_mask": 0,
+      "closing": "\n</think>\n\n",
+      "budget_tokens": 2048,
+      "continuation_max_tokens": 4096
+    }
+  ],
+  "generation_timeline": [
+    {
+      "generation": 1,
+      "start_sequence": 3,
+      "input_sequence": 4,
+      "prompt_characters": 9635,
+      "input_tokens": 2726,
+      "max_tokens": 2048,
+      "grammar_constrained": true,
+      "end_sequence": 6147,
+      "generated_tokens": 2048,
+      "reason": "maximum_tokens",
+      "entire_failed_check_feedback_present": false
+    },
+    {
+      "generation": 2,
+      "start_sequence": 6149,
+      "input_sequence": 6150,
+      "prompt_characters": 16724,
+      "input_tokens": 4778,
+      "max_tokens": 4096,
+      "grammar_constrained": true,
+      "end_sequence": 6555,
+      "generated_tokens": 135,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": false
+    },
+    {
+      "generation": 3,
+      "start_sequence": 6560,
+      "input_sequence": 6561,
+      "prompt_characters": 17428,
+      "input_tokens": 5008,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 6768,
+      "generated_tokens": 69,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": false
+    },
+    {
+      "generation": 4,
+      "start_sequence": 6773,
+      "input_sequence": 6774,
+      "prompt_characters": 18258,
+      "input_tokens": 5228,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 8814,
+      "generated_tokens": 680,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": true
+    },
+    {
+      "generation": 5,
+      "start_sequence": 8819,
+      "input_sequence": 8820,
+      "prompt_characters": 21507,
+      "input_tokens": 6125,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 12861,
+      "generated_tokens": 1347,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": true
+    },
+    {
+      "generation": 6,
+      "start_sequence": 12866,
+      "input_sequence": 12867,
+      "prompt_characters": 26969,
+      "input_tokens": 7689,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 19010,
+      "generated_tokens": 2048,
+      "reason": "maximum_tokens",
+      "entire_failed_check_feedback_present": true
+    },
+    {
+      "generation": 7,
+      "start_sequence": 19012,
+      "input_sequence": 19013,
+      "prompt_characters": 33749,
+      "input_tokens": 9741,
+      "max_tokens": 4096,
+      "grammar_constrained": false,
+      "end_sequence": 19136,
+      "generated_tokens": 41,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": true
+    },
+    {
+      "generation": 8,
+      "start_sequence": 19141,
+      "input_sequence": 19142,
+      "prompt_characters": 34110,
+      "input_tokens": 9870,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 19985,
+      "generated_tokens": 281,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": true
+    },
+    {
+      "generation": 9,
+      "start_sequence": 19990,
+      "input_sequence": 19991,
+      "prompt_characters": 35853,
+      "input_tokens": 10368,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 24475,
+      "generated_tokens": 1495,
+      "reason": "end_of_sequence",
+      "entire_failed_check_feedback_present": true
+    },
+    {
+      "generation": 10,
+      "start_sequence": 24480,
+      "input_sequence": 24481,
+      "prompt_characters": 41968,
+      "input_tokens": 12174,
+      "max_tokens": 2048,
+      "grammar_constrained": false,
+      "end_sequence": 25082,
+      "generated_tokens": 201,
+      "reason": "time_limit",
+      "entire_failed_check_feedback_present": true
+    }
+  ],
+  "tool_chronology": [
+    {
+      "id": 1,
+      "call_sequence": 6557,
+      "result_sequence": 6558,
+      "name": "edit_file",
+      "arguments": {
+        "path": "src/calc.adb",
+        "old_text": "       return A + B;",
+        "new_text": "if (B > 0 and A > Integer'Last - B) or\n   (B < 0 and A < Integer'First + B) then\n      if B > 0 then\n         return Integer'Last;\n      else\n         return Integer'First;\n      end if;\n   else\n      return A + B;\n   end if;"
+      },
+      "raw_reply_sequence": 6556,
+      "next_input": 6561
+    },
+    {
+      "id": 2,
+      "call_sequence": 6770,
+      "result_sequence": 6771,
+      "name": "run_checks",
+      "arguments": {
+        "scope": "full"
+      },
+      "raw_reply_sequence": 6769,
+      "next_input": 6774
+    },
+    {
+      "id": 3,
+      "call_sequence": 8816,
+      "result_sequence": 8817,
+      "name": "read_file",
+      "arguments": {
+        "path": "src/calc.adb"
+      },
+      "raw_reply_sequence": 8815,
+      "next_input": 8820
+    },
+    {
+      "id": 4,
+      "call_sequence": 12863,
+      "result_sequence": 12864,
+      "name": "read_file",
+      "arguments": {
+        "path": "src/calc.adb"
+      },
+      "raw_reply_sequence": 12862,
+      "next_input": 12867
+    },
+    {
+      "id": 5,
+      "call_sequence": 19138,
+      "result_sequence": 19139,
+      "name": "read_file",
+      "arguments": {
+        "path": "src/calc.adb",
+        "first_line": 4,
+        "last_line": 6
+      },
+      "raw_reply_sequence": 19137,
+      "next_input": 19142
+    },
+    {
+      "id": 6,
+      "call_sequence": 19987,
+      "result_sequence": 19988,
+      "name": "read_file",
+      "arguments": {
+        "path": "src/calc.adb"
+      },
+      "raw_reply_sequence": 19986,
+      "next_input": 19991
+    },
+    {
+      "id": 7,
+      "call_sequence": 24477,
+      "result_sequence": 24478,
+      "name": "find",
+      "arguments": {
+        "kind": "declaration",
+        "query": "Add",
+        "path": "src/calc.adb"
+      },
+      "raw_reply_sequence": 24476,
+      "next_input": 24481
+    }
+  ],
+  "context": {
+    "capacity": 131072,
+    "largest_captured_input_tokens": 12174,
+    "compactions": 0
+  },
+  "conclusions": {
+    "missing_failed_check_feedback": false,
+    "tool_response_truncation_found": false,
+    "lost_text_at_forced_continuations": false,
+    "inspection_loop_present_on_naturally_ended_generations": true,
+    "confirmed_harness_defect_found": false,
+    "closure_counterfactual_effect": "Unknown without a controlled comparison; complete continuation preservation does not prove the forced closure was harmless",
+    "broader_model_or_numerical_cause": "Not established by one offline trace",
+    "production_changes_made": false,
+    "new_model_runs": 0
+  }
+}
