@@ -1,7 +1,7 @@
 with Agent_Trial;
 with Model_Runner.Numerics;
 
---  Paired four-arm campaigns over Agent_Trial, using its deployed /work workflow.
+--  Paired campaigns over Agent_Trial; four arms by default, or two with thinking off.
 package Agent_Campaign is
 
    --  @param Path File to hash without loading it whole.
@@ -34,6 +34,7 @@ package Agent_Campaign is
    --  @param Adapted_Adapter Optional runtime adapter for both adapted thinking settings.
    --  @param Base_Scale Native-representable finite scale; must be one when no adapter is selected.
    --  @param Adapted_Scale Native-representable finite scale; must be one when no adapter is selected.
+   --  @param Thinking_Off_Only Run only base-off and adapted-off, preserving alternating paired order.
    procedure Run
      (Base, Adapted, Program, Output_Directory : String;
       Clean : out Boolean;
@@ -47,6 +48,7 @@ package Agent_Campaign is
       Base_Adapter : String := "";
       Adapted_Adapter : String := "";
       Base_Scale : Model_Runner.Numerics.Real := 1.0;
-      Adapted_Scale : Model_Runner.Numerics.Real := 1.0);
+      Adapted_Scale : Model_Runner.Numerics.Real := 1.0;
+      Thinking_Off_Only : Boolean := False);
 
 end Agent_Campaign;

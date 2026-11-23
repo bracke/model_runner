@@ -4685,8 +4685,10 @@ begin
          if Option ("--base", "") = "" or else Option ("--adapted", "") = ""
            or else Option ("--out", "") = ""
            or else Option ("--mode", "run") not in "run" | "check" | "inspect"
+           or else Option ("--thinking", "both") not in "both" | "off"
          then
-            Ada.Text_IO.Put_Line ("agent-campaign: --base, --adapted and --out are required");
+            Ada.Text_IO.Put_Line
+              ("agent-campaign: --base, --adapted and --out are required; --thinking is both or off");
             Ada.Command_Line.Set_Exit_Status (2);
          elsif Option ("--mode", "run") = "inspect" then
             Adapter_Inspection.Run
@@ -4711,7 +4713,8 @@ begin
                Base_Adapter => Option ("--base-adapter", ""),
                Adapted_Adapter => Option ("--adapted-adapter", ""),
                Base_Scale => Model_Runner.Numerics.Real'Value (Option ("--base-scale", "1")),
-               Adapted_Scale => Model_Runner.Numerics.Real'Value (Option ("--adapted-scale", "1")));
+               Adapted_Scale => Model_Runner.Numerics.Real'Value (Option ("--adapted-scale", "1")),
+               Thinking_Off_Only => Option ("--thinking", "both") = "off");
             Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
          end if;
       exception

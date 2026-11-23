@@ -249,11 +249,12 @@ package body Tool_Commands is
      "--base PATH --adapted PATH --out DIR [--program PATH] [--task NAMES]"
      & " [--options OPTIONS] [--repeats N] [--max-seconds N] [--context-size N] [--seed N] [--mode run|check|inspect]"
      & " [--adapter PATH] [--base-bytes N] [--adapted-bytes N] [--adapter-bytes N]"
-     & " [--base-adapter PATH] [--adapted-adapter PATH] [--base-scale N] [--adapted-scale N]";
+     & " [--base-adapter PATH] [--adapted-adapter PATH] [--base-scale N] [--adapted-scale N]"
+     & " [--thinking both|off]";
    Opts_Campaign : aliased constant String :=
      " --base --adapted --out --program --task --options --repeats --max-seconds --context-size --seed --mode"
      & " --adapter --base-bytes --adapted-bytes --adapter-bytes"
-     & " --base-adapter --adapted-adapter --base-scale --adapted-scale ";
+     & " --base-adapter --adapted-adapter --base-scale --adapted-scale --thinking ";
    Says_Fixtures : aliased constant String :=
      "write the committed test fixtures";
    Says_Package : aliased constant String :=

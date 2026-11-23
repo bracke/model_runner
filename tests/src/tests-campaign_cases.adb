@@ -62,7 +62,9 @@ package body Tests.Campaign_Cases is
      & """cache_keys"":""f32"",""cache_values"":""f32"",""arithmetic"":""f32"","
      & """thinking"":""THINKING_OFF"",""seed_given"":true,""seed"":""42"",""runtime_adapters"":0}";
 
-   procedure Qualify (Item : in out Agent_Trial.Attempt; Thinking : Boolean := False; Adapters : Natural := 0) is
+   procedure Qualify
+     (Item : in out Agent_Trial.Attempt; Thinking : Boolean := False; Adapters : Natural := 0; Seed : Natural := 42)
+   is
       Doc : J.Document;
       Error : Jsonlib.Errors.Error_Info;
    begin
@@ -73,6 +75,8 @@ package body Tests.Campaign_Cases is
                        J.New_String (Doc, (if Thinking then "THINKING_ON" else "THINKING_OFF")));
          J.Set_Member (Doc, J.Element (Doc, J.Root (Doc), Index), "runtime_adapters",
                        J.New_Integer (Doc, Long_Long_Integer (Adapters)));
+         J.Set_Member (Doc, J.Element (Doc, J.Root (Doc), Index), "seed",
+                       J.New_String (Doc, Ada.Strings.Fixed.Trim (Natural'Image (Seed), Ada.Strings.Both)));
       end loop;
       Item.Resolved_Settings := To_Unbounded_String (Jsonlib.Serializers.To_String (Doc));
       Item.Configuration_Before := To_Unbounded_String ("{""revision"":1,""fields"":{}}");
@@ -204,6 +208,102 @@ package body Tests.Campaign_Cases is
       Run;
       Assert (not Clean, "an interrupted attempt was replayed or counted as passed");
    end Resume_Is_Bound_To_The_Request;
+
+   procedure Thinking_Off_Pairs_Are_Complete (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Directory : constant String := Root & "/off-only";
+      Item : Agent_Trial.Attempt;
+      Summary : J.Document;
+      Error : Jsonlib.Errors.Error_Info;
+
+      function Image (Value : Natural) return String
+      is (Ada.Strings.Fixed.Trim (Natural'Image (Value), Ada.Strings.Both));
+
+      function Run (Thinking : String := "off") return Integer is
+         Ran : Hostkit.Process.Process_Outcome;
+      begin
+         Ran := Hostkit.Process.Run_Captured
+           (Hostkit.Fs.Own_Executable,
+            [To_Unbounded_String ("agent-campaign"), To_Unbounded_String ("--mode"), To_Unbounded_String ("check"),
+             To_Unbounded_String ("--base"), To_Unbounded_String (Root & "/base"),
+             To_Unbounded_String ("--adapted"), To_Unbounded_String (Root & "/base"),
+             To_Unbounded_String ("--adapted-adapter"), To_Unbounded_String (Root & "/adapter"),
+             To_Unbounded_String ("--program"), To_Unbounded_String (Root & "/program"),
+             To_Unbounded_String ("--out"), To_Unbounded_String (Directory),
+             To_Unbounded_String ("--task"), To_Unbounded_String ("edit"),
+             To_Unbounded_String ("--repeats"), To_Unbounded_String ("3"),
+             To_Unbounded_String ("--thinking"), To_Unbounded_String (Thinking)],
+            Stdout_Path => Root & "/off-output.txt", Stderr_Path => Root & "/off-errors.txt", Timeout_Ms => 20_000);
+         Assert (Ran.Started and then not Ran.Timed_Out, "bounded off-only command did not return");
+         return Ran.Exit_Status;
+      end Run;
+
+      procedure Read_Summary is
+      begin
+         Assert (Ada.Directories.Exists (Directory & "/summary.json"),
+                 "thinking-off selector did not produce a summary: "
+                 & Project_Tools.Files.Read_Raw_File (Root & "/off-output.txt"));
+         Jsonlib.Parsers.Parse (Project_Tools.Files.Read_Raw_File (Directory & "/summary.json"), Summary, Error);
+         Assert (Error.Code = Jsonlib.Errors.No_Error, "off-only summary was not JSON");
+      end Read_Summary;
+   begin
+      Fresh;
+      Project_Tools.Files.Write_Raw_File (Root & "/base", "base");
+      Project_Tools.Files.Write_Raw_File (Root & "/program", "program");
+      Project_Tools.Files.Write_Raw_File (Root & "/adapter", "adapter");
+      Assert (Run = 1, "missing off-only records claimed completion");
+      Read_Summary;
+      Assert (J.As_Integer (Summary, J.Member (Summary, J.Root (Summary), "planned_attempts")) = 6
+              and then J.As_Integer (Summary, J.Member (Summary, J.Root (Summary), "pending_attempts")) = 6,
+              "thinking-off pairs planned more than six attempts");
+      Item.Task_Name := To_Unbounded_String ("edit");
+      for Round in 1 .. 3 loop
+         for Arm in 1 .. 2 loop
+            declare
+               Name : constant String := (if Arm = 1 then "base-off" else "adapted-off");
+               Id : constant String := "edit-" & Image (Round) & "-" & Name;
+            begin
+               Item.Grade := (if (Round = 1 and then Arm = 1) or else (Round = 2 and then Arm = 2)
+                              then Agent_Trial.Failed else Agent_Trial.Passed);
+               Item.Ending := To_Unbounded_String
+                 (if Item.Grade = Agent_Trial.Passed then "complete" else "out of time");
+               Qualify (Item, Adapters => Arm - 1, Seed => 41 + Round);
+               Project_Tools.Files.Write_Raw_File
+                 (Directory & "/" & Id & ".json",
+                  Agent_Campaign.Attempt_JSON
+                    (Id, Name, 41 + Round, Item,
+                     GNAT.SHA256.Digest (Project_Tools.Files.Read_Raw_File (Directory & "/manifest.json"))));
+            end;
+         end loop;
+      end loop;
+      Project_Tools.Files.Write_Raw_File (Directory & "/edit-1-base-on.json", "{broken unselected record");
+      Assert (Run = 1, "failed coding outcomes were reported as all passed");
+      Read_Summary;
+      declare
+         Top : constant J.Node := J.Root (Summary);
+         Attempts : constant J.Node := J.Member (Summary, Top, "attempts");
+         Expected : constant Hostkit.String_Vectors.Vector :=
+           [To_Unbounded_String ("base-off"), To_Unbounded_String ("adapted-off"),
+            To_Unbounded_String ("adapted-off"), To_Unbounded_String ("base-off"),
+            To_Unbounded_String ("base-off"), To_Unbounded_String ("adapted-off")];
+      begin
+         Assert (J.Length (Summary, Attempts) = 6
+                 and then J.As_Integer (Summary, J.Member (Summary, Top, "passed")) = 4
+                 and then J.As_Integer (Summary, J.Member (Summary, Top, "failed")) = 2
+                 and then J.As_Integer (Summary, J.Member (Summary, Top, "pending_attempts")) = 0
+                 and then not J.As_Boolean (Summary, J.Member (Summary, Top, "blocked")),
+                 "off-only failures stopped or contaminated the six requested records");
+         for Index in 1 .. 6 loop
+            Assert (J.As_String (Summary, J.Member (Summary, J.Element (Summary, Attempts, Index), "arm"))
+                      = To_String (Expected (Index)), "off-only paired order did not alternate");
+         end loop;
+      end;
+      Assert (Run ("both") = 1
+              and then Ada.Strings.Fixed.Index
+                (Project_Tools.Files.Read_Raw_File (Root & "/off-output.txt"), "manifest differs") > 0,
+              "changing thinking arms reused a different campaign manifest");
+      Assert (Run ("invalid") = 2, "an invalid thinking selector was silently accepted");
+   end Thinking_Off_Pairs_Are_Complete;
 
    procedure Adapter_Arms_Bind_Content_And_Scale (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
@@ -602,6 +702,7 @@ package body Tests.Campaign_Cases is
         (T, Isolation_Protects_Graders_And_Descendants'Access, "OS isolation protects verifiers from descendants");
       Register_Routine (T, Metrics_Keep_Missing_Values'Access, "metrics and JSON preserve unavailable values");
       Register_Routine (T, Resume_Is_Bound_To_The_Request'Access, "resume binds every attempt to the campaign");
+      Register_Routine (T, Thinking_Off_Pairs_Are_Complete'Access, "thinking-off pairs select six alternating arms");
       Register_Routine (T, Adapter_Arms_Bind_Content_And_Scale'Access, "adapter arms bind content and scale");
       Register_Routine (T, Shared_Adapters_Are_Refused'Access, "shared adapters cannot contaminate both arms");
       Register_Routine (T, Grading_Uses_The_Preserved_Test'Access, "independent graders reject no-op and wrong code");

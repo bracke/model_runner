@@ -6,6 +6,12 @@ Current implementation, checks and remaining gates are recorded in [the executio
 session, initializes a fresh project, runs `/work`, preserves its session and diff, and grades the result after
 the session has ended. It does not use a substitute agent loop or an external inference runtime.
 
+`--thinking off` selects just base-off and adapted-off. Three repeats then plan six attempts; the paired
+order reverses for successive seeds. The default `--thinking both` retains all four arms. The choice is
+manifest-bound, so an existing off-only campaign cannot be resumed as a four-arm campaign. Ordinary coding
+failures do not stop later pairs; infrastructure failures still block execution. Check-only mode uses the
+same selector and never starts missing attempts.
+
 ## Pinned artifacts and resource admission
 
 The published candidate set is pinned in [harness-adapter-artifacts.json](harness-adapter-artifacts.json).

@@ -200,12 +200,14 @@ package body Agent_Campaign is
       Base_Adapter : String := "";
       Adapted_Adapter : String := "";
       Base_Scale : Model_Runner.Numerics.Real := 1.0;
-      Adapted_Scale : Model_Runner.Numerics.Real := 1.0)
+      Adapted_Scale : Model_Runner.Numerics.Real := 1.0;
+      Thinking_Off_Only : Boolean := False)
    is
       --  Inspect nonfinite scales explicitly before any formatting or arithmetic.
       pragma Suppress (Validity_Check);
       Directory : constant String := Ada.Directories.Full_Name (Output_Directory);
       Names : Hostkit.String_Vectors.Vector;
+      Arm_Count : constant Positive := (if Thinking_Off_Only then 2 else 4);
       Guard : Hostkit.Locks.Lock;
       Manifest : J.Document;
       Root : constant J.Node := J.New_Object (Manifest);
@@ -292,9 +294,9 @@ package body Agent_Campaign is
          end if;
          J.Set_Member (Summary, Summary_Root, "statistics", J.Copy (Summary, Statistics, J.Root (Statistics)));
          J.Set_Member (Summary, Summary_Root, "planned_attempts",
-                       J.New_Integer (Summary, Long_Long_Integer (Natural (Names.Length) * Repeats * 4)));
+                       J.New_Integer (Summary, Long_Long_Integer (Natural (Names.Length) * Repeats * Arm_Count)));
          J.Set_Member (Summary, Summary_Root, "pending_attempts", J.New_Integer
-                       (Summary, Long_Long_Integer (Natural (Names.Length) * Repeats * 4
+                       (Summary, Long_Long_Integer (Natural (Names.Length) * Repeats * Arm_Count
                          - Complete - Failures - Unknown - Infrastructure)));
          J.Set_Member (Summary, Summary_Root, "passed", J.New_Integer (Summary, Long_Long_Integer (Complete)));
          J.Set_Member (Summary, Summary_Root, "failed", J.New_Integer (Summary, Long_Long_Integer (Failures)));
@@ -554,6 +556,9 @@ package body Agent_Campaign is
       Put ("knowledge", "off");
       Put ("carry", "off");
       Put ("draft_tokens", "0");
+      if Thinking_Off_Only then
+         Put ("thinking_choices", "off");
+      end if;
       declare
          Ran : Hostkit.Process.Process_Outcome;
       begin
@@ -618,9 +623,9 @@ package body Agent_Campaign is
       end if;
       for Round in 1 .. Repeats loop
          for Task_Index in Names.First_Index .. Names.Last_Index loop
-            for Position in 1 .. 4 loop
+            for Position in 1 .. Arm_Count loop
                One (To_String (Names (Task_Index)), Round,
-                    (if (Round + Task_Index) mod 2 = 0 then Position else 5 - Position));
+                    (if (Round + Task_Index) mod 2 = 0 then Position else Arm_Count + 1 - Position));
                exit when Blocked;
             end loop;
             exit when Blocked;
@@ -631,7 +636,7 @@ package body Agent_Campaign is
       Say (Image (Complete) & " passed, " & Image (Failures) & " failed, " & Image (Unknown)
            & " ungraded, " & Image (Infrastructure) & " infrastructure errors; "
            & Image (Started_Count) & " new attempts");
-      Clean := not Blocked and then Complete = Natural (Names.Length) * Repeats * 4;
+      Clean := not Blocked and then Complete = Natural (Names.Length) * Repeats * Arm_Count;
       Hostkit.Locks.Release (Guard);
    exception
       when others =>
