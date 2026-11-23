@@ -2,6 +2,15 @@ with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.Stops is
 
+   function Token_At (Item : Set; Index : Positive) return Token_Id
+   is (if Index > Item.Tokens_Used then Model_Runner.Tokenizer.No_Token else Item.Tokens (Index));
+
+   function String_At (Item : Set; Index : Positive) return String
+   is (if Index > Item.Strings_Used or else Item.Storage = null then ""
+       else Item.Storage.all
+         (Item.Storage.all'First + Item.Extents (Index).Offset
+          .. Item.Storage.all'First + Item.Extents (Index).Offset + Item.Extents (Index).Length - 1));
+
    use type Model_Runner.Tokenizer.Token_Id;
 
    package E renames Model_Runner.Errors;

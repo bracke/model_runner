@@ -359,6 +359,11 @@ package Model_Runner.Templates is
    --  @param Item Template to release.
    procedure Close (Item : in out Compiled);
 
+   --  The exact source compiled for this template, including an explicit override.
+   --  @param Item Compiled template.
+   --  @return Source bytes; empty before compilation or after Close.
+   function Source_Of (Item : Compiled) return String;
+
    --  Report whether a template compiled successfully.
    --
    --  @param Item Template to inspect.
@@ -1207,6 +1212,7 @@ private
       Program_Used : Natural := 0;
       Source       : Text_Access := null;
       Source_Used  : Natural := 0;
+      Original_Source : Text_Access := null;
 
       --  Grown as the template needs them, rather than sized for the largest
       --  program the engine will accept.

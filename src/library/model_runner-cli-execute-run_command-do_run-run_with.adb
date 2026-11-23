@@ -1,4 +1,5 @@
 with Model_Runner.CLI.MCP;
+with Model_Runner.CLI.Run_Settings;
 with Model_Runner.CLI.Language_Server;
 with Model_Runner.CLI.Tool_Turns;
 with Model_Runner.Code_Health.Ada;
@@ -1014,6 +1015,8 @@ begin
                Executor   => Talk_Runner,
                Generation => Request,
                Stop_Set   => Stops_In,
+               Capture    => Model_Runner.CLI.Run_Settings.Capture
+                 (Item, Prepared, Session, Request, Item.Thinking, Item.Effort),
                Sink       => Agent_Sink'Unchecked_Access,
                Time       => Clock'Unchecked_Access,
                Seeds      => Seeds'Unchecked_Access,
@@ -1030,6 +1033,7 @@ begin
                Gate       =>
                  (if Talk_Gate_Ready then Talk_Gate'Unchecked_Access else null),
                Result     => Loop_Out);
+            Model_Runner.CLI.Run_Settings.Report_Capture (Screen, Loop_Out);
             Close_Helper;
             Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
             --  The answer's last line ended, so that what is said under it
@@ -1186,6 +1190,8 @@ begin
                Executor   => Exec,
                Generation => Request,
                Pictures   => Pictures,
+               Capture    => Model_Runner.CLI.Run_Settings.Capture
+                 (Item, Prepared, Session, Request, Agent_Thinking, Agent_Effort),
                Stop_Set   => Stop_Set,
                Sink       => Agent_Sink'Unchecked_Access,
                Time       => Clock'Unchecked_Access,
@@ -1218,6 +1224,7 @@ begin
                Answer_Schema =>
                  (if Answer /= null then Answer.all else ""),
                Result     => Loop_Out);
+            Model_Runner.CLI.Run_Settings.Report_Capture (Screen, Loop_Out);
             --  Held back and never a call: the reply's own text, written.
             Model_Runner.CLI.Held_Output.Release_Held (Agent_Sink);
             Ada.Text_IO.New_Line (Ada.Text_IO.Standard_Output);

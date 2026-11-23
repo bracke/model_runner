@@ -16,6 +16,9 @@ with Model_Runner.UTF8;
 
 package body Model_Runner.Templates is
 
+   function Source_Of (Item : Compiled) return String
+   is (if Item.Original_Source = null then "" else Item.Original_Source.all);
+
    package E renames Model_Runner.Errors;
    package Conv renames Model_Runner.Conversation;
 
@@ -54,6 +57,9 @@ package body Model_Runner.Templates is
       end if;
       if Item.Source /= null then
          Free_Text (Item.Source);
+      end if;
+      if Item.Original_Source /= null then
+         Free_Text (Item.Original_Source);
       end if;
       Item.Program_Used := 0;
       Item.Operand_Used := 0;

@@ -105,7 +105,6 @@ package body Library_Surface is
       new String'("Has_Template"),
       new String'("Is_Normal"),
       new String'("Seed_Used"),
-      new String'("String_Count"),
 
       --  Building a diagnostic.
       new String'("Add_Boolean"),

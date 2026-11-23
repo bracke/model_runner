@@ -4,6 +4,27 @@ This campaign checks the CPU cost added to ordinary inference by the adapter imp
 the pre-adapter engine at commit `a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b` against the current working tree.
 It does not measure trained-adapter quality, device execution, or an adapter's active arithmetic overhead.
 
+## Capture-disabled requalification
+
+The trajectory generation hooks were requalified on 2026-11-23 using the
+[frozen protocol](trajectory-no-adapter-protocol.md) and
+[28 fresh samples](trajectory-no-adapter-evidence.json). Capture was disabled in both arms.
+Every sample read 100 prompt tokens, generated sixteen tokens and produced digest `c85e719a42725969`.
+Both batches pass the unchanged 1.05 paired-median boundary:
+
+| Batch | Pairs | Prompt time change | Decode time change |
+| --- | ---: | ---: | ---: |
+| 1 | 7 | +0.02% | -0.01% |
+| 2 | 7 | +0.04% | +0.32% |
+
+The original engine sources match their baseline commit. Both final binders use release engine objects,
+with identical actual engine compiler arguments including `-O3 -gnatn`. A development-profile candidate
+was detected and discarded before timing. The source archive, frozen binaries, dependency archives and
+model/prompt identities remain unchanged after all 28 runs. No builds, tests, audits, retries or sample
+exclusions occurred during the 325.491-second campaign. All raw native metrics are retained in the evidence.
+This qualifies the local descriptive boundary; it establishes no significance or tail-latency guarantee.
+The complete native suite passes **982/982**. Earlier checkpoint results below remain historical evidence.
+
 ## Granite and template-override requalification
 
 The final Granite attachment and custom-template tool-syntax changes were requalified on 2026-11-23.

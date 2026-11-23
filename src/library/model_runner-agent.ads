@@ -6,6 +6,7 @@ with Model_Runner.Conversation;
 with Model_Runner.Entropy;
 with Model_Runner.Errors;
 with Model_Runner.Generation;
+with Model_Runner.Trajectories;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
 with Model_Runner.Output;
@@ -173,6 +174,11 @@ package Model_Runner.Agent is
       --  Trusted feedback from a completion gate when it refused the last
       --  answer. It is distinct from a generation or tool failure.
       Completion_Feedback : Ada.Strings.Unbounded.Unbounded_String;
+
+      --  Complete capture is separate from model success. A failed capture
+      --  leaves the model outcome intact and its artifact ineligible for export.
+      Capture_Path : Ada.Strings.Unbounded.Unbounded_String;
+      Capture_Error : Model_Runner.Errors.Error_Info;
    end record;
 
    type Answer_Decision is (Accept_Answer, Continue_After_Feedback, Refuse_Answer);
@@ -579,6 +585,7 @@ package Model_Runner.Agent is
    --  @param Pace Where the pace is kept across the runs of one piece of
    --    work, carried on and added to; null for a run paced alone.
    --  @param Result Why it stopped, how far it got, and any diagnostic.
+   --  @param Capture Opt-in storage and provenance; defaults to explicit environment settings.
    procedure Run
      (Source     : Model_Runner.Llama.Model'Class;
       Session    : in out Model_Runner.Llama.Session;
@@ -620,6 +627,7 @@ package Model_Runner.Agent is
       Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
       Call_First  : Boolean := False;
       Gate        : Answer_Gate_Reference := null;
+      Capture    : Model_Runner.Trajectories.Options := Model_Runner.Trajectories.Configured;
       Result     : out Outcome);
 
    --  gpt-oss's rule (harmony), at high effort: a line come an eighth time

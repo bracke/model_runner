@@ -15,6 +15,7 @@ with Model_Runner.Output.Harmony;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Tools.Constraint;
 with Model_Runner.Grammar.Rooms;
+with Model_Runner.Platform;
 
 package body Model_Runner.Agent is
 
@@ -27,6 +28,7 @@ package body Model_Runner.Agent is
    package Gen renames Model_Runner.Generation;
    package L renames Model_Runner.Llama;
    package Vocab renames Model_Runner.Tokenizer;
+   package Trace renames Model_Runner.Trajectories;
 
    use type Gen.Completion_Reason;
    use type Interfaces.Unsigned_64;
@@ -156,6 +158,7 @@ package body Model_Runner.Agent is
       Round_Rule  : access constant Model_Runner.Output.Repetition.Rule := null;
       Call_First  : Boolean := False;
       Gate        : Answer_Gate_Reference := null;
+      Capture    : Model_Runner.Trajectories.Options := Model_Runner.Trajectories.Configured;
       Result     : out Outcome)
    is
       --  The shape the model's calls are read in: the caller's, unless it
@@ -242,6 +245,61 @@ package body Model_Runner.Agent is
       Request : Gen.Request := Generation;
 
       Last_Result : Gen.Result;
+
+      Evidence : aliased Trace.Recorder;
+      Capture_Tokens : access Trace.Recorder;
+      Prior_Lineage : constant Trace.Lineage := Trace.Current;
+
+      function Q (Text : String) return String renames Trace.Quote;
+      function I (Value : Long_Long_Integer) return String renames Trace.Number;
+
+      procedure Keep_Context is
+         Text : U.Unbounded_String;
+      begin
+         if not Trace.Active (Evidence) then
+            return;
+         end if;
+         for Index in 1 .. Conv.Length (Messages) loop
+            declare
+               Calls : U.Unbounded_String;
+            begin
+               for Call in 1 .. Conv.Call_Count (Messages, Index) loop
+                  U.Append (Calls, (if Call = 1 then "" else ",")
+                    & "{""name"":" & Q (Conv.Call_Name (Messages, Index, Call))
+                    & ",""arguments"":" & Q (Conv.Call_Arguments (Messages, Index, Call)) & "}");
+               end loop;
+               U.Append (Text, (if Index = 1 then "" else ",")
+                 & "{""role"":" & Q (Conv.Role_Name (Conv.Sender_At (Messages, Index)))
+                 & ",""content"":" & Q (Conv.Content_At (Messages, Index))
+                 & ",""parts"":" & Q (Conv.Parts_At (Messages, Index))
+                 & ",""calls"" :[" & U.To_String (Calls) & "]}");
+            end;
+         end loop;
+         Trace.Append (Evidence, Trace.Context, "{""messages"" :[" & U.To_String (Text) & "]}");
+      end Keep_Context;
+
+      procedure End_Capture is
+      begin
+         Keep_Context;
+         Trace.Finish (Evidence,
+           "{""complete"":true,""reason"":" & Q (Reason_Words (Result.Reason))
+           & ",""error"":" & Q (Result.Error.Code'Image)
+           & ",""calls"":" & I (Long_Long_Integer (Result.Calls))
+           & ",""steps"":" & I (Long_Long_Integer (Result.Steps)) & "}", Result.Capture_Error);
+         if E.Is_Error (Result.Capture_Error) and then Trace.Path (Evidence) /= "" then
+            Result.Capture_Path := U.To_Unbounded_String (Trace.Path (Evidence) & ".partial");
+         end if;
+         Trace.Enter (Prior_Lineage);
+      end End_Capture;
+
+      procedure Enter_Call (Call : Positive) is
+      begin
+         if Capture_Tokens /= null then
+            Trace.Enter ((Parent => U.To_Unbounded_String (Trace.Path (Evidence)), Parent_Call => Call,
+              Provenance => Capture.Provenance, Directory => Capture.Directory,
+              Max_Bytes => Capture.Max_Bytes, Max_Episodes => Capture.Max_Episodes));
+         end if;
+      end Enter_Call;
 
       --  A tool's answer held to what the context can still take: the
       --  last prompt and its reply, the answers given back since, and
@@ -752,6 +810,45 @@ package body Model_Runner.Agent is
 
    begin
       Result := (Reason => Answered, others => <>);
+      if U.Length (Capture.Directory) > 0 then
+         declare
+            Offered_JSON : U.Unbounded_String;
+         begin
+            for Index in 1 .. Model_Runner.Tools.Count (Offered) loop
+               U.Append (Offered_JSON, (if Index = 1 then "" else ",")
+                 & Model_Runner.Tools.Definition (Offered, Index));
+            end loop;
+            Trace.Open (Evidence, Capture,
+              "{""parent_episode"":" & Q (U.To_String (Prior_Lineage.Parent))
+              & ",""parent_call"":" & I (Long_Long_Integer (Prior_Lineage.Parent_Call))
+              & ",""model_fingerprint"":" & Q (L.Fingerprint (Source)'Image)
+              & ",""harness_sha256"":" & Q (Model_Runner.Platform.Program_Stamp)
+              & ",""template_source"":" & Q
+                  (if L.Template (Source) = null then ""
+                   else Model_Runner.Templates.Source_Of (L.Template (Source).all))
+              & ",""thinking"":" & Q (Thinking'Image) & ",""effort"":" & Q (Effort'Image)
+              & ",""syntax"":" & Q (Read_Syntax'Image) & ",""answer_schema"":" & Q (Answer_Schema)
+              & ",""call_first"":" & (if Call_First then "true" else "false")
+              & ",""think_budget"":" & I (Long_Long_Integer (Think_Budget))
+              & ",""max_steps"":" & I (Long_Long_Integer (Max_Steps))
+              & ",""max_total_tokens"":" & I (Long_Long_Integer (Max_Total_Tokens))
+              & ",""max_seconds"":" & Q (Max_Seconds'Image)
+              & ",""tools"" :[" & U.To_String (Offered_JSON) & "]}", Result.Capture_Error);
+            Result.Capture_Path := U.To_Unbounded_String
+              (if Trace.Path (Evidence) = "" then U.To_String (Capture.Directory) else Trace.Path (Evidence));
+            if Trace.Active (Evidence) then
+               Capture_Tokens := Evidence'Unchecked_Access;
+            end if;
+            if Script /= null then
+               Trace.Append (Evidence, Trace.Ineligible,
+                 "{""reason"":""scripted replies do not have sampled model token IDs""}");
+            end if;
+         end;
+      elsif U.Length (Prior_Lineage.Parent) > 0 then
+         --  An explicitly disabled child is still a missing stream in its
+         --  captured parent's family; never hide the opt-out behind success.
+         Trace.Open (Evidence, Capture, "{}", Result.Capture_Error);
+      end if;
       Tidied.Answer_Only (Hide_Reasoning);
       --  The pace begins with the work's first run.
       if Timing and then Kept.Started = 0 then
@@ -773,6 +870,7 @@ package body Model_Runner.Agent is
             Syntax        => Read_Syntax);
          if E.Is_Error (Result.Error) then
             Result.Reason := Grammar_Failed;
+            End_Capture;
             return;
          end if;
          Rules := Rules_Grammar'Unchecked_Access;
@@ -820,6 +918,7 @@ package body Model_Runner.Agent is
             Rendered : Text_Access := null;
             Status   : E.Error_Info;
          begin
+            Keep_Context;
             Render (Rendered, Status);
 
             --  A conversation too large to render is made to fit by dropping
@@ -838,6 +937,9 @@ package body Model_Runner.Agent is
                   exit when Gone = 0;
                   L.Reset (Session);
                   Result.Compactions := Result.Compactions + 1;
+                  Trace.Append
+                    (Evidence, Trace.Compaction, "{""removed_messages"":" & I (Long_Long_Integer (Gone)) & "}");
+                  Keep_Context;
                   --  Room made: the reply may be as long as asked again, as
                   --  after a compaction for a full context.
                   Reply_Cap := Natural'Last;
@@ -1047,6 +1149,7 @@ package body Model_Runner.Agent is
                      Cancel   => Cancel,
                      Bounds   => Bounds,
                      Pictures => Pictures,
+                     Capture  => Capture_Tokens,
                      Outcome  => Last_Result);
                   Count_Time (Last_Result);
                end if;
@@ -1081,6 +1184,8 @@ package body Model_Runner.Agent is
                      Result.Thoughts_Closed := Result.Thoughts_Closed + 1;
                   end if;
                   if Was_Open then
+                     Trace.Append (Evidence, Trace.Forced_Text,
+                       "{""loss_mask"":0,""text"":" & Q (U.To_String (Turned) & Closing) & "}");
                      --  Shown closed too, as the prompt has it: what the reply
                      --  goes on with is no longer thought, and a call it
                      --  opens is held back as a call -- shown as thought, a
@@ -1143,6 +1248,7 @@ package body Model_Runner.Agent is
                            Cancel   => Cancel,
                            Bounds   => Bounds,
                            Pictures => Pictures,
+                           Capture  => Capture_Tokens,
                            Outcome  => Last_Result);
                         Count_Time (Last_Result);
                      end if;
@@ -1153,6 +1259,10 @@ package body Model_Runner.Agent is
                   end;
                end if;
                <<Generated>>
+               if Trace.Active (Evidence) then
+                  Trace.Append (Evidence, Trace.Raw_Reply,
+                    "{""text"":" & Q (Reply_Text) & ",""reason"":" & Q (Gen.Reason_Name (Last_Result.Reason)) & "}");
+               end if;
             end;
             Free (Rendered);
          end;
@@ -1178,6 +1288,7 @@ package body Model_Runner.Agent is
                   --  is not counted, only the retry.
                   Retries_Left := Retries_Left - 1;
                   Result.Retries := Result.Retries + 1;
+                  Trace.Append (Evidence, Trace.Retry, "{""error"":" & Q (Last_Result.Error.Code'Image) & "}");
                   goto Next_Iteration;
                when Compact_And_Retry =>
                   --  Out of context: room made by dropping the oldest turns,
@@ -1193,6 +1304,9 @@ package body Model_Runner.Agent is
                      end if;
                      if Gone > 0 then
                         Result.Compactions := Result.Compactions + 1;
+                        Trace.Append (Evidence, Trace.Compaction,
+                          "{""removed_messages"":" & I (Long_Long_Integer (Gone)) & "}");
+                        Keep_Context;
                         --  Room made: the reply may be as long as asked again.
                         Reply_Cap := Natural'Last;
                         Thought_Cap := Natural'Last;
@@ -1730,6 +1844,11 @@ package body Model_Runner.Agent is
                   begin
                      Items (Call).Named := U.To_Unbounded_String (Named);
                      Items (Call).Args  := U.To_Unbounded_String (Args);
+                     if Trace.Active (Evidence) then
+                        Trace.Append (Evidence, Trace.Tool_Call,
+                          "{""id"":" & I (Long_Long_Integer (Invocations + Call))
+                          & ",""name"":" & Q (Named) & ",""arguments"":" & Q (Args) & "}");
+                     end if;
                      if Watch /= null then
                         Watch.On_Call
                           ((Id => Invocations + Call, In_Turn => Call, Of_Turn => Asked,
@@ -1959,6 +2078,7 @@ package body Model_Runner.Agent is
                                  Fill : Natural;
                                  Ran  : E.Error_Info;
                               begin
+                                 Enter_Call (Invocations + Idx);
                                  Executor.Run
                                    (U.To_String (Items (Idx).Named),
                                     U.To_String (Items (Idx).Args),
@@ -2015,6 +2135,7 @@ package body Model_Runner.Agent is
                            Fill : Natural;
                            Ran  : E.Error_Info;
                         begin
+                           Enter_Call (Invocations + Call);
                            Executor.Run
                              (Named, U.To_String (Items (Call).Args),
                               Buf, Fill, Items (Call).Ended, Ran);
@@ -2129,6 +2250,11 @@ package body Model_Runner.Agent is
                                          Executor.Kind (Named), Ended);
                            end;
                            Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
+                           if Trace.Active (Evidence) then
+                              Trace.Append (Evidence, Trace.Tool_Result,
+                                "{""id"":" & I (Long_Long_Integer (Invocations + Call))
+                                & ",""text"":" & Q (Reply) & ",""ending"":" & Q (Ended'Image) & "}");
+                           end if;
                            if Watch /= null then
                               Watch.On_Result
                                 ((Id => Invocations + Call, In_Turn => Call, Of_Turn => Asked,
@@ -2217,6 +2343,7 @@ package body Model_Runner.Agent is
       end loop Step_Loop;
 
       Result.Work_Record := U.To_Unbounded_String (Work.Record_Text);
+      End_Capture;
       Gen.Release (Last_Result);
       Model_Runner.Grammar.Close (Rules_Grammar);
    exception
@@ -2225,6 +2352,7 @@ package body Model_Runner.Agent is
          Model_Runner.Grammar.Close (Rules_Grammar);
          Result.Reason := Generation_Failed;
          Result.Error := E.Unexpected (Failure, "agent");
+         End_Capture;
    end Run;
 
    ---------------

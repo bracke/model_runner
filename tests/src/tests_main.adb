@@ -41,6 +41,7 @@ with Tests.Suite;
 with Checks;
 with Agent_Trial;
 with Agent_Campaign;
+with Trajectory_Export;
 with Campaign_Probe;
 with Adapter_Inspection;
 with Adapter_Fixture;
@@ -151,6 +152,10 @@ procedure Tests_Main is
          end if;
       end if;
       Model_Runner.Durable_Syncs.Skip_Syncs (True);
+      --  Tests opt in through their own private fixtures, never the caller's capture directory.
+      Ada.Environment_Variables.Set ("MODEL_RUNNER_CAPTURE_DIR", "");
+      Ada.Environment_Variables.Set ("MODEL_RUNNER_CAPTURE_MAX_BYTES", "");
+      Ada.Environment_Variables.Set ("MODEL_RUNNER_CAPTURE_MAX_EPISODES", "");
       --  The suite's sessions keep their conversations in its own folder,
       --  not among the user's: every conversation is kept as it goes.
       Ada.Environment_Variables.Set
@@ -4563,6 +4568,33 @@ begin
          --  fails when nothing encoded -- and this was the one whose "I did
          --  nothing" was indistinguishable from its "I did".
          if not Result.Ran then
+            Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+         end if;
+      end;
+
+   elsif Command = "trajectories" then
+      declare
+         function Option (Name : String; Default : String := "") return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+         Include_Content : Boolean := False;
+         Clean : Boolean;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            if Ada.Command_Line.Argument (Index) = "--include-content" then
+               Include_Content := True;
+            end if;
+         end loop;
+         Trajectory_Export.Run
+           (Option ("--mode", "validate"), Option ("--episode"), Option ("--out"),
+            Option ("--verification"), Include_Content, Clean);
+         if not Clean then
             Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
          end if;
       end;

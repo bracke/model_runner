@@ -35,6 +35,7 @@ with Model_Runner.Templates;
 with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Runner;
+with Model_Runner.Trajectories;
 
 with Tiny_Model;
 
@@ -43,6 +44,7 @@ package body Tests.Agent_Loop_Cases is
    use Ada.Strings.Unbounded;
    use type Model_Runner.Agent.Stop_Reason;
    use type Model_Runner.Bytes.Byte_Array_Access;
+   use type Model_Runner.Tools.Builtin.Delegator_Reference;
 
    package Ag renames Model_Runner.Agent;
    package Conv renames Model_Runner.Conversation;
@@ -282,7 +284,9 @@ package body Tests.Agent_Loop_Cases is
       Talk     : access Conv.History := null;
       Syntax   : Model_Runner.Tools.Call_Syntax := Model_Runner.Tools.Tool_Call_JSON;
       Effort   : Model_Runner.Templates.Reasoning_Effort := Model_Runner.Templates.Effort_Unstated;
-      Rounds   : access constant Model_Runner.Output.Repetition.Rule := null)
+      Rounds   : access constant Model_Runner.Output.Repetition.Rule := null;
+      Capture  : Model_Runner.Trajectories.Options := (others => <>);
+      Delegate : Model_Runner.Tools.Builtin.Delegator_Reference := null)
    is
       Under    : Harness (Image);
       Session  : L.Session;
@@ -313,11 +317,13 @@ package body Tests.Agent_Loop_Cases is
         (Offered,
          Model_Runner.Tools.Registry.Offered
            ([Model_Runner.Tools.Registry.Read_Files | Model_Runner.Tools.Registry.Write_Files => True,
+             Model_Runner.Tools.Registry.Delegation => Delegate /= null,
              others => False]),
          Status);
       Assert (E.Is_Ok (Status), "the built-in tools did not read");
       Model_Runner.Stops.Open (Stop);
       Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+      Runner.Use_Delegator (Delegate);
       Request.Max_Tokens := Reply;
       Ag.Run
         (Source     => Under.Ready,
@@ -346,6 +352,7 @@ package body Tests.Agent_Loop_Cases is
          Max_Total_Tokens => Total,
          Pace_Tokens => Pace_Tokens,
          Pace        => Pace,
+         Capture     => Capture,
          Result     => Ended);
       --  Each assistant turn's calls, against the tool answers after it.
       Unanswered := 0;
@@ -399,6 +406,31 @@ package body Tests.Agent_Loop_Cases is
       end if;
       Model_Runner.Tools.Close (Offered);
    end Run;
+
+   type Capture_Helper is new Model_Runner.Tools.Builtin.Delegator with record
+      Calls : Natural := 0;
+      Capture_Disabled : Boolean := False;
+   end record;
+
+   overriding procedure Run_Sub
+     (Self : in out Capture_Helper; Instruction : String; Context : Tr.Tool_Context;
+      Result : out String; Last : out Natural; Ended : out Model_Runner.Tools.Builtin.Sub_Outcome;
+      Status : out E.Error_Info)
+   is
+      pragma Unreferenced (Instruction, Context);
+      Replies : Script;
+      Seen : Recorder;
+      Outcome : Ag.Outcome;
+   begin
+      Self.Calls := Self.Calls + 1;
+      Replies.Replies.Append ("done");
+      Run (Replies, Seen, Outcome,
+        Capture => (if Self.Capture_Disabled then (others => <>) else Model_Runner.Trajectories.Configured));
+      Result (Result'First .. Result'First + 3) := "done";
+      Last := Result'First + 3;
+      Ended := (State => Model_Runner.Tools.Builtin.Completed, others => <>);
+      Status := Outcome.Error;
+   end Run_Sub;
 
    function Has (Text, Part : String) return Boolean is (Ada.Strings.Fixed.Index (Text, Part) > 0);
 
@@ -2164,9 +2196,89 @@ package body Tests.Agent_Loop_Cases is
       end;
    end Completion_Is_A_Harness_Decision;
 
+   procedure Capture_Uses_The_Actual_Agent_Loop
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Traces renames Model_Runner.Trajectories;
+      Settings : Traces.Options;
+      Replies : Script;
+      Seen : Recorder;
+      Ended : Ag.Outcome;
+      Checked : Traces.Validation;
+      Status : E.Error_Info;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      if Image = null then
+         Tiny_Model.Build (Image);
+      end if;
+      Settings.Directory := To_Unbounded_String (Ada.Directories.Full_Name (Dir) & "/capture");
+      Replies.Replies.Append (Write ("captured.txt", "whole"));
+      Replies.Replies.Append (Read ("captured.txt"));
+      Replies.Replies.Append ("done");
+      Run (Replies, Seen, Ended, Capture => Settings);
+      Assert (Ended.Reason = Ag.Answered and then E.Is_Ok (Ended.Capture_Error),
+        "capture changed scripted agent behavior or failed to record it");
+      Traces.Validate (To_String (Ended.Capture_Path), Checked, Status);
+      Assert (E.Is_Ok (Status) and then Checked.Complete and then not Checked.Exact_Tokens,
+        "scripted agent history was lost or mislabeled as sampled model tokens");
+      Assert (Natural (Seen.Results.Length) = 2, "capture replaced or replayed the actual tool calls");
+      declare
+         Capped : Script;
+      begin
+         Capped.Replies.Append ("done");
+         Settings.Max_Bytes := 1_024;
+         Run (Capped, Seen, Ended, Capture => Settings);
+         Assert (Ended.Reason = Ag.Answered and then E.Is_Ok (Ended.Error)
+           and then E."=" (Ended.Capture_Error.Code, E.IO_Input_Too_Large),
+           "a capture limit changed the model outcome or was silently discarded");
+      end;
+   end Capture_Uses_The_Actual_Agent_Loop;
+
+   procedure Capture_Follows_A_Real_Helper (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Traces renames Model_Runner.Trajectories;
+      Settings : Traces.Options;
+      Helper : aliased Capture_Helper;
+      Replies : Script;
+      Seen : Recorder;
+      Outcome : Ag.Outcome;
+      Checked : Traces.Validation;
+      Status : E.Error_Info;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      if Image = null then
+         Tiny_Model.Build (Image);
+      end if;
+      Settings.Directory := To_Unbounded_String (Ada.Directories.Full_Name (Dir) & "/capture");
+      Replies.Replies.Append (Call ("delegate", "{""task"":""help with one thing""}"));
+      Replies.Replies.Append ("done");
+      Run (Replies, Seen, Outcome, Capture => Settings, Delegate => Helper'Unchecked_Access);
+      Assert (Helper.Calls = 1 and then Outcome.Reason = Ag.Answered and then E.Is_Ok (Outcome.Capture_Error),
+        "actual delegate execution did not finish with capture enabled");
+      Traces.Validate (To_String (Outcome.Capture_Path), Checked, Status);
+      Assert (E.Is_Ok (Status) and then Checked.Child_Episodes = 1,
+        "the shared agent boundary lost its real helper's parent-call link");
+      Replies.Next := 1;
+      Helper.Capture_Disabled := True;
+      Run (Replies, Seen, Outcome, Capture => Settings, Delegate => Helper'Unchecked_Access);
+      Assert (Outcome.Reason = Ag.Answered and then E.Is_Error (Outcome.Capture_Error),
+        "an explicitly uncaptured helper was hidden inside a supposedly complete parent");
+   end Capture_Follows_A_Real_Helper;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine (T, Capture_Uses_The_Actual_Agent_Loop'Access,
+        "full capture observes real tool execution and never changes its outcome");
+      Register_Routine (T, Capture_Follows_A_Real_Helper'Access,
+        "helper execution inherits capture and binds to its actual parent call");
       Register_Routine
         (T, A_Conversation_Turn_Asks_Then_Writes_Then_Undoes'Access,
          "a conversation's write is asked first, runs once allowed, and /undo puts the files back");

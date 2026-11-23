@@ -90,11 +90,21 @@ package Model_Runner.Stops is
    --  @return Stop-token count.
    function Token_Count (Item : Set) return Natural;
 
+   --  @param Item Set to query.
+   --  @param Index Position, counting from one.
+   --  @return Configured ID, or No_Token when out of range.
+   function Token_At (Item : Set; Index : Positive) return Token_Id;
+
    --  Number of stop strings.
    --
    --  @param Item Set to query.
    --  @return Stop-string count.
    function String_Count (Item : Set) return Natural;
+
+   --  @param Item Set to query.
+   --  @param Index Position, counting from one.
+   --  @return Exact configured bytes, or empty text when out of range.
+   function String_At (Item : Set; Index : Positive) return String;
 
    --  Length of the longest stop string.
    --

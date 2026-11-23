@@ -1,5 +1,6 @@
 with Model_Runner.Output.Harmony;
 with Model_Runner.CLI.Held_Output;
+with Model_Runner.CLI.Run_Settings;
 with Model_Runner.Output.Reasoning;
 with Model_Runner.Draft_Policy;
 with Ada.Calendar;
@@ -849,6 +850,9 @@ package body Model_Runner.CLI.Execute.Run_Command is
                         Effort           => Self.Effort,
                         Approve          => Self.Approve,
                         Result           => Loop_Out);
+                     if Self.Watcher /= null then
+                        Model_Runner.CLI.Run_Settings.Report_Capture (Self.Watcher.Screen.all, Loop_Out);
+                     end if;
                   end;
 
                   --  How it ended, by what its stop asks: only an answer is

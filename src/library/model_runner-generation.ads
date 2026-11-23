@@ -18,6 +18,7 @@ with Model_Runner.Text;
 with Model_Runner.Tokenizer;
 with Model_Runner.Grammar;
 with Model_Runner.Stops;
+with Model_Runner.Trajectories;
 
 --  Generation coordination.
 --
@@ -629,6 +630,7 @@ package Model_Runner.Generation is
    --    Frame_After, and a picture with crops among the reference's
    --    words, the whole picture and each crop framed the same way.
    --  @param Outcome Completion reason, counts, timings and any diagnostic.
+   --  @param Capture Optional complete token recorder; failures affect capture only.
    procedure Generate
      (Source   : Model_Runner.Llama.Model'Class;
       Session  : in out Model_Runner.Llama.Session;
@@ -647,6 +649,7 @@ package Model_Runner.Generation is
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Pictures : Picture_Set := No_Pictures;
+      Capture  : access Model_Runner.Trajectories.Recorder := null;
       Outcome  : out Result);
 
 end Model_Runner.Generation;

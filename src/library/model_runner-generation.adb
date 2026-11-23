@@ -197,6 +197,7 @@ package body Model_Runner.Generation is
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
       Pictures : Picture_Set := No_Pictures;
+      Capture  : access Model_Runner.Trajectories.Recorder := null;
       Outcome  : out Result)
    is
       Settings : constant L.Configuration := L.Config (Source);
@@ -1200,6 +1201,15 @@ package body Model_Runner.Generation is
 
       procedure Cleanup is
       begin
+         if Capture /= null then
+            Model_Runner.Trajectories.Append
+              (Capture.all, Model_Runner.Trajectories.Generation_End,
+               "{""reason"":" & Model_Runner.Trajectories.Quote (Reason_Name (Outcome.Reason))
+               & ",""generated_tokens"":" & Model_Runner.Trajectories.Number
+                   (Long_Long_Integer (Outcome.Generated_Tokens))
+               & ",""seed"":" & Model_Runner.Trajectories.Quote (Outcome.Seed'Image)
+               & ",""error"":" & Model_Runner.Trajectories.Quote (Outcome.Error.Code'Image) & "}");
+         end if;
          Free (First_Of);
          Free (Spells);
          Free (Ending);
@@ -1328,6 +1338,11 @@ package body Model_Runner.Generation is
          declare
             Text : constant String := Model_Runner.UTF8.Repaired (Fragment);
          begin
+            if Capture /= null then
+               Model_Runner.Trajectories.Append
+                 (Capture.all, Model_Runner.Trajectories.Output_Text,
+                  "{""text"":" & Model_Runner.Trajectories.Quote (Text) & "}");
+            end if;
             Retain (Text);
             Model_Runner.Output.Emit (Sink, Text, Closed);
          end;
@@ -1357,6 +1372,39 @@ package body Model_Runner.Generation is
 
    begin
       Outcome := (others => <>);
+
+      if Capture /= null then
+         declare
+            use Ada.Strings.Unbounded;
+            Stop_Tokens, Stop_Strings : Unbounded_String;
+            function Q (Text : String) return String renames Model_Runner.Trajectories.Quote;
+            function I (Value : Long_Long_Integer) return String renames Model_Runner.Trajectories.Number;
+         begin
+            for Index in 1 .. Model_Runner.Stops.Token_Count (Stop_Set) loop
+               Append (Stop_Tokens, (if Index = 1 then "" else ",")
+                 & I (Long_Long_Integer (Model_Runner.Stops.Token_At (Stop_Set, Index))));
+            end loop;
+            for Index in 1 .. Model_Runner.Stops.String_Count (Stop_Set) loop
+               Append (Stop_Strings, (if Index = 1 then "" else ",")
+                 & Q (Model_Runner.Trajectories.Hex_Bytes (Model_Runner.Stops.String_At (Stop_Set, Index))));
+            end loop;
+            Model_Runner.Trajectories.Append
+              (Capture.all, Model_Runner.Trajectories.Generation_Start,
+               "{""sampling_ada"":" & Q (Item.Sampling'Image) & ",""request_ada"":" & Q (Item'Image)
+               & ",""bounds_ada"":" & Q (Bounds'Image)
+               & ",""vocabulary_size"":" & I (Long_Long_Integer (Settings.Vocabulary))
+               & ",""max_tokens"":" & I (Long_Long_Integer (Item.Max_Tokens))
+               & ",""grammar_constrained"":" & (if Rules = null then "false" else "true")
+               & ",""grammar"":" & (if Rules = null then "null" else Model_Runner.Grammar.Snapshot (Rules.all))
+               & ",""stop_tokens"" :[" & To_String (Stop_Tokens)
+               & "],""stop_strings_hex"" :[" & To_String (Stop_Strings) & "]}");
+         end;
+         if Pictures.Count > 0 or else Item.Context_Shift > 0 then
+            Model_Runner.Trajectories.Append
+              (Capture.all, Model_Runner.Trajectories.Ineligible,
+               "{""reason"":""multimodal rows or rolling context are not captured by this text schema""}");
+         end if;
+      end if;
 
       Validate (Item, Status);
       if E.Is_Error (Status) then
@@ -1707,6 +1755,9 @@ package body Model_Runner.Generation is
       end if;
 
       Outcome.Prompt_Tokens := Prompt_Count;
+      if Capture /= null then
+         Model_Runner.Trajectories.Input (Capture.all, Shown, Tokens.all (1 .. Prompt_Count));
+      end if;
       P.Publish
         (Observer,
          P.Generation_Progress
@@ -3575,6 +3626,13 @@ package body Model_Runner.Generation is
                      end;
                   end if;
 
+                  if Capture /= null then
+                     Model_Runner.Trajectories.Selected
+                       (Capture.all, Token, Vocab.Decode_Token (Words.all, Token),
+                        Terminal => (Vocab.Ends_Generation (Words.all, Token) and then not Item.Ignore_End)
+                          or else Model_Runner.Stops.Is_Stop_Token (Stop_Set, Token));
+                  end if;
+
                   --  Token-level stop conditions, before any text is produced, so
                   --  that no byte of a stop token reaches the output. The end
                   --  of the sequence, or of the turn: a model whose chat format
@@ -3656,6 +3714,11 @@ package body Model_Runner.Generation is
                   end if;
 
                   Outcome.Generated_Tokens := Produced;
+                  if Capture /= null then
+                     Model_Runner.Trajectories.Append
+                       (Capture.all, Model_Runner.Trajectories.Committed_Token,
+                        "{""id"":" & Model_Runner.Trajectories.Number (Long_Long_Integer (Token)) & "}");
+                  end if;
                   P.Publish
                     (Observer,
                      P.Generation_Progress
@@ -3774,9 +3837,9 @@ package body Model_Runner.Generation is
       Cleanup;
    exception
       when Occurrence : others =>
-         Cleanup;
          Outcome.Reason := Runtime_Error;
          Outcome.Error := E.Unexpected (Occurrence, "generation.generate");
+         Cleanup;
    end Generate;
 
 end Model_Runner.Generation;

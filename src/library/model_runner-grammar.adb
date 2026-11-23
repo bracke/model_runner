@@ -1,10 +1,69 @@
 with Ada.Characters.Handling;
+with Jsonlib.Documents;
+with Jsonlib.Serializers;
 
 with Model_Runner.UTF8;
 
 package body Model_Runner.Grammar is
 
    package E renames Model_Runner.Errors;
+
+   function Snapshot (Item : Compiled) return String is
+      package J renames Jsonlib.Documents;
+      Doc : J.Document;
+      Root : constant J.Node := J.New_Object (Doc);
+      Rules : constant J.Node := J.New_Array (Doc);
+      Elements : constant J.Node := J.New_Array (Doc);
+      Ranges : constant J.Node := J.New_Array (Doc);
+      procedure Count (Object : J.Node; Name : String; Value : Natural) is
+      begin
+         J.Insert (Doc, Object, Name, J.New_Integer (Doc, Long_Long_Integer (Value)));
+      end Count;
+   begin
+      if not Item.Ready then
+         return "null";
+      end if;
+      J.Set_Root (Doc, Root);
+      Count (Root, "schema_version", 1);
+      Count (Root, "root", Item.Root);
+      for Index in 1 .. Item.Rule_Used loop
+         declare
+            Row : constant J.Node := J.New_Object (Doc);
+            Rule : Rule_Entry renames Item.Rules (Index);
+         begin
+            Count (Row, "start", Rule.Start);
+            J.Insert (Doc, Row, "name", J.New_String (Doc,
+              (if Rule.Name_First = 0 then "" else Item.Names (Rule.Name_First .. Rule.Name_Last))));
+            J.Append (Doc, Rules, Row);
+         end;
+      end loop;
+      for Index in 1 .. Item.Element_Used loop
+         declare
+            Row : constant J.Node := J.New_Object (Doc);
+            Element : Model_Runner.Grammar.Element renames Item.Elements (Index);
+         begin
+            J.Insert (Doc, Row, "kind", J.New_String (Doc, Element.Kind'Image));
+            Count (Row, "first", Element.First);
+            Count (Row, "count", Element.Count);
+            Count (Row, "rule", Element.Rule);
+            J.Insert (Doc, Row, "inverted", J.New_Boolean (Doc, Element.Inverted));
+            J.Append (Doc, Elements, Row);
+         end;
+      end loop;
+      for Index in 1 .. Item.Range_Used loop
+         declare
+            Row : constant J.Node := J.New_Array (Doc);
+         begin
+            J.Append (Doc, Row, J.New_Integer (Doc, Long_Long_Integer (Item.Ranges (Index).Low)));
+            J.Append (Doc, Row, J.New_Integer (Doc, Long_Long_Integer (Item.Ranges (Index).High)));
+            J.Append (Doc, Ranges, Row);
+         end;
+      end loop;
+      J.Insert (Doc, Root, "rules", Rules);
+      J.Insert (Doc, Root, "elements", Elements);
+      J.Insert (Doc, Root, "ranges", Ranges);
+      return Jsonlib.Serializers.To_String (Doc);
+   end Snapshot;
 
    --  Elements one alternative-list may hold while it is being parsed.
    --

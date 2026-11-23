@@ -33,6 +33,11 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Opt-in trajectory capture.** Separate bounded local artifacts preserve model
+  input and sampled token IDs, full messages and tool exchanges. The native
+  `tests trajectories` tool validates and explicitly exports captures, binds
+  independent verification evidence and excludes incomplete or redacted records.
+
 - **Thinking-off paired campaigns.** `tests agent-campaign --thinking off`
   selects only the base and adapted arms, alternates their order by seed,
   and binds the selection to its manifest. Ordinary failures remain outcomes;

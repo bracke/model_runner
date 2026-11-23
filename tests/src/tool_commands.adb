@@ -52,6 +52,11 @@ package body Tool_Commands is
    Name_Agent_Eval     : aliased constant String := "agent-eval";
    Name_Agent_Trial    : aliased constant String := "agent-trial";
    Name_Agent_Campaign : aliased constant String := "agent-campaign";
+   Name_Trajectories : aliased constant String := "trajectories";
+   Takes_Trajectories : aliased constant String :=
+     "--episode PATH [--mode validate|validate-export|export --out PATH --verification PATH --include-content]";
+   Says_Trajectories : aliased constant String := "validate exact local trajectory evidence or explicitly export it";
+   Opts_Trajectories : aliased constant String := " --episode --mode --out --verification --include-content ";
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
    Name_Probe          : aliased constant String := "probe";
@@ -380,7 +385,8 @@ package body Tool_Commands is
    Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N] [--device]";
    Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads --device ";
 
-   Held : constant array (1 .. 47) of Command :=
+   type Command_List is array (Positive range <>) of Command;
+   Held : constant Command_List :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -459,6 +465,7 @@ package body Tool_Commands is
        Says_Trial'Access, Opts_Trial'Access),
       (Name_Agent_Campaign'Access, Takes_Campaign'Access,
        Says_Campaign'Access, Opts_Campaign'Access),
+      (Name_Trajectories'Access, Takes_Trajectories'Access, Says_Trajectories'Access, Opts_Trajectories'Access),
       (Name_Probe'Access, Takes_Probe'Access, Says_Probe'Access,
        Opts_None'Access),
       (Name_Approve_Probe'Access, Takes_Approve'Access, Says_Approve'Access,

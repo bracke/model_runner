@@ -1,5 +1,9 @@
 default_locale = en
 
+en.cli.agent.capture_incomplete = trajectory capture is incomplete at {path}: {code}; model work continues
+da.cli.agent.capture_incomplete = forløbsoptagelsen er ufuldstændig ved {path}: {code}; modelarbejdet fortsætter
+qps.cli.agent.capture_incomplete = ⟦trajectory capture is incomplete at {path}: {code}; model work continues⟧
+
 en.application.name = model_runner
 en.application.summary = Local GGUF language-model execution. Loads a model file, tokenizes a prompt, evaluates the model on the GPU where it fits and on the CPU otherwise, and streams the generated text. Inference is local only.
 en.application.version = model_runner {version}

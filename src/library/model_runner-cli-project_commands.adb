@@ -27,6 +27,7 @@ with Model_Runner.CLI.Repo;
 with Model_Runner.CLI.Tasks;
 with Model_Runner.CLI.Work;
 with Model_Runner.CLI.Run_Settings;
+with Model_Runner.Trajectories;
 with Model_Runner.Clocks;
 with Model_Runner.Code_Health.Ada_Profiles;
 with Model_Runner.Code_Health.Engine;
@@ -702,7 +703,31 @@ package body Model_Runner.CLI.Project_Commands is
       use type Model_Runner.Clocks.Nanoseconds;
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
+
       Request  : Model_Runner.Generation.Request;
+      Policy   : Model_Runner.Framework.Inference_Policy.Effective;
+
+      function Capture_For_Call return Model_Runner.Trajectories.Options is
+         Invocation : Model_Runner.Framework.Records.Item;
+         Read : E.Error_Info;
+         Settings : constant Model_Runner.Trajectories.Options := Model_Runner.Trajectories.Configured;
+      begin
+         if Length (Settings.Directory) = 0 then
+            return Settings;
+         end if;
+         if Host = null then
+            return Model_Runner.CLI.Run_Settings.Capture
+              (Self.Item.all, Self.Prepared.all, Using.all, Request, Policy.Thinking, Policy.Effort);
+         end if;
+         Model_Runner.Framework.Stores.Read
+           (Wk.Store_Of (Host.all).all, Model_Runner.Framework.Invocations_Area,
+            Wk.Invocation_Of (Host.all), Invocation, Read);
+         return Model_Runner.CLI.Run_Settings.Capture
+           (Self.Item.all, Self.Prepared.all, Using.all, Request, Policy.Thinking, Policy.Effort,
+            Invocation => Wk.Invocation_Of (Host.all), Task_Id => Wk.Task_Id_Of (Host.all),
+            Project_Revision => Model_Runner.Framework.Records.Get (Invocation, "project_revision"),
+            Parent_Invocation => Model_Runner.Framework.Records.Get (Invocation, "parent"));
+      end Capture_For_Call;
       Outcome  : Model_Runner.Agent.Outcome;
       Calls    : Natural := 0;
 
@@ -741,7 +766,6 @@ package body Model_Runner.CLI.Project_Commands is
       Doing    : Model_Runner.Framework.Inference_Policy.Activity :=
         Model_Runner.Framework.Inference_Policy.Task_Work;
       --  And what it is set to: the session's own where there is no task.
-      Policy   : Model_Runner.Framework.Inference_Policy.Effective;
 
       --  The template's own shape of call, and where that is the JSON
       --  envelope, the bare or fenced object too: models asked for a call
@@ -1025,6 +1049,7 @@ package body Model_Runner.CLI.Project_Commands is
             Executor    => Runner,
             Generation  => Request,
             Stop_Set    => Work_Stops,
+            Capture     => Capture_For_Call,
             Sink        => Sink'Unchecked_Access,
             Time        => Clock'Unchecked_Access,
             Seeds       => Seeds'Unchecked_Access,
@@ -1061,6 +1086,7 @@ package body Model_Runner.CLI.Project_Commands is
               (if Runner.Health_Gate_Ready
                then Runner.Health_Gate'Unchecked_Access else null),
             Result      => Outcome);
+         Model_Runner.CLI.Run_Settings.Report_Capture (Self.Screen.all, Outcome);
          --  Held back and never a call: the reply's own text, written --
          --  and its last line ended, which the record said beside it ran
          --  into: "changed_files: docs/calc.mdthe work as the harness...".

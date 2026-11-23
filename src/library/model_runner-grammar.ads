@@ -97,6 +97,12 @@ package Model_Runner.Grammar is
    --  @param Item Grammar to release.
    procedure Close (Item : in out Compiled);
 
+   --  A versioned JSON snapshot of the complete compiled constraint, not matcher state.
+   --  It contains only used rules, elements and ranges, with their original names.
+   --  @param Item Compiled grammar.
+   --  @return Snapshot, or null when no grammar is ready.
+   function Snapshot (Item : Compiled) return String;
+
    --  Report whether a grammar compiled.
    --
    --  @param Item Grammar to inspect.

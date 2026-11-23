@@ -363,6 +363,7 @@ package body Model_Runner.CLI.Work is
          Timeout   => Positive'Max (1, Self.Timeout),
          Result    => Happened,
          Passed    => "LANG,LC_ALL,XDG_DATA_HOME,XDG_CONFIG_HOME,XDG_CACHE_HOME,XDG_RUNTIME_DIR,"
+                      & "MODEL_RUNNER_CAPTURE_DIR,MODEL_RUNNER_CAPTURE_MAX_BYTES,MODEL_RUNNER_CAPTURE_MAX_EPISODES,"
                       & "MODEL_RUNNER_MODELS,MODEL_RUNNER_CONFIG,MODEL_RUNNER_LOCALE,"
                       & Pm.Sandbox_Variable,
          Added     => Given);

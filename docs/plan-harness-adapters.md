@@ -1,6 +1,11 @@
 # Harness adapters: measure transfer, reduce memory, then prepare training data
 
-Status: execution started, 2026-11-22. The released-model campaign is held at the resource gate.
+Status: opt-in text capture, export and validation implemented, 2026-11-23. The complete suite passes
+982/982; see [capture validation](trajectory-capture-validation.md). The separate three-pair adapter screen
+shows no local benefit and the cancelled pilot stays stopped. No model_runner-specific adapter is trained.
+
+Earlier checkpoints below retain their original scope. The original Q8 released-model campaign remains
+held at its resource gate.
 
 The artifact manifest, bounded header comparison, paired campaign driver, independently qualified pilot
 graders and native work counters are implemented. Header inspection passes for the pinned release, including
@@ -23,12 +28,17 @@ records capture actual session/root/helper settings and project configuration; s
 The released trained-adapter campaign remains pending. A matched before/after comparison without adapters
 now passes the declared local 5% prompt/decode median gate in two seven-pair release-engine batches on the
 0.8B CPU case; see [the evidence and limits](harness-adapter-no-adapter-check.md).
-The mandatory full suite now passes 969/969. The
+At that checkpoint, the mandatory full suite passed 969/969. The
 [repository repair](repository-audit-repair.md) fixes the dependency conflict and addresses the nineteen
 earlier audit findings. [Campaign hardening](campaign-hardening.md) records the subsequent validation.
 Bounded CPU tiles reduce observed prompt
 overhead from 44–46% to about 1–5% in the saved synthetic case; runtime contexts are versioned accordingly.
-Device attachment and complete training capture remain unimplemented.
+Device attachment remains unimplemented. Complete text-trajectory capture now has
+[an opt-in implementation and export contract](trajectory-capture.md), separate from excerpt-only journals.
+The shared agent/generation boundary records exact tokens, full contexts, tools and parent-linked helpers.
+Native validators check captures and self-contained exports; independent verifier evidence controls
+demonstration eligibility. Multimodal rows, rolling context and scripted replies remain ineligible for
+training under this schema. Dataset curation and model_runner-specific training remain separate work.
 See [the execution report](harness-adapter-execution.md) and
 [campaign guide](harness-adapter-campaign.md).
 
@@ -53,7 +63,7 @@ The user then authorizes a separate bounded [three-pair comparison](twil-adapter
 with its scope frozen before generation. All six attempts finish: baseline two passes, adapter one pass,
 zero adapted wins, one adapted loss and zero infrastructure errors. No local benefit is demonstrated;
 the model default is unchanged and the cancelled pilot stays cancelled. The new two-arm campaign selector
-passes its focused regressions; the feature's full suite passes 970/970. See the result for exact validation
+passes its focused regressions; that feature's full suite passed 970/970. See the result for exact validation
 checkpoints and limits. This screen does not close the broader transfer or training gates.
 
 The [native generation and validation record](harness-adapter-twil-execution.md) now admits both models
@@ -267,6 +277,11 @@ support matrix, CLI documentation and measured figures together with the impleme
 ## Stage 5: export complete trajectories for future model_runner training
 
 Deliverable: opt-in bounded capture, a versioned export format and a validator. Training is a later decision.
+
+The [capture/export contract](trajectory-capture.md) documents the delivered text implementation, local
+privacy and retention controls, exact token boundaries, helper bundles, independent-verification binding
+and explicit redaction. [Validation evidence](trajectory-capture-validation.md) is recorded separately;
+the requirements below remain the acceptance contract. No adapter is trained by this stage.
 
 Add capture at the shared agent/generation boundary, including `/work`, helpers and ordinary tool-agent runs.
 Build on invocation IDs and provenance without enlarging every normal journal entry into a transcript.

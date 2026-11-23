@@ -1648,6 +1648,7 @@ begin
    end;
 
    Item.Step_Limit := Bounds.Max_Render_Iterations;
+   Item.Original_Source := new String'(Source);
    Item.Ready := True;
 exception
    when Occurrence : others =>

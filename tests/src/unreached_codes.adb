@@ -11,20 +11,10 @@ package body Unreached_Codes is
       --  Named rather than listed as text, so a code that is renamed or
       --  removed fails to compile here instead of quietly falling off.
       case Code is
-         --  Reached only from a host call failing. The environment cannot
-         --  be made to refuse a read from inside the suite without breaking
-         --  the process it runs in.
-         when E.CLI_Invalid_Environment_Value
-
-         --  A prompt file larger than the input bound. Writing one costs
-         --  more disk and time than the refusal is worth checking that way;
-         --  the bound itself is checked where it is applied.
-            | E.IO_Input_Too_Large
-
          --  Reached when a size computation would overflow while reading a
          --  container. The fuzzing campaign is what walks those paths, and
          --  it reports the outcome by class rather than by code.
-            | E.GGUF_Arithmetic_Overflow
+         when E.GGUF_Arithmetic_Overflow
 
          --  A tensor whose format the architecture cannot use, as opposed to
          --  one the container rejects. Every format the fixture writer can

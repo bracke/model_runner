@@ -4,8 +4,87 @@ with Model_Runner.Backend;
 with Model_Runner.Backend.CPU;
 with Model_Runner.Numerics;
 with Model_Runner.Text;
+with Ada.Strings.Unbounded;
+with Model_Runner.GGUF.Shards;
+with Model_Runner.Platform;
+with Model_Runner.Errors;
+with Model_Runner.Localization;
 
 package body Model_Runner.CLI.Run_Settings is
+
+   function Capture
+     (Item : Options.Command; Prepared : Llama.Model'Class; Session : Llama.Session;
+      Request : Generation.Request; Thinking : Templates.Thinking_Choice;
+      Effort : Templates.Reasoning_Effort; Invocation : String := ""; Task_Id : String := "";
+      Project_Revision : String := ""; Parent_Invocation : String := "") return Trajectories.Options
+   is
+      use Ada.Strings.Unbounded;
+      Result : Trajectories.Options := Trajectories.Configured;
+      Artifacts : Unbounded_String;
+      Model_Path : constant String := Text.To_String (Item.Model_Path);
+      Model_Hash : Unbounded_String;
+      function Q (Value : String) return String renames Trajectories.Quote;
+
+      procedure Artifact (Role, Path : String; Scale : String := "") is
+         Hash : constant String := Platform.Program_Stamp (Path);
+      begin
+         if Hash'Length /= 64 then
+            Result.Invalid := True;
+         end if;
+         if Role = "model" then
+            Model_Hash := To_Unbounded_String (Hash);
+         end if;
+         Append (Artifacts, (if Length (Artifacts) = 0 then "" else ",")
+           & "{""role"":" & Q (Role) & ",""path"":" & Q (Path)
+           & ",""sha256"":" & Q (Hash) & ",""scale"":" & Q (Scale) & "}");
+      end Artifact;
+   begin
+      if Length (Result.Directory) = 0 then
+         return Result;
+      end if;
+      Artifact ("model", Model_Path);
+      if Model_Runner.GGUF.Shards.Is_Shard_Name (Model_Path) then
+         declare
+            Count : constant Positive := Positive'Value (Model_Path (Model_Path'Last - 9 .. Model_Path'Last - 5));
+         begin
+            if Count > Model_Runner.GGUF.Shards.Max_Shards then
+               Result.Invalid := True;
+            else
+               for Part in 2 .. Count loop
+                  Artifact ("model_shard", Model_Runner.GGUF.Shards.Shard_Path (Model_Path, Part, Count));
+               end loop;
+            end if;
+         end;
+      end if;
+      for Part in 1 .. Item.Auxiliary_Count loop
+         Artifact ("auxiliary", Text.To_String (Item.Auxiliary_Shards (Part)));
+      end loop;
+      for Part in 1 .. Item.Adapter_Count loop
+         Artifact ("adapter", Text.To_String (Item.Adapters (Part)), Item.Adapter_Scales (Part)'Image);
+      end loop;
+      Result.Provenance := To_Unbounded_String
+        ("{""model_sha256"":" & Q (To_String (Model_Hash))
+         & ",""artifacts"" :[" & To_String (Artifacts) & "]"
+         & ",""adapter_mode"":" & Q (if Item.Adapter_Runtime then "runtime" else "merge")
+         & ",""invocation"":" & Q (Invocation) & ",""task_id"":" & Q (Task_Id)
+         & ",""project_revision"":" & Q (Project_Revision)
+         & ",""parent_invocation"":" & Q (Parent_Invocation)
+         & ",""settings"":" & Describe (Item, Prepared, Session, Request, Thinking, Effort) & "}");
+      return Result;
+   exception
+      when others =>
+         Result.Invalid := True;
+         return Result;
+   end Capture;
+
+   procedure Report_Capture (Screen : in out Presentation.Console; Result : Agent.Outcome) is
+   begin
+      if Model_Runner.Errors.Is_Error (Result.Capture_Error) then
+         Presentation.Put_Note (Screen, "cli.agent.capture_incomplete",
+           [Localization.Named ("path", Ada.Strings.Unbounded.To_String (Result.Capture_Path)),
+            Localization.Named ("code", Result.Capture_Error.Code'Image)]);
+      end if;
+   end Report_Capture;
 
    function Describe
      (Item : Options.Command; Prepared : Llama.Model'Class; Session : Llama.Session;

@@ -12,6 +12,11 @@ and the pending independently graded work gate separately.
 Subsequent [campaign hardening](campaign-hardening.md) adds OS-isolated verifiers, protected baselines and
 native resolved-setting capture. Earlier isolation/reporting limitations below describe their checkpoints.
 
+Complete [text trajectory capture and export](trajectory-capture.md) is subsequently implemented at the
+shared agent/generation boundary. It records actual tokens, contexts, full tool exchanges and bound helper
+streams in separate private artifacts. Native capture/export validators enforce completeness and proof
+binding. This supplies the stage-5 text capture tooling; training and dataset curation remain separate.
+
 The subsequent [repository audit repair](repository-audit-repair.md) resolves the dependency conflict and
 addresses the earlier findings. Validation counts and build limitations below describe their original
 checkpoints; see the repair report for the latest status.
@@ -79,8 +84,9 @@ Full resolved-setting reporting and verifier isolation also need qualification b
 Stage 2's contract and independent reference are implemented, with F32 baseline regressions. Stage 3 now has
 production CPU attachment and token/batch execution, loader/ownership regressions and a real quantized-model
 memory smoke check. Its broad trained-adapter throughput qualification remains pending; short synthetic runs
-cannot establish acceptable overhead for the 256-pair released adapter. Stages 4 and 5 remain unimplemented:
-device attachment and complete training-trajectory capture. No trainer is added.
+cannot establish acceptable overhead for the 256-pair released adapter. At that checkpoint stages 4 and 5
+were unimplemented. The subsequent stage-5 text capture implementation is linked above; device attachment
+and training remain unimplemented. No trainer is added.
 Older adapted snapshots can be refused after the identity
 fix; no-attachment fingerprints and the snapshot layout version are unchanged.
 
