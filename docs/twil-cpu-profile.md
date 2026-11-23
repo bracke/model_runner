@@ -121,3 +121,11 @@ are terminated. The unchanged suite then passes within its 900-second bound. MCP
 not changed here, and this report does not claim that the intermittent startup issue is repaired.
 
 The final three-seed check runs after builds, tests and the audit finish, with no competing model job.
+
+## Subsequent bounded adapter comparison
+
+The user later authorizes a separate [six-attempt paired screen](twil-adapter-paired-results.md), using
+these explicit CPU settings and the repaired program. Its baseline passes two of three attempts and the
+adapter one of three, with zero adapted wins and one adapted loss. All six finish with zero infrastructure
+errors. No adapter benefit is demonstrated. This separately frozen experiment does not resume the cancelled
+144-attempt pilot or change the earlier grades, repeatability gate or global defaults.

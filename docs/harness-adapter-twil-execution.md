@@ -108,6 +108,12 @@ The subsequent [CPU throughput investigation](twil-cpu-profile.md) measures a fa
 and repairs closing XML tags being read as claimed filenames. Its fresh base-only check passes two seeds
 and times out on the third. The earlier native pilot grades remain unchanged, and no adapter study restarts.
 
+The user subsequently authorizes a separate [three-pair adapter screen](twil-adapter-paired-results.md).
+Its six fresh attempts finish with zero infrastructure errors: baseline two passes, adapter one pass,
+zero adapted wins and one adapted loss. The single pair both arms complete takes 33.1% more adapted work
+time. No local benefit is demonstrated; defaults stay unchanged and the cancelled 144-attempt pilot is
+not resumed. The new protocol and all six grades are preserved separately from the historical results.
+
 Build and validation logs are retained under `/tmp/model-runner-twil-*.log`; plain generation output, process
 timing and panel cache are under `tests/obj/trained-twil-smoke`. Pinned executables and the shared template
 are under `tests/obj/twil-runtime-pinned`; the replacement harness bundle is `tests/obj/twil-runtime-pinned-v2`.

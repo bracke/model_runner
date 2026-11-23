@@ -48,6 +48,14 @@ confirmation starts. See the [cancellation record](harness-adapter-twil-cancelle
 The [CPU throughput follow-up](twil-cpu-profile.md) finds faster explicit settings and fixes an XML
 completion-report error. Fresh base-only verification passes two of three seeds; its local repeatability
 gate remains unmet and the adapter campaign stays stopped.
+
+The user then authorizes a separate bounded [three-pair comparison](twil-adapter-paired-results.md),
+with its scope frozen before generation. All six attempts finish: baseline two passes, adapter one pass,
+zero adapted wins, one adapted loss and zero infrastructure errors. No local benefit is demonstrated;
+the model default is unchanged and the cancelled pilot stays cancelled. The new two-arm campaign selector
+passes its focused regressions; the feature's full suite passes 970/970. See the result for exact validation
+checkpoints and limits. This screen does not close the broader transfer or training gates.
+
 The [native generation and validation record](harness-adapter-twil-execution.md) now admits both models
 without F32 expansion and separates the screen's failures from the cancelled partial pilot.
 

@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "completed_on": "2026-11-23",
+  "decision": "No adapter benefit demonstrated in this local screen; leave defaults unchanged and adapter disabled.",
+  "scope": "Three paired seeds, one native Ada edit task, thinking off, CPU Q4_K_M base and released Pi adapter.",
+  "protocol": "twil-adapter-paired-protocol.md",
+  "control": "twil-adapter-paired-control.json",
+  "native_manifest": {
+    "path": "twil-adapter-paired-manifest.json",
+    "sha256": "d71203cc708e16721baadac1e93e487d3848be3f60a3e772d7b3d04ab89251ed"
+  },
+  "native_summary": {
+    "path": "twil-adapter-paired-summary.json",
+    "sha256": "6b7f4188ed7bf7c8dbce81691d0e86a83858859eb1b0c407800651dc04ed1b00"
+  },
+  "source_checkpoint": "53bdc8a0d0952bc6f9c8efe4ebf8f79ba13b4eee",
+  "campaign_exit_code": 1,
+  "planned_attempts": 6,
+  "finished_attempts": 6,
+  "pending_attempts": 0,
+  "passed": 3,
+  "failed": 3,
+  "ungraded": 0,
+  "infrastructure_errors": 0,
+  "blocked": false,
+  "selected_arm_statistics": [
+    {
+      "arm": "base-off",
+      "passed": 2,
+      "failed": 1,
+      "infrastructure_errors": 0,
+      "ungraded": 0,
+      "time_observations": 3,
+      "median_work_seconds_all": 218.8,
+      "median_generated_tokens_all": 812,
+      "median_calls_all": 7
+    },
+    {
+      "arm": "adapted-off",
+      "passed": 1,
+      "failed": 2,
+      "infrastructure_errors": 0,
+      "ungraded": 0,
+      "time_observations": 3,
+      "median_work_seconds_all": 300.3,
+      "median_generated_tokens_all": 709,
+      "median_calls_all": 4
+    }
+  ],
+  "paired_comparison": {
+    "thinking": false,
+    "adapted_wins": 0,
+    "adapted_losses": 1,
+    "both_passed": 1,
+    "both_failed": 1,
+    "missing_pairs": 0,
+    "ineligible_pairs": 0,
+    "both_solved_time_pairs": 1,
+    "base_median_work_seconds_both_solved": 218.8,
+    "adapted_median_work_seconds_both_solved": 291.3
+  },
+  "both_solved_adapter_work_increase_percent": 33.13528336380256,
+  "total_recorded_work_seconds": 1612.7,
+  "model_work_allowance_seconds": 1800,
+  "attempts": [
+    {
+      "attempt_id": "edit-1-base-off",
+      "seed": 42,
+      "arm": "base-off",
+      "grade": "passed",
+      "ending": "complete",
+      "work_seconds": 218.8,
+      "elapsed_seconds": 221.8152,
+      "calls": 7,
+      "generated_tokens": 812,
+      "configuration_unchanged": true,
+      "runtime_adapter_counts": [
+        0
+      ],
+      "native_roles": [
+        "session",
+        "root"
+      ],
+      "peak_host_bytes": null,
+      "device_resident_bytes": null
+    },
+    {
+      "attempt_id": "edit-1-adapted-off",
+      "seed": 42,
+      "arm": "adapted-off",
+      "grade": "passed",
+      "ending": "complete",
+      "work_seconds": 291.3,
+      "elapsed_seconds": 303.300096,
+      "calls": 6,
+      "generated_tokens": 669,
+      "configuration_unchanged": true,
+      "runtime_adapter_counts": [
+        1
+      ],
+      "native_roles": [
+        "session",
+        "root"
+      ],
+      "peak_host_bytes": null,
+      "device_resident_bytes": null
+    },
+    {
+      "attempt_id": "edit-2-adapted-off",
+      "seed": 43,
+      "arm": "adapted-off",
+      "grade": "failed",
+      "ending": "out of time",
+      "work_seconds": 300.6,
+      "elapsed_seconds": 343.995123,
+      "calls": 4,
+      "generated_tokens": 726,
+      "configuration_unchanged": true,
+      "runtime_adapter_counts": [
+        1
+      ],
+      "native_roles": [
+        "session",
+        "root"
+      ],
+      "peak_host_bytes": null,
+      "device_resident_bytes": null
+    },
+    {
+      "attempt_id": "edit-2-base-off",
+      "seed": 43,
+      "arm": "base-off",
+      "grade": "passed",
+      "ending": "complete",
+      "work_seconds": 201.5,
+      "elapsed_seconds": 243.577709,
+      "calls": 6,
+      "generated_tokens": 738,
+      "configuration_unchanged": true,
+      "runtime_adapter_counts": [
+        0
+      ],
+      "native_roles": [
+        "session",
+        "root"
+      ],
+      "peak_host_bytes": null,
+      "device_resident_bytes": null
+    },
+    {
+      "attempt_id": "edit-3-base-off",
+      "seed": 44,
+      "arm": "base-off",
+      "grade": "failed",
+      "ending": "out of time",
+      "work_seconds": 300.2,
+      "elapsed_seconds": 306.870988,
+      "calls": 8,
+      "generated_tokens": 1167,
+      "configuration_unchanged": true,
+      "runtime_adapter_counts": [
+        0
+      ],
+      "native_roles": [
+        "session",
+        "root"
+      ],
+      "peak_host_bytes": null,
+      "device_resident_bytes": null
+    },
+    {
+      "attempt_id": "edit-3-adapted-off",
+      "seed": 44,
+      "arm": "adapted-off",
+      "grade": "failed",
+      "ending": "out of time",
+      "work_seconds": 300.3,
+      "elapsed_seconds": 310.354693,
+      "calls": 4,
+      "generated_tokens": 709,
+      "configuration_unchanged": true,
+      "runtime_adapter_counts": [
+        1
+      ],
+      "native_roles": [
+        "session",
+        "root"
+      ],
+      "peak_host_bytes": null,
+      "device_resident_bytes": null
+    }
+  ],
+  "qualification": {
+    "all_six_native_settings_match_protocol": true,
+    "all_six_configurations_unchanged": true,
+    "expected_arm_order_and_seeds": true,
+    "base_runtime_adapters": 0,
+    "adapted_runtime_adapters": 1,
+    "source_checkpoint_matches_manifest": true,
+    "program_harness_template_and_eight_resource_hashes_rechecked": true,
+    "model_and_adapter_digests_verified_before_generation": true,
+    "check_only": {
+      "completed": true,
+      "new_attempts": 0,
+      "summary_byte_identical": true,
+      "summary_before_sha256": "6b7f4188ed7bf7c8dbce81691d0e86a83858859eb1b0c407800651dc04ed1b00",
+      "summary_after_sha256": "6b7f4188ed7bf7c8dbce81691d0e86a83858859eb1b0c407800651dc04ed1b00",
+      "log": "/tmp/model-runner-twil-paired-check-only.log"
+    },
+    "quiet_host_protocol": "Sequential inference, no overlapping builds, test suites, audits or other model jobs.",
+    "host_load_monitor": {
+      "samples": 43,
+      "first_utc": "2026-11-23T16:26:30Z",
+      "last_utc": "2026-11-23T16:54:43Z",
+      "path": "tests/obj/twil-adapter-paired-v1/host-load.jsonl"
+    },
+    "validation": {
+      "full_suite_tests_passed": 970,
+      "full_suite_checkpoint": "9822d3352260f5a2dbaa988869e5990330cda5db",
+      "campaign_cases_after_test_reader_repair_passed": 11,
+      "repository_checks": 30634,
+      "repository_failures": 0,
+      "repository_duration_qualified": false,
+      "repository_log": "/tmp/model-runner-twil-paired-repository-final.log"
+    }
+  },
+  "cleanup": {
+    "own_campaign_and_model_processes_stopped": true,
+    "temporary_sleep_inhibitor_released": true,
+    "removed_panel_files": 6,
+    "removed_panel_bytes": 30670872576,
+    "preserved": "Native records, transcripts, project sources, diffs, verifier outputs and configuration snapshots.",
+    "artifacts": "tests/obj/twil-adapter-paired-v1"
+  },
+  "limits": [
+    "One task and three paired seeds; descriptive screening only.",
+    "Only one both-solved pair supports a completion-cost comparison.",
+    "Timeout times are censored and cannot establish total completion cost.",
+    "Peak model memory is unavailable; parent process memory is not substituted.",
+    "This local Q4 CPU screen does not reproduce upstream BF16 results or assess all adapters.",
+    "The cancelled 144-attempt pilot remains cancelled; no larger campaign or custom training starts from this screen."
+  ]
+}

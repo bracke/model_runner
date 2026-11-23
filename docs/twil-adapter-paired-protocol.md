@@ -69,3 +69,8 @@ and publish the six results. The driver may exit one for ordinary failed outcome
 an infrastructure failure. This three-pair, single-task screen supplies descriptive evidence without
 significance, independence, noninferiority or general adapter-transfer claims. Do not start the old pilot
 or a larger confirmation automatically, and do not change the model default.
+
+## Completed result
+
+The [six-attempt result](twil-adapter-paired-results.md) and its native records are published separately.
+The protocol above remains the pre-generation scope; no outcome changes its settings, budgets or grades.

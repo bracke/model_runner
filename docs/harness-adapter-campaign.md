@@ -2,6 +2,10 @@
 
 Current implementation, checks and remaining gates are recorded in [the execution report](harness-adapter-execution.md).
 
+The completed [three-pair TwIL screen](twil-adapter-paired-results.md) demonstrates no local adapter benefit:
+baseline two passes, adapter one pass, zero adapted wins and zero infrastructure errors across six attempts.
+The cancelled larger pilot stays cancelled and model defaults are unchanged.
+
 `tests agent-campaign` drives the existing `Agent_Trial` workflow. Each attempt opens a real model_runner
 session, initializes a fresh project, runs `/work`, preserves its session and diff, and grades the result after
 the session has ended. It does not use a substitute agent loop or an external inference runtime.
