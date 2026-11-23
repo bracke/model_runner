@@ -20,6 +20,11 @@ CLI validation, full export and standalone validation also pass against a native
 Standalone CLI validation passes against the self-contained helper-family fixture.
 Root and test builds complete without compiler warnings or errors.
 
+A subsequent [real Mellum coding task](mellum-trajectory-results.md) uses the user's configured model
+and automatic settings. It times out with an incorrect edit; its complete exact capture and self-contained
+export both validate, including with original evidence paths hidden. Independent failure correctly leaves
+successful-demonstration eligibility false. No successful real demonstration is produced by that check.
+
 The final repository audit passes **30,760 checks with zero failures** (exit zero). The preceding audit
 had only the expected stale no-adapter fingerprint; it was replaced after the passing fresh measurements,
 and its original row and evidence remain historical. The audit's own 211.08-second processor cost exceeds
