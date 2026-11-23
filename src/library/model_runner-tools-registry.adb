@@ -79,10 +79,14 @@ package body Model_Runner.Tools.Registry is
       (W ("edit_file"), Write_Files, True, Changes, Files, False, Writes_Path,
        W (Sc.Definition
          ("edit_file",
-            "Replace one exact passage of a file with new text -- the way to change part of a file"
-            & " without writing it all out. old_text must be in the file exactly once, as it is now;"
-            & " give revision, from read_file, to be refused if the file changed since you read it.",
-            [Sc.Text ("path"), Sc.Text ("old_text"), Sc.Text ("new_text"), Sc.Text ("revision", Required => False)]))),
+            "For a whole Ada function/procedure body, prefer ref from find kind declaration: give path, ref"
+            & " and new_text (the complete replacement body), without old_text or copied indentation."
+            & " The ref must name one complete multiline body, at most 400 lines, at its current revision."
+            & " Success returns a fresh ref for another edit."
+            & " Otherwise give path, old_text and new_text to replace one passage; old_text must occur once."
+            & " Optional revision protects a passage edit; in ref mode it must agree with ref.",
+            [Sc.Text ("path"), Sc.Text ("ref", Required => False), Sc.Text ("new_text"),
+             Sc.Text ("old_text", Required => False), Sc.Text ("revision", Required => False)]))),
       (W ("write_file"), Write_Files, True, Changes, Files, False, Writes_Path,
        W (Sc.Definition
          ("write_file", "Write a new file, or one rewritten whole -- edit_file changes part of one.",

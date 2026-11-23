@@ -156,6 +156,15 @@ package body Model_Runner.Tools.Builtin is
       return Doc.As_String (Document, Item);
    end Text_Argument;
 
+   function Has_Argument (Args, Key : String) return Boolean is
+      Document : Doc.Document;
+      Item : Doc.Node;
+      Present : Boolean;
+   begin
+      Member (Args, Key, Document, Item, Present);
+      return Present;
+   end Has_Argument;
+
    function Schema_Given (Args : String) return String is
       Document : Doc.Document;
       Shape    : Doc.Node;
@@ -1232,12 +1241,23 @@ package body Model_Runner.Tools.Builtin is
    end With_Revisions;
 
    function Edit_File (Args : String; Base : String) return Reply is
-      Have_P, Have_O, Have_N, Have_R : Boolean;
+      Have_P, Have_O, Have_N, Have_R, Have_Ref : Boolean;
       Path : constant String := Text_Argument (Args, "path", Have_P);
       Old  : constant String := Text_Argument (Args, "old_text", Have_O);
       Neww : constant String := Text_Argument (Args, "new_text", Have_N);
       Rev  : constant String := Text_Argument (Args, "revision", Have_R);
+      Ref  : constant String := Text_Argument (Args, "ref", Have_Ref);
    begin
+      if Has_Argument (Args, "ref") then
+         if not (Have_P and then Have_N and then Have_Ref) or else Has_Argument (Args, "old_text") then
+            return Failure ("edit_file ref mode needs path, ref and new_text, without old_text");
+         elsif Has_Argument (Args, "revision")
+           and then (not Have_R or else Ref'Length < 17 or else Rev /= Ref (Ref'Last - 15 .. Ref'Last))
+         then
+            return Failure ("revision must agree with the revision in ref");
+         end if;
+         return As_Reply (Model_Runner.Tools.Editing.Edit_Reference (Path, Ref, Neww, Base));
+      end if;
       if not (Have_P and then Have_O and then Have_N) then
          return Failure ("edit_file needs a path, old_text and new_text");
       end if;
@@ -1253,6 +1273,9 @@ package body Model_Runner.Tools.Builtin is
       Neww : constant String := Text_Argument (Args, "new_text", Have_N);
       Rev  : constant String := Text_Argument (Args, "revision", Have_R);
    begin
+      if Has_Argument (Args, "ref") then
+         return Edit_File (Args, Base);
+      end if;
       if not (Have_P and then Have_O and then Have_N) then
          return Failure ("edit_file needs a path, old_text and new_text");
       end if;
@@ -2719,17 +2742,19 @@ package body Model_Runner.Tools.Builtin is
             Now  : constant String :=
               (if Writes (Named) and then Have and then Self.Seen.Has (Path)
                then Model_Runner.Tools.Editing.Revision_Of (Spelt, U.To_String (Self.Base)) else "");
+            Referenced : constant Boolean := Named = "edit_file" and then Has_Argument (Args, "ref");
          begin
             --  Changed under it since it last read or wrote it: made over
             --  what it did not see, the other change would be lost.
-            if Now /= "" and then Now /= Self.Seen.Get (Path) then
+            if not Referenced and then Now /= "" and then Now /= Self.Seen.Get (Path) then
                return Failure
                  (Path & " has changed since you last read or wrote it (revision " & Self.Seen.Get (Path)
                   & " then, " & Now & " now), by something other than you: read it again, then"
                   & " change what is there");
             --  Seen, and now not to be read -- grown past what is read,
             --  no longer text, gone: not written over unseen.
-            elsif Writes (Named) and then Have and then Self.Seen.Has (Path) and then Now = "" then
+            elsif not Referenced and then Writes (Named) and then Have and then Self.Seen.Has (Path) and then Now = ""
+            then
                return Failure
                  (Path & " cannot be read as it is now -- gone, grown too large or no longer text --"
                   & " so it is not changed over what you saw of it: read it again first");
@@ -2864,6 +2889,8 @@ package body Model_Runner.Tools.Builtin is
                   begin
                      if Has_Old then
                         Self.Replaced.Put (Path, Old);
+                     else
+                        Self.Replaced.Forget (Path);
                      end if;
                   end;
                end if;

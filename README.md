@@ -316,6 +316,10 @@ rules are written in `Model_Runner.Framework.Retrieval`; the index of the
 files' words is kept in the process and read again on the first search
 after a start.
 
+For a complete Ada function or procedure body, agents can give `edit_file` a revision-bound `ref` from
+`find` instead of copying `old_text`. The tool checks structural boundaries and returns a fresh reference
+after a successful replacement. See [reference editing](docs/reference-editing.md) for its scope and examples.
+
 Work is verified as widely as what it changed reaches. The traceability graph
 says which tests the change reaches and how sure that is; where the policy
 allows testing less than everything and names a profile for it --

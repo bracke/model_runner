@@ -16,6 +16,7 @@ with Hostkit.Metadata_Copy;
 
 with Model_Runner.Durable_Syncs;
 with Model_Runner.Heap_Buffers;
+with Model_Runner.Framework.Repository;
 
 package body Model_Runner.Tools.Editing is
 
@@ -482,7 +483,8 @@ package body Model_Runner.Tools.Editing is
      (Path    : String;
       Content : String;
       Result  : out Said;
-      Base    : String := "")
+      Base    : String := "";
+      Expected : String := "")
    is
       use Ada.Streams;
       Given  : constant String := On_Disk (Base, Path);
@@ -557,6 +559,10 @@ package body Model_Runner.Tools.Editing is
       Result.Before_Revision := U.To_Unbounded_String (Before);
       Result.After_Revision := U.To_Unbounded_String (After);
       Result.Created := not There;
+      if Expected /= "" and then Expected /= Before then
+         Fail (Path & " changed before its replacement was written: get a fresh reference");
+         return;
+      end if;
       if There and then Before = After then
          return;
       end if;
@@ -2001,6 +2007,263 @@ package body Model_Runner.Tools.Editing is
       when others =>
          return Failing ("could not write " & Path);
    end Edit;
+
+   function Edit_Reference (Path, Reference, New_Text : String; Base : String := "") return Said is
+      package Rp renames Model_Runner.Framework.Repository;
+      At_Sign : constant Natural := Ada.Strings.Fixed.Index (Reference, "@", Ada.Strings.Backward);
+      Colon : constant Natural :=
+        (if At_Sign = 0 then 0 else Ada.Strings.Fixed.Index
+           (Reference (Reference'First .. At_Sign - 1), ":", Ada.Strings.Backward));
+      Dash : constant Natural :=
+        (if Colon = 0 then 0 else Ada.Strings.Fixed.Index (Reference (Colon + 1 .. At_Sign - 1), "-"));
+      Held : U.Unbounded_String;
+      Status : E.Error_Info;
+
+      function Number (Text : String) return Natural is
+        (if Text'Length in 1 .. 7 and then (for all C of Text => C in '0' .. '9')
+         then Natural'Value (Text) else 0);
+
+      function Start_Of (Text : String; Line : Positive) return Natural is
+         Current : Positive := 1;
+      begin
+         if Line = 1 then
+            return Text'First;
+         end if;
+         for Index in Text'Range loop
+            if Text (Index) = ASCII.LF then
+               Current := Current + 1;
+               if Current = Line then
+                  return Index + 1;
+               end if;
+            end if;
+         end loop;
+         return Text'Last + 1;
+      end Start_Of;
+
+      function Next_Line (Text : String; From : Positive) return Positive is
+      begin
+         for Index in From .. Text'Last loop
+            if Text (Index) = ASCII.LF then
+               return Index + 1;
+            end if;
+         end loop;
+         return Text'Last + 1;
+      end Next_Line;
+
+      function Simple (Name : String) return String is
+         Dot : constant Natural := Ada.Strings.Fixed.Index (Name, ".", Ada.Strings.Backward);
+      begin
+         return Ada.Characters.Handling.To_Lower (Name ((if Dot = 0 then Name'First else Dot + 1) .. Name'Last));
+      end Simple;
+
+      --  Whole-line replacement is safe only where the scanner and both line
+      --  boundaries agree on one routine. In particular, an end followed by a
+      --  neighboring declaration on the same line must never consume that neighbor.
+      function Body_At
+        (Text : String; First, Last : Positive; Name : out U.Unbounded_String;
+         Kind : out U.Unbounded_String) return Boolean
+      is
+         Span : constant Rp.Extent := Rp.Enclosing (Path, Text, Last, Name);
+         Head : U.Unbounded_String;
+         Tail : U.Unbounded_String;
+         Cursor : Positive := Start_Of (Text, First);
+      begin
+         Kind := U.Null_Unbounded_String;
+         if not Span.Structural or else Span.First /= First or else Span.Last /= Last or else First >= Last then
+            return False;
+         end if;
+         for Line in First .. Last loop
+            declare
+               Begin_At : constant Natural := Cursor;
+               After_At : constant Natural := Next_Line (Text, Cursor);
+               End_At : Natural := After_At - 1;
+            begin
+               Cursor := After_At;
+               if End_At >= Begin_At and then Text (End_At) = ASCII.LF then
+                  End_At := End_At - 1;
+               end if;
+               if End_At >= Begin_At and then Text (End_At) = ASCII.CR then
+                  End_At := End_At - 1;
+               end if;
+               declare
+                  Words : constant String := Ada_Words (Text (Begin_At .. End_At));
+               begin
+                  if U.Length (Head) = 0 and then Words /= "" then
+                     Head := U.To_Unbounded_String (Words);
+                  end if;
+                  if Line = Last then
+                     for C of Words loop
+                        if C not in ' ' | ASCII.HT then
+                           U.Append (Tail, C);
+                        end if;
+                     end loop;
+                  end if;
+               end;
+            end;
+         end loop;
+         declare
+            Header : constant String := U.To_String (Head);
+            Offset : constant Natural :=
+              (if Starts (Header, "function") then 9 elsif Starts (Header, "procedure") then 10 else 0);
+            Begin_Name : Natural := Offset;
+            Stop : Natural;
+            Depth : Natural := 0;
+            Character_Through : Natural := 0;
+         begin
+            if Offset = 0 or else Offset > Header'Last then
+               return False;
+            end if;
+            for Index in Header'Range loop
+               if Index <= Character_Through then
+                  null;
+               elsif Header (Index) = ''' and then Index + 2 <= Header'Last and then Header (Index + 2) = ''' then
+                  Character_Through := Index + 2;
+               elsif Header (Index) = '(' then
+                  Depth := Depth + 1;
+               elsif Header (Index) = ')' and then Depth > 0 then
+                  Depth := Depth - 1;
+               elsif Header (Index) = ';' and then Depth = 0 then
+                  return False;
+               end if;
+            end loop;
+            while Begin_Name <= Header'Last and then Header (Begin_Name) in ' ' | ASCII.HT loop
+               Begin_Name := Begin_Name + 1;
+            end loop;
+            Stop := Begin_Name;
+            while Stop <= Header'Last and then Header (Stop) in 'a' .. 'z' | '0' .. '9' | '_' | '.' loop
+               Stop := Stop + 1;
+            end loop;
+            if Stop = Begin_Name or else Simple (Header (Begin_Name .. Stop - 1)) /= Simple (U.To_String (Name)) then
+               return False;
+            end if;
+            Kind := U.To_Unbounded_String (if Offset = 9 then "function" else "procedure");
+            return U.To_String (Tail) in "end;" | "end" & Simple (U.To_String (Name)) & ";";
+         end;
+      end Body_At;
+   begin
+      if Path = "" or else Reference'Length > 8_192 or else Dash = 0 or else Colon <= Reference'First
+        or else At_Sign + 16 /= Reference'Last
+        or else Reference (Reference'First .. Colon - 1) /= Path
+        or else (for some C of Reference (At_Sign + 1 .. Reference'Last) => C not in '0' .. '9' | 'a' .. 'f')
+        or else Number (Reference (Colon + 1 .. Dash - 1)) = 0
+        or else Number (Reference (Dash + 1 .. At_Sign - 1)) < Number (Reference (Colon + 1 .. Dash - 1))
+      then
+         return Failing ("ref must be PATH:FIRST-LAST@REVISION from find declaration, with the same path");
+      elsif New_Text'Length = 0 or else New_Text'Length > Text_Most
+        or else (for some C of New_Text => C = Character'Val (0))
+      then
+         return Failing ("new_text must contain the complete replacement routine within the text limit");
+      elsif Rp.Language_Of (Path) /= "Ada" then
+         return Failing ("ref replacement currently supports complete multiline Ada routine bodies; use old_text");
+      end if;
+      Read_Text (Path, Held, Status, Base);
+      if E.Is_Error (Status) then
+         return Failing (Why_Unread (Path, Status));
+      end if;
+      declare
+         Text : constant String := U.To_String (Held);
+         Now : constant String := Revision (Text);
+         First : constant Positive := Number (Reference (Colon + 1 .. Dash - 1));
+         Last : constant Positive := Number (Reference (Dash + 1 .. At_Sign - 1));
+         Old_Name, Old_Kind, New_Name, New_Kind, Fresh, Indent : U.Unbounded_String;
+         From : constant Natural := Start_Of (Text, First);
+         After_At : constant Natural := Start_Of (Text, Last + 1);
+         Minimum : Natural := Natural'Last;
+         Put : Said;
+      begin
+         if Reference (At_Sign + 1 .. Reference'Last) /= Now then
+            return Failing (Path & " has changed since this ref was shown: find declaration again");
+         elsif Last - First >= Range_Most then
+            return Failing ("ref body exceeds the 400-line limit: use a smaller edit with old_text");
+         elsif not Body_At (Text, First, Last, Old_Name, Old_Kind) then
+            return Failing ("ref must name exactly one complete multiline Ada function or procedure body");
+         end if;
+         --  Normalize only the replacement. Prefix and suffix retain their exact bytes.
+         for Index in New_Text'Range loop
+            if New_Text (Index) = ASCII.CR then
+               if Index = New_Text'Last or else New_Text (Index + 1) /= ASCII.LF then
+                  return Failing ("new_text has a bare carriage return");
+               end if;
+            else
+               U.Append (Fresh, New_Text (Index));
+            end if;
+         end loop;
+         while U.Length (Fresh) > 0 and then U.Element (Fresh, U.Length (Fresh)) = ASCII.LF loop
+            U.Delete (Fresh, U.Length (Fresh), U.Length (Fresh));
+         end loop;
+         declare
+            Body_Text : constant String := U.To_String (Fresh);
+            Lines : constant Positive := Natural'Max (1, Lines_In (Body_Text));
+         begin
+            if Lines > Range_Most or else not Body_At (Body_Text, 1, Lines, New_Name, New_Kind)
+              or else Simple (U.To_String (New_Name)) /= Simple (U.To_String (Old_Name))
+              or else U.To_String (New_Kind) /= U.To_String (Old_Kind)
+            then
+               return Failing ("new_text must be one complete body of the same named routine");
+            end if;
+            declare
+               Cursor : Positive := Body_Text'First;
+            begin
+               for Line in 1 .. Lines loop
+                  declare
+                     At_Line : constant Natural := Cursor;
+                     Stop : Natural := At_Line;
+                  begin
+                     while Stop <= Body_Text'Last and then Body_Text (Stop) in ' ' | ASCII.HT loop
+                        Stop := Stop + 1;
+                     end loop;
+                     if Stop <= Body_Text'Last and then Body_Text (Stop) /= ASCII.LF then
+                        Minimum := Natural'Min (Minimum, Stop - At_Line);
+                     end if;
+                     Cursor := Next_Line (Body_Text, Cursor);
+                  end;
+               end loop;
+            end;
+            declare
+               Stop : Natural := From;
+               Replacement : U.Unbounded_String;
+               Cursor : Positive := Body_Text'First;
+               Break : constant String :=
+                 (if Ada.Strings.Fixed.Index (Text (From .. After_At - 1), ASCII.CR & ASCII.LF) > 0
+                  then ASCII.CR & ASCII.LF else [ASCII.LF]);
+            begin
+               while Stop < After_At and then Text (Stop) in ' ' | ASCII.HT loop
+                  U.Append (Indent, Text (Stop));
+                  Stop := Stop + 1;
+               end loop;
+               for Line in 1 .. Lines loop
+                  declare
+                     A : constant Natural := Cursor;
+                     B : constant Natural := Next_Line (Body_Text, Cursor) - 1;
+                     Z : constant Natural := (if B <= Body_Text'Last and then Body_Text (B) = ASCII.LF then B - 1
+                                               else B);
+                  begin
+                     Cursor := B + 1;
+                     if Z >= A + Minimum then
+                        U.Append (Replacement, U.To_String (Indent) & Body_Text (A + Minimum .. Z));
+                     end if;
+                     if Line < Lines or else (After_At > From and then Text (After_At - 1) = ASCII.LF) then
+                        U.Append (Replacement, Break);
+                     end if;
+                  end;
+               end loop;
+               if Text'Length - (After_At - From) + U.Length (Replacement) > Text_Most then
+                  return Failing ("replacement would exceed the text file limit");
+               end if;
+               Replace (Path, Text (Text'First .. From - 1) & U.To_String (Replacement)
+                        & Text (After_At .. Text'Last), Put, Base, Expected => Now);
+               if not Put.Failed then
+                  Put.Text := U.To_Unbounded_String
+                    ((if Put.Changed then "replaced " else "unchanged: ") & U.To_String (Old_Name)
+                     & " in " & Path & "; revision now " & U.To_String (Put.After_Revision)
+                     & "; ref " & Path & ":" & Image (First) & "-" & Image (First + Lines - 1)
+                     & "@" & U.To_String (Put.After_Revision) & Kept_Note (Put));
+               end if;
+               return Put;
+            end;
+         end;
+      end;
+   end Edit_Reference;
 
    ----------------
    -- Read_Range --

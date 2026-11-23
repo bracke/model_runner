@@ -123,11 +123,13 @@ package Model_Runner.Tools.Editing is
    --    before "" for a file made -- or Failed, with what failed and why.
    --  @param Base The directory a relative path is under; "" for the
    --    process's own.
+   --  @param Expected Required previous revision, or empty for an ordinary replacement.
    procedure Replace
      (Path    : String;
       Content : String;
       Result  : out Said;
-      Base    : String := "");
+      Base    : String := "";
+      Expected : String := "");
 
    --  Replace the one place a passage is in a file. Refused, and nothing
    --  written, where Expected is given and the file's revision is another,
@@ -151,6 +153,16 @@ package Model_Runner.Tools.Editing is
       Base       : String := "";
       Near_First : Natural := 0;
       Near_Last  : Natural := 0) return Said;
+
+   --  Replace a complete multiline Ada function/procedure body using a reference
+   --  from find declaration. No old text or indentation needs to be copied.
+   --  The reference's file revision and structural bounds must still agree.
+   --  @param Path File, spelled exactly as in the reference; ordinary path grants apply.
+   --  @param Reference PATH:FIRST-LAST@REVISION for one complete routine body.
+   --  @param New_Text Complete replacement of the same named routine, without neighboring code.
+   --  @param Base Directory for relative paths, as for Edit.
+   --  @return Structured change/revisions, or Failed with the refusal reason; never a partial edit.
+   function Edit_Reference (Path, Reference, New_Text : String; Base : String := "") return Said;
 
    --  Lines First .. Last of a file, numbered; Last of nought for to the
    --  end. At most Range_Most of them.

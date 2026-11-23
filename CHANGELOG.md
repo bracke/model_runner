@@ -33,6 +33,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Reference editing.** Agents can replace a complete multiline Ada routine body using a revision-bound
+  declaration reference, with structural boundary checks and a fresh reference returned after success.
+  Existing passage edits remain available.
+
 - **Opt-in trajectory capture.** Separate bounded local artifacts preserve model
   input and sampled token IDs, full messages and tool exchanges. The native
   `tests trajectories` tool validates and explicitly exports captures, binds
