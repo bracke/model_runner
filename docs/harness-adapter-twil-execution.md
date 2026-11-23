@@ -79,20 +79,30 @@ After the startup fix, the mandatory suite again passes **969/969** and the fina
 The replacement pilot starts at 2026-11-23 13:23 UTC under `tests/obj/trained-twil-pilot-v2`, using source
 checkpoint `ecdb93a3862743fd9056a4f9ff6f24c21f364a77` and a fresh manifest. Its pinned harness SHA-256 is
 `3d44c7bc0761b06fdd547d93f0ea046fdc3b1854c109c203f4ee1328a23b4229`. It retains the same inference
-program, models, template, sampler and work budgets. Results are pending. Generated panel files are removed
-only from finished
-attempts; transcripts, diffs, configurations and verifier results are retained. The process holds a temporary
-idle/sleep inhibitor and the existing hard deadline.
+program, models, template, sampler and work budgets. The user stops this pilot at 2026-11-23 13:54:30 UTC
+after five finished attempts, all timeouts, with zero verified completions and zero infrastructure errors.
+The interrupted sixth attempt, `find-1-base-on`, remains ungraded; 138 attempts never start. Native records
+retain 139 pending attempts because cancellation does not manufacture a finished record for the interruption.
+The [cancellation record](harness-adapter-twil-cancelled-pilot.json) links the unchanged native summary and
+manifest. All five finished attempts preserve their project configuration and expected native settings.
 
-A separate lightweight operational monitor samples host load every 45 seconds and removes generated panel
-files from finished attempts. It retains the native summary and every transcript. After the campaign exits,
-it attempts native check-only reuse if at least two minutes remain before the same deadline, records the
-exit status and whether the summary hash changed, and writes `pilot-result.json` in the pilot directory.
-That result file is not present while the pilot is running; no completed pilot result is claimed here.
+In the first edit comparison, the base without thinking reaches passing project checks but times out before
+task completion. The adapted counterpart still has failing overflow checks when it times out. Almost all
+observed work time is model inference; checks take approximately one second. Neither thinking-enabled edit
+attempt completes, and the adapted thinking-enabled find attempt also times out. Unavailable native work
+counters remain null. These partial observations show no demonstrated adapter benefit and do not establish
+general transfer efficacy or a precise performance margin. Confirmation does not start.
+
+The lightweight monitor sampled host load every 45 seconds and removed generated panels from finished
+attempts. Cancellation stops both the campaign and monitor before any check-only follow-up. Process checks
+confirm that the pilot, its confined model descendants, monitor and idle/sleep inhibitor are gone. Generated
+panels from the interrupted project are then removed; transcripts, project records, verifier results and
+the invoking marker are retained. `pilot-result.json` records cancellation in the pilot directory. The
+native summary is copied byte-for-byte without resuming the study or changing grades.
 
 The user authorized sixteen hours and reported the machine quiet. The shared screen/pilot deadline is
-2026-11-24 04:07:54 UTC. Confirmation remains conditional on a promising pilot and its separate frozen-suite
-and uncertainty requirements. No model default has changed.
+2026-11-24 04:07:54 UTC. Cancellation ends this run before that deadline and revokes continued execution
+of this pilot. No model default has changed.
 
 Build and validation logs are retained under `/tmp/model-runner-twil-*.log`; plain generation output, process
 timing and panel cache are under `tests/obj/trained-twil-smoke`. Pinned executables and the shared template

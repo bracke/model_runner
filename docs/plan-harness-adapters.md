@@ -23,7 +23,7 @@ records capture actual session/root/helper settings and project configuration; s
 The released trained-adapter campaign remains pending. A matched before/after comparison without adapters
 now passes the declared local 5% prompt/decode median gate in two seven-pair release-engine batches on the
 0.8B CPU case; see [the evidence and limits](harness-adapter-no-adapter-check.md).
-The mandatory full suite now passes 968/968. The
+The mandatory full suite now passes 969/969. The
 [repository repair](repository-audit-repair.md) fixes the dependency conflict and addresses the nineteen
 earlier audit findings. [Campaign hardening](campaign-hardening.md) records the subsequent validation.
 Bounded CPU tiles reduce observed prompt
@@ -41,9 +41,12 @@ A smaller published TwIL Pi pair now has [its own frozen protocol](harness-adapt
 Its Q4 base and trained adapter are verified against their pinned whole-file digests, and all 280 Granite
 projection pairs resolve. Native Granite attachment and explicit-template tool-format recognition have
 oracle and regression coverage. The four-arm edit screen qualifies the native tool contract but has zero
-verified completions. The predeclared 144-attempt pilot is running within the user-authorized sixteen hours.
+verified completions. The user stops the predeclared 144-attempt pilot after five finished attempts, all
+timeouts, with zero verified completions and zero infrastructure errors. The interrupted sixth attempt is
+ungraded; 138 attempts never start. No adapter benefit or full-pilot conclusion is established, and no
+confirmation starts. See the [cancellation record](harness-adapter-twil-cancelled-pilot.json).
 The [native generation and validation record](harness-adapter-twil-execution.md) now admits both models
-without F32 expansion and separates the screen's failures from the pending full-pilot decision.
+without F32 expansion and separates the screen's failures from the cancelled partial pilot.
 
 The objective is better verified coding work per unit of local time and memory. The first question is whether
 the released harness adapters improve this program's actual `/work` agent. The second is whether keeping an

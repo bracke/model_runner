@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "state": "cancelled",
+  "reason": "User requested stopping after observing repeated timeouts: seems pointless to continue.",
+  "stopped_utc": "2026-11-23T13:54:30Z",
+  "source_checkpoint": "ecdb93a3862743fd9056a4f9ff6f24c21f364a77",
+  "planned_attempts": 144,
+  "finished_attempts": 5,
+  "passed": 0,
+  "failed": 5,
+  "infrastructure_errors": 0,
+  "interrupted_attempts": [
+    {
+      "attempt_id": "find-1-base-on",
+      "state": "interrupted by cancellation",
+      "grade": null,
+      "directory": "tests/obj/trained-twil-pilot-v2/find-1-base-on",
+      "note": "Native invoking marker and partial project retained. No finished transcript or work counters were emitted."
+    }
+  ],
+  "unstarted_attempts": 138,
+  "native_pending_attempts": 139,
+  "native_summary_sha256": "e04a2635bca24c62e53faf9163f505fae06fe8c642fc74de6906b2639e84230a",
+  "native_manifest_sha256": "6ce84830fc651d9926f35b8f407a556492032f7e1ea0f50112d03345444696ee",
+  "native_summary": "harness-adapter-twil-cancelled-pilot-summary.json",
+  "native_manifest": "harness-adapter-twil-cancelled-pilot-manifest.json",
+  "check_only": {
+    "performed": false,
+    "reason": "Cancelled the operational monitor and campaign together at user request. Native finished records were copied without modification; no resumed attempts or further model evaluation."
+  },
+  "cleanup": {
+    "pilot_processes_stopped": true,
+    "model_descendants_stopped": true,
+    "monitor_stopped": true,
+    "sleep_inhibitor_released": true,
+    "generated_panel_files_removed": true,
+    "finished_attempt_cache_bytes_removed": 25559060480,
+    "interrupted_attempt_cache_bytes_removed": 5111812096,
+    "transcripts_and_project_records_retained": true
+  },
+  "quality_conclusion": "No verified completion or demonstrated adapter benefit in this stopped local experiment. The incomplete pilot cannot establish general transfer efficacy or a precise performance margin.",
+  "confirmation_started": false,
+  "model_default_changed": false,
+  "attempts": [
+    {
+      "attempt_id": "edit-1-base-off",
+      "arm": "base-off",
+      "task": "edit",
+      "grade": "failed",
+      "ending": "out of time",
+      "calls": 7,
+      "generated_tokens": 822,
+      "work_seconds": 301,
+      "configuration_unchanged": true,
+      "session": [
+        {
+          "thinking": "THINKING_OFF",
+          "runtime_adapters": 0,
+          "backend": "cpu",
+          "threads": 8,
+          "context_size": 8192,
+          "batch_size": 16
+        }
+      ],
+      "directory": "/home/bent/Projekte/Ada/model_runner/tests/obj/trained-twil-pilot-v2/edit-1-base-off/trial-edit-failed-2026-11-23_14-25-07"
+    },
+    {
+      "attempt_id": "edit-1-adapted-off",
+      "arm": "adapted-off",
+      "task": "edit",
+      "grade": "failed",
+      "ending": "out of time",
+      "calls": 4,
+      "generated_tokens": 517,
+      "work_seconds": 300.7,
+      "configuration_unchanged": true,
+      "session": [
+        {
+          "thinking": "THINKING_OFF",
+          "runtime_adapters": 1,
+          "backend": "cpu",
+          "threads": 8,
+          "context_size": 8192,
+          "batch_size": 16
+        }
+      ],
+      "directory": "/home/bent/Projekte/Ada/model_runner/tests/obj/trained-twil-pilot-v2/edit-1-adapted-off/trial-edit-failed-2026-11-23_14-30-16"
+    },
+    {
+      "attempt_id": "edit-1-base-on",
+      "arm": "base-on",
+      "task": "edit",
+      "grade": "failed",
+      "ending": "out of time",
+      "calls": 1,
+      "generated_tokens": 1101,
+      "work_seconds": 300.4,
+      "configuration_unchanged": true,
+      "session": [
+        {
+          "thinking": "THINKING_ON",
+          "runtime_adapters": 0,
+          "backend": "cpu",
+          "threads": 8,
+          "context_size": 8192,
+          "batch_size": 16
+        }
+      ],
+      "directory": "/home/bent/Projekte/Ada/model_runner/tests/obj/trained-twil-pilot-v2/edit-1-base-on/trial-edit-failed-2026-11-23_14-35-33"
+    },
+    {
+      "attempt_id": "edit-1-adapted-on",
+      "arm": "adapted-on",
+      "task": "edit",
+      "grade": "failed",
+      "ending": "out of time",
+      "calls": null,
+      "generated_tokens": null,
+      "work_seconds": null,
+      "configuration_unchanged": true,
+      "session": [
+        {
+          "thinking": "THINKING_ON",
+          "runtime_adapters": 1,
+          "backend": "cpu",
+          "threads": 8,
+          "context_size": 8192,
+          "batch_size": 16
+        }
+      ],
+      "directory": "/home/bent/Projekte/Ada/model_runner/tests/obj/trained-twil-pilot-v2/edit-1-adapted-on/trial-edit-failed-2026-11-23_14-41-23"
+    },
+    {
+      "attempt_id": "find-1-adapted-on",
+      "arm": "adapted-on",
+      "task": "find",
+      "grade": "failed",
+      "ending": "out of time",
+      "calls": 2,
+      "generated_tokens": 675,
+      "work_seconds": 300.8,
+      "configuration_unchanged": true,
+      "session": [
+        {
+          "thinking": "THINKING_ON",
+          "runtime_adapters": 1,
+          "backend": "cpu",
+          "threads": 8,
+          "context_size": 8192,
+          "batch_size": 16
+        }
+      ],
+      "directory": "/home/bent/Projekte/Ada/model_runner/tests/obj/trained-twil-pilot-v2/find-1-adapted-on/trial-find-failed-2026-11-23_14-46-34"
+    }
+  ],
+  "statistics": {
+    "scope": "descriptive; no independence or significance claim",
+    "arms": [
+      {
+        "arm": "base-off",
+        "passed": 0,
+        "failed": 1,
+        "infrastructure_errors": 0,
+        "ungraded": 0,
+        "time_observations": 1,
+        "median_work_seconds_all": 301,
+        "median_generated_tokens_all": 822,
+        "median_calls_all": 7
+      },
+      {
+        "arm": "adapted-off",
+        "passed": 0,
+        "failed": 1,
+        "infrastructure_errors": 0,
+        "ungraded": 0,
+        "time_observations": 1,
+        "median_work_seconds_all": 300.7,
+        "median_generated_tokens_all": 517,
+        "median_calls_all": 4
+      },
+      {
+        "arm": "base-on",
+        "passed": 0,
+        "failed": 1,
+        "infrastructure_errors": 0,
+        "ungraded": 0,
+        "time_observations": 1,
+        "median_work_seconds_all": 300.4,
+        "median_generated_tokens_all": 1101,
+        "median_calls_all": 1
+      },
+      {
+        "arm": "adapted-on",
+        "passed": 0,
+        "failed": 2,
+        "infrastructure_errors": 0,
+        "ungraded": 0,
+        "time_observations": 1,
+        "median_work_seconds_all": 300.8,
+        "median_generated_tokens_all": 675,
+        "median_calls_all": 2
+      }
+    ],
+    "comparisons": [
+      {
+        "thinking": false,
+        "adapted_wins": 0,
+        "adapted_losses": 0,
+        "both_passed": 0,
+        "both_failed": 1,
+        "missing_pairs": 0,
+        "ineligible_pairs": 0,
+        "both_solved_time_pairs": 0,
+        "base_median_work_seconds_both_solved": null,
+        "adapted_median_work_seconds_both_solved": null
+      },
+      {
+        "thinking": true,
+        "adapted_wins": 0,
+        "adapted_losses": 0,
+        "both_passed": 0,
+        "both_failed": 1,
+        "missing_pairs": 0,
+        "ineligible_pairs": 0,
+        "both_solved_time_pairs": 0,
+        "base_median_work_seconds_both_solved": null,
+        "adapted_median_work_seconds_both_solved": null
+      }
+    ]
+  }
+}

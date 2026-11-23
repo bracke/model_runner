@@ -86,3 +86,10 @@ five attempts per arm, an explicit compute budget and task-cluster uncertainty. 
 still applies: credible completion gain at acceptable latency, or at least 10% lower median work time with
 completion loss bounded by five percentage points. An unresolved margin is inconclusive. Keep the default
 unchanged unless confirmation supports a recommendation; fewer tokens alone cannot pass this rule.
+
+## Execution stopped
+
+At 2026-11-23 13:54:30 UTC, the user stops the pilot after repeated timeouts. The frozen rules above are
+retained. Five attempts finish with no verified completion, one attempt is interrupted and 138 never start.
+The [cancellation record](harness-adapter-twil-cancelled-pilot.json) preserves native results and the reason
+for stopping. This partial pilot does not meet the planned sample size or justify confirmation.
