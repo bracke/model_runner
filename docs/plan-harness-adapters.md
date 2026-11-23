@@ -40,7 +40,7 @@ its descriptors resolve all 256 trained pairs. This does not pass the inference 
 A smaller published TwIL Pi pair now has [its own frozen protocol](harness-adapter-twil-protocol.md).
 Its Q4 base and trained adapter are verified against their pinned whole-file digests, and all 280 Granite
 projection pairs resolve. Native Granite attachment and explicit-template tool-format recognition have
-oracle and regression coverage; the real inference and work gates are still pending.
+oracle and regression coverage; the independently graded work gate is still pending.
 The [native generation and validation record](harness-adapter-twil-execution.md) now admits both models
 without F32 expansion; independently graded coding attempts remain the next gate.
 

@@ -60,8 +60,8 @@ begin
 end;
 ```
 
-Attachments use the CPU runtime path without expanding or merging the base. Dense Llama, Qwen2, Qwen3 and
-Qwen35 main-layer projections follow the native attachment support boundary. An adapter request with a
+Attachments use the CPU runtime path without expanding or merging the base. Dense Llama, Qwen2, Qwen3,
+Qwen35 and Granite main-layer projections follow the native attachment support boundary. An adapter request with a
 non-CPU backend, invalid scale/path or invalid file-count bounds is refused before device acquisition or
 model IO. Architecture, descriptor, tensor and memory checks occur during loading. The API does not select
 F32 merging or silently fall back from a requested backend. Sources close after their matrices are owned;
