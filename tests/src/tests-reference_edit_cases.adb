@@ -11,6 +11,8 @@ with Model_Runner.Tools.Editing;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Trajectories;
 with Project_Tools.Files;
+with Agent_Trial;
+with Trial_Graders;
 
 package body Tests.Reference_Edit_Cases is
    use AUnit.Assertions;
@@ -251,6 +253,51 @@ package body Tests.Reference_Edit_Cases is
               "reference mode bypassed the ordinary write permission boundary");
    end Tool_Mode_And_Permissions;
 
+   procedure Directed_Grade_Requires_Actual_Use (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Trace renames Model_Runner.Trajectories;
+      Dir : constant String := Fresh ("directed-grade");
+      function Q (Text : String) return String renames Trace.Quote;
+      function Episode (Slot, Args, Reply : String) return String is
+         Recorder : Trace.Recorder;
+         Settings : Trace.Options;
+         Status : E.Error_Info;
+      begin
+         Settings.Directory := To_Unbounded_String (Dir & "/" & Slot);
+         Trace.Open (Recorder, Settings, "{}", Status);
+         Assert (E.Is_Ok (Status), "grader control could not open capture");
+         Trace.Append (Recorder, Trace.Generation_Start,
+           "{""vocabulary_size"":16,""max_tokens"":1,""sampling_ada"":""fixture"",""request_ada"":""fixture"","
+           & """grammar_constrained"":false,""grammar"":null,""stop_tokens"":[],""stop_strings_hex"":[]}");
+         Trace.Append (Recorder, Trace.Model_Input, "{""prompt"":""fixture"",""tokens"":[1],""loss_mask"":0}");
+         Trace.Selected (Recorder, 3, "x", False);
+         Trace.Append (Recorder, Trace.Committed_Token, "{""id"":3}");
+         Trace.Append (Recorder, Trace.Generation_End, "{""reason"":""maximum_tokens"",""generated_tokens"":1}");
+         Trace.Append (Recorder, Trace.Tool_Call,
+           "{""id"":1,""name"":""edit_file"",""arguments"":" & Q (Args) & "}");
+         Trace.Append (Recorder, Trace.Tool_Result, "{""id"":1,""text"":" & Q (Reply) & ",""ending"":""fixture""}");
+         Trace.Finish (Recorder, "{""complete"":true,""reason"":""answered""}", Status);
+         Assert (E.Is_Ok (Status), "grader control could not finish capture");
+         return Trace.Path (Recorder);
+      end Episode;
+      Ref_Args : constant String :=
+        "{""path"":""src/calc.adb"",""ref"":""src/calc.adb:3-6@0123456789abcdef"",""new_text"":""fixture""}";
+   begin
+      Assert (Agent_Trial.Known_Task ("edit-ref"), "directed reference fixture was not registered");
+      Assert (Trial_Graders.Uses_Reference_Edit
+        (Episode ("used", Ref_Args, "replaced Calc.Add in src/calc.adb; revision now 0123456789abcdef")),
+        "a successful reference call was not recognized");
+      Assert (not Trial_Graders.Uses_Reference_Edit
+        (Episode ("legacy", "{""path"":""src/calc.adb"",""old_text"":""old"",""new_text"":""new""}",
+          "edited src/calc.adb at line 3")), "legacy passage editing incorrectly qualified reference use");
+      Assert (not Trial_Graders.Uses_Reference_Edit
+        (Episode ("failed", Ref_Args, "error: reference is stale")), "a failed reference call qualified");
+      Assert (not Trial_Graders.Uses_Reference_Edit
+        (Episode ("noop", Ref_Args, "unchanged: Calc.Add in src/calc.adb")), "a no-op reference call qualified");
+      Assert (not Trial_Graders.Uses_Reference_Edit (Dir & "/missing/events.jsonl"),
+              "missing capture qualified reference use");
+   end Directed_Grade_Requires_Actual_Use;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -263,5 +310,7 @@ package body Tests.Reference_Edit_Cases is
         (T, Endings_And_Limits'Access, "reference changes preserve line endings and enforce body limits");
       Register_Routine
         (T, Tool_Mode_And_Permissions'Access, "reference calls retain revision and permission boundaries");
+      Register_Routine
+        (T, Directed_Grade_Requires_Actual_Use'Access, "directed grading requires an actual successful reference edit");
    end Register_Tests;
 end Tests.Reference_Edit_Cases;

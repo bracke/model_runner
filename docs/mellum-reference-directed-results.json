@@ -1,0 +1,393 @@
+{
+  "schema": "model_runner.reference_edit_directed_check.v1",
+  "date": "2026-11-23",
+  "state": "complete",
+  "acceptance_criteria_met": false,
+  "protocol": "docs/mellum-reference-directed-protocol.md",
+  "implementation_base": "df793973a895c9f8c8a73ff05ef5d2712a58b26e",
+  "implementation_patch_sha256": "125f7a0deb481cc4acc85a899325eab22bd5b895d0a19e71753d184b49bcea27",
+  "validation": {
+    "focused": {
+      "run": 6,
+      "passed": 6
+    },
+    "campaign": {
+      "run": 11,
+      "passed": 11
+    },
+    "firstFull": {
+      "run": 988,
+      "passed": 987,
+      "failures": 1,
+      "cause": "edit-ref fell through to untested search grader controls",
+      "log": "/tmp/model-runner-ref-directed-full-suite.log"
+    },
+    "fix": "Exclude tested fixtures from search control branch",
+    "build": "/tmp/model-runner-ref-directed-build-v2.log",
+    "driverBuild": "/tmp/model-runner-ref-directed-probe-build.log",
+    "secondFullLog": "/tmp/model-runner-ref-directed-full-suite-v2.log",
+    "full": {
+      "run": 988,
+      "passed": 988,
+      "failed": 0,
+      "errors": 0,
+      "exitCode": 0
+    },
+    "audit": {
+      "checks": 30785,
+      "failures": 0,
+      "exitCode": 0,
+      "wallSeconds": 222.909435,
+      "cpuSeconds": 210.3,
+      "load": 1.17,
+      "durationQualified": false,
+      "log": "/tmp/model-runner-ref-directed-repository.log"
+    }
+  },
+  "attempts": 1,
+  "retries": 0,
+  "model": {
+    "path": "/home/bent/models/Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf",
+    "sha256": "ecc4d5b8107fc219e23c494b2d107552137637b6c6002ee713e0ba8af7fa2755",
+    "bytes": 8071295264,
+    "unchanged": true
+  },
+  "configuration_sha256": "ed2d533da3ce230ea54872e752ca689885ab353fa78df3666c58778fe763a8da",
+  "configuration_unchanged": true,
+  "program_sha256": "300ff259277d837371271cfa44b0211e7cd35bfba8d57a98ec8c3f4b0d78e0b0",
+  "driver": {
+    "binary_sha256": "8aae8ca52d057b0b4fb31622b676380d58b009beffaea3d9deb316cd312de10f",
+    "source_sha256": "bf2938a02ca1b7f329322b6091515e75f8d577233861a4a76edb49596aa617f7",
+    "grader_controls_passed": true,
+    "unchanged": true
+  },
+  "resolved_settings": [
+    {
+      "schema_version": 1,
+      "role": "session",
+      "round": 0,
+      "model": "/home/bent/models/Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf",
+      "architecture": "mellum",
+      "backend": "device",
+      "context_size": 131072,
+      "threads": 7,
+      "cache_keys": "q4t",
+      "cache_values": "q4",
+      "arithmetic": "int8",
+      "repack": "none",
+      "batch_size": 512,
+      "requested_batch_size": 512,
+      "max_tokens": 4096,
+      "fill_context": false,
+      "seed_given": false,
+      "seed": null,
+      "thinking": "THINKING_UNSTATED",
+      "reasoning_effort": "EFFORT_UNSTATED",
+      "template": "chatml",
+      "policy": "",
+      "draft_tokens": 0,
+      "draft_from_context": false,
+      "draft_from_next": false,
+      "draft_lookup": false,
+      "context_shift": 0,
+      "context_keep": 1,
+      "reuse_committed_prefix": false,
+      "ignore_eos": false,
+      "runtime_adapters": 0,
+      "max_steps": 0,
+      "max_total_tokens": 0,
+      "cli_max_parallel": 1,
+      "cli_delegate_depth": 1,
+      "max_seconds": 0,
+      "sampling": {
+        "temperature": 0.4000000059604645,
+        "dynatemp_range": 0,
+        "dynatemp_exponent": 1,
+        "top_p": 0.949999988079071,
+        "min_p": 0.05000000074505806,
+        "top_a": 0,
+        "repeat_penalty": 1,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "typical_p": 1,
+        "tail_free": 1,
+        "xtc_probability": 0,
+        "xtc_threshold": 0.10000000149011612,
+        "dry_multiplier": 0,
+        "dry_base": 1.75,
+        "mirostat_tau": 5,
+        "mirostat_eta": 0.10000000149011612,
+        "top_k": 40,
+        "repeat_window": 64,
+        "dry_allowed_length": 2,
+        "mirostat": 0
+      }
+    },
+    {
+      "schema_version": 1,
+      "role": "root",
+      "round": 1,
+      "model": "/home/bent/models/Mellum2.1-12B-A2.5B-Thinking-Q4_K_M.gguf",
+      "architecture": "mellum",
+      "backend": "device",
+      "context_size": 131072,
+      "threads": 7,
+      "cache_keys": "q4t",
+      "cache_values": "q4",
+      "arithmetic": "int8",
+      "repack": "none",
+      "batch_size": 512,
+      "requested_batch_size": 512,
+      "max_tokens": 4096,
+      "fill_context": false,
+      "seed_given": false,
+      "seed": null,
+      "thinking": "THINKING_UNSTATED",
+      "reasoning_effort": "EFFORT_UNSTATED",
+      "template": "chatml",
+      "policy": "activity=task_work profile=none mode=fixed revision=2 temperature=0.4 (default) top_k=40 (default) top_p=0.95 (default) min_p=0.05 (default) thinking=unstated (default) reasoning=unstated (default) max_tokens=4096 (default) think_limit=2048",
+      "draft_tokens": 0,
+      "draft_from_context": false,
+      "draft_from_next": false,
+      "draft_lookup": false,
+      "context_shift": 0,
+      "context_keep": 1,
+      "reuse_committed_prefix": false,
+      "ignore_eos": false,
+      "runtime_adapters": 0,
+      "max_steps": 24,
+      "max_total_tokens": 200000,
+      "cli_max_parallel": 1,
+      "cli_delegate_depth": 1,
+      "max_seconds": 299.974337,
+      "sampling": {
+        "temperature": 0.4000000059604645,
+        "dynatemp_range": 0,
+        "dynatemp_exponent": 1,
+        "top_p": 0.949999988079071,
+        "min_p": 0.05000000074505806,
+        "top_a": 0,
+        "repeat_penalty": 1,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "typical_p": 1,
+        "tail_free": 1,
+        "xtc_probability": 0,
+        "xtc_threshold": 0.10000000149011612,
+        "dry_multiplier": 0,
+        "dry_base": 1.75,
+        "mirostat_tau": 5,
+        "mirostat_eta": 0.10000000149011612,
+        "top_k": 40,
+        "repeat_window": 64,
+        "dry_allowed_length": 2,
+        "mirostat": 0
+      }
+    }
+  ],
+  "task": {
+    "name": "edit-ref",
+    "grade": "failed",
+    "ending": "out of time",
+    "work_seconds": 300.3,
+    "elapsed_seconds": 509.481534,
+    "load_seconds": 207.83623,
+    "generated_tokens": 8129,
+    "compactions": 0,
+    "family": "model_runner.agent_trial.calc.saturating_add",
+    "split": "test",
+    "expected_outputs": [
+      "src/calc.adb"
+    ]
+  },
+  "reference_mode": {
+    "calls": 3,
+    "successful_replacements": 2,
+    "stale_rejections": 1,
+    "passage_edits": 0,
+    "whole_file_writes": 0,
+    "helpers": 0
+  },
+  "reference_calls": [
+    {
+      "id": 3,
+      "sequence": 5517,
+      "ref": "src/calc.adb:3-6@bc353f08c3a205c8",
+      "result": "replaced Calc.Add in src/calc.adb; revision now d0ddf83439ad1734; ref src/calc.adb:3-12@d0ddf83439ad1734\nused by: Main, Test_Add"
+    },
+    {
+      "id": 6,
+      "sequence": 13889,
+      "ref": "src/calc.adb:3-6@bc353f08c3a205c8",
+      "result": "error: src/calc.adb has changed since this ref was shown: find declaration again"
+    },
+    {
+      "id": 8,
+      "sequence": 21091,
+      "ref": "src/calc.adb:3-12@d0ddf83439ad1734",
+      "result": "replaced Calc.Add in src/calc.adb; revision now 7cfc570a91b7bb3e; ref src/calc.adb:3-14@7cfc570a91b7bb3e\nused by: Main, Test_Add"
+    }
+  ],
+  "independent_verification": {
+    "artifact": "docs/mellum-reference-directed-independent-result.json",
+    "sha256": "2f48a53e2bf7cca1248bf45a44b98b91423b34463f1532aebcb68266a9029a52",
+    "native_grade_result_sha256": "a236f46161a66caf36a6aa14b7c6a14876bf0a997d97f2cda8ee44d080f05b14",
+    "build_exit_code": 4,
+    "run_exit_code": null,
+    "run_not_attempted": "The fresh protected build failed; no old executable was run.",
+    "test_source_sha256": "925a57ce7541b7252103b615e65e57983a307082ce26b33ce0811de1bf5fe0eb",
+    "stderr_sha256": "0535333b54c1617ae104f5b73f6f6755d8326da8c15fd80b1bcc6a950e14bb40",
+    "submitted_calc_sha256": "01f68d6080e5dc4ad79e9c92eda49bc14ac50decba3bc8788585f51ec62af550",
+    "verifier_source_unchanged": true,
+    "changed_source_scope": "Calc.Add only",
+    "neighbor_bytes_unchanged": true,
+    "prefix_bytes": 22,
+    "suffix_bytes": 219,
+    "source_diff_sha256": "caa4d225890681f35a7aa5bf6c1dc5f619ec6f086c15dae13c3b83d64eedde48",
+    "isolation": "bubblewrap read-only host; only protected object directory writable"
+  },
+  "capture": {
+    "path": "/home/bent/Projekte/Ada/model_runner/tests/obj/mellum-reference-directed-v1/attempts/trial-edit-ref-failed-2026-11-23_22-21-47/.trial-runtime/captures/episode-1/events.jsonl",
+    "sha256": "f614867e9306b0d0f69488cbc1223595f58e228a90fe0e9eba406a6167bb7432",
+    "bytes": 5537936,
+    "chain_sha256": "f73c76df45667e0b508b68770fbdf65ac5b13fec67e81daaaa57b828fd3cc390",
+    "events": 24459,
+    "counts": {
+      "committed_token": 8129,
+      "context": 13,
+      "episode_end": 1,
+      "episode_start": 1,
+      "forced_text": 1,
+      "generation_end": 14,
+      "generation_start": 14,
+      "model_input": 14,
+      "output_text": 8098,
+      "raw_reply": 12,
+      "selected_token": 8140,
+      "tool_call": 11,
+      "tool_result": 11
+    },
+    "complete": true,
+    "exact_tokens": true,
+    "provenance_complete": true,
+    "footer": {
+      "complete": true,
+      "reason": "timed out",
+      "error": "NO_ERROR",
+      "calls": 11,
+      "steps": 11,
+      "children": []
+    },
+    "generations": [
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 506,
+        "seed": " 2728276760036197596",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 123,
+        "seed": " 4241662056791361099",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 1204,
+        "seed": " 7036101728514425590",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 104,
+        "seed": " 16588667709641308578",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 438,
+        "seed": " 5979721655959900641",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "maximum_tokens",
+        "generated_tokens": 2048,
+        "seed": " 2421047958215317286",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 194,
+        "seed": " 12450797550742895927",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 173,
+        "seed": " 1129956286374572491",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "maximum_tokens",
+        "generated_tokens": 2048,
+        "seed": " 11938352535328900651",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 176,
+        "seed": " 4577151897184581170",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 32,
+        "seed": " 1302113571585949755",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 64,
+        "seed": " 5420863595694177241",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "end_of_sequence",
+        "generated_tokens": 501,
+        "seed": " 14922791184446772367",
+        "error": "NO_ERROR"
+      },
+      {
+        "reason": "time_limit",
+        "generated_tokens": 518,
+        "seed": " 13059096482254170259",
+        "error": "NO_ERROR"
+      }
+    ],
+    "forced_text": [
+      {
+        "loss_mask": 0,
+        "text": "\n</think>\n\n"
+      }
+    ],
+    "validation_exit_code": 0
+  },
+  "export": {
+    "path": "tests/obj/mellum-reference-directed-v1/full-export.json",
+    "sha256": "0d58dcf6330071797d9ba34d7cb9224b5784e719177b9170c79edf2a0874ab86",
+    "bytes": 6354294,
+    "permissions": "0600",
+    "content_included": true,
+    "verification_result": "failed",
+    "supervised_eligible": false,
+    "rl_ready": false,
+    "split": "test",
+    "included_in_training": false,
+    "validation_exit_code": 0,
+    "validation_with_originals_hidden_exit_code": 0
+  },
+  "completion_improvement_established": false,
+  "conclusion": "The real model exercised reference replacement and stale-reference refusal. The directed coding task failed with invalid Ada at the original work limit. No completion or speed improvement is established.",
+  "retained_directory": "tests/obj/mellum-reference-directed-v1",
+  "model_processes_remaining": 0
+}

@@ -50,5 +50,6 @@ The feature addresses editing uncertainty observed in the
 [Mellum trace review](mellum-trajectory-review.md). Deterministic structural safety and a bounded real-model
 check are separate evidence: successful structural replacement alone does not establish better task completion.
 
-See [validation and limits](reference-editing-validation.md). The one completed Mellum check uses passage
-editing, so it supplies no evidence of real-model adoption of reference mode.
+See [validation and limits](reference-editing-validation.md). The ordinary Mellum check passed through
+passage editing. A separate [directed check](mellum-reference-directed-results.md) exercised reference
+replacement and stale-reference refusal, but failed the coding task. No completion benefit is established.

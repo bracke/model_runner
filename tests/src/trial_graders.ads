@@ -3,6 +3,12 @@ with Agent_Trial;
 --  Verification runs after the agent has stopped, using a source kept outside its project.
 package Trial_Graders is
 
+   --  Require an exact complete capture with an actual successful reference edit
+   --  of Calc.Add; passage edits, whole-file writes and delegation are refused.
+   --  @param Capture_Path The explicitly selected completed root event stream.
+   --  @return Whether the directed integration test exercised its required tool path.
+   function Uses_Reference_Edit (Capture_Path : String) return Boolean;
+
    --  @param Root Fresh trial project whose verifier source is preserved outside it.
    procedure Preserve (Root : String);
 

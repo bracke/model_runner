@@ -106,12 +106,12 @@ package body Agent_Trial is
      & " Integer'First when it would overflow below, instead of raising. Change only Add.";
 
    --  The tasks' places in Tasks, in the order a trial runs them.
-   type Task_Order is array (1 .. 14) of Positive;
+   type Task_Order is array (1 .. 15) of Positive;
 
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 14) of Trial_Task :=
+   Tasks : constant array (1 .. 15) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -177,7 +177,12 @@ package body Agent_Trial is
       T ("c-multi", "implementation",
          "Add int span(int lo, int hi) to src/math.h and src/math.c. It returns hi - lo + 1"
          & " for a valid inclusive interval, and zero when hi < lo. Keep clamp unchanged.",
-         Tested => True, Named_Only => True, Variant => C_Span)];
+         Tested => True, Named_Only => True, Variant => C_Span),
+      T ("edit-ref", "implementation", Edit_Notes
+         & " First use find kind declaration for Calc.Add and select its complete src/calc.adb body ref."
+         & " Apply the change with edit_file using path, ref and new_text, including the function header"
+         & " and end Add;. Do not use old_text, write_file or a helper. Run the checks after editing.",
+         Tested => True, Named_Only => True)];
 
    function Known_Task (Name : String) return Boolean
    is (for some One of Tasks => To_String (One.Name) = Name);
@@ -386,7 +391,9 @@ package body Agent_Trial is
       Clean := True;
       Ada.Directories.Create_Path (Directory);
       for One of Tasks loop
-         if One.Tested then
+         --  edit-ref shares edit's behavioral verifier; its additional actual-use
+         --  gate is qualified by the reference-mode capture controls in the suite.
+         if One.Tested and then To_String (One.Name) /= "edit-ref" then
             declare
                Root : constant String := Ada.Directories.Full_Name (Directory & "/" & To_String (One.Name));
                function Grade return Verdict
@@ -461,7 +468,7 @@ package body Agent_Trial is
                end if;
                Check (Failed, "known-wrong");
             end;
-         elsif Length (One.Tree) = 0 then
+         elsif not One.Tested and then Length (One.Tree) = 0 then
             declare
                Root : constant String := Ada.Directories.Full_Name (Directory & "/" & To_String (One.Name));
                Name : constant String := To_String (One.Name);
@@ -1125,6 +1132,7 @@ package body Agent_Trial is
                      procedure Keep_Variable (Variable, Value : String) is
                      begin
                         if Variable /= "TERM"
+                          and then not (Name = "edit-ref" and then Variable = "MODEL_RUNNER_CAPTURE_DIR")
                           and then (Isolation_Root = ""
                                     or else Variable not in "MODEL_RUNNER_REPORT_SETTINGS"
                                       | "MODEL_RUNNER_CONVERSATIONS")
@@ -1396,6 +1404,11 @@ package body Agent_Trial is
                      --  The copy ends with the trial: stopped, it ran on with
                      --  its model loaded.
                      Spawned.Environment.Append (To_Unbounded_String ("MODEL_RUNNER_END_WITH_PARENT=1"));
+                     if Name = "edit-ref" then
+                        Spawned.Environment.Append
+                          (To_Unbounded_String
+                            ("MODEL_RUNNER_CAPTURE_DIR=" & Root & "/.trial-runtime/captures"));
+                     end if;
                      if Isolation_Root /= "" then
                         Ada.Directories.Create_Path (Root & "/.trial-runtime/conversations");
                         Spawned.Environment.Append (To_Unbounded_String ("MODEL_RUNNER_REPORT_SETTINGS=1"));

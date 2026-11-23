@@ -8,12 +8,101 @@ with Hostkit.Process;
 with Project_Tools.Files;
 with Project_Tools.Text;
 with Trial_Confinement;
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+with Model_Runner.Errors;
+with Model_Runner.Trajectories;
 
 package body Trial_Graders is
 
    use Ada.Strings.Unbounded;
    use type Ada.Directories.File_Size;
    use type Agent_Trial.Verdict;
+
+   function Uses_Reference_Edit (Capture_Path : String) return Boolean is
+      package J renames Jsonlib.Documents;
+      package T renames Model_Runner.Trajectories;
+      use type J.Value_Kind;
+      Checked : T.Validation;
+      Status : Model_Runner.Errors.Error_Info;
+      Reference_Call : array (1 .. 1_024) of Boolean := [others => False];
+      Success : Boolean := False;
+      function Text (Doc : J.Document; Node : J.Node; Key : String) return String is
+      begin
+         if J.Kind (Doc, Node) = J.Object_Value and then J.Has_Member (Doc, Node, Key)
+           and then J.Kind (Doc, J.Member (Doc, Node, Key)) = J.String_Value
+         then
+            return J.As_String (Doc, J.Member (Doc, Node, Key));
+         end if;
+         return "";
+      end Text;
+   begin
+      if not Ada.Directories.Exists (Capture_Path) or else Hostkit.Fs.Is_Link (Capture_Path)
+        or else Ada.Directories.Size (Capture_Path) > 16 * 1_024 * 1_024
+      then
+         return False;
+      end if;
+      T.Validate (Capture_Path, Checked, Status);
+      if Model_Runner.Errors.Is_Error (Status) or else not Checked.Complete or else not Checked.Exact_Tokens then
+         return False;
+      end if;
+      declare
+         Raw : constant String := Project_Tools.Files.Read_Raw_File (Capture_Path);
+         First : Positive := Raw'First;
+      begin
+         for Last in Raw'Range loop
+            if Raw (Last) = ASCII.LF then
+               declare
+                  Envelope, Payload, Args : J.Document;
+                  Error : Jsonlib.Errors.Error_Info;
+                  Body_Node : J.Node;
+                  Id : Long_Long_Integer;
+               begin
+                  Jsonlib.Parsers.Parse (Raw (First .. Last - 1), Envelope, Error);
+                  if Jsonlib.Errors.Failed (Error) then
+                     return False;
+                  end if;
+                  if Text (Envelope, J.Root (Envelope), "kind") in "tool_call" | "tool_result" then
+                     Jsonlib.Parsers.Parse (Text (Envelope, J.Root (Envelope), "payload"), Payload, Error);
+                     if Jsonlib.Errors.Failed (Error) then
+                        return False;
+                     end if;
+                     Body_Node := J.Root (Payload);
+                     Id := J.As_Integer (Payload, J.Member (Payload, Body_Node, "id"));
+                     if Id not in 1 .. Reference_Call'Length then
+                        return False;
+                     end if;
+                     if Text (Envelope, J.Root (Envelope), "kind") = "tool_call" then
+                        if Text (Payload, Body_Node, "name") in "write_file" | "delegate" then
+                           return False;
+                        elsif Text (Payload, Body_Node, "name") = "edit_file" then
+                           Jsonlib.Parsers.Parse (Text (Payload, Body_Node, "arguments"), Args, Error);
+                           if Jsonlib.Errors.Failed (Error) or else J.Kind (Args, J.Root (Args)) /= J.Object_Value
+                             or else J.Has_Member (Args, J.Root (Args), "old_text")
+                             or else Text (Args, J.Root (Args), "path") /= "src/calc.adb"
+                             or else Text (Args, J.Root (Args), "ref") = ""
+                           then
+                              return False;
+                           end if;
+                           Reference_Call (Natural (Id)) := True;
+                        end if;
+                     elsif Reference_Call (Natural (Id))
+                       and then Ada.Strings.Fixed.Index
+                         (Text (Payload, Body_Node, "text"), "replaced Calc.Add in src/calc.adb;") = 1
+                     then
+                        Success := True;
+                     end if;
+                  end if;
+               end;
+               First := Last + 1;
+            end if;
+         end loop;
+      end;
+      return Success;
+   exception
+      when others => return False;
+   end Uses_Reference_Edit;
 
    procedure Preserve (Root : String) is
       Where : constant String := Root & "-verifier";
@@ -95,7 +184,7 @@ package body Trial_Graders is
          elsif Task_Name = "c-boundary" then Name = "src/math.c"
          elsif Task_Name = "c-multi" then Name in "src/math.c" | "src/math.h"
          elsif Task_Name = "delegate" then Name = "docs/calc.md"
-         elsif Task_Name in "edit" | "styled" | "convention" | "times-negative" | "delegate-edit"
+         elsif Task_Name in "edit" | "edit-ref" | "styled" | "convention" | "times-negative" | "delegate-edit"
          then Name = "src/calc.adb"
          else False);
    begin
@@ -201,6 +290,10 @@ package body Trial_Graders is
       end Has_Line_Five;
    begin
       if not Completed then
+         return Agent_Trial.Failed;
+      elsif Task_Name = "edit-ref" and then not Uses_Reference_Edit
+        (Root & "/.trial-runtime/captures/episode-1/events.jsonl")
+      then
          return Agent_Trial.Failed;
       end if;
       if Task_Name = "convention" then
