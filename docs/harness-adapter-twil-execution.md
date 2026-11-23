@@ -38,10 +38,35 @@ or warning allowance changed.
 
 ## Coding gate and budget
 
-Real native `/work` attempts and their independent coding verdicts are still pending. Successful short text
-generation is not an adapter-transfer or coding-quality result. The initial screen uses all four arms of
-the edit task. Its records must qualify isolation, native settings, tool execution and independent grading
-before the full twelve-task, three-repeat pilot proceeds.
+The [four-arm edit screen](harness-adapter-twil-screen.json) and
+[its native manifest](harness-adapter-twil-screen-manifest.json) finish with **zero verified completions**,
+four timeouts and zero infrastructure failures. Both model variants execute native edits and checks with
+thinking off. All four attempts preserve their project configuration and record the expected thinking
+choice, CPU controls and zero/one runtime attachment counts. This qualifies the tool contract, rather than
+successful coding or an adapter recommendation.
+
+| Arm | Executed calls | Generated tokens | Verified completion |
+| --- | ---: | ---: | --- |
+| Base, thinking off | 7 | 823 | no |
+| Adapted, thinking off | 4 | 509 | no |
+| Base, thinking on | 1 | 1,101 | no |
+| Adapted, thinking on | unavailable | unavailable | no |
+
+The last arm requests no tools before timing out; native completed-work counters are unavailable and remain
+null. Fewer tokens in the off comparison do not establish efficiency without verified completion.
+Check-only reuse reads all four finished records with zero new attempts and leaves the summary hash unchanged.
+
+The first startup attempt, retained separately under `tests/obj/trained-twil-screen-v1`, was an infrastructure
+failure because the pinned program bundle lacked its project templates. The complete source resource tree
+was copied before the fresh v2 screen; its manifest SHA-256 is
+`c2cc1ec128340e41f8afd2b99973baeb4f1e82c3fa4b430e1bdfe62691db2f96`.
+That packaging failure is excluded from model-quality outcomes. Program and harness bytes did not change.
+
+The predeclared **144-attempt pilot is running** under `tests/obj/trained-twil-pilot-v1`: twelve tasks,
+three repeats and four arms. Its source worktree stays at
+`dc002faa4622597a56d602c33cbead96402fbbe6`, independently of later evidence commits.
+Generated panel files are removed only from finished attempts; transcripts, diffs, configurations and
+verifier results are retained. The process holds a temporary idle/sleep inhibitor and a hard deadline.
 
 The user authorized sixteen hours and reported the machine quiet. The shared screen/pilot deadline is
 2026-11-24 04:07:54 UTC. Confirmation remains conditional on a promising pilot and its separate frozen-suite

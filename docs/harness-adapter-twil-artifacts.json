@@ -6,6 +6,7 @@
   "base_model": "webAI-Official/TwIL-8B",
   "pinned_program_sha256": "c256f51744b842be0aa9aa61e3c2e9b0e654abeb0281cfa805ba60de283410fc",
   "pinned_harness_sha256": "7f9ddc05e93f030788059b8b7d138d9bdc984416ef9c22c87ecda2a2e6e14b8e",
+  "runtime_resources_manifest_sha256": "c2cc1ec128340e41f8afd2b99973baeb4f1e82c3fa4b430e1bdfe62691db2f96",
   "artifacts": [
     {
       "role": "shared_base",
@@ -73,6 +74,7 @@
     "record": "harness-adapter-twil-smoke.json"
   },
   "generation_gate_passed": true,
-  "inference_gate_passed": false,
+  "tool_contract_gate_passed": true,
+  "inference_gate_passed": true,
   "trained_adapter_quality_result": null
 }
