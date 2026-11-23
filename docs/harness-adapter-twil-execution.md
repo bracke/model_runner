@@ -79,7 +79,8 @@ After the startup fix, the mandatory suite again passes **969/969** and the fina
 The replacement pilot starts at 2026-11-23 13:23 UTC under `tests/obj/trained-twil-pilot-v2`, using source
 checkpoint `ecdb93a3862743fd9056a4f9ff6f24c21f364a77` and a fresh manifest. Its pinned harness SHA-256 is
 `3d44c7bc0761b06fdd547d93f0ea046fdc3b1854c109c203f4ee1328a23b4229`. It retains the same inference
-program, models, template, sampler and work budgets. Results are pending. Generated panel files are removed only from finished
+program, models, template, sampler and work budgets. Results are pending. Generated panel files are removed
+only from finished
 attempts; transcripts, diffs, configurations and verifier results are retained. The process holds a temporary
 idle/sleep inhibitor and the existing hard deadline.
 
