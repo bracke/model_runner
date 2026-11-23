@@ -35,7 +35,8 @@ Keep a Changelog and the project uses semantic versioning.
 
 - **Thinking-off paired campaigns.** `tests agent-campaign --thinking off`
   selects only the base and adapted arms, alternates their order by seed,
-  and binds the selection to its manifest. Ordinary failures remain outcomes.
+  and binds the selection to its manifest. Ordinary failures remain outcomes;
+  its regression diagnostics use normalized host line endings.
 
 - **Bounded CPU coding checks.** A native base-only probe reuses confined work sessions,
   independent graders and native settings records, with fresh seeded projects and fixed

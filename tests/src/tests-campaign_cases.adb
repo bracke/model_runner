@@ -242,7 +242,7 @@ package body Tests.Campaign_Cases is
       begin
          Assert (Ada.Directories.Exists (Directory & "/summary.json"),
                  "thinking-off selector did not produce a summary: "
-                 & Project_Tools.Files.Read_Raw_File (Root & "/off-output.txt"));
+                 & To_String (Project_Tools.Text.Read_Text_File (Root & "/off-output.txt")));
          Jsonlib.Parsers.Parse (Project_Tools.Files.Read_Raw_File (Directory & "/summary.json"), Summary, Error);
          Assert (Error.Code = Jsonlib.Errors.No_Error, "off-only summary was not JSON");
       end Read_Summary;
@@ -300,7 +300,7 @@ package body Tests.Campaign_Cases is
       end;
       Assert (Run ("both") = 1
               and then Ada.Strings.Fixed.Index
-                (Project_Tools.Files.Read_Raw_File (Root & "/off-output.txt"), "manifest differs") > 0,
+                (To_String (Project_Tools.Text.Read_Text_File (Root & "/off-output.txt")), "manifest differs") > 0,
               "changing thinking arms reused a different campaign manifest");
       Assert (Run ("invalid") = 2, "an invalid thinking selector was silently accepted");
    end Thinking_Off_Pairs_Are_Complete;
