@@ -47,7 +47,7 @@ alr exec -- gprbuild -P tests.gpr cpu_work_probe.adb -j1
 Run it with `MODEL PROGRAM TEMPLATE NEW_OUTPUT THREADS BATCH CACHE REPEATS`. Existing output directories,
 invalid input paths and settings beyond its explicit limits are refused before model execution. The input
 manifest hashes the model, program, template and harness. A successful exit requires every planned attempt
-to finish and qualify independently. The proposed check uses eight workers, batch 512 and F16 cache.
+to finish and qualify independently. The bounded check uses eight workers, batch 512 and F16 cache.
 
 ## First coding check and completion-report repair
 
@@ -71,5 +71,53 @@ It records 13,788 user-space cycle samples with none lost. Q4 and Q6 panel kerne
 88% of sampled cycles; worker waiting accounts for 3.4%. Generation is primarily native arithmetic on this
 case. This profile includes warm-up and does not establish a before/after generation speed improvement.
 
-Full post-fix validation and a fresh base-only check are pending. The cancelled pilot supplies no adapter
-recommendation, and a successful base-only check would not by itself establish adapter transfer.
+## Fresh post-fix check
+
+The [fresh native attempts](twil-cpu-work-fixed-attempts.json) and
+[their manifest](twil-cpu-work-fixed-manifest.json) record all three planned seeds with the fixed program.
+The controller, model, template, sampler and work budgets are unchanged from the initial check. The new
+program hash is `c8d3ab420981a1ed5814ed55b5926b70ec3be4895bc58dba194de73751f5d7a7`.
+
+| Seed | Native grade | Work seconds | Calls | Generated tokens |
+| ---: | --- | ---: | ---: | ---: |
+| 42 | passed, complete | 221.1 | 7 | 812 |
+| 43 | passed, complete | 201.7 | 6 | 738 |
+| 44 | failed, out of time | 300.1 | 8 | 1,166 |
+
+All native session and root settings qualify: CPU, eight workers, batch 512, F16 keys and values, context
+8192, thinking off, zero runtime adapters and the expected seed. All project configurations remain unchanged.
+The probe exits one because its success condition requires every planned attempt to pass. It runs for
+763.2 seconds overall and leaves no model process or sleep inhibitor active.
+
+Seed 43 produces the same final source and the same XML-suffixed final report before and after the fix.
+Their SHA-256 values are preserved in the evidence record. The fixed run independently passes while the
+original failed grade stays unchanged. This reproduces the repair on the actual model response, including
+the closing tags, rather than inferring it from a changed token count.
+
+Seed 44 is a genuine remaining failure. Three project checks fail after unsafe overflow arithmetic; an
+unmatched edit and another read add work. It spends 106.6 seconds on prompts and 191.0 generating, against
+1.1 seconds running checks. It never reaches a completion report. The parser repair cannot turn that into
+successful work. Model peak RSS remains unavailable behind confinement; the timer's 14,568 KiB parent
+reading is not model memory. Generated panel caches are removed after all processes stop; other artifacts
+are retained.
+
+The sampled configuration improves prompt throughput, and the false completion failure is repaired.
+The declared three-of-three local repeatability gate remains unmet at two passes and one timeout. This is
+one task across three seeds, with no general reliability or adapter-transfer claim. The adapter campaign
+stays stopped and global defaults remain unchanged.
+
+## Validation and remaining limitation
+
+Both normal builds pass without warnings. Both focused regressions fail before the fix and pass after it,
+including real missing-file, inline-markup and unrelated-markup controls. The mandatory suite passes
+**969/969**, with zero failed assertions or unexpected errors. The repository audit passes **30,628 checks
+with zero failures**. Its duration is unqualified at host load 1.36; the 195-second bound is unchanged.
+No CPU inference-kernel source or ordinary-inference measurement fingerprint changes in the report repair.
+
+An intermediate full-suite run stalls during concurrent fake MCP server startup and has no test verdict.
+The [diagnostic record](twil-cpu-validation-stall.json) preserves the observed pipe inheritance and the
+bounded rerun; the underlying startup race is suspected from those descriptors. Only that run's test groups
+are terminated. The unchanged suite then passes within its 900-second bound. MCP and Hostkit sources are
+not changed here, and this report does not claim that the intermittent startup issue is repaired.
+
+The final three-seed check runs after builds, tests and the audit finish, with no competing model job.

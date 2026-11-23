@@ -1,0 +1,32 @@
+{
+  "state": "initial stalled run retained without verdict; bounded rerun passed",
+  "session": 95963,
+  "log": "/tmp/model-runner-twil-xml-full-suite-stalled.log",
+  "backtrace_attempt": "/tmp/model-runner-twil-xml-suite-backtrace.log",
+  "ptrace_unavailable": true,
+  "diagnostic": "Parent launch waited in anon_pipe_read while another concurrently launched fake MCP server held its exec-status pipe write descriptor; inferred pipe-inheritance race. MCP and Hostkit sources unchanged.",
+  "stopped_only_own_test_process_groups": [
+    3628081,
+    3630570,
+    3630583,
+    3630596
+  ],
+  "rerun_session": 5737,
+  "rerun_log": "/tmp/model-runner-twil-xml-full-suite-rerun.log",
+  "rerun_timeout_seconds": 900,
+  "pipe_observations": {
+    "parent_pid": 3628094,
+    "blocked_thread": 3630571,
+    "parent_read_fd": 20,
+    "pipe_inode": 288976733,
+    "other_fake_server_pid": 3630598,
+    "other_fake_server_write_fd": 28,
+    "interpretation": "A different fake server retained the write end of the exec-status pipe on which a starter was waiting for EOF."
+  },
+  "source_observation": "The unchanged Linux Hostkit Create_Pipe calls pipe then separately sets FD_CLOEXEC; concurrent forks may inherit descriptors during that interval.",
+  "external_dependency_modified": false,
+  "rerun_exit_status": 0,
+  "rerun_successful_tests": 969,
+  "rerun_failed_assertions": 0,
+  "rerun_unexpected_errors": 0
+}

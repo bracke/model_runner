@@ -45,6 +45,9 @@ verified completions. The user stops the predeclared 144-attempt pilot after fiv
 timeouts, with zero verified completions and zero infrastructure errors. The interrupted sixth attempt is
 ungraded; 138 attempts never start. No adapter benefit or full-pilot conclusion is established, and no
 confirmation starts. See the [cancellation record](harness-adapter-twil-cancelled-pilot.json).
+The [CPU throughput follow-up](twil-cpu-profile.md) finds faster explicit settings and fixes an XML
+completion-report error. Fresh base-only verification passes two of three seeds; its local repeatability
+gate remains unmet and the adapter campaign stays stopped.
 The [native generation and validation record](harness-adapter-twil-execution.md) now admits both models
 without F32 expansion and separates the screen's failures from the cancelled partial pilot.
 

@@ -104,6 +104,10 @@ The user authorized sixteen hours and reported the machine quiet. The shared scr
 2026-11-24 04:07:54 UTC. Cancellation ends this run before that deadline and revokes continued execution
 of this pilot. No model default has changed.
 
+The subsequent [CPU throughput investigation](twil-cpu-profile.md) measures a faster explicit configuration
+and repairs closing XML tags being read as claimed filenames. Its fresh base-only check passes two seeds
+and times out on the third. The earlier native pilot grades remain unchanged, and no adapter study restarts.
+
 Build and validation logs are retained under `/tmp/model-runner-twil-*.log`; plain generation output, process
 timing and panel cache are under `tests/obj/trained-twil-smoke`. Pinned executables and the shared template
 are under `tests/obj/twil-runtime-pinned`; the replacement harness bundle is `tests/obj/twil-runtime-pinned-v2`.

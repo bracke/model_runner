@@ -203,7 +203,7 @@
     "All temperatures, loads, configurations and sample reports are retained. No sample is discarded."
   ],
   "coding_verification": {
-    "state": "initial check stopped on second result; report parser regression confirmed; fresh post-fix check pending",
+    "state": "stopped on second initial result; superseded by fresh post-fix check",
     "planned_seeds": [
       42,
       43,
@@ -279,7 +279,7 @@
     "output_digest": "6898d5f375714e95"
   },
   "report_fix": {
-    "state": "implemented; full validation and fresh coding check pending",
+    "state": "validated in regressions and fresh native coding checks",
     "changed_files": [
       "src/library/model_runner-framework-invocations.adb",
       "src/library/model_runner-framework-invocations.ads"
@@ -298,6 +298,168 @@
     ],
     "normal_root_build": "passed",
     "normal_test_build": "passed",
-    "program_sha256": "c8d3ab420981a1ed5814ed55b5926b70ec3be4895bc58dba194de73751f5d7a7"
+    "program_sha256": "c8d3ab420981a1ed5814ed55b5926b70ec3be4895bc58dba194de73751f5d7a7",
+    "real_response_control": {
+      "seed": 43,
+      "initial_native_grade": "failed",
+      "fixed_native_grade": "passed",
+      "generated_tokens_before": 738,
+      "generated_tokens_after": 738,
+      "source_sha256_before": "97f67703eac4cf7ae17688ee4b1877c853f7e6718798d9a3e2e6321882ecd262",
+      "source_sha256_after": "97f67703eac4cf7ae17688ee4b1877c853f7e6718798d9a3e2e6321882ecd262",
+      "final_report_sha256_before": "a10b96684551328730be7e3cb0986bfc02b2470ee85ee0b4250305488280f5ac",
+      "final_report_sha256_after": "a10b96684551328730be7e3cb0986bfc02b2470ee85ee0b4250305488280f5ac",
+      "closing_tags_present_in_fixed_native_transcript": true,
+      "initial_grade_preserved": true
+    }
+  },
+  "validation": {
+    "normal_root_build": "passed",
+    "normal_tests_build": "passed",
+    "regressions": {
+      "before_fix_failed": 2,
+      "after_fix_passed": 2
+    },
+    "post_fix_full_suite": {
+      "successful_tests": 969,
+      "failed_assertions": 0,
+      "unexpected_errors": 0,
+      "exit_status": 0,
+      "log": "/tmp/model-runner-twil-xml-full-suite-rerun.log",
+      "verified_at_utc": "2026-11-23T15:02:15Z",
+      "rerun_timeout_seconds": 900,
+      "prior_stalled_run": "twil-cpu-validation-stall.json"
+    },
+    "repository": {
+      "checks": 30628,
+      "failures": 0,
+      "wall_seconds": 232.393504,
+      "processor_seconds": 213.55,
+      "cost_bound_seconds": 195,
+      "load": 1.36,
+      "cost_qualification": "unqualified due to host load; bound unchanged",
+      "log": "/tmp/model-runner-twil-xml-repository.log"
+    },
+    "ordinary_inference_source_group_changed": false
+  },
+  "fixed_coding_verification": {
+    "state": "finished; repeatability gate not met",
+    "program_sha256": "c8d3ab420981a1ed5814ed55b5926b70ec3be4895bc58dba194de73751f5d7a7",
+    "harness_sha256": "570fbccb9e026882870a91930b550318ba72216c613dfbee67fe2f2c97e2bb33",
+    "control": {
+      "schema_version": 1,
+      "stage": "fresh base-only CPU check after XML report fix",
+      "planned_utc": "2026-11-23T15:02:41Z",
+      "hard_timeout_seconds": 1100,
+      "work_seconds_per_attempt": 300,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "fresh_projects": true,
+      "task": "edit",
+      "stop_after_first_failure": true,
+      "program_source_checkpoint": "f1cf0ec165ed75cca6430b35f24791f5c9da6b04",
+      "harness_source_checkpoint": "9d596a00b42c11d27586f3e1ab69ad1634ad729a",
+      "harness_sha256": "570fbccb9e026882870a91930b550318ba72216c613dfbee67fe2f2c97e2bb33",
+      "program_sha256": "c8d3ab420981a1ed5814ed55b5926b70ec3be4895bc58dba194de73751f5d7a7",
+      "template_sha256": "b0a1ec95f3ad2f879f8d9a8eea3355c6a7ff6f33e7ae0e75bf92a0285cd26a3b",
+      "resource_manifest_sha256": "c2cc1ec128340e41f8afd2b99973baeb4f1e82c3fa4b430e1bdfe62691db2f96",
+      "model_sha256": "d99ef62463658c8d4a6f54b1744599146414e68b836e3541247026987cdbb0f8",
+      "threads": 8,
+      "batch_size": 512,
+      "cache": "f16",
+      "thinking": false,
+      "adapters": 0,
+      "context_size": 8192,
+      "temperature": 0.8,
+      "no_overlapping_builds_tests_or_model_jobs": true,
+      "full_suite_passed": 969,
+      "repository_checks_passed": 30628,
+      "full_suite_rerun_log": "/tmp/model-runner-twil-xml-full-suite-rerun.log",
+      "stalled_validation_record": "docs/twil-cpu-validation-stall.json",
+      "out": "/home/bent/Projekte/Ada/model_runner/tests/obj/twil-cpu-base-f16-b512-v2"
+    },
+    "planned": 3,
+    "finished": 3,
+    "passed": 2,
+    "failed": 1,
+    "timeouts": 1,
+    "infrastructure_errors": 0,
+    "unstarted": 0,
+    "process_exit_status": 1,
+    "process_wall_seconds": 763.2,
+    "model_peak_rss_bytes": null,
+    "parent_probe_peak_rss_kib": 14568,
+    "required_qualified_passes": 3,
+    "repeatability_gate_passed": false,
+    "native_attempts": "twil-cpu-work-fixed-attempts.json",
+    "native_manifest": "twil-cpu-work-fixed-manifest.json",
+    "manifest_sha256": "08872f8fe85c4b134e675c85c051b464203b37802cedc7dbddc3dd679836b566",
+    "all_native_settings_qualify": true,
+    "all_project_configurations_unchanged": true,
+    "attempts": [
+      {
+        "seed": 42,
+        "grade": "passed",
+        "ending": "complete",
+        "work_seconds": 221.1,
+        "elapsed_seconds": 224.083337,
+        "calls": 7,
+        "generated_tokens": 812,
+        "prompt_read_tokens": 3529,
+        "prompt_reused_tokens": 24516,
+        "phase_seconds": {
+          "prompt": 87.2,
+          "reply": 130.9,
+          "checks": 1.5
+        }
+      },
+      {
+        "seed": 43,
+        "grade": "passed",
+        "ending": "complete",
+        "work_seconds": 201.7,
+        "elapsed_seconds": 208.577633,
+        "calls": 6,
+        "generated_tokens": 738,
+        "prompt_read_tokens": 3453,
+        "prompt_reused_tokens": 20309,
+        "phase_seconds": {
+          "prompt": 83.9,
+          "reply": 115.7,
+          "checks": 1.1
+        }
+      },
+      {
+        "seed": 44,
+        "grade": "failed",
+        "ending": "out of time",
+        "work_seconds": 300.1,
+        "elapsed_seconds": 307.064348,
+        "calls": 8,
+        "generated_tokens": 1166,
+        "prompt_read_tokens": 4056,
+        "prompt_reused_tokens": 30336,
+        "phase_seconds": {
+          "prompt": 106.6,
+          "reply": 191,
+          "checks": 1.1
+        }
+      }
+    ],
+    "last_failure": "Repeated incorrect Ada overflow repairs, an unmatched edit and another read consumed the work budget. All three project checks failed; no completion report was reached.",
+    "cleanup": {
+      "all_owned_model_and_probe_processes_stopped": true,
+      "sleep_inhibitor_released": true,
+      "generated_panel_cache_bytes_removed_from_fixed_runs": 15335436288,
+      "generated_panel_cache_bytes_removed_from_initial_runs": 10223624192,
+      "generated_microbenchmark_cache_bytes_removed": 5111812096,
+      "all_transcripts_projects_verifiers_and_native_records_retained": true
+    },
+    "adapter_campaign_restarted": false,
+    "global_defaults_changed": false,
+    "conclusion": "The sampled CPU configuration is faster and the report parser defect is fixed. Two of three fresh seeds complete independently within 300 seconds; one remains a genuine timeout with incorrect code. The declared 3/3 local repeatability gate is not met."
   }
 }
