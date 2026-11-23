@@ -69,7 +69,7 @@ package body Trial_Confinement is
       loop
          Add ("--setenv");
          Add (To_String (Name));
-         Add (Root);
+         Add (Root & (if To_String (Name) = "XDG_CACHE_HOME" then "/obj" else ""));
       end loop;
       Add ("--setenv");
       Add ("TMPDIR");

@@ -7,6 +7,14 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Explicit-template tool calls.** A supplied template now retains its
+  recognized tool-call syntax when no format name is given. The original
+  template remains in use; explicit names still take precedence.
+
+- **Large-model campaign startup.** Initialization gets a separate bounded
+  wait with early exit on setup errors. Confined runtime caches stay under
+  the project's ignored build directory, and model-work budgets stay fixed.
+
 - **Build and audit recovery.** The linked database uses the workspace's
   sibling Cryptolib consistently. Headless command dispatch reuses its
   documented public API while preserving noninteractive validation, and
@@ -20,6 +28,10 @@ Keep a Changelog and the project uses semantic versioning.
   lookup, including independently tested negative outcomes and replay.
 
 ### Added
+
+- **Dense Granite runtime adapters.** CPU attachments cover all seven standard
+  projections without expanding the base weights, qualified against independent
+  projection calculations and same-base reference logits, including packed rows.
 
 - **Confined adapter campaigns and resolved settings.** Linux campaigns require
   a working Bubblewrap boundary, hide other attempts and verifier storage,

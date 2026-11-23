@@ -1,5 +1,9 @@
 # Campaign isolation and resolved settings
 
+Subsequent real-model startup qualification places confined `XDG_CACHE_HOME` under the project's ignored
+`obj` directory. Other homes remain inside the writable project. Initialization has a 300-second bound,
+with early refusal on a reported startup error, separate from the unchanged per-task model-work budget.
+
 This implements the campaign-hardening item in [the adapter plan](plan-harness-adapters.md).
 It does not establish trained-adapter quality or complete the model resource gate.
 

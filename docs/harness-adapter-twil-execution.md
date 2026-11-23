@@ -62,11 +62,20 @@ was copied before the fresh v2 screen; its manifest SHA-256 is
 `c2cc1ec128340e41f8afd2b99973baeb4f1e82c3fa4b430e1bdfe62691db2f96`.
 That packaging failure is excluded from model-quality outcomes. Program and harness bytes did not change.
 
-The predeclared **144-attempt pilot is running** under `tests/obj/trained-twil-pilot-v1`: twelve tasks,
-three repeats and four arms. Its source worktree stays at
-`dc002faa4622597a56d602c33cbead96402fbbe6`, independently of later evidence commits.
-Generated panel files are removed only from finished attempts; transcripts, diffs, configurations and
-verifier results are retained. The process holds a temporary idle/sleep inhibitor and a hard deadline.
+The first full-pilot launch under `tests/obj/trained-twil-pilot-v1` stops after one model timeout and one
+infrastructure failure. The second session completes initialization after the driver's thirty-second wait
+has expired; no model work begins in that attempt. These partial records remain separate from the new pilot.
+
+The harness now gives initialization up to 300 seconds and stops early on a reported setup error. This
+changes startup tolerance only; the model's work budget remains 300 seconds. Confined runtime caches now
+live under the project's already-ignored `obj` directory. The native boundary probe verifies that cache
+location and actual cache writes while retaining the original verifier, host-write and descendant attacks.
+That regression fails with the prior cache environment and all ten campaign cases pass with the fix.
+
+The replacement pilot will use a fresh manifest and harness checkpoint, with the same pinned inference
+program, models, template, sampler and work budgets. Generated panel files are removed only from finished
+attempts; transcripts, diffs, configurations and verifier results are retained. The process holds a temporary
+idle/sleep inhibitor and the existing hard deadline.
 
 The user authorized sixteen hours and reported the machine quiet. The shared screen/pilot deadline is
 2026-11-24 04:07:54 UTC. Confirmation remains conditional on a promising pilot and its separate frozen-suite

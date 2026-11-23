@@ -1483,7 +1483,7 @@ package body Agent_Trial is
                                  Send ("");
                               end if;
                               if Carried
-                                or else (Wait_For ("initialized", (if Tree_At = "" then 30.0 else 300.0))
+                                or else (Wait_For ("initialized", 300.0, Give_Up => "model_runner: error:")
                                          and then Prompt_Ready
                                          and then (Hostkit.Process.Locate ("gnatmake") = ""
                                                    or else (Send_Then

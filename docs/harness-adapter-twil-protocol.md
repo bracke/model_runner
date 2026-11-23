@@ -77,6 +77,9 @@ bounded to two hours. Acquisition and compilation preceding authorization are se
 advance to the twelve-task, three-repeat, four-arm pilot in [the original plan](plan-harness-adapters.md).
 Freeze a new campaign manifest before starting it. Do not treat the four edit attempts as that pilot.
 The user reported the host quiet before coding attempts; keep builds and validation jobs out of the pilot.
+After an initialization timeout in the first pilot launch, startup may take up to 300 seconds; explicit
+startup errors stop immediately. This does not extend the 300-second model-work budget. Runtime caches
+belong under the project's ignored `obj` directory, preserving the same namespace boundary.
 
 Confirmation remains conditional on a promising pilot and requires at least thirty independent frozen tasks,
 five attempts per arm, an explicit compute budget and task-cluster uncertainty. The original acceptance rule

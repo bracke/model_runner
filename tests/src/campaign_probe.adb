@@ -1,4 +1,6 @@
 with Ada.Text_IO;
+with Ada.Directories;
+with Ada.Environment_Variables;
 with Ada.Strings.Unbounded;
 with Hostkit;
 with Hostkit.Fs;
@@ -27,6 +29,13 @@ package body Campaign_Probe is
    begin
       if Write_Only then
          return (if Write (Guarded) then 0 else 9);
+      end if;
+      if Ada.Environment_Variables.Value ("XDG_CACHE_HOME", "") /= Writable & "/obj" then
+         return 2;
+      end if;
+      Ada.Directories.Create_Path (Writable & "/obj/model_runner/panels");
+      if not Write (Writable & "/obj/model_runner/panels/cache-marker") then
+         return 3;
       end if;
       if not Write (Writable & "/allowed.txt") or else Write (Guarded) or else Write (Outside) then
          return 1;
