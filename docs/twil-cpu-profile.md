@@ -49,5 +49,27 @@ invalid input paths and settings beyond its explicit limits are refused before m
 manifest hashes the model, program, template and harness. A successful exit requires every planned attempt
 to finish and qualify independently. The proposed check uses eight workers, batch 512 and F16 cache.
 
-Coding verification is pending. The cancelled pilot supplies no adapter recommendation, and a successful
-base-only check would not by itself establish adapter transfer.
+## First coding check and completion-report repair
+
+The [initial native attempts](twil-cpu-work-initial-attempts.json) and
+[their manifest](twil-cpu-work-initial-manifest.json) preserve the pre-fix result without changing grades.
+Seed 42 completes independently in 224.5 seconds of work. Seed 43 reaches passing project checks in 202.6
+seconds, then receives a native failed outcome because its report's closing XML tags are treated as three
+nonexistent filenames. It does not time out. The probe stops after that second outcome; seed 44 never runs.
+
+The recorded GNU time maximum RSS of 15,256 KiB describes the parent probe; it does not capture the model
+behind the confinement processes. Model peak RSS remains unavailable. It must not be reported as 15 MiB.
+
+Two regressions reproduce the report failure, in contract parsing and in the complete framework work path.
+Both fail before the production fix and pass after it. Standalone `</parameter>`, `</function>` and
+`</tool_call>` lines now end a claim field, just as existing report framing does. Inline occurrences and
+unrelated closing tags remain report text. Real missing-file claims still fail the work-completion guard.
+The public contract documents this bounded normalization; grading and work budgets are unchanged.
+
+The generation-focused profile uses five prompt tokens and 64 generated tokens with the F16 configuration.
+It records 13,788 user-space cycle samples with none lost. Q4 and Q6 panel kernels account for approximately
+88% of sampled cycles; worker waiting accounts for 3.4%. Generation is primarily native arithmetic on this
+case. This profile includes warm-up and does not establish a before/after generation speed improvement.
+
+Full post-fix validation and a fresh base-only check are pending. The cancelled pilot supplies no adapter
+recommendation, and a successful base-only check would not by itself establish adapter transfer.

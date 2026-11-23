@@ -371,11 +371,13 @@ package body Model_Runner.Framework.Invocations is
                  (if Said /= "" and then not Rules.Fields.Contains (Said)
                     and then Rules.Fields.Contains (Said & "s")
                   then Said & "s" else Said);
-               --  What only frames an answer -- a brace, a bracket, a code
-               --  fence -- ends the field before it and is no part of one.
+               --  Answer framing ends the field before it. A model may
+               --  close its XML call envelope after its plain final report;
+               --  those exact standalone closers are not claimed filenames.
                Bare  : constant String := Trim (Line);
                Frame : constant Boolean :=
                  Bare in "{" | "}" | "[" | "]" | "}," | "],"
+                   | "</parameter>" | "</function>" | "</tool_call>"
                  or else (Bare'Length >= 3 and then Bare (Bare'First .. Bare'First + 2) = "```")
                  or else (Bare'Length >= 2 and then Bare (Bare'First) = '{'
                           and then Bare (Bare'Last) = '}' and then Name = "");

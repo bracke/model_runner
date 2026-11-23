@@ -6636,6 +6636,23 @@ package body Tests.Framework_Cases is
               and then Iv.Claim (Said, "issues") = "",
               "an answer keeping to its contract was not read: "
               & Code_Of (Status));
+      --  Transport closers after a plain final report are not filenames.
+      Iv.Hold (Iv.Work_Claim,
+               "status: done" & LF & "summary: clamped Add" & LF & "changed_files: src/calc.adb" & LF
+               & "</parameter>" & LF & "</function>" & LF & "</tool_call>", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "changed_files") = "src/calc.adb"
+              and then Iv.Claim (Said, "summary") = "clamped Add",
+              "XML transport closers became claimed files: " & Iv.Claim (Said, "changed_files"));
+      Iv.Hold (Iv.Work_Claim,
+               "status: done" & LF & "summary: explain </tool_call> literally" & LF
+               & "changed_files: src/missing.adb" & LF & "</parameter>" & LF & "</function>" & LF
+               & "</tool_call>", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "changed_files") = "src/missing.adb"
+              and then Iv.Claim (Said, "summary") = "explain </tool_call> literally",
+              "transport cleanup removed a real claimed path or inline report text");
+      Iv.Hold (Iv.Work_Claim, "status: done" & LF & "summary: kept" & LF & "</custom>", Said, Status);
+      Assert (E.Is_Ok (Status) and then Iv.Claim (Said, "summary") = "kept" & LF & "</custom>",
+              "an unrelated XML closing tag was discarded from report text");
       --  A field of the answer's own ends the one before it: what it
       --  found is not taken for files it changed.
       Iv.Hold (Iv.Work_Claim,
@@ -7505,7 +7522,9 @@ package body Tests.Framework_Cases is
 
       Wk.Execute (Store, To_String (Ids (1)),
                   Scripted_Agent'(File => To_Unbounded_String ("src/hello.adb"),
-                                  Answer => To_Unbounded_String (Good), Broken => False),
+                                  Answer => To_Unbounded_String
+                                    (Good & LF & "</parameter>" & LF & "</function>" & LF & "</tool_call>"),
+                                  Broken => False),
                   Model, Done, Status);
       Assert (E.Is_Ok (Status) and then To_String (Done.Final_State) = "complete",
               "a task done and verified did not complete: " & Code_Of (Status) & " "
@@ -7557,11 +7576,16 @@ package body Tests.Framework_Cases is
       Dirs.Delete_File (Fresh_Root (Store) & "/src/hello.adb");
       Wk.Execute (Store, To_String (Ids (2)),
                   Scripted_Agent'(File => Null_Unbounded_String,
-                                  Answer => To_Unbounded_String (Good), Broken => False),
+                                  Answer => To_Unbounded_String
+                                    (Good & LF & "</parameter>" & LF & "</function>" & LF & "</tool_call>"),
+                                  Broken => False),
                   Model, Done, Status);
       Assert (To_String (Done.Final_State) = "failed" and then Done.Changed_Files.Is_Empty,
               "an agent's claim was taken over the failing check, or a change"
               & " it did not make was put on it: " & To_String (Done.Final_State));
+      Assert (Ada.Strings.Fixed.Index (To_String (Done.Reason), "src/hello.adb") > 0
+              and then Ada.Strings.Fixed.Index (To_String (Done.Reason), "</") = 0,
+              "a real missing-file claim was hidden, or XML framing was still treated as a file");
       declare
          View : R.Item;
       begin

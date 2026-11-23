@@ -72,6 +72,8 @@ package Model_Runner.Framework.Invocations is
    --  Hold an answer to a contract. The answer is lines of NAME: VALUE;
    --  a value runs on over the lines after it that do not start a field,
    --  and anything before the first field is passed over.
+   --  Standalone </parameter>, </function> and </tool_call> lines end a
+   --  field. Inline occurrences remain part of its text.
    --
    --  @param Rules The contract.
    --  @param Answer The model's answer.

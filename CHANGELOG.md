@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **XML-framed completion reports.** Standalone closing call-envelope tags no
+  longer become claimed filenames in a plain final report. Real missing-file
+  claims still fail verification, and inline or unrelated markup is preserved.
+
 - **Explicit-template tool calls.** A supplied template now retains its
   recognized tool-call syntax when no format name is given. The original
   template remains in use; explicit names still take precedence.

@@ -203,7 +203,7 @@
     "All temperatures, loads, configurations and sample reports are retained. No sample is discarded."
   ],
   "coding_verification": {
-    "state": "pending",
+    "state": "initial check stopped on second result; report parser regression confirmed; fresh post-fix check pending",
     "planned_seeds": [
       42,
       43,
@@ -212,6 +212,92 @@
     "task": "edit",
     "work_seconds_per_attempt": 300,
     "stop_after_first_failure": true,
-    "required_qualified_passes": 3
+    "required_qualified_passes": 3,
+    "finished": 2,
+    "passed": 1,
+    "failed": 1,
+    "timeouts": 0,
+    "unstarted": 1,
+    "attempts": [
+      {
+        "seed": 42,
+        "native_grade": "passed",
+        "work_seconds": 224.5,
+        "elapsed_seconds": 256.61167,
+        "calls": 7,
+        "generated_tokens": 812
+      },
+      {
+        "seed": 43,
+        "native_grade": "failed",
+        "work_seconds": 202.6,
+        "elapsed_seconds": 209.10373,
+        "calls": 6,
+        "generated_tokens": 738,
+        "project_checks": "passed",
+        "failure": "Standalone closing XML tags in changed_files were treated as missing filenames; no native grade is rewritten."
+      }
+    ],
+    "native_attempts": "twil-cpu-work-initial-attempts.json",
+    "native_manifest": "twil-cpu-work-initial-manifest.json",
+    "maximum_model_rss_bytes": null,
+    "parent_probe_maximum_rss_kib": 15256,
+    "process_wall_seconds": 492.18,
+    "process_exit_status": 1
+  },
+  "decode_profile": {
+    "event": "cycles:u",
+    "sampling_frequency_hz": 99,
+    "samples": 13788,
+    "lost_samples": 0,
+    "prompt_tokens": 5,
+    "generated_tokens": 64,
+    "prompt_seconds": 0.179,
+    "decode_seconds": 7.387,
+    "profiled_decode_tokens_per_second": 8.66,
+    "includes_load_and_warmup": true,
+    "cache": "f16",
+    "threads": 8,
+    "batch_size": 512,
+    "hotspots": [
+      {
+        "symbol": "Q4_K panel kernel",
+        "percent": 65.3
+      },
+      {
+        "symbol": "Q6_K panel kernel",
+        "percent": 23.19
+      },
+      {
+        "symbol": "CPU worker watch",
+        "percent": 3.42
+      }
+    ],
+    "raw": "tests/obj/twil-cpu-profile/decode.perf",
+    "flat_report": "tests/obj/twil-cpu-profile/decode-hotspots.txt",
+    "log": "/tmp/model-runner-twil-cpu-decode-profile.log",
+    "output_digest": "6898d5f375714e95"
+  },
+  "report_fix": {
+    "state": "implemented; full validation and fresh coding check pending",
+    "changed_files": [
+      "src/library/model_runner-framework-invocations.adb",
+      "src/library/model_runner-framework-invocations.ads"
+    ],
+    "standalone_closers": [
+      "</parameter>",
+      "</function>",
+      "</tool_call>"
+    ],
+    "red_regressions": 2,
+    "green_regressions": 2,
+    "controls": [
+      "Real missing filenames are still rejected.",
+      "Inline known tags remain report text.",
+      "Unrelated closing tags remain report text."
+    ],
+    "normal_root_build": "passed",
+    "normal_test_build": "passed",
+    "program_sha256": "c8d3ab420981a1ed5814ed55b5926b70ec3be4895bc58dba194de73751f5d7a7"
   }
 }
