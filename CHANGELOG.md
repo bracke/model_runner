@@ -29,6 +29,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Added
 
+- **Bounded CPU coding checks.** A native base-only probe reuses confined work sessions,
+  independent graders and native settings records, with fresh seeded projects and fixed
+  work budgets. It stops at the first failed or unqualified result.
+
 - **Dense Granite runtime adapters.** CPU attachments cover all seven standard
   projections without expanding the base weights, qualified against independent
   projection calculations and same-base reference logits, including packed rows.

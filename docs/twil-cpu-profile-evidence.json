@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-23",
+  "scope": "Bounded CPU configuration diagnosis after cancellation of the adapter pilot; base model only",
+  "source_checkpoint_before_probe": "9a3e659a",
+  "model": "/tmp/model-runner-trained-adapter-evaluation/TwIL-8B.Q4_K_M.gguf",
+  "model_sha256": "d99ef62463658c8d4a6f54b1744599146414e68b836e3541247026987cdbb0f8",
+  "timing_harness_sha256": "3d44c7bc0761b06fdd547d93f0ea046fdc3b1854c109c203f4ee1328a23b4229",
+  "program_for_coding_sha256": "c256f51744b842be0aa9aa61e3c2e9b0e654abeb0281cfa805ba60de283410fc",
+  "settings": {
+    "backend": "cpu",
+    "arithmetic": "int8",
+    "repack": "rows",
+    "context_size": 8192,
+    "adapter_count": 0,
+    "draft_tokens": 0,
+    "seed": 1,
+    "temperature": 0,
+    "prompt_file": "tests/fixtures/speed-prompt-long.txt",
+    "raw_prompt": true,
+    "ignore_eos": true,
+    "tokens": 32,
+    "warmup_passes": 1,
+    "measured_passes_per_configuration": 1,
+    "process_timeout_seconds": 180,
+    "overlapping_builds_or_model_jobs": false
+  },
+  "samples": [
+    {
+      "name": "baseline-profiled",
+      "threads": 8,
+      "batch_size": 16,
+      "cache": "q4t",
+      "profiled": true,
+      "measured_passes": 1,
+      "warmup_passes": 1,
+      "prompt_tokens": 1328,
+      "generated_tokens": 32,
+      "wall_seconds": 43.841,
+      "prompt_seconds": 39.618,
+      "prompt_tokens_per_second": 33.52,
+      "decode_seconds": 4.221,
+      "decode_tokens_per_second": 7.58,
+      "load_seconds": 4.908,
+      "output_digest": "0839f42db257b3c2",
+      "processor_seconds": 361.38,
+      "load_before": 0.52,
+      "load_after": 7.7,
+      "temperature_before_c": 58.8,
+      "temperature_after_c": 86.5,
+      "native_report": "median of 1 runs:  1328 prompt tokens, 32 generated; 43.841 s wall -- 39.618 s evaluating the prompt (33.52 t/s) and 4.221 s generating (7.58 t/s); loading took 4.908 s; output 0839f42db257b3c2; 361.38 s of processor time; load 0.52 to 7.70; 58.8 to 86.5 degrees",
+      "log": "/tmp/model-runner-twil-cpu-baseline.log"
+    },
+    {
+      "name": "batch16-unprofiled",
+      "threads": 8,
+      "batch_size": 16,
+      "cache": "q4t",
+      "profiled": false,
+      "measured_passes": 1,
+      "warmup_passes": 1,
+      "prompt_tokens": 1328,
+      "generated_tokens": 32,
+      "wall_seconds": 43.464,
+      "prompt_seconds": 39.205,
+      "prompt_tokens_per_second": 33.87,
+      "decode_seconds": 4.258,
+      "decode_tokens_per_second": 7.52,
+      "load_seconds": 0.124,
+      "output_digest": "0839f42db257b3c2",
+      "processor_seconds": 357.77,
+      "load_before": 4.49,
+      "load_after": 7.27,
+      "temperature_before_c": 66.4,
+      "temperature_after_c": 86.8,
+      "native_report": "median of 1 runs:  1328 prompt tokens, 32 generated; 43.464 s wall -- 39.205 s evaluating the prompt (33.87 t/s) and 4.258 s generating (7.52 t/s); loading took 0.124 s; output 0839f42db257b3c2; 357.77 s of processor time; load 4.49 to 7.27; 66.4 to 86.8 degrees",
+      "log": "/tmp/model-runner-twil-cpu-batch16-unprofiled.log"
+    },
+    {
+      "name": "batch512",
+      "threads": 8,
+      "batch_size": 512,
+      "cache": "q4t",
+      "profiled": false,
+      "measured_passes": 1,
+      "warmup_passes": 1,
+      "prompt_tokens": 1328,
+      "generated_tokens": 32,
+      "wall_seconds": 39.504,
+      "prompt_seconds": 35.291,
+      "prompt_tokens_per_second": 37.63,
+      "decode_seconds": 4.211,
+      "decode_tokens_per_second": 7.6,
+      "load_seconds": 0.731,
+      "output_digest": "0839f42db257b3c2",
+      "processor_seconds": 313.8,
+      "load_before": 4.36,
+      "load_after": 8.2,
+      "temperature_before_c": 74.4,
+      "temperature_after_c": 86.9,
+      "native_report": "median of 1 runs:  1328 prompt tokens, 32 generated; 39.504 s wall -- 35.291 s evaluating the prompt (37.63 t/s) and 4.211 s generating (7.60 t/s); loading took 0.731 s; output 0839f42db257b3c2; 313.80 s of processor time; load 4.36 to 8.20; 74.4 to 86.9 degrees",
+      "log": "/tmp/model-runner-twil-cpu-batch512.log"
+    },
+    {
+      "name": "threads4-batch512",
+      "threads": 4,
+      "batch_size": 512,
+      "cache": "q4t",
+      "profiled": false,
+      "measured_passes": 1,
+      "warmup_passes": 1,
+      "prompt_tokens": 1328,
+      "generated_tokens": 32,
+      "wall_seconds": 48.102,
+      "prompt_seconds": 43.695,
+      "prompt_tokens_per_second": 30.39,
+      "decode_seconds": 4.406,
+      "decode_tokens_per_second": 7.26,
+      "load_seconds": 0.124,
+      "output_digest": "0839f42db257b3c2",
+      "processor_seconds": 226.76,
+      "load_before": 7.27,
+      "load_after": 5.64,
+      "temperature_before_c": 86.6,
+      "temperature_after_c": 88.1,
+      "native_report": "median of 1 runs:  1328 prompt tokens, 32 generated; 48.102 s wall -- 43.695 s evaluating the prompt (30.39 t/s) and 4.406 s generating (7.26 t/s); loading took 0.124 s; output 0839f42db257b3c2; 226.76 s of processor time; load 7.27 to 5.64; 86.6 to 88.1 degrees",
+      "log": "/tmp/model-runner-twil-cpu-threads4-batch512.log"
+    },
+    {
+      "name": "f16-batch512",
+      "threads": 8,
+      "batch_size": 512,
+      "cache": "f16",
+      "profiled": false,
+      "measured_passes": 1,
+      "warmup_passes": 1,
+      "prompt_tokens": 1328,
+      "generated_tokens": 32,
+      "wall_seconds": 32.985,
+      "prompt_seconds": 28.9,
+      "prompt_tokens_per_second": 45.95,
+      "decode_seconds": 4.084,
+      "decode_tokens_per_second": 7.84,
+      "load_seconds": 0.123,
+      "output_digest": "19362db5b6bd6c83",
+      "processor_seconds": 276.15,
+      "load_before": 5.64,
+      "load_after": 8.4,
+      "temperature_before_c": 88.1,
+      "temperature_after_c": 87.8,
+      "native_report": "median of 1 runs:  1328 prompt tokens, 32 generated; 32.985 s wall -- 28.900 s evaluating the prompt (45.95 t/s) and 4.084 s generating (7.84 t/s); loading took 0.123 s; output 19362db5b6bd6c83; 276.15 s of processor time; load 5.64 to 8.40; 88.1 to 87.8 degrees",
+      "log": "/tmp/model-runner-twil-cpu-f16-batch512.log"
+    }
+  ],
+  "profile": {
+    "event": "cpu/cycles/P",
+    "sampling_frequency_hz": 99,
+    "samples": 73276,
+    "lost_samples": 0,
+    "includes_load_and_warmup": true,
+    "kernel_symbols_available": false,
+    "hotspots": [
+      {
+        "symbol": "Q4_K panel Run_Strip",
+        "percent": 42.26
+      },
+      {
+        "symbol": "Q6_K panel Run_Strip",
+        "percent": 10.43
+      },
+      {
+        "symbol": "head_dot_fourth",
+        "percent": 8.64
+      },
+      {
+        "symbol": "CPU worker watch",
+        "percent": 8.45
+      },
+      {
+        "symbol": "Q4_K panel outer kernel",
+        "percent": 7.36
+      },
+      {
+        "symbol": "blend_run_fourth",
+        "percent": 5.23
+      },
+      {
+        "symbol": "Q6_K panel outer kernel",
+        "percent": 4.21
+      },
+      {
+        "symbol": "transformed four-bit KV transform",
+        "percent": 3.73
+      }
+    ],
+    "raw": "tests/obj/twil-cpu-profile/baseline.perf",
+    "flat_report": "tests/obj/twil-cpu-profile/baseline-hotspots.txt"
+  },
+  "limits": [
+    "Single measured pass per configuration; descriptive screening, without confidence bounds.",
+    "F16 changes the output digest and memory use; this is a configuration comparison, not a numerically equivalent optimization.",
+    "The sampled run includes profiler overhead; numerical comparisons use the separate unprofiled batch-16 run.",
+    "All temperatures, loads, configurations and sample reports are retained. No sample is discarded."
+  ],
+  "coding_verification": {
+    "state": "pending",
+    "planned_seeds": [
+      42,
+      43,
+      44
+    ],
+    "task": "edit",
+    "work_seconds_per_attempt": 300,
+    "stop_after_first_failure": true,
+    "required_qualified_passes": 3
+  }
+}
