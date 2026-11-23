@@ -32,6 +32,18 @@ Device attachment and complete training capture remain unimplemented.
 See [the execution report](harness-adapter-execution.md) and
 [campaign guide](harness-adapter-campaign.md).
 
+A smaller same-base Q4 runtime-attachment experiment now has
+[a frozen protocol](harness-adapter-q4-runtime-protocol.md) and
+[separate artifact records](harness-adapter-q4-runtime-artifacts.json). The complete released F16 adapter
+is verified against its pinned whole-file digest. Q4 base acquisition is deferred with its fragments retained;
+its descriptors resolve all 256 trained pairs. This does not pass the inference gate or replace the Q8 campaign.
+A smaller published TwIL Pi pair now has [its own frozen protocol](harness-adapter-twil-protocol.md).
+Its Q4 base and trained adapter are verified against their pinned whole-file digests, and all 280 Granite
+projection pairs resolve. Native Granite attachment and explicit-template tool-format recognition have
+oracle and regression coverage; the real inference and work gates are still pending.
+The [native generation and validation record](harness-adapter-twil-execution.md) now admits both models
+without F32 expansion; independently graded coding attempts remain the next gate.
+
 The objective is better verified coding work per unit of local time and memory. The first question is whether
 the released harness adapters improve this program's actual `/work` agent. The second is whether keeping an
 adapter beside quantized weights makes that improvement practical on the machines this program serves.

@@ -165,7 +165,7 @@ begin
       Status := E.Make (E.Lifecycle_Session_Active);
       return;
    elsif Item.Able.Kind not in Model_Runner.Backend.Backend_CPU | Model_Runner.Backend.Backend_Reference
-     or else Item.Settings.Kind not in Llama | Qwen2 | Qwen3 | Qwen35
+     or else Item.Settings.Kind not in Llama | Qwen2 | Qwen3 | Qwen35 | Granite
      or else Item.Settings.Experts /= 0
      or else Item.Layers_Light /= null or else Item.Light_Head /= null
      or else (Old_Count = 0 and then Item.Adapted /= 0)

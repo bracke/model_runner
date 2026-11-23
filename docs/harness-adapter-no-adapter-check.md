@@ -4,6 +4,29 @@ This campaign checks the CPU cost added to ordinary inference by the adapter imp
 the pre-adapter engine at commit `a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b` against the current working tree.
 It does not measure trained-adapter quality, device execution, or an adapter's active arithmetic overhead.
 
+## Granite and template-override requalification
+
+The final Granite attachment and custom-template tool-syntax changes were requalified on 2026-11-23.
+[The new evidence](harness-adapter-no-adapter-twil-evidence.json) retains all 28 fresh native samples.
+Every sample read 100 prompt tokens, generated sixteen tokens and produced digest `c85e719a42725969`.
+Both batches pass the unchanged 1.05 paired-median boundary:
+
+| Batch | Pairs | Prompt time change | Decode time change |
+| --- | ---: | ---: | ---: |
+| 1 | 7 | -1.5% | -2.0% |
+| 2 | 7 | -0.6% | +0.3% |
+
+Baseline engine sources again match an archive of `a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b`.
+Both probes were built against the same current dependency archives, and actual engine compiler arguments
+match exactly. The suite subsequently rebuilt six dependency archives; timing uses the preserved statically
+linked probes. Their hashes and the normalized candidate source archive remain unchanged through timing.
+No builds or validation campaigns ran alongside timed samples.
+
+The final full suite passes **969/969**. Large wall-time stalls remain in both arms: candidate/baseline
+decode ratios span about 0.13 to 5.12. No sample was excluded. These observations qualify the declared local
+median boundary and provide no tail-latency guarantee or claimed speed improvement. The earlier results below
+describe their original checkpoint and remain available unchanged.
+
 ## Measurement protocol
 
 The same `tests/src/no_adapter_probe.adb` main is compiled against both engine trees. It calls each tree's

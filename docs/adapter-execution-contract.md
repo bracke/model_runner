@@ -86,7 +86,7 @@ is refused until the device stage is implemented and qualified. It may not silen
 projection through a hidden host fallback. Speculative and draft combinations must either execute the same
 effective attachment in every relevant session or be refused explicitly until tested. This implementation
 disables next-layer drafting on attached sessions and refuses explicit CLI drafting. Unused next-layer
-weights may remain in the model. Dense Llama, Qwen2, Qwen3 and Qwen35 are accepted; experts are refused.
+weights may remain in the model. Dense Llama, Qwen2, Qwen3, Qwen35 and Granite are accepted; experts are refused.
 
 ## Ownership, transaction and lifecycle
 
@@ -203,7 +203,7 @@ Production attachment tests also cover extra targets, rank-three tensors, unsupp
 short/changed sources, source I/O failure, rank/storage/file limits, F16/F32 NaNs at zero scale, active sessions,
 cancellation before and during payload loading, source closure and account preservation. Projection tests
 require bitwise unchanged results when stacking a zero-scale attachment. End-to-end tests compare token logits
-on CPU/reference and CPU prompt batches with tails for dense Llama, Qwen2, Qwen3 and Qwen35 against the
+on CPU/reference and CPU prompt batches with tails for dense Llama, Qwen2, Qwen3, Qwen35 and Granite against the
 same-base F32 merger at 1E-4 absolute plus 1E-4 relative tolerance. Separate sessions have separate scratch.
 The reference backend retains its existing multi-token prompt-batch refusal.
 

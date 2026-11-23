@@ -2875,7 +2875,9 @@ package body Model_Runner.Llama is
       Model_Runner.Templates.Compile (Item.Chat, Source, Bounds, Status);
       Item.Chat_Present := E.Is_Ok (Status);
       Item.Chat_Status := Status;
-      Set_Template_Format (Item, (if E.Is_Ok (Status) then Name else ""));
+      Set_Template_Format
+        (Item, (if E.Is_Error (Status) then ""
+                elsif Name /= "" then Name else Model_Runner.Templates.Recognise (Source)));
       Item.Chat_Stood_In := False;
    end Use_Template;
 

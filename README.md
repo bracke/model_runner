@@ -755,7 +755,7 @@ model_runner run MODEL --lora adapter.gguf --lora-mode runtime --prompt "..."
 ```
 
 This mode selects CPU and disables drafting unless those choices were already
-explicit. It supports dense Llama, Qwen2, Qwen3 and Qwen35 main-layer projections,
+explicit. It supports dense Llama, Qwen2, Qwen3, Qwen35 and Granite main-layer projections,
 including hybrid feed-forward layers. CPU token and prompt-batch execution are
 supported; the reference backend supports tokens. Device execution, experts,
 drafting and mixing runtime attachments with merged adapters are refused.
@@ -2384,8 +2384,8 @@ identical probes and matched settings. Both phases passed a predeclared +5% pair
 
 | Batch | Paired median prompt time change | Paired median decode time change |
 | --- | ---: | ---: |
-| 1 | +0.6% | +1.1% |
-| 2 | -1.9% | -0.9% |
+| 1 | -1.5% | -2.0% |
+| 2 | -0.6% | +0.3% |
 
 Every measured run read 100 prompt tokens, generated sixteen tokens and produced identical text.
 All samples, including large stalls in both arms, remain in the linked evidence. These medians do not

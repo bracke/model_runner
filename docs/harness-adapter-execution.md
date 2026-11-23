@@ -3,6 +3,12 @@
 Execution date: 2026-11-22. The [plan](plan-harness-adapters.md) is partially implemented.
 The published adapter has not been evaluated, and no inference default has changed.
 Per-arm runtime campaign qualification was added on 2026-11-23.
+The subsequent [TwIL experiment](harness-adapter-twil-protocol.md) pins a smaller trained candidate with
+[verified complete payloads](harness-adapter-twil-artifacts.json). It adds qualified dense Granite runtime
+attachment and preserves recognized tool syntax when a supplied template overrides the model's own.
+These preparation changes do not yet establish trained-adapter quality or replace the original Qwen campaign.
+The [native TwIL execution record](harness-adapter-twil-execution.md) tracks generation, memory, validation
+and the pending independently graded work gate separately.
 Subsequent [campaign hardening](campaign-hardening.md) adds OS-isolated verifiers, protected baselines and
 native resolved-setting capture. Earlier isolation/reporting limitations below describe their checkpoints.
 

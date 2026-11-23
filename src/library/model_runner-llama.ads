@@ -978,8 +978,7 @@ package Model_Runner.Llama is
    --  @param Source Template source.
    --  @param Bounds Limits applied while compiling.
    --  @param Status Success, or why the source was refused.
-   --  @param Name The carried format the source is, when it is one, so that
-   --    Template_Format answers it. Empty for a source that is not.
+   --  @param Name Explicit format name for Template_Format; empty recognizes the format from the source.
    procedure Use_Template
      (Item   : in out Model;
       Source : String;
@@ -1539,7 +1538,7 @@ package Model_Runner.Llama is
    Default_Adapter_Limits : constant Adapter_Limits := (others => <>);
 
    --  Keep owned F32 low-rank matrices beside the existing base layout, without expanding base weights.
-   --  CPU/reference dense Llama, Qwen2, Qwen3 and Qwen35 models are accepted. Device, mixture, lightened
+   --  CPU/reference dense Llama, Qwen2, Qwen3, Qwen35 and Granite models are accepted. Device, mixture, lightened
    --  layers and mixing runtime attachments with F32 merging are refused. Optional next-layer storage
    --  is allowed, but attached sessions cannot execute its draft operation.
    --  The entire file is validated before publication; failure leaves weights, identity and accounting unchanged.
@@ -1690,17 +1689,15 @@ package Model_Runner.Llama is
    function Template_Condition
      (Item : Model) return Model_Runner.Errors.Error_Info;
 
-   --  The carried chat format the model renders with, when it is one.
+   --  The tool-call format recognized in the model's chat template, or named by its caller.
    --
-   --  Set by Use_Template when the caller named one, and by Prepare when
-   --  the model's own template would not compile but its text is written
-   --  in a format this build carries -- that format then stands in, and
-   --  Template_Stood_In says so. A caller reads tool calls in the shape
-   --  this format writes them: Templates.Syntax_Of.
+   --  Use_Template honors an explicit name, otherwise recognizing the source as Prepare does for an
+   --  embedded template. Recognition alone does not replace the compiled source. Template_Stood_In
+   --  separately reports when a carried format replaced an embedded template. A caller reads tool
+   --  calls using Templates.Syntax_Of.
    --
    --  @param Item Prepared model.
-   --  @return Format name as Templates.Format_Name gives it, or the empty
-   --    string when the model renders with its own template.
+   --  @return Recognized or explicit format name, or empty when the source has no recognized format.
    function Template_Format (Item : Model) return String;
 
    --  Whether a carried format was chosen for the model rather than named.
@@ -1711,7 +1708,7 @@ package Model_Runner.Llama is
    --  through Use_Template afterwards resets it.
    --
    --  @param Item Prepared model.
-   --  @return True when Template_Format was recognised, not named.
+   --  @return True when a carried format replaced the embedded template.
    function Template_Stood_In (Item : Model) return Boolean;
 
    --  The sampling settings the file says it is run with (general.sampling.*),

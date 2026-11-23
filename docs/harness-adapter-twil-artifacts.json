@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-23",
+  "scope": "Trained TwIL Pi adapter over the identical pinned Q4 base in every arm",
+  "protocol": "harness-adapter-twil-protocol.md",
+  "base_model": "webAI-Official/TwIL-8B",
+  "pinned_program_sha256": "c256f51744b842be0aa9aa61e3c2e9b0e654abeb0281cfa805ba60de283410fc",
+  "pinned_harness_sha256": "7f9ddc05e93f030788059b8b7d138d9bdc984416ef9c22c87ecda2a2e6e14b8e",
+  "artifacts": [
+    {
+      "role": "shared_base",
+      "repository": "mradermacher/TwIL-8B-GGUF",
+      "revision": "00e9ccad554b6bb1308ca1c068a70d040b84f052",
+      "filename": "TwIL-8B.Q4_K_M.gguf",
+      "bytes": 5347918528,
+      "expected_sha256": "d99ef62463658c8d4a6f54b1744599146414e68b836e3541247026987cdbb0f8",
+      "measured_sha256": "d99ef62463658c8d4a6f54b1744599146414e68b836e3541247026987cdbb0f8",
+      "whole_payload_verified": true
+    },
+    {
+      "role": "adapted_arms_only",
+      "repository": "harness-hub/TwIL-8B-pi-GGUF",
+      "revision": "f199641d170167657244f9e3a2e462df0a1ee59e",
+      "filename": "TwIL-8B-harbor-pi-lora-F16.gguf",
+      "bytes": 197958112,
+      "expected_sha256": "21e610324dd21e488a3c8c3cb6ff18135a74c7fb4cb1e121aedd5eb400db5eaf",
+      "measured_sha256": "21e610324dd21e488a3c8c3cb6ff18135a74c7fb4cb1e121aedd5eb400db5eaf",
+      "whole_payload_verified": true
+    }
+  ],
+  "declared_training_source": {
+    "repository": "harness-hub/TwIL-8B-pi",
+    "revision": "650d3169db36542f4429641fe518ce4f1f268078",
+    "base_model_name_or_path": "webAI-Official/TwIL-8B",
+    "rank": 32,
+    "alpha": 64,
+    "fan_in_fan_out": false,
+    "use_dora": false,
+    "targets": ["gate_proj", "down_proj", "o_proj", "up_proj", "v_proj", "k_proj", "q_proj"]
+  },
+  "shared_template": {
+    "repository": "harness-hub/TwIL-8B-pi",
+    "revision": "650d3169db36542f4429641fe518ce4f1f268078",
+    "filename": "chat_template.jinja",
+    "sha256": "b0a1ec95f3ad2f879f8d9a8eea3355c6a7ff6f33e7ae0e75bf92a0285cd26a3b",
+    "native_offline_rendering_passed": true,
+    "rendering_scope": "Complete verified TwIL base; both thinking choices and a tool definition; no inference"
+  },
+  "header_inspection": {
+    "architecture": "granite",
+    "headers_compatible": true,
+    "base_parameters": 8791592960,
+    "adapter_pairs_resolved": 280,
+    "adapter_parameters": 98959360,
+    "failures": [],
+    "scope": "Compatible header descriptors; complete payloads separately verified against pinned digests"
+  },
+  "resource_estimates": {
+    "physical_memory_bytes": 32814366720,
+    "mapped_base_file_bytes": 5347918528,
+    "decoded_adapter_matrix_bytes": 395837440,
+    "session_8192_q4t_bytes": 440617024,
+    "additional_workspace_and_host_margin_bytes": 2147483648,
+    "additional_panel_storage_bound_bytes": 10695837056,
+    "single_model_admission_bound_bytes": 19027693696,
+    "f32_weight_bytes": 35166371840,
+    "f32_weights_fit_physical_memory": false
+  },
+  "resource_observations": {
+    "maximum_smoke_process_rss_bytes": 10311344128,
+    "packed_panel_payload_bytes": 5111808000,
+    "scope": "Three short CLI runs, including initial panel construction and later cache reuse",
+    "record": "harness-adapter-twil-smoke.json"
+  },
+  "generation_gate_passed": true,
+  "inference_gate_passed": false,
+  "trained_adapter_quality_result": null
+}

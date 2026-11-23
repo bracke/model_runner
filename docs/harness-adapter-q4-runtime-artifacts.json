@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-23",
+  "scope": "Same pinned Q4 base without and with the released trained runtime adapter",
+  "source_revision": "4dac5198e796302829a1af52e0aa5833e84b49eb",
+  "program_sha256": "7aab547ee2aeaff81a68bd6fb6f801c1cb102e9fb2b4e4732387e69b643d788a",
+  "harness_sha256": "5ac6d0e7b05575e589b5e6ece6a85ab6770f2a39a280f153f7d94bde1eefe4fa",
+  "base_model": "Qwen/Qwen3.8-27B",
+  "base_source_revision": "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+  "declared_adapter_source": {
+    "repository": "harness-hub/Qwen3.8-27B-pi-adapted",
+    "inspected_revision": "7d42b119e2d4d475fa11270634b1ef98d1cd5aee",
+    "base_model_name_or_path": "Qwen/Qwen3.8-27B",
+    "base_weight_revision_in_peft_config": null,
+    "rank": 32,
+    "alpha": 64,
+    "fan_in_fan_out": false,
+    "use_dora": false,
+    "scope": "Declared training lineage; exact original base-weight revision is not published in this config"
+  },
+  "artifacts": [
+    {
+      "role": "shared_base",
+      "repository": "ggml-org/Qwen3.8-27B-GGUF",
+      "revision": "c1869413dece09109e55b7dcc2c77ef382b0d0bd",
+      "filename": "Qwen3.8-27B-Q4_K_M.gguf",
+      "bytes": 19403684480,
+      "expected_sha256": "d15d4b6de55f662ac40e867702d31afe738d032fa06b829b2b1a21a49d4a48ee",
+      "measured_sha256": null,
+      "whole_payload_verified": false,
+      "acquisition_status": "Partial bytes retained; deferred while qualifying a smaller published trained pair"
+    },
+    {
+      "role": "adapted_arms_only",
+      "repository": "harness-hub/Qwen3.8-27B-pi-adapted-GGUF",
+      "revision": "19980ce556b41c7b73818083c9adf4b3fa0c72e5",
+      "filename": "Qwen3.8-27B-pi-lora-F16.gguf",
+      "bytes": 318802304,
+      "expected_sha256": "a64f91844f19e67da500d8628bdf9383aa334e61b7ab687805802e7d272d7b67",
+      "measured_sha256": "a64f91844f19e67da500d8628bdf9383aa334e61b7ab687805802e7d272d7b67",
+      "whole_payload_verified": true
+    }
+  ],
+  "adapter": {
+    "rank": 32,
+    "alpha": 64,
+    "scale": 1,
+    "projection_pairs": 256,
+    "parameters": 159383552,
+    "decoded_matrix_bytes": 637534208,
+    "mode": "runtime"
+  },
+  "header_inspection": {
+    "failures": [],
+    "architecture": "qwen35",
+    "headers_compatible": true,
+    "base_parameters": 26895998464,
+    "adapter_pairs_resolved": 256,
+    "scope": "Q4 base prefix and complete adapter descriptors; no base tensor payload verification"
+  },
+  "resource_estimates": {
+    "physical_memory_bytes": 32814366720,
+    "mapped_base_file_bytes": 19403684480,
+    "session_8192_q4t_bytes": 341169626,
+    "decoded_adapter_matrix_bytes": 637534208,
+    "additional_workspace_and_host_margin_bytes": 2147483648,
+    "total_admission_bytes": 22529871962,
+    "observed_peak_rss_bytes": null
+  },
+  "inference_gate_passed": false,
+  "trained_adapter_quality_result": null
+}

@@ -13,6 +13,14 @@ Expected whole-file digests are the upstream LFS digests, not claims of a comple
 [harness-adapter-header-inspection.json](harness-adapter-header-inspection.json) records descriptor inspection
 of bounded downloaded prefixes. It does not verify missing tensor bytes or establish that inference works.
 
+The subsequent [Q4 runtime protocol](harness-adapter-q4-runtime-protocol.md) pins an upstream Q4_K_M base
+and compares it with and without the released trained adapter. Its
+[artifact record](harness-adapter-q4-runtime-artifacts.json) tracks whole-file verification separately.
+It is a distinct experiment from the premerged Q8 comparison; inference admission remains a required gate.
+The smaller [TwIL protocol](harness-adapter-twil-protocol.md) also has
+[fully verified inputs](harness-adapter-twil-artifacts.json), including the publisher's required template.
+It tests another trained adapter and base, independently of the Qwen candidate.
+
 The two Q8_0 models have matching tensor descriptors, tokenizer metadata, templates and resolved architecture
 configuration. All 256 adapter pairs resolve to the original model's matrices with matching dimensions.
 Their architecture is `qwen35`. The original has 26,895,998,464 parameters; an F32 copy of those parameters
@@ -52,7 +60,7 @@ model_runner run BASE.gguf --lora ADAPTER.gguf --lora-mode runtime --prompt "...
 ```
 
 This selects CPU and disables drafting by default. The native API is `Llama.Attach_Adapter`; F32 merging
-remains the default CLI mode. Dense Llama, Qwen2, Qwen3 and Qwen35 main-layer targets are supported.
+remains the default CLI mode. Dense Llama, Qwen2, Qwen3, Qwen35 and Granite main-layer targets are supported.
 Device execution, experts and drafting are refused. A runtime file can contain only supported complete pairs.
 
 For execution instrumentation without a trained adapter, create a bounded artificial rank-two fixture:

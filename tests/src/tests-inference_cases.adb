@@ -22096,6 +22096,46 @@ package body Tests.Inference_Cases is
       Model_Runner.Backend.Device.Close;
    end A_Reopened_Session_Asks_For_No_Checkpoint_Slot;
 
+   procedure Explicit_Template_Overrides_Preserve_Tool_Syntax
+     (Test : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (Test);
+      Image : B.Byte_Array_Access;
+   begin
+      Tiny_Model.Build (Image);
+      declare
+         Held : aliased constant B.Byte_Array := Image.all;
+         Under : Harness (Held'Access);
+         Ready : Boolean;
+         Status : E.Error_Info;
+      begin
+         Start (Under, Model_Runner.Backend.Backend_CPU, Ready);
+         Assert (Ready, "template override fixture did not prepare");
+         L.Use_Template
+           (Under.Ready, Model_Runner.Templates.Built_In ("qwen3-coder"),
+            Model_Runner.Limits.Default_Model_Limits, Status);
+         Assert (E.Is_Ok (Status), "explicit XML template did not compile");
+         Assert (L.Template_Format (Under.Ready) = "qwen3-coder",
+                 "explicit XML template lost its native tool-call syntax");
+         Assert (not L.Template_Stood_In (Under.Ready), "explicit template was replaced with a stand-in");
+         L.Use_Template
+           (Under.Ready, "{{ 'plain reply' }}", Model_Runner.Limits.Default_Model_Limits,
+            Status, Name => "qwen3-coder");
+         Assert (E.Is_Ok (Status) and then L.Template_Format (Under.Ready) = "qwen3-coder",
+                 "explicit format name was not authoritative");
+         L.Use_Template
+           (Under.Ready, "{{ 'plain reply' }}", Model_Runner.Limits.Default_Model_Limits, Status);
+         Assert (E.Is_Ok (Status) and then L.Template_Format (Under.Ready) = "",
+                 "unrecognized template retained the previous XML syntax");
+         L.Use_Template
+           (Under.Ready, "{{", Model_Runner.Limits.Default_Model_Limits,
+            Status, Name => "qwen3-coder");
+         Assert (E.Is_Error (Status) and then L.Template_Format (Under.Ready) = "",
+                 "invalid override retained a usable tool-call format");
+      end;
+      B.Free (Image);
+   end Explicit_Template_Overrides_Preserve_Tool_Syntax;
+
    --  A template that will not compile, written in a call shape no
    --  carried format writes -- Mistral's [TOOL_CALLS]name[ARGS] -- has no
    --  stand-in: the shape names only how calls are read, and an empty
@@ -22938,6 +22978,9 @@ package body Tests.Inference_Cases is
         (T, A_Reopened_Session_Asks_For_No_Checkpoint_Slot'Access,
          "a session object opened again seats the ring a fresh one does, "
          & "without the closed session's checkpoint slot");
+      Register_Routine
+        (T, Explicit_Template_Overrides_Preserve_Tool_Syntax'Access,
+         "explicit template overrides retain their recognized tool syntax");
       Register_Routine
         (T, A_Shape_With_No_Carried_Format_Stands_In_For_Nothing'Access,
          "a template in a call shape no carried format writes has nothing "

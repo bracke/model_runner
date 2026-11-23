@@ -387,7 +387,9 @@ package body Tests.Adapter_Cases is
          Layer_Index : constant Natural := (if Kind = Tiny_Model.Qwen35 and then Which <= P.Attention_Output
                                            then 1 else 0);
          Stem : constant String := "blk." & (if Layer_Index = 0 then "0." else "1.") & P.Stem (Which) & ".weight";
-         Arch : constant String := (if Kind = Tiny_Model.Qwen35 then "qwen35" else "llama");
+         Arch : constant String :=
+           (case Kind is when Tiny_Model.Qwen35 => "qwen35", when Tiny_Model.Granite => "granite",
+                         when others => "llama");
          Status : E.Error_Info;
       begin
          Tiny_Model.Build (Image, Format => (if Kind = Tiny_Model.Qwen35 then Tiny_Model.F32 else Tiny_Model.Q8_0),
@@ -517,7 +519,7 @@ package body Tests.Adapter_Cases is
       end One;
    begin
       for Runtime in Boolean loop
-         for Kind of Architectures'([Tiny_Model.Llama, Tiny_Model.Qwen35]) loop
+         for Kind of Architectures'([Tiny_Model.Llama, Tiny_Model.Qwen35, Tiny_Model.Granite]) loop
             for Which in P.Projection loop
                for Format of Formats'([G.Type_F32, G.Type_F16]) loop
                   for Alpha in Alpha_Kind loop
@@ -760,14 +762,15 @@ package body Tests.Adapter_Cases is
       Image, Adapter : B.Byte_Array_Access := null;
 
       procedure One
-        (Kind : Tiny_Model.Fixture_Architecture; Backend : Model_Runner.Backend.Backend_Kind; Rank : Positive) is
+        (Kind : Tiny_Model.Fixture_Architecture; Backend : Model_Runner.Backend.Backend_Kind;
+         Rank : Positive; Packed : Boolean := False) is
          Held : aliased constant B.Byte_Array := Image.all;
          Source : Model_Runner.Byte_Sources.Memory.Buffer_Source (Held'Access);
          Parsed : C.Container;
          Runtime, Merged : L.Model;
          Token_Live, Batch_Live, Reference_Live : L.Session;
          Status : E.Error_Info;
-         Tokens : constant Model_Runner.Tokenizer.Token_Array := [1, 4, 5, 6, 7];
+         Tokens : constant Model_Runner.Tokenizer.Token_Array := [1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
          Token_Result, Batch_Result, Reference_Result : N.Real_Array (0 .. Tiny_Model.Vocabulary - 1);
          View : T.View;
          procedure Agree (Left, Right : N.Real_Array; Why : String) is
@@ -779,7 +782,8 @@ package body Tests.Adapter_Cases is
       begin
          C.Reader.Parse (Parsed, Source, Status => Status);
          Check (Status, "runtime end-to-end parse");
-         L.Prepare (Runtime, Parsed, Source, Backend => Backend, Repack => L.No_Repack, Status => Status);
+         L.Prepare (Runtime, Parsed, Source, Backend => Backend,
+                    Repack => (if Packed then L.To_Rows else L.No_Repack), Status => Status);
          Check (Status, "quantized runtime prepare");
          L.Prepare (Merged, Parsed, Source, Backend => Model_Runner.Backend.Backend_Reference,
                     Repack => L.To_F32, Status => Status);
@@ -792,6 +796,7 @@ package body Tests.Adapter_Cases is
             begin
                P.Read_Projection (Runtime, Layer_Index, Which, View, Status);
                Check (Status, "end-to-end target");
+               Assert (not Packed or else View.Interleaved, "packed test did not interleave its projection");
                Build_Adapter (Positive (View.Columns), Positive (View.Rows), Rank, Stem,
                               C.String_Value (Parsed, "general.architecture"),
                               (if P.Projection'Pos (Which) mod 2 = 0 then G.Type_F16 else G.Type_F32),
@@ -826,12 +831,12 @@ package body Tests.Adapter_Cases is
             Check (Status, "reference token");
             Agree (Token_Result, Reference_Result, "runtime token logits differ from same-base merge");
          end loop;
-         L.Evaluate_Batch (Batch_Live, Runtime, Tokens (1 .. 3), Batch_Result, Status => Status);
+         L.Evaluate_Batch (Batch_Live, Runtime, Tokens (1 .. 8), Batch_Result, Status => Status);
          if Backend = Model_Runner.Backend.Backend_Reference then
             Assert (Status.Code = E.Backend_Capability_Missing, "reference batch capability changed silently");
          else
             Check (Status, "runtime prompt batch " & Tiny_Model.Fixture_Architecture'Image (Kind));
-            L.Evaluate_Batch (Batch_Live, Runtime, Tokens (4 .. 5), Batch_Result, Status => Status);
+            L.Evaluate_Batch (Batch_Live, Runtime, Tokens (9 .. 11), Batch_Result, Status => Status);
             Check (Status, "runtime prompt tail");
             Agree (Token_Result, Batch_Result, "runtime batch/tail logits differ from token route");
          end if;
@@ -848,13 +853,17 @@ package body Tests.Adapter_Cases is
       end One;
    begin
       CPU.Use_Integer_Activations (CPU.No_Role);
-      for Kind of Kinds'([Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3, Tiny_Model.Qwen35]) loop
+      for Kind of Kinds'([Tiny_Model.Llama, Tiny_Model.Qwen2, Tiny_Model.Qwen3, Tiny_Model.Qwen35,
+                          Tiny_Model.Granite]) loop
          Tiny_Model.Build (Image, Tiny_Model.Q8_0, Kind => Kind);
          for Backend of Backends'([Model_Runner.Backend.Backend_CPU, Model_Runner.Backend.Backend_Reference]) loop
             for Rank of Ranks'([2, 32, 64]) loop
                One (Kind, Backend, Rank);
             end loop;
          end loop;
+         if Kind = Tiny_Model.Granite then
+            One (Kind, Model_Runner.Backend.Backend_CPU, 32, Packed => True);
+         end if;
          B.Free (Image);
       end loop;
       CPU.Use_Integer_Activations (Old_Roles);
