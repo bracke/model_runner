@@ -1,4 +1,5 @@
 with Model_Runner.Platform;
+with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Drafts;
 with Model_Runner.Draft_Policy;
 with Ada.Strings.Fixed;
@@ -38,6 +39,7 @@ package body Speed_Run is
 
    use type Ada.Real_Time.Time;
    use type Interfaces.Unsigned_64;
+   use type L.Repack_Mode;
 
    --  Generated text is not kept, but it is digested: the batch-size table
    --  publishes a column showing that --batch-size changes no output, and a
@@ -170,7 +172,10 @@ package body Speed_Run is
       Turns       : String := "";
       Arithmetic  : String := "";
       Memory_Limit : Interfaces.Unsigned_64 := 0;
-      No_Cache    : Boolean := False)
+      No_Cache    : Boolean := False;
+      Adapter     : String := "";
+      Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
+      Adapter_Runtime : Boolean := True)
    is
       use type Model_Runner.Backend.Backend_Kind;
 
@@ -201,8 +206,8 @@ package body Speed_Run is
 
       --  What was asked of drafting, read as the command reads it.
       Asked : constant Draft_Policy.Asked :=
-        (Tokens      => Draft_Tokens,
-         Tokens_Set  => Draft_Tokens_Set or else Draft_Next,
+        (Tokens      => (if Adapter /= "" then 0 else Draft_Tokens),
+         Tokens_Set  => Draft_Tokens_Set or else Draft_Next or else Adapter /= "",
          Lookup      => Draft_Lookup,
          Model_Named => Draft /= "");
       Found_Draft : Ada.Strings.Unbounded.Unbounded_String;
@@ -219,6 +224,15 @@ package body Speed_Run is
       Result := (others => <>);
       Result.Load_Before := Host_Load.Now;
       Result.Warm_Before := Host_Load.Warmth;
+
+      if Adapter /= "" and then
+        (Backend = Model_Runner.Backend.Backend_Device or else Draft /= "" or else Draft_Lookup
+         or else Draft_Next or else (Draft_Tokens_Set and then Draft_Tokens /= 0)
+         or else (not Adapter_Runtime and then Repack /= L.To_F32))
+      then
+         Say ("CPU adapter measurements require no drafting; merging requires F32 repacking");
+         return;
+      end if;
 
       if Path = "" or else not Ada.Directories.Exists (Path) then
          Result.Missing := True;
@@ -392,6 +406,41 @@ package body Speed_Run is
                  & E.Error_Code'Image (Status.Code));
             return;
          end if;
+         if Adapter /= "" then
+            declare
+               From : Model_Runner.Byte_Sources.Files.File_Source;
+               Parsed : Containers.Container;
+               At_Adapter : constant Ada.Real_Time.Time := Ada.Real_Time.Clock;
+            begin
+               Model_Runner.Byte_Sources.Files.Open (From, Adapter, Status => Status);
+               if E.Is_Ok (Status) then
+                  Containers.Reader.Parse (Parsed, From, Status => Status);
+               end if;
+               if E.Is_Ok (Status) then
+                  if Adapter_Runtime then
+                     L.Attach_Adapter (Engine, Parsed, From, Adapter_Scale, Status);
+                  else
+                     L.Merge_Adapter (Engine, Parsed, From, Adapter_Scale, Status);
+                  end if;
+               end if;
+               Containers.Close (Parsed);
+               Model_Runner.Byte_Sources.Files.Close (From);
+               Result.Adapter_Load := Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - At_Adapter);
+               if E.Is_Error (Status) then
+                  declare
+                     Reason : constant String := E.Error_Code'Image (Status.Code);
+                  begin
+                     L.Close (Engine, Status);
+                     Containers.Close (Container);
+                     Shards.Close (Source);
+                     Say ("the adapter would not load: " & Reason);
+                  end;
+                  return;
+               end if;
+            end;
+         end if;
+         Result.Adapter_Bytes := L.Runtime_Adapter_Bytes (Engine);
+         Result.Model_Bytes := L.Account (Engine).Current;
          Result.Load :=
            Ada.Real_Time.To_Duration (Ada.Real_Time.Clock - Started);
 

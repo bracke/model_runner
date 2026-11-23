@@ -40,6 +40,10 @@ with AUnit.Test_Filters;
 with Tests.Suite;
 with Checks;
 with Agent_Trial;
+with Agent_Campaign;
+with Adapter_Inspection;
+with Adapter_Fixture;
+with Adapter_Benchmark;
 with Knowledge_Bench;
 with Retrieval_Bench;
 with Conformance;
@@ -4654,6 +4658,57 @@ begin
          end if;
       end;
 
+   elsif Command = "agent-campaign" then
+      declare
+         function Option (Name, Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+         Clean : Boolean;
+      begin
+         if Option ("--base", "") = "" or else Option ("--adapted", "") = ""
+           or else Option ("--out", "") = ""
+           or else Option ("--mode", "run") not in "run" | "check" | "inspect"
+         then
+            Ada.Text_IO.Put_Line ("agent-campaign: --base, --adapted and --out are required");
+            Ada.Command_Line.Set_Exit_Status (2);
+         elsif Option ("--mode", "run") = "inspect" then
+            Adapter_Inspection.Run
+              (Base => Option ("--base", ""), Adapted => Option ("--adapted", ""),
+               Adapter => Option ("--adapter", ""), Output_Path => Option ("--out", ""),
+               Base_Bytes => Interfaces.Unsigned_64'Value (Option ("--base-bytes", "0")),
+               Adapted_Bytes => Interfaces.Unsigned_64'Value (Option ("--adapted-bytes", "0")),
+               Adapter_Bytes => Interfaces.Unsigned_64'Value (Option ("--adapter-bytes", "0")), Clean => Clean);
+            Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
+         else
+            Agent_Campaign.Run
+              (Base => Option ("--base", ""), Adapted => Option ("--adapted", ""),
+               Program => Option ("--program", "../bin/model_runner"),
+               Output_Directory => Option ("--out", ""), Clean => Clean,
+               Only => Option ("--task", "edit,find,delegate"),
+               Options => Option ("--options", "--backend cpu --threads 8 --kv-cache q4t"),
+               Repeats => Positive'Value (Option ("--repeats", "3")),
+               Max_Seconds => Positive'Value (Option ("--max-seconds", "300")),
+               Context_Size => Positive'Value (Option ("--context-size", "8192")),
+               Seed => Natural'Value (Option ("--seed", "42")),
+               Check_Only => Option ("--mode", "run") = "check",
+               Base_Adapter => Option ("--base-adapter", ""),
+               Adapted_Adapter => Option ("--adapted-adapter", ""),
+               Base_Scale => Model_Runner.Numerics.Real'Value (Option ("--base-scale", "1")),
+               Adapted_Scale => Model_Runner.Numerics.Real'Value (Option ("--adapted-scale", "1")));
+            Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
+         end if;
+      exception
+         when Constraint_Error =>
+            Ada.Text_IO.Put_Line ("agent-campaign: invalid numeric option");
+            Ada.Command_Line.Set_Exit_Status (2);
+      end;
+
    elsif Command = "agent-trial" then
       --  A real model on /work tasks, each in a project made fresh: how it
       --  ended, the time, the calls, the work figures, what changed.
@@ -4712,6 +4767,64 @@ begin
             --  --accept on: a carried run accepts the lessons proposed.
             Accept_Lessons => Option ("--accept", "off") = "on");
          Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
+      end;
+
+   elsif Command = "adapter-fixture" then
+      declare
+         function Option (Name, Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+         Clean : Boolean;
+         All_Targets : Boolean := False;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            All_Targets := All_Targets or else Ada.Command_Line.Argument (Index) = "--all-targets";
+         end loop;
+         Adapter_Fixture.Run (Option ("--model", ""), Option ("--out", ""),
+                              Option ("--tensor", "blk.0.ffn_gate.weight"), Clean,
+                              Rank => Positive'Value (Option ("--rank", "2")), All_Targets => All_Targets);
+         Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
+      exception
+         when Constraint_Error =>
+            Ada.Text_IO.Put_Line ("adapter-fixture: rank must be a positive integer in 1 .. 64");
+            Ada.Command_Line.Set_Exit_Status (2);
+      end;
+
+   elsif Command = "adapter-bench" then
+      declare
+         function Option (Name, Default : String) return String is
+         begin
+            for Index in 2 .. Ada.Command_Line.Argument_Count - 1 loop
+               if Ada.Command_Line.Argument (Index) = Name then
+                  return Ada.Command_Line.Argument (Index + 1);
+               end if;
+            end loop;
+            return Default;
+         end Option;
+         Clean : Boolean;
+         Include_Merge : Boolean := False;
+      begin
+         for Index in 2 .. Ada.Command_Line.Argument_Count loop
+            Include_Merge := Include_Merge or else Ada.Command_Line.Argument (Index) = "--include-merge";
+         end loop;
+         Adapter_Benchmark.Run
+           (Option ("--model", ""), Option ("--adapter", ""), Option ("--prompt-file", ""), Option ("--out", ""), Clean,
+            Repeats => Positive'Value (Option ("--repeats", "5")),
+            Tokens => Positive'Value (Option ("--max-tokens", "16")),
+            Threads => Positive'Value (Option ("--threads", "4")),
+            Batch => Positive'Value (Option ("--batch-size", "16")),
+            Context => Positive'Value (Option ("--context-size", "512")), Include_Merge => Include_Merge);
+         Ada.Command_Line.Set_Exit_Status (if Clean then 0 else 1);
+      exception
+         when Constraint_Error =>
+            Ada.Text_IO.Put_Line ("adapter-bench: numeric options must be positive bounded integers");
+            Ada.Command_Line.Set_Exit_Status (2);
       end;
 
    elsif Command = "fixtures" then

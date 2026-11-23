@@ -6,10 +6,8 @@ with Ada.Environment_Variables;
 with Ada.Streams;
 with Ada.Strings.Fixed;
 with Ada.Strings.Maps;
-with Ada.Strings.Unbounded;
 with Ada.Text_IO;
 
-with Hostkit;
 with Hostkit.Descriptors;
 with Hostkit.Fs;
 with Hostkit.Host;
@@ -18,6 +16,9 @@ with Hostkit.Process;
 with Hostkit.Pty;
 with Hostkit.Spawn;
 with Child_Guards;
+with Trial_Graders;
+with Trial_Metrics;
+with Project_Tools.Files;
 
 package body Agent_Trial is
 
@@ -36,6 +37,8 @@ package body Agent_Trial is
    --  hold the code to GNAT's style rules, warnings errors: a convention
    --  the task does not say and only a failed check tells, which a first
    --  attempt most often misses and a later one may be told.
+   type Fixture_Kind is (Calculation, Negative_Times, Subtraction, C_Clamp, C_Span);
+
    type Trial_Task is record
       Name   : Unbounded_String;
       Kind   : Unbounded_String;
@@ -69,14 +72,15 @@ package body Agent_Trial is
       --  The path a right answer names, where the task asks to find
       --  something: said with the outcome, as the report has it or not.
       Expect : Unbounded_String;
+      Variant : Fixture_Kind := Calculation;
    end record;
 
    function T
      (Name, Kind, Notes : String; Tested, Styled, Convention, Large, Named_Only : Boolean := False;
-      Tree, Expect : String := "")
+      Tree, Expect : String := ""; Variant : Fixture_Kind := Calculation)
      return Trial_Task is
      ((To_Unbounded_String (Name), To_Unbounded_String (Kind), To_Unbounded_String (Notes), Tested, Styled,
-       Convention, Large, Named_Only, To_Unbounded_String (Tree), To_Unbounded_String (Expect)));
+       Convention, Large, Named_Only, To_Unbounded_String (Tree), To_Unbounded_String (Expect), Variant));
 
    --  The ledger's task: a subprogram named, no file.
    Large_Notes : constant String :=
@@ -99,12 +103,12 @@ package body Agent_Trial is
      & " Integer'First when it would overflow below, instead of raising. Change only Add.";
 
    --  The tasks' places in Tasks, in the order a trial runs them.
-   type Task_Order is array (1 .. 10) of Positive;
+   type Task_Order is array (1 .. 14) of Positive;
 
    --  The tasks: one that changes part of a file, one that only finds --
    --  the two things a coding agent most does -- and one handed to a helper,
    --  its output named, which is how a run delegates.
-   Tasks : constant array (1 .. 10) of Trial_Task :=
+   Tasks : constant array (1 .. 14) of Trial_Task :=
      [T ("edit", "implementation", Edit_Notes, Tested => True),
       T ("find", "analysis",
          "Find which units use the package Calc, and in which file and on which line Times is"
@@ -154,13 +158,32 @@ package body Agent_Trial is
       T ("delegate-edit", "implementation",
          "Hand this change to a helper with the delegate tool, its outputs [""src/calc.adb""]: " & Edit_Notes
          & " Do not edit src/calc.adb yourself. When the helper has finished, run the checks and report.",
-         Tested => True, Named_Only => True)];
+         Tested => True, Named_Only => True),
+      T ("times-negative", "implementation",
+         "In src/calc.adb fix Times so it multiplies correctly when B is negative."
+         & " Keep ordinary and zero products correct. Change only Times.",
+         Tested => True, Named_Only => True, Variant => Negative_Times),
+      T ("subtract", "implementation",
+         "Add function Subtract (A, B : Integer) return Integer to Calc's public specification and body."
+         & " It returns A minus B. Keep Add and Times unchanged.",
+         Tested => True, Named_Only => True, Variant => Subtraction),
+      T ("c-boundary", "implementation",
+         "Fix clamp in src/math.c to return lo below the lower bound and hi above the upper bound."
+         & " Values within the inclusive bounds must be unchanged. Keep the header unchanged.",
+         Tested => True, Named_Only => True, Variant => C_Clamp),
+      T ("c-multi", "implementation",
+         "Add int span(int lo, int hi) to src/math.h and src/math.c. It returns hi - lo + 1"
+         & " for a valid inclusive interval, and zero when hi < lo. Keep clamp unchanged.",
+         Tested => True, Named_Only => True, Variant => C_Span)];
+
+   function Known_Task (Name : String) return Boolean
+   is (for some One of Tasks => To_String (One.Name) = Name);
 
    --  The project a task is run in, made fresh: a package, its body, and a
    --  main that uses it, under version control.
    procedure Make_Project
      (Root : String; Tested : Boolean; Convention : Boolean := False; Large : Boolean := False;
-      Tree : String := "")
+      Tree : String := ""; Variant : Fixture_Kind := Calculation)
    is
       procedure Put (Name, Text : String) is
          File : Ada.Text_IO.File_Type;
@@ -291,6 +314,31 @@ package body Agent_Trial is
               & "      raise Program_Error with ""Add does not hold to Integer's limits"";" & LF
               & "   end if;" & LF & "end Test_Add;" & LF);
       end if;
+      if Variant = Negative_Times then
+         Put ("src/test_add.adb", "with Calc;" & LF & "procedure Test_Add is" & LF & "begin" & LF
+           & "   if Calc.Times (6, -7) /= -42 or else Calc.Times (-6, -7) /= 42" & LF
+           & "     or else Calc.Times (-6, 7) /= -42 or else Calc.Times (6, 7) /= 42" & LF
+           & "     or else Calc.Times (5, 0) /= 0 or else Calc.Times (0, -3) /= 0 then" & LF
+           & "      raise Program_Error;" & LF & "   end if;" & LF & "end Test_Add;" & LF);
+      elsif Variant = Subtraction then
+         Put ("src/test_add.adb", "with Calc;" & LF & "procedure Test_Add is" & LF & "begin" & LF
+           & "   if Calc.Subtract (9, 4) /= 5 or else Calc.Subtract (-3, 7) /= -10" & LF
+           & "     or else Calc.Subtract (0, -2) /= 2 or else Calc.Subtract (3, 3) /= 0" & LF
+           & "     or else Calc.Add (2, 3) /= 5 or else Calc.Times (6, 7) /= 42 then" & LF
+           & "      raise Program_Error;" & LF & "   end if;" & LF & "end Test_Add;" & LF);
+      elsif Variant in C_Clamp | C_Span then
+         Ada.Directories.Delete_File (Root & "/src/test_add.adb");
+         Put ("src/math.h", "int clamp(int x, int lo, int hi);" & LF);
+         Put ("src/math.c", "#include ""math.h""" & LF
+           & "int clamp(int x, int lo, int hi) { (void)lo; (void)hi; return x; }" & LF);
+         Put ("src/test_math.c", "#include ""math.h""" & LF & "int main(void) {" & LF
+           & (if Variant = C_Clamp then
+                "  return !(clamp(-5, 0, 10) == 0 && clamp(15, 0, 10) == 10 && clamp(5, 0, 10) == 5" & LF
+                & "    && clamp(0, 0, 10) == 0 && clamp(10, 0, 10) == 10 && clamp(-9, -4, -1) == -4);"
+              else "  return !(span(2, 5) == 4 && span(7, 7) == 1 && span(8, 3) == 0" & LF
+                & "    && span(-3, 1) == 5 && clamp(5, 0, 10) == 5);")
+           & LF & "}" & LF);
+      end if;
       Put ("src/main.adb",
            "with Ada.Text_IO;" & LF & "with Calc;" & LF & "procedure Main is" & LF & "begin" & LF
            & "   Ada.Text_IO.Put_Line (Integer'Image (Calc.Times (6, 7)));" & LF & "end Main;" & LF);
@@ -319,6 +367,133 @@ package body Agent_Trial is
       Git ("commit -qm start");
       Git ("tag trial-start");
    end Make_Project;
+
+   procedure Validate_Graders (Directory : String; Clean : out Boolean) is
+      procedure Replace (Path, Old, New_Text : String) is
+         Text : constant String := Project_Tools.Files.Read_Raw_File (Path);
+         At_It : constant Natural := Ada.Strings.Fixed.Index (Text, Old);
+      begin
+         if At_It = 0 then
+            raise Program_Error with "grader control no longer matches its fixture";
+         end if;
+         Project_Tools.Files.Write_Raw_File
+           (Path, Text (Text'First .. At_It - 1) & New_Text & Text (At_It + Old'Length .. Text'Last));
+      end Replace;
+   begin
+      Clean := True;
+      Ada.Directories.Create_Path (Directory);
+      for One of Tasks loop
+         if One.Tested then
+            declare
+               Root : constant String := Ada.Directories.Full_Name (Directory & "/" & To_String (One.Name));
+               function Grade return Verdict
+               is (Trial_Graders.Verify (Root, To_String (One.Name), "", "-> delegate {}", Completed => True));
+               procedure Check (Wanted : Verdict; Control : String) is
+               begin
+                  if Grade /= Wanted then
+                     Clean := False;
+                     Ada.Text_IO.Put_Line ("grader " & To_String (One.Name) & " failed " & Control);
+                  end if;
+               end Check;
+            begin
+               Make_Project (Root, True, One.Convention, One.Large, Variant => One.Variant);
+               Trial_Graders.Preserve (Root);
+               Check (Failed, "no-op");
+               if One.Large then
+                  Replace (Root & "/src/ledger.adb", "      Item.Balance := Item.Balance + Amount;",
+                           "      if Amount < 0 then raise Constraint_Error; end if;" & LF
+                           & "      Item.Balance := Item.Balance + Amount;");
+               elsif One.Variant = Negative_Times then
+                  Replace (Root & "/src/calc.adb", "      return Result;",
+                           "      return Integer (Long_Long_Integer (A) * Long_Long_Integer (B));");
+               elsif One.Variant = Subtraction then
+                  Replace (Root & "/src/calc.ads", "end Calc;",
+                           "   function Subtract (A, B : Integer) return Integer;" & LF & "end Calc;");
+                  Replace (Root & "/src/calc.adb", "end Calc;",
+                           "   function Subtract (A, B : Integer) return Integer is (A - B);" & LF & "end Calc;");
+               elsif One.Variant = C_Clamp then
+                  Replace (Root & "/src/math.c", "return x;", "return x < lo ? lo : x > hi ? hi : x;");
+               elsif One.Variant = C_Span then
+                  Replace (Root & "/src/math.h", "int clamp", "int span(int lo, int hi);" & LF & "int clamp");
+                  Replace (Root & "/src/math.c", "#include",
+                           "int span(int lo, int hi) { return hi < lo ? 0 : hi - lo + 1; }" & LF & "#include");
+               else
+                  Replace (Root & "/src/calc.adb", "      return A + B;",
+                           "      if B > 0 and then A > Integer'Last - B then" & LF
+                           & "         return Integer'Last;" & LF
+                           & "      elsif B < 0 and then A < Integer'First - B then" & LF
+                           & "         return Integer'First;" & LF
+                           & "      else" & LF & "         return A + B;" & LF & "      end if;");
+               end if;
+               if One.Convention then
+                  Project_Tools.Files.Write_Raw_File
+                    (Root & "/src/calc.adb", License_Line & LF
+                     & Project_Tools.Files.Read_Raw_File (Root & "/src/calc.adb"));
+               end if;
+               Check (Passed, "reference");
+               if Trial_Graders.Check_Changes (Root, To_String (One.Name)) /= Passed then
+                  Clean := False;
+                  Ada.Text_IO.Put_Line ("grader " & To_String (One.Name) & " rejected its reference diff");
+               end if;
+               Ada.Directories.Create_Path (Root & "/docs");
+               Project_Tools.Files.Write_Raw_File (Root & "/docs/unrelated.md", "unrelated change");
+               if Trial_Graders.Check_Changes (Root, To_String (One.Name)) /= Failed then
+                  Clean := False;
+                  Ada.Text_IO.Put_Line ("grader " & To_String (One.Name) & " accepted an unrelated change");
+               end if;
+               Ada.Directories.Delete_File (Root & "/docs/unrelated.md");
+               if One.Large then
+                  Replace (Root & "/src/ledger.adb", "Amount < 0", "Amount < -100");
+               elsif One.Variant = Negative_Times then
+                  Replace (Root & "/src/calc.adb", "Long_Long_Integer (A) * Long_Long_Integer (B)",
+                           "Long_Long_Integer (A)");
+               elsif One.Variant = Subtraction then
+                  Replace (Root & "/src/calc.adb", "is (A - B)", "is (A + B)");
+               elsif One.Variant = C_Clamp then
+                  Replace (Root & "/src/math.c", "x < lo ? lo : x > hi ? hi : x", "x > hi ? hi : x");
+               elsif One.Variant = C_Span then
+                  Replace (Root & "/src/math.c", "hi - lo + 1", "hi - lo");
+               else
+                  Replace (Root & "/src/calc.adb", "return A + B;", "return 0;");
+               end if;
+               Check (Failed, "known-wrong");
+            end;
+         elsif Length (One.Tree) = 0 then
+            declare
+               Root : constant String := Ada.Directories.Full_Name (Directory & "/" & To_String (One.Name));
+               Name : constant String := To_String (One.Name);
+               function Grade (Text : String) return Verdict
+               is (Trial_Graders.Verify (Root, Name, "", Text, Completed => True));
+            begin
+               Make_Project (Root, False);
+               Trial_Graders.Preserve (Root);
+               if Grade ("") /= Failed then
+                  Clean := False;
+               end if;
+               if Name = "delegate" then
+                  Ada.Directories.Create_Path (Root & "/docs");
+                  Project_Tools.Files.Write_Raw_File
+                    (Root & "/docs/calc.md", "Add sums A and B. Times multiplies them.");
+                  if Grade ("-> delegate {}") /= Passed then
+                     Clean := False;
+                  end if;
+                  Project_Tools.Files.Write_Raw_File (Root & "/docs/calc.md", "Add sums A and B.");
+                  if Grade ("-> delegate {}") /= Failed then
+                     Clean := False;
+                  end if;
+               else
+                  if Grade ("status: done" & LF & "summary: src/calc.ads:5 Times; src/main.adb uses Calc") /= Passed
+                    or else Grade ("status: done" & LF & "summary: Times is in src/missing.ads:9") /= Failed
+                    or else Grade ("read_file src/calc.ads:5 Times src/main.adb" & LF
+                                   & "status: done" & LF & "summary: I did not find it") /= Failed
+                  then
+                     Clean := False;
+                  end if;
+               end if;
+            end;
+         end if;
+      end loop;
+   end Validate_Graders;
 
    --  A project kept from an earlier run, its sources put back as they were
    --  made -- whatever the work changed or committed -- and its state kept.
@@ -422,10 +597,15 @@ package body Agent_Trial is
 
    function Check_Line
      (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True; Styled : Boolean := False;
-      Convention : Boolean := False; Tree : Boolean := False)
+      Convention : Boolean := False; Tree : Boolean := False; Variant : Fixture_Kind := Calculation)
       return String is
      --  Another project's tree is not built: the task there only finds.
-     (if Tree
+     (if Variant in C_Clamp | C_Span then
+        "/reconfigure add set.execution.allowed cc obj/test_math "
+        & "profile.checks=""build: cc -std=c99 -Wall -Wextra -Werror -Isrc src/math.c src/test_math.c"
+        & " -o obj/test_math; run: obj/test_math"""
+        & Time_Bound & Apart_Words (Apart) & Knowledge_Words (Knowledge) & " confirm=yes"
+      elsif Tree
       then "/reconfigure add set.execution.allowed test profile.analysis=""look: test -d src"""
            & " profile.build=""look: test -d src"" profile.tests=""look: test -d src"""
            & Time_Bound & Knowledge_Words (Knowledge) & " confirm=yes"
@@ -576,7 +756,10 @@ package body Agent_Trial is
       Context_Size : Natural := 0;
       Accept_Lessons : Boolean := False;
       Whole_Files    : Boolean := False;
-      Inference      : String := "fixed")
+      Inference      : String := "fixed";
+      Output_Directory : String := "";
+      On_Attempt : access procedure (Item : Attempt) := null;
+      Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -843,6 +1026,9 @@ package body Agent_Trial is
          return;
       end if;
       Seconds_Bound := Max_Seconds;
+      if Output_Directory /= "" then
+         Ada.Directories.Create_Path (Output_Directory);
+      end if;
       Whole_Context := Whole_Files;
       Inference_Mode := To_Unbounded_String (Inference);
       for Round in 1 .. Repeats loop
@@ -859,7 +1045,9 @@ package body Agent_Trial is
                then
                   declare
                      Name    : constant String := To_String (One.Name);
-                     Root    : constant String := Ada.Directories.Full_Name ("obj/agent-trial-" & Name);
+                     Root    : constant String := Ada.Directories.Full_Name
+                       ((if Output_Directory = "" then "obj/agent-trial-"
+                         else Output_Directory & "/trial-") & Name);
                      Project : constant String := Ada.Directories.Simple_Name (Root);
                      --  The other project's tree the task is run in, beside
                      --  this one; "" for the trial's own.
@@ -872,12 +1060,14 @@ package body Agent_Trial is
                      Watcher : Child_Guards.Guard;
                      Ended   : Hostkit.Spawn.Status;
                      Seen    : Unbounded_String;
+                     Result  : Attempt;
                      --  What the screen showed wrongly, said with the outcome.
                      Display_Faults : Unbounded_String;
                      --  Whether the report named what a right answer names:
                      --  ", right", ", wrong", or "" where nothing is expected.
                      Answered : Unbounded_String;
                      Began   : constant Ada.Calendar.Time := Ada.Calendar.Clock;
+                     Loading_Began : Ada.Calendar.Time := Began;
                      --  When the screen last grew, and how often a stall was
                      --  written down: a session that shows nothing for five
                      --  minutes has every thread's wait recorded beside it,
@@ -1071,9 +1261,13 @@ package body Agent_Trial is
                      --  Give_Up, where it is seen first, ends the wait at once:
                      --  a program with no catalog said so in its first second
                      --  and was waited for five minutes all the same.
-                     function Wait_For (Text : String; Seconds : Duration; Give_Up : String := "") return Boolean is
+                     Last_Sent : Natural := 0;
+
+                     function Wait_For
+                       (Text : String; Seconds : Duration; Give_Up : String := "";
+                        Since : Natural := Natural'Last) return Boolean is
                         use type Ada.Calendar.Time;
-                        From  : constant Natural := Length (Seen);
+                        From  : constant Natural := (if Since = Natural'Last then Length (Seen) else Since);
                         Until_At : constant Ada.Calendar.Time := Ada.Calendar.Clock + Seconds;
                      begin
                         loop
@@ -1105,19 +1299,31 @@ package body Agent_Trial is
                         return False;
                      end Wait_For;
 
+                     function Prompt_Ready return Boolean
+                     is (Wait_For (ASCII.LF & "> ", 30.0, Since => Last_Sent));
+
                      procedure Send (Line : String) is
                         Bytes : Ada.Streams.Stream_Element_Array
                           (1 .. Ada.Streams.Stream_Element_Offset (Line'Length + 1));
                         Wrote : Ada.Streams.Stream_Element_Offset;
-                        pragma Warnings (Off, Wrote);
-                        Ignored : Hostkit.Descriptors.Transfer_Outcome;
+                        Next : Ada.Streams.Stream_Element_Offset := Bytes'First;
+                        Outcome : Hostkit.Descriptors.Transfer_Outcome;
                      begin
+                        Last_Sent := Length (Seen);
                         for Index in Line'Range loop
                            Bytes (Ada.Streams.Stream_Element_Offset (Index - Line'First + 1)) :=
                              Character'Pos (Line (Index));
                         end loop;
                         Bytes (Bytes'Last) := 13;
-                        Ignored := Hostkit.Descriptors.Write (Pair.To_Child, Bytes, Wrote);
+                        while Next <= Bytes'Last loop
+                           Outcome := Hostkit.Descriptors.Write (Pair.To_Child, Bytes (Next .. Bytes'Last), Wrote);
+                           if Hostkit.Descriptors."/=" (Outcome, Hostkit.Descriptors.Transfer_Ok)
+                             or else Wrote < Next
+                           then
+                              raise Ada.Text_IO.Device_Error with "trial terminal write did not progress";
+                           end if;
+                           Next := Wrote + 1;
+                        end loop;
                      end Send;
 
                      --  Send a line, as a condition: true, so a chain of steps
@@ -1130,6 +1336,7 @@ package body Agent_Trial is
 
                      Words  : Hostkit.String_Vectors.Vector;
                      Worked : Boolean := False;
+                     Invoked : Boolean := False;
 
                      --  Kept from the run before, where runs carry their
                      --  state: no /init, and the task the next one made.
@@ -1161,7 +1368,8 @@ package body Agent_Trial is
                      elsif Carried then
                         Reset_Sources (Root);
                      else
-                        Make_Project (Root, One.Tested, One.Convention, One.Large, Tree_At);
+                        Make_Project (Root, One.Tested, One.Convention, One.Large, Tree_At, One.Variant);
+                        Trial_Graders.Preserve (Root);
                      end if;
                      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                         Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");
@@ -1201,6 +1409,8 @@ package body Agent_Trial is
                            end if;
                         end loop;
                      end;
+                     Words.Append_Vector (Extra_Arguments);
+                     Loading_Began := Ada.Calendar.Clock;
                      if Hostkit.Spawn."/=" (Hostkit.Spawn.Start (Own_Copy, Words, Spawned, Child),
                                             Hostkit.Spawn.Spawn_Ok)
                      then
@@ -1212,7 +1422,14 @@ package body Agent_Trial is
                      Hostkit.Pty.Close_Device (Pair);
 
                      --  The session, as a person would drive it.
-                     if Wait_For ("Interactive mode", 300.0, Give_Up => "message catalog could not be read") then
+                     if Wait_For ("Interactive mode", 300.0, Give_Up => "message catalog could not be read")
+                       and then Prompt_Ready
+                     then
+                        declare
+                           use type Ada.Calendar.Time;
+                        begin
+                           Result.Load_Seconds := Ada.Calendar.Clock - Loading_Began;
+                        end;
                         if not Carried then
                            Send ("/init");
                         end if;
@@ -1226,12 +1443,14 @@ package body Agent_Trial is
                               end if;
                               if Carried
                                 or else (Wait_For ("initialized", (if Tree_At = "" then 30.0 else 300.0))
+                                         and then Prompt_Ready
                                          and then (Hostkit.Process.Locate ("gnatmake") = ""
                                                    or else (Send_Then
                                                               (Check_Line (One.Tested, Apart, Knowledge,
                                                                            One.Styled, One.Convention,
-                                                                           Tree_At /= ""))
-                                                            and then Wait_For ("is now revision", 30.0))))
+                                                                           Tree_At /= "", One.Variant))
+                                                            and then Wait_For ("is now revision", 30.0)
+                                                            and then Prompt_Ready)))
                               then
                                  --  What the harness proposed from what earlier
                                  --  runs mended alike, accepted as a person
@@ -1255,11 +1474,12 @@ package body Agent_Trial is
                                           elsif To_String (One.Kind) = "implementation"
                                           then " component=" & Project else "")
                                        & " notes=" & To_String (One.Notes));
-                                 if Wait_For ("created TASK-", 30.0) then
+                                 if Wait_For ("created TASK-", 30.0) and then Prompt_Ready then
                                     Task_Id := To_Unbounded_String (Made_Task);
                                     Send ("/accept " & To_String (Task_Id));
-                                    if Wait_For ("ready", 30.0) then
+                                    if Wait_For ("ready", 30.0) and then Prompt_Ready then
                                        Send ("/work " & To_String (Task_Id));
+                                       Invoked := True;
                                        Worked := Wait_For ("How it came out",
                                                           Duration (if Max_Seconds = 0 then 3_600 else Max_Seconds)
                                                           + 600.0);
@@ -1363,12 +1583,15 @@ package body Agent_Trial is
                                    Ada.Strings.Fixed.Trim (Text (Start .. Index - 1), Ada.Strings.Both);
                               begin
                                  --  A call, as the session shows one: an arrow, the tool.
-                                 if Line'Length > Arrow'Length
-                                   and then Line (Line'First .. Line'First + Arrow'Length - 1) = Arrow
+                                 if (Line'Length > Arrow'Length
+                                     and then Line (Line'First .. Line'First + Arrow'Length - 1) = Arrow)
+                                   or else (Line'Length > 3 and then Line (Line'First .. Line'First + 2) = "-> ")
                                  then
                                     Calls := Calls + 1;
                                     declare
-                                       Rest  : constant String := Line (Line'First + Arrow'Length .. Line'Last);
+                                       Prefix : constant Positive :=
+                                         (if Line (Line'First .. Line'First + 2) = "-> " then 3 else Arrow'Length);
+                                       Rest  : constant String := Line (Line'First + Prefix .. Line'Last);
                                        Space : constant Natural := Ada.Strings.Fixed.Index (Rest, " ");
                                        Tool  : constant String :=
                                          (if Space = 0 then Rest else Rest (Rest'First .. Space - 1));
@@ -1421,36 +1644,23 @@ package body Agent_Trial is
                               & "its messages came out as their names");
                            Halted := True;
                         end if;
-                        --  The test is the trial's measure, not the work's: a
-                        --  run that changed it -- past the license line a
-                        --  convention asks of each changed file -- passed its
-                        --  own test. A helper of qwen3-8b's cut the overflow
-                        --  cases out of test_add, and the run counted done.
-                        if One.Tested
+                        Result.Grade := Trial_Graders.Verify
+                          (Root, Name, To_String (One.Expect), Text,
+                           Completed => Worked
+                             and then Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") = 1);
+                        if Result.Grade = Passed then
+                           Result.Grade := Trial_Graders.Check_Changes (Root, Name);
+                        end if;
+                        if Halted or else not Invoked then
+                           Result.Grade := Infrastructure_Error;
+                        elsif Result.Grade = Failed
                           and then Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") = 1
                         then
-                           declare
-                              Same : Hostkit.Process.Process_Outcome;
-                           begin
-                              Same := Hostkit.Process.Run_Captured
-                                ("sh",
-                                 [To_Unbounded_String ("-c"),
-                                  To_Unbounded_String
-                                    ("git -C """ & Root & """ show trial-start:src/test_add.adb"
-                                     & " | grep -vxF -- '" & License_Line & "' > """ & Root & "/.trial-test"""
-                                     & " && grep -vxF -- '" & License_Line & "' """ & Root & "/src/test_add.adb"""
-                                     & " | cmp -s """ & Root & "/.trial-test"" -")],
-                                 Stdout_Path => Hostkit.Fs.Null_Device, Stderr_Path => Hostkit.Fs.Null_Device);
-                              if Same.Started and then Same.Exit_Status /= 0 then
-                                 Outcome := To_Unbounded_String
-                                   ("the task failed: it changed src/test_add.adb, the test it is measured by ("
-                                    & To_String (Outcome) & ")");
-                              end if;
-                           end;
+                           Outcome := To_Unbounded_String ("the task failed independent verification");
                         end if;
                         --  Complete by how the line begins: "the task failed: it
                         --  could not be completed" counted a failed run done.
-                        if not Worked or else Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") /= 1
+                        if not Worked or else Result.Grade /= Passed
                         then
                            Clean := False;
                         else
@@ -1553,6 +1763,37 @@ package body Agent_Trial is
                                  elsif Ada.Strings.Fixed.Index (Text, "the task failed") = 1 then "failed"
                                  else "other");
                            begin
+                              Result.Task_Name := To_Unbounded_String (Name);
+                              Result.Ending := To_Unbounded_String (Ending);
+                              Result.Directory := Kept_In;
+                              Result.Seconds := Took;
+                              Result.Calls := Calls;
+                              Result.Figures := Figures;
+                              Result.Generated_Tokens := Trial_Metrics.Count_After
+                                (To_String (Figures), "tokens generated:");
+                              Result.Executed_Calls := Trial_Metrics.Count_After
+                                (To_String (Figures), "root calls run:");
+                              Result.Root_Tokens := Trial_Metrics.Count_After
+                                (To_String (Figures), "root tokens generated:");
+                              Result.Delegated_Tokens := Trial_Metrics.Count_After
+                                (To_String (Figures), "delegated tokens:");
+                              Result.Compactions := Trial_Metrics.Count_After
+                                (To_String (Figures), "compactions:");
+                              Result.Work_Seconds := Trial_Metrics.Seconds_After
+                                (To_String (Figures), "time:");
+                              declare
+                                 Line : constant String := To_String (Figures);
+                                 At_It : constant Natural := Ada.Strings.Fixed.Index (Line, "prompts read ");
+                                 Held_At : constant Natural := Ada.Strings.Fixed.Index (Line, "tokens,");
+                              begin
+                                 if At_It > 0 then
+                                    Result.Prompt_Read := Trial_Metrics.Count_After
+                                      (Line (At_It .. Line'Last), "(");
+                                 end if;
+                                 if Held_At > 0 then
+                                    Result.Prompt_Reused := Trial_Metrics.Count_After (Line, "tokens,");
+                                 end if;
+                              end;
                               Answered := To_Unbounded_String (Answer);
                               if Ada.Strings.Fixed.Index (Ending, "complete") /= 1 then
                                  Kept_In := To_Unbounded_String (Failed_Name);
@@ -1578,6 +1819,7 @@ package body Agent_Trial is
                                                             then "names " else "does not name ")
                                       & To_String (One.Expect))
                               & LF & "  time:" & Integer'Image (Integer (Took)) & " s; calls:" & Natural'Image (Calls)
+                              & LF & "  independent grade: " & Verdict'Image (Result.Grade)
                               & (if Length (Used) = 0 then "" else " (" & To_String (Used) & ")")
                               & LF & "  " & (if Length (Figures) = 0 then "(no work figures)" else To_String (Figures))
                               & LF & "  changed: " & (if Length (Said) = 0 then "nothing" else To_String (Said))
@@ -1609,6 +1851,10 @@ package body Agent_Trial is
                      end;
                      if To_String (Kept_In) /= Root then
                         Ada.Directories.Rename (Root, To_String (Kept_In));
+                     end if;
+                     Result.Directory := Kept_In;
+                     if On_Attempt /= null then
+                        On_Attempt (Result);
                      end if;
                   end;
                end if;

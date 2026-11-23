@@ -911,7 +911,7 @@ package body Model_Runner.CLI.Execute.Support is
 
          --  An adapter is merged into binary32 weights, and those are what
          --  the device would hold: a 2 GB four-bit 3B is twelve.
-         Adapted : constant Boolean := not T.Is_Empty (Item.Adapter_Path);
+         Adapted : constant Boolean := not T.Is_Empty (Item.Adapter_Path) and then not Item.Adapter_Runtime;
 
          --  What the load will hold, and what the panels may take of it.
          Asked : constant Interfaces.Unsigned_64 :=
@@ -1062,7 +1062,7 @@ package body Model_Runner.CLI.Execute.Support is
       if Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU)
         and then L."=" (Item.Repack, L.No_Repack)
         and then not Item.Repack_Asked
-        and then T.Is_Empty (Item.Adapter_Path)
+        and then (T.Is_Empty (Item.Adapter_Path) or else Item.Adapter_Runtime)
         --  Not for --arith f32: the panels are laid out for the integer
         --  kernels, and the floating-point path reads them a byte at a
         --  time -- TinyLlama's twelve tokens 2.00 s against 1.12 as stored

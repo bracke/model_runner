@@ -81,12 +81,6 @@ package body Unreached_Codes is
          --  arithmetic would have to produce on its own.
             | E.Sampling_Invalid_Distribution
 
-         --  A softmax that produced something that is not a number. The
-         --  weights would have to be large enough for a row product to
-         --  overflow binary32, which no fixture here writes and which a
-         --  fixture written for it would be testing the arithmetic's
-         --  overflow rather than the refusal.
-            | E.Tensor_Non_Finite_Value
          =>
             return True;
 

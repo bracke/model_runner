@@ -5,17 +5,20 @@ with Ada.Text_IO;
 with Model_Runner.Errors;
 with Model_Runner.Framework;
 with Model_Runner.Inference;
+with Model_Runner.Text;
+with Interfaces;
 
 procedure Inference_Consumer is
    package E renames Model_Runner.Errors;
    package I renames Model_Runner.Inference;
 
    use type I.Completion_State;
+   use type Interfaces.Unsigned_64;
 
    Item    : I.Session;
    Status  : E.Error_Info;
    Outcome : I.Completion;
-   Opening : constant I.Open_Options :=
+   Opening : I.Open_Options :=
      (Workers => 4,
       others => <>);
    Options : constant I.Completion_Options :=
@@ -35,8 +38,8 @@ begin
         (Model_Runner.Framework.Project_Area) = "project",
       "the framework imported beside inference is not operational");
    Require
-     (Ada.Command_Line.Argument_Count = 1,
-      "usage: inference_consumer MODEL.gguf");
+     (Ada.Command_Line.Argument_Count in 1 | 2,
+      "usage: inference_consumer MODEL.gguf [ADAPTER.gguf]");
    I.Open (Item, Ada.Command_Line.Argument (1), Opening, Status);
    Require (E.Is_Ok (Status), "the embedded inference session did not open");
    Require (I.Is_Open (Item), "the opened embedded session says it is closed");
@@ -48,6 +51,19 @@ begin
    Require
      (Ada.Strings.Unbounded.Length (Outcome.Text) <= Options.Maximum_Output_Bytes,
       "embedded completion exceeded its output bound");
+
+   if Ada.Command_Line.Argument_Count = 2 then
+      Opening.Runtime_Adapter_Count := 1;
+      Opening.Runtime_Adapters (1) :=
+        (Path => Model_Runner.Text.To_Bounded (Ada.Command_Line.Argument (2)), Scale => 0.5);
+      I.Open (Item, Ada.Command_Line.Argument (1), Opening, Status);
+      Require (E.Is_Ok (Status) and then I.Is_Open (Item), "the embedded adapter session did not open");
+      Require
+        (I.Provenance (Item).Runtime_Adapter_Count = 1 and then I.Provenance (Item).Runtime_Adapter_Bytes > 0,
+         "the independent consumer lost its adapter ownership");
+      I.Complete (Item, "ab", "{""const"":12}", Options, Outcome);
+      Require (Outcome.State = I.Completion_Ready, "the embedded adapter consumer did not complete");
+   end if;
 
    I.Close (Item, Status);
    Require (E.Is_Ok (Status), "the embedded session did not close cleanly");

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-22",
+  "source_revision": "a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b",
+  "base_model": "Qwen/Qwen3.8-27B",
+  "artifacts": [
+    {
+      "role": "base",
+      "repository": "ggml-org/Qwen3.8-27B-GGUF",
+      "revision": "c1869413dece09109e55b7dcc2c77ef382b0d0bd",
+      "filename": "Qwen3.8-27B-Q8_0.gguf",
+      "bytes": 28595763840,
+      "expected_sha256": "6bc9e7220d8400574fd62df25f04a961cb5cbb0d766cf0118c21c36c0059c35a",
+      "header_prefix_bytes": 16777216,
+      "header_prefix_sha256": "4a32759e72b4dbc69c6cb2f73208cbdb27d28defd8d5304b034bef4e5905c348"
+    },
+    {
+      "role": "adapted",
+      "repository": "harness-hub/Qwen3.8-27B-pi-adapted-GGUF",
+      "revision": "19980ce556b41c7b73818083c9adf4b3fa0c72e5",
+      "filename": "Qwen3.8-27B-pi-Q8_0.gguf",
+      "bytes": 28595763840,
+      "expected_sha256": "bcb2b967901e772e76842bee0c67bc92f27c819c0ce7f14642e17d64aadd4d21",
+      "header_prefix_bytes": 16777216,
+      "header_prefix_sha256": "4a32759e72b4dbc69c6cb2f73208cbdb27d28defd8d5304b034bef4e5905c348"
+    },
+    {
+      "role": "adapter",
+      "repository": "harness-hub/Qwen3.8-27B-pi-adapted-GGUF",
+      "revision": "19980ce556b41c7b73818083c9adf4b3fa0c72e5",
+      "filename": "Qwen3.8-27B-pi-lora-F16.gguf",
+      "bytes": 318802304,
+      "expected_sha256": "a64f91844f19e67da500d8628bdf9383aa334e61b7ab687805802e7d272d7b67",
+      "header_prefix_bytes": 131072,
+      "header_prefix_sha256": "aee78c88f0650486d8d03c02e92aa2f2a3080fb2d2aa7c4a59a9bca9d790c2bf"
+    }
+  ],
+  "adapter": {
+    "rank": 32,
+    "alpha": 64,
+    "projection_pairs": 256,
+    "parameters": 159383552,
+    "target_modules": [
+      "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
+    ]
+  },
+  "validation_scope": "Expected whole-file digests come from the Hub API; prefix digests were measured locally.",
+  "whole_payloads_verified": false
+}

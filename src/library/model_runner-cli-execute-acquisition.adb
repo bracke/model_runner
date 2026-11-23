@@ -533,6 +533,7 @@ package body Model_Runner.CLI.Execute.Acquisition is
             Item.Backend,
             (if Item.Repack = L.No_Repack
                and then not T.Is_Empty (Item.Adapter_Path)
+               and then not Item.Adapter_Runtime
              then L.To_F32
              else Item.Repack),
 

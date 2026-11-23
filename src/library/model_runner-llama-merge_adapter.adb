@@ -1,3 +1,5 @@
+with GNAT.SHA256;
+
 separate (Model_Runner.Llama)
 procedure Merge_Adapter
   (Item   : in out Model;
@@ -6,6 +8,8 @@ procedure Merge_Adapter
    Scale  : Real := 1.0;
    Status : out E.Error_Info)
 is
+   --  Non-finite IEEE payloads must reach the explicit validation below, not a validity exception.
+   pragma Suppress (Validity_Check);
    use type Model_Runner.GGUF.Tensor_Type;
    use type Interfaces.Unsigned_32;
 
@@ -20,13 +24,29 @@ is
    --  adapter of alpha 32 went in at sixteen times its delta.
    Alpha : N.Wide_Real := 0.0;
 
-   --  The same, as bits, for the digest below.
-   Alpha_Bits : Interfaces.Unsigned_32 := 0;
+   Content_Digest : GNAT.SHA256.Message_Digest;
 
    procedure Release is
    begin
       B.Free (Arena);
    end Release;
+
+   procedure Hash_Content is
+      Context : GNAT.SHA256.Context;
+      Position : B.Byte_Count := Arena'First;
+   begin
+      while Position <= Arena'Last loop
+         declare
+            Take : constant B.Byte_Count := B.Byte_Count'Min (65_536, Arena'Last - Position + 1);
+            --  A bounded read-only byte overlay; no file or stream capability enters model interpretation.
+            Text : String (1 .. Natural (Take)) with Import, Address => Arena (Position)'Address;
+         begin
+            GNAT.SHA256.Update (Context, Text);
+            Position := Position + Take;
+         end;
+      end loop;
+      Content_Digest := GNAT.SHA256.Digest (Context);
+   end Hash_Content;
 
    --  One of the pair, resolved against the adapter's own arena.
    procedure Adapter_View
@@ -84,16 +104,14 @@ is
      (Target : T.View;
       Down   : T.View;
       Up     : T.View;
+      Checking : Boolean;
       Local  : out E.Error_Info)
    is
       Rank : constant Element_Count := Down.Rows;
-
-      Left  : Real_Array (0 .. Down.Columns - 1);
-      Right : Real_Array (0 .. Up.Columns - 1);
    begin
       Local := E.Success;
 
-      if Target.Format /= Model_Runner.GGUF.Type_F32
+      if Rank = 0 or else Target.Format /= Model_Runner.GGUF.Type_F32
         or else Down.Columns /= Target.Columns
         or else Up.Rows /= Target.Rows
         or else Up.Columns /= Rank
@@ -105,85 +123,109 @@ is
          return;
       end if;
 
-      --  One row of the weight at a time, so that the adapter's rows are
-      --  decoded once each and the weight is touched once.
-      for Row in 0 .. Target.Rows - 1 loop
-         T.Dequantize_Row (Up, Row, Right, Local);
-         if E.Is_Error (Local) then
-            return;
-         end if;
-
-         for Which in 0 .. Rank - 1 loop
-            if Right (Which) /= 0.0 then
+      --  Allocate row room only after the adapter widths match a prepared model's admitted widths.
+      --  The first pass simulates each binary32 update without touching a base weight. A bad later
+      --  pair, non-finite value or unrepresentable result therefore cannot leave an earlier pair applied.
+      if not Checking and then Scale = 0.0 then
+         return;
+      end if;
+      declare
+         Left : Real_Array (0 .. Down.Columns - 1);
+         Right : Real_Array (0 .. Up.Columns - 1);
+         Row_Result : Real_Array (0 .. Target.Columns - 1);
+      begin
+         if Checking then
+            for Which in 0 .. Rank - 1 loop
                T.Dequantize_Row (Down, Which, Left, Local);
                if E.Is_Error (Local) then
                   return;
                end if;
+               for Value of Left loop
+                  if not N.Is_Finite (Value) then
+                     Local := E.Make (E.Tensor_Non_Finite_Value);
+                     return;
+                  end if;
+               end loop;
+            end loop;
+         end if;
 
+         --  Simulate one output row at a time, preserving the existing per-rank binary32 rounding.
+         for Row in 0 .. Target.Rows - 1 loop
+            T.Dequantize_Row (Up, Row, Right, Local);
+            if E.Is_Error (Local) then
+               return;
+            end if;
+            T.Dequantize_Row (Target, Row, Row_Result, Local);
+            if E.Is_Error (Local) then
+               return;
+            end if;
+            if Checking then
+               for Value of Right loop
+                  if not N.Is_Finite (Value) then
+                     Local := E.Make (E.Tensor_Non_Finite_Value);
+                     return;
+                  end if;
+               end loop;
+               for Value of Row_Result loop
+                  if not N.Is_Finite (Value) then
+                     Local := E.Make (E.Tensor_Non_Finite_Value);
+                     return;
+                  end if;
+               end loop;
+            end if;
+
+            for Which in 0 .. Rank - 1 loop
+               if Right (Which) /= 0.0 and then Scale /= 0.0 then
+                  T.Dequantize_Row (Down, Which, Left, Local);
+                  if E.Is_Error (Local) then
+                     return;
+                  end if;
+
+                  declare
+                     Factor : constant N.Wide_Real :=
+                       N.Wide_Real (Right (Which)) * N.Wide_Real (Scale)
+                       * (if Alpha = 0.0 then 1.0
+                          else Alpha / N.Wide_Real (Rank));
+                  begin
+                     for Column in 0 .. Target.Columns - 1 loop
+                        declare
+                           Now : constant N.Wide_Real := N.Wide_Real (Row_Result (Column))
+                             + Factor * N.Wide_Real (Left (Column));
+                        begin
+                           if not N.Is_Finite (Now) or else abs Now > N.Wide_Real (Real'Last) then
+                              Local := E.Make (E.Tensor_Non_Finite_Value);
+                              return;
+                           end if;
+                           Row_Result (Column) := Real (Now);
+                        end;
+                     end loop;
+                  end;
+               end if;
+            end loop;
+            if not Checking then
                declare
-                  Factor : constant N.Wide_Real :=
-                    N.Wide_Real (Right (Which)) * N.Wide_Real (Scale)
-                    * (if Alpha = 0.0 then 1.0
-                       else Alpha / N.Wide_Real (Rank));
-
-                  At_Row : constant B.Byte_Count :=
-                    Target.Offset
-                    + B.Byte_Count (Row) * T.Row_Bytes (Target);
-
-                  --  The one place a view is written through rather than
-                  --  read. It reaches here only for a model prepared as
-                  --  binary32, whose weights are the copy the repacking
-                  --  made and never a mapped file, which nothing may
-                  --  write to.
-                  Held : B.Byte_Array (1 .. Target.Span)
-                    with Import, Address => Target.Base;
+                  At_Row : constant B.Byte_Count := Target.Offset + B.Byte_Count (Row) * T.Row_Bytes (Target);
+                  --  Only owned F32 repacking is written; mapped model bytes are never modified.
+                  Held : B.Byte_Array (1 .. Target.Span) with Import, Address => Target.Base;
                begin
                   for Column in 0 .. Target.Columns - 1 loop
                      declare
-                        At_Byte : constant B.Byte_Count :=
-                          At_Row + B.Byte_Count (Column) * 4;
-
-                        Was : constant Real :=
-                          N.From_Bits
-                            (Interfaces.Unsigned_32
-                               (Held (Held'First + At_Byte))
-                             or Interfaces.Shift_Left
-                                  (Interfaces.Unsigned_32
-                                     (Held (Held'First + At_Byte + 1)),
-                                   8)
-                             or Interfaces.Shift_Left
-                                  (Interfaces.Unsigned_32
-                                     (Held (Held'First + At_Byte + 2)),
-                                   16)
-                             or Interfaces.Shift_Left
-                                  (Interfaces.Unsigned_32
-                                     (Held (Held'First + At_Byte + 3)),
-                                   24));
-
-                        Now : constant Real :=
-                          Real (N.Wide_Real (Was)
-                                + Factor * N.Wide_Real (Left (Column)));
-
-                        Bits : constant Interfaces.Unsigned_32 :=
-                          N.Bits (Now);
+                        At_Byte : constant B.Byte_Count := At_Row + B.Byte_Count (Column) * 4;
+                        Bits : constant Interfaces.Unsigned_32 := N.Bits (Row_Result (Column));
                      begin
-                        Held (Held'First + At_Byte) :=
-                          B.Byte (Bits and 16#FF#);
+                        Held (Held'First + At_Byte) := B.Byte (Bits and 16#FF#);
                         Held (Held'First + At_Byte + 1) :=
-                          B.Byte
-                            (Interfaces.Shift_Right (Bits, 8) and 16#FF#);
+                          B.Byte (Interfaces.Shift_Right (Bits, 8) and 16#FF#);
                         Held (Held'First + At_Byte + 2) :=
-                          B.Byte
-                            (Interfaces.Shift_Right (Bits, 16) and 16#FF#);
+                          B.Byte (Interfaces.Shift_Right (Bits, 16) and 16#FF#);
                         Held (Held'First + At_Byte + 3) :=
-                          B.Byte
-                            (Interfaces.Shift_Right (Bits, 24) and 16#FF#);
+                          B.Byte (Interfaces.Shift_Right (Bits, 24) and 16#FF#);
                      end;
                   end loop;
                end;
             end if;
          end loop;
-      end loop;
+      end;
    end Merge_One;
 
    --  Every weight an adapter may touch, by the name it has in a file.
@@ -207,11 +249,21 @@ begin
       Status := E.Make (E.Lifecycle_Session_Active);
       return;
    end if;
+   if Runtime_Adapter_Count (Item) > 0 then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "mixed_adapter_modes", E.Param_Identifier);
+      return;
+   end if;
 
    if Item.Packing /= To_F32 or else Item.Repacked = null then
       Status := E.Make (E.Arch_Unsupported_Feature);
       E.Add_Text (Status, "feature", "adapter_without_f32_weights",
                   E.Param_Identifier);
+      return;
+   end if;
+   if not N.Is_Finite (Scale) then
+      Status := E.Make (E.Tensor_Non_Finite_Value);
+      E.Add_Text (Status, "tensor", "adapter.scale", E.Param_Identifier);
       return;
    end if;
 
@@ -258,10 +310,14 @@ begin
       Value : N.Wide_Real;
       Local : E.Error_Info;
    begin
-      Containers.Get_Float
-        (Source, "adapter.lora.alpha", 0.0, 1.0E6, Value, Local);
-      Alpha := (if E.Is_Ok (Local) then Value else 0.0);
-      Alpha_Bits := N.Bits (Real (Alpha));
+      if Containers.Has (Source, "adapter.lora.alpha") then
+         Containers.Get_Float (Source, "adapter.lora.alpha", 0.0, 1.0E6, Value, Local);
+         if E.Is_Error (Local) then
+            Status := Local;
+            return;
+         end if;
+         Alpha := Value;
+      end if;
    end;
 
    --  The adapter's tensors, in an arena of their own.
@@ -289,84 +345,91 @@ begin
       end if;
    end;
 
-   for Index in Item.Layers.all'Range loop
-      for Which of Names loop
-         declare
-            Stem : constant String :=
-              Layer_Key (Index, Which.all & ".weight");
+   for Pass in 1 .. 2 loop
+      if Pass = 2 then
+         Hash_Content;
+      end if;
+      for Index in Item.Layers.all'Range loop
+         for Which of Names loop
+            declare
+               Stem : constant String :=
+                 Layer_Key (Index, Which.all & ".weight");
 
-            Down, Up : T.View;
-            Has_Down, Has_Up : Boolean;
-            Local : E.Error_Info;
-         begin
-            Adapter_View (Stem & ".lora_a", Down, Has_Down, Local);
-            if E.Is_Error (Local) then
-               Status := Local;
-               Release;
-               return;
-            end if;
+               Down, Up : T.View;
+               Has_Down, Has_Up : Boolean;
+               Local : E.Error_Info;
+            begin
+               Adapter_View (Stem & ".lora_a", Down, Has_Down, Local);
+               if E.Is_Error (Local) then
+                  Status := Local;
+                  Release;
+                  return;
+               end if;
 
-            Adapter_View (Stem & ".lora_b", Up, Has_Up, Local);
-            if E.Is_Error (Local) then
-               Status := Local;
-               Release;
-               return;
-            end if;
+               Adapter_View (Stem & ".lora_b", Up, Has_Up, Local);
+               if E.Is_Error (Local) then
+                  Status := Local;
+                  Release;
+                  return;
+               end if;
 
-            --  Half a pair is not an adapter for anything. Refused by
-            --  name rather than ignored, because the half that is there
-            --  says a fine-tune expected both.
-            if Has_Down /= Has_Up then
-               Status := E.Make (E.Arch_Missing_Tensor);
-               E.Add_Text
-                 (Status, "tensor",
-                  Stem & (if Has_Down then ".lora_b" else ".lora_a"),
-                  E.Param_Identifier);
-               Release;
-               return;
-            end if;
+               --  Half a pair is not an adapter for anything. Refused by
+               --  name rather than ignored, because the half that is there
+               --  says a fine-tune expected both.
+               if Has_Down /= Has_Up then
+                  Status := E.Make (E.Arch_Missing_Tensor);
+                  E.Add_Text
+                    (Status, "tensor",
+                     Stem & (if Has_Down then ".lora_b" else ".lora_a"),
+                     E.Param_Identifier);
+                  Release;
+                  return;
+               end if;
 
-            if Has_Down then
-               declare
-                  Target : T.View := T.Empty_View;
-               begin
-                  if Which.all = "attn_q" then
-                     Target := Item.Layers.all (Index).Query;
-                  elsif Which.all = "attn_k" then
-                     Target := Item.Layers.all (Index).Key;
-                  elsif Which.all = "attn_v" then
-                     Target := Item.Layers.all (Index).Value;
-                  elsif Which.all = "attn_output" then
-                     Target := Item.Layers.all (Index).Attention_Out;
-                  elsif Which.all = "ffn_gate" then
-                     Target := Item.Layers.all (Index).Gate;
-                  elsif Which.all = "ffn_up" then
-                     Target := Item.Layers.all (Index).Up;
-                  else
-                     Target := Item.Layers.all (Index).Down;
-                  end if;
+               if Has_Down then
+                  declare
+                     Target : T.View := T.Empty_View;
+                  begin
+                     if Which.all = "attn_q" then
+                        Target := Item.Layers.all (Index).Query;
+                     elsif Which.all = "attn_k" then
+                        Target := Item.Layers.all (Index).Key;
+                     elsif Which.all = "attn_v" then
+                        Target := Item.Layers.all (Index).Value;
+                     elsif Which.all = "attn_output" then
+                        Target := Item.Layers.all (Index).Attention_Out;
+                     elsif Which.all = "ffn_gate" then
+                        Target := Item.Layers.all (Index).Gate;
+                     elsif Which.all = "ffn_up" then
+                        Target := Item.Layers.all (Index).Up;
+                     else
+                        Target := Item.Layers.all (Index).Down;
+                     end if;
 
-                  if not T.Is_Present (Target) then
-                     Status := E.Make (E.Arch_Missing_Tensor);
-                     E.Add_Text
-                       (Status, "tensor", Stem, E.Param_Identifier);
-                     Release;
-                     return;
-                  end if;
+                     if not T.Is_Present (Target) then
+                        Status := E.Make (E.Arch_Missing_Tensor);
+                        E.Add_Text
+                          (Status, "tensor", Stem, E.Param_Identifier);
+                        Release;
+                        return;
+                     end if;
 
-                  Merge_One (Target, Down, Up, Local);
-                  if E.Is_Error (Local) then
-                     Status := Local;
-                     E.Add_Text
-                       (Status, "tensor", Stem, E.Param_Identifier);
-                     Release;
-                     return;
-                  end if;
+                     Merge_One (Target, Down, Up, Checking => Pass = 1, Local => Local);
+                     if E.Is_Error (Local) then
+                        Status := Local;
+                        E.Add_Text
+                          (Status, "tensor", Stem, E.Param_Identifier);
+                        Release;
+                        return;
+                     end if;
 
-                  Merged := Merged + 1;
-               end;
-            end if;
-         end;
+                     if Pass = 2 then
+                        Merged := Merged + 1;
+                     end if;
+                  end;
+               end if;
+            end;
+         end loop;
       end loop;
    end loop;
 
@@ -397,8 +460,30 @@ begin
       end if;
 
       Mix (Interfaces.Unsigned_64 (Merged));
+      Mix (16#4C4F_5241_4D52_4731#); --  LORAMRG1: full-content F32 merge identity.
       Mix (Interfaces.Unsigned_64 (N.Bits (Scale)));
       Mix (Interfaces.Unsigned_64 (Containers.Tensor_Data_Bytes (Source)));
-      Mix (Interfaces.Unsigned_64 (Alpha_Bits));
+      Mix (N.Wide_Bits (Alpha));
+      Mix (Boolean'Pos (Containers.Has (Source, "adapter.lora.alpha")));
+      for Index in 1 .. Containers.Tensor_Count (Source) loop
+         declare
+            Name : constant String := Containers.Tensor_Name (Source, Index);
+         begin
+            Mix (Name'Length);
+            for Ch of Name loop
+               Mix (Character'Pos (Ch));
+            end loop;
+            Mix (Interfaces.Unsigned_64 (Model_Runner.GGUF.Tensor_Type'Pos
+                   (Containers.Tensor_Format (Source, Index))));
+            Mix (Interfaces.Unsigned_64 (Containers.Tensor_Rank (Source, Index)));
+            Mix (Containers.Tensor_Offset (Source, Index) - Containers.Data_Offset (Source));
+            for Axis in 1 .. Containers.Tensor_Rank (Source, Index) loop
+               Mix (Containers.Tensor_Dimension (Source, Index, Axis));
+            end loop;
+         end;
+      end loop;
+      for Ch of Content_Digest loop
+         Mix (Character'Pos (Ch));
+      end loop;
    end;
 end Merge_Adapter;

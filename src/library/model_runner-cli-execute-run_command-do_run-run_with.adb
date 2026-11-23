@@ -214,6 +214,7 @@ begin
    --  every weight it touches, and eight mantissa bits is where a
    --  small difference goes.
    if not T.Is_Empty (Item.Adapter_Path)
+     and then not Item.Adapter_Runtime
      and then Item.Repack = L.To_BF16
    then
       Condition := E.Make (E.CLI_Option_Combination);
@@ -282,8 +283,11 @@ begin
             return;
          end if;
 
-         L.Merge_Adapter
-           (Prepared, Second, From, Scale, Condition);
+         if Item.Adapter_Runtime then
+            L.Attach_Adapter (Prepared, Second, From, Scale, Condition, Cancel => Cancel'Unchecked_Access);
+         else
+            L.Merge_Adapter (Prepared, Second, From, Scale, Condition);
+         end if;
 
          Containers.Close (Second);
          Files.Close (From);
@@ -359,6 +363,7 @@ begin
    --  now, once the model has said whether it carries a next-token
    --  block that drafts on its own.
    if Item.Draft_Tokens_Set
+     and then not Item.Adapter_Runtime
      and then T.Is_Empty (Item.Draft_Path)
      and then not Item.Draft_Lookup
      and then not L.Drafts_Next (Session)

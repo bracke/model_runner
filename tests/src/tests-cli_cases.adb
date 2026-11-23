@@ -6026,6 +6026,11 @@ package body Tests.CLI_Cases is
                  """" & Words & """ gave "
                  & E.Error_Code'Image (Status.Code)
                  & " instead of " & E.Error_Code'Image (Code));
+         if E.Is_Ok (Status) and then Item.Adapter_Runtime then
+            Assert (Model_Runner.Backend."=" (Item.Backend, Model_Runner.Backend.Backend_CPU) and then Item.Backend_Set
+                      and then Item.Draft_Tokens = 0 and then Item.Draft_Tokens_Set,
+                    "runtime adapter mode did not resolve CPU and disabled drafting");
+         end if;
          Opt.Release (Item);
       end Expect;
 
@@ -6073,6 +6078,13 @@ package body Tests.CLI_Cases is
       Expect (E.CLI_Option_Combination,
               "run m.gguf --prompt hi --chat-template chatml --chat-template-file f");
       Expect (E.CLI_Option_Combination, "run m.gguf --prompt hi --lora-scale 0.5");
+      Expect (E.No_Error, "run m.gguf --prompt hi --lora a.gguf --lora-mode runtime");
+      Expect (E.No_Error, "run m.gguf --prompt hi --lora a.gguf --lora-mode merge");
+      Expect (E.CLI_Invalid_Option_Value, "run m.gguf --lora a.gguf --lora-mode unknown");
+      Expect (E.CLI_Option_Combination, "run m.gguf --lora-mode runtime");
+      Expect (E.CLI_Option_Combination, "run m.gguf --lora a.gguf --lora-mode runtime --backend device");
+      Expect (E.CLI_Option_Combination, "run m.gguf --lora a.gguf --lora-mode runtime --draft-tokens 1");
+      Expect (E.CLI_Option_Combination, "run m.gguf --lora a.gguf --lora-mode runtime --draft-lookup");
       Expect (E.CLI_Invalid_Option_Value, "run m.gguf --prompt hi --shard ,bad.gguf");
       Expect (E.CLI_Invalid_Option_Value, "run m.gguf --prompt hi --ple bad.gguf,");
       Expect

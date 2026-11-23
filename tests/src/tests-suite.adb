@@ -1,5 +1,7 @@
 with Tests.Backend_Cases;
+with Tests.Adapter_Cases;
 with Tests.Catalog_Cases;
+with Tests.Campaign_Cases;
 with Tests.CLI_Cases;
 with Tests.Code_Health_Cases;
 with Tests.Framework_Cases;
@@ -28,7 +30,9 @@ package body Tests.Suite is
    CLI_Case       : aliased Tests.CLI_Cases.Case_Type;
    Code_Health_Case : aliased Tests.Code_Health_Cases.Case_Type;
    Catalog_Case   : aliased Tests.Catalog_Cases.Case_Type;
+   Campaign_Case  : aliased Tests.Campaign_Cases.Case_Type;
    Backend_Case   : aliased Tests.Backend_Cases.Case_Type;
+   Adapter_Case   : aliased Tests.Adapter_Cases.Case_Type;
    Template_Case  : aliased Tests.Template_Cases.Case_Type;
    Grammar_Case   : aliased Tests.Grammar_Cases.Case_Type;
    Tools_Case     : aliased Tests.Tools_Cases.Case_Type;
@@ -52,7 +56,9 @@ package body Tests.Suite is
       AUnit.Test_Suites.Add_Test (Result'Access, CLI_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Code_Health_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Catalog_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Campaign_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Backend_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Adapter_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Accounting_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Template_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Grammar_Case'Access);

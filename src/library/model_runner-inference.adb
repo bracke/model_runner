@@ -6,6 +6,8 @@ with Ada.Unchecked_Deallocation;
 with CryptoLib.Hashes;
 
 with Model_Runner.Bytes;
+with Model_Runner.Byte_Sources.Files;
+with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Grammar;
 with Model_Runner.Heap_Buffers;
 with Model_Runner.Output;
@@ -199,8 +201,40 @@ package body Model_Runner.Inference is
       Path    : String;
       Options : Open_Options := (others => <>);
       Status  : out E.Error_Info) is
+      pragma Suppress (Validity_Check);
+      use type Interfaces.Unsigned_64;
       Ready   : Boolean;
       Granted : Boolean;
+
+      procedure Load_Adapter (Index : Positive) is
+         package Files renames Model_Runner.Byte_Sources.Files;
+         Source : Files.File_Source;
+         Parsed : Model_Runner.GGUF.Containers.Container;
+      begin
+         Files.Open
+           (Source, Model_Runner.Text.To_String (Options.Runtime_Adapters (Index).Path),
+            Max_Bytes => Model_Runner.Bytes.Byte_Count
+              (Interfaces.Unsigned_64'Min
+                 (Options.Model_Bounds.Max_File_Bytes,
+                  Interfaces.Unsigned_64 (Model_Runner.Bytes.Byte_Count'Last))), Status => Status);
+         if E.Is_Ok (Status) then
+            Model_Runner.GGUF.Containers.Reader.Parse
+              (Parsed, Source, Bounds => Options.Model_Bounds, Cancel => Options.Cancel,
+               Observer => Options.Observer, Status => Status);
+         end if;
+         if E.Is_Ok (Status) then
+            L.Attach_Adapter
+              (Item.Engine, Parsed, Source, Scale => Options.Runtime_Adapters (Index).Scale,
+               Bounds => Options.Adapter_Bounds, Cancel => Options.Cancel, Status => Status);
+         end if;
+         Model_Runner.GGUF.Containers.Close (Parsed);
+         Files.Close (Source);
+      exception
+         when others =>
+            Model_Runner.GGUF.Containers.Close (Parsed);
+            Files.Close (Source);
+            raise;
+      end Load_Adapter;
 
       --  Preserve the operation's primary diagnostic. Open is a
       --  status-returning boundary, so a second failure during cleanup must
@@ -221,6 +255,40 @@ package body Model_Runner.Inference is
       Close (Item, Status);
       if E.Is_Error (Status) then
          return;
+      end if;
+
+      if Options.Runtime_Adapter_Count > 0 then
+         if Options.Backend /= Model_Runner.Backend.Backend_CPU then
+            Status := E.Make (E.Arch_Unsupported_Feature);
+            E.Add_Text (Status, "feature", "embedded_runtime_adapter_backend", E.Param_Identifier);
+            return;
+         elsif Options.Adapter_Bounds.Max_Adapters > L.Default_Adapter_Limits.Max_Adapters
+           or else Options.Adapter_Bounds.Max_Pairs > L.Default_Adapter_Limits.Max_Pairs
+           or else Options.Adapter_Bounds.Max_Rank > L.Default_Adapter_Limits.Max_Rank
+           or else Options.Adapter_Bounds.Max_Bytes = 0
+           or else Options.Adapter_Bounds.Max_Bytes > L.Default_Adapter_Limits.Max_Bytes
+         then
+            Status := E.Make (E.Arch_Unsupported_Feature);
+            E.Add_Text (Status, "feature", "adapter_limits", E.Param_Identifier);
+            return;
+         elsif Options.Runtime_Adapter_Count > Options.Adapter_Bounds.Max_Adapters then
+            Status := E.Make (E.Memory_Limit_Exceeded);
+            E.Add_Text (Status, "category", "adapter_weights", E.Param_Identifier);
+            E.Add_Integer (Status, "requested", Long_Long_Integer (Options.Runtime_Adapter_Count));
+            E.Add_Integer (Status, "limit", Long_Long_Integer (Options.Adapter_Bounds.Max_Adapters));
+            return;
+         end if;
+         for Index in 1 .. Options.Runtime_Adapter_Count loop
+            if Model_Runner.Text.Is_Empty (Options.Runtime_Adapters (Index).Path) then
+               Status := E.Make (E.IO_Open_Failed);
+               E.Add_Text (Status, "path", "", E.Param_Path);
+               return;
+            elsif not Model_Runner.Numerics.Is_Finite (Options.Runtime_Adapters (Index).Scale) then
+               Status := E.Make (E.Tensor_Non_Finite_Value);
+               E.Add_Text (Status, "tensor", "adapter.scale", E.Param_Identifier);
+               return;
+            end if;
+         end loop;
       end if;
 
       if Options.Backend = Model_Runner.Backend.Backend_Device then
@@ -281,6 +349,14 @@ package body Model_Runner.Inference is
          Close_After_Failure;
          return;
       end if;
+
+      for Index in 1 .. Options.Runtime_Adapter_Count loop
+         Load_Adapter (Index);
+         if E.Is_Error (Status) then
+            Close_After_Failure;
+            return;
+         end if;
+      end loop;
 
       Item.Pool := new CPU.Pool (Options.Workers);
       CPU.Open (Item.Pool.all);
@@ -405,7 +481,9 @@ package body Model_Runner.Inference is
          Fingerprint => L.Fingerprint (Item.Engine),
          Bytes => Interfaces.Unsigned_64
            (Model_Runner.GGUF.Shards.Size (Item.Source)),
-         Parts => Model_Runner.GGUF.Shards.Parts (Item.Source));
+         Parts => Model_Runner.GGUF.Shards.Parts (Item.Source),
+         Runtime_Adapter_Count => L.Runtime_Adapter_Count (Item.Engine),
+         Runtime_Adapter_Bytes => L.Runtime_Adapter_Bytes (Item.Engine));
    end Provenance;
 
    procedure SHA256

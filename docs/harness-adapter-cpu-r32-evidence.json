@@ -1,0 +1,68 @@
+{
+  "schema": "model_runner.cpu_adapter_performance_evidence.v1",
+  "date": "2026-11-22",
+  "scope": "Synthetic CPU execution cost on a real local model; no trained-adapter quality claim",
+  "model_path": "/home/bent/models/qwen3.5-0.8b-q8_0.gguf",
+  "model_sha256": "37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f",
+  "adapter": {
+    "path": "/tmp/model-runner-lora-r32-all-20261122.gguf",
+    "sha256": "12a00e0d766fe01dcc606970393dc49d8836ce2875cf4e832c3bc3e8c20f9ac8",
+    "creation": "tests adapter-fixture --model MODEL --out ADAPTER --rank 32 --all-targets",
+    "trained": false,
+    "rank": 32,
+    "pairs": 96,
+    "file_bytes": 25572288,
+    "decoded_matrix_bytes": 51118080,
+    "owned_matrix_and_descriptor_bytes": 51130368,
+    "targets": "all present supported main-layer projections; excludes next-layer drafts"
+  },
+  "first_batch": "harness-adapter-cpu-r32-timing.json",
+  "repeat_batch": "harness-adapter-cpu-r32-repeat.json",
+  "benchmark_settings": {
+    "prompt_file": "tests/fixtures/speed-prompt-110.txt",
+    "actual_prompt_tokens": 100,
+    "generated_tokens_per_sample": 16,
+    "threads": 4,
+    "batch_size": 16,
+    "context": 512,
+    "arithmetic": "f32",
+    "cache": "exact",
+    "seed": 1,
+    "temperature": 0,
+    "ignore_eos": true,
+    "drafting": false,
+    "panel_file_cache": false,
+    "warmup": "one full untimed inference pass per sample",
+    "order": "reverse on alternate repetitions",
+    "repeats_per_batch": 5
+  },
+  "first_batch_outlier": {
+    "trial": 1,
+    "runtime_decode_seconds": 8.784344314,
+    "base_decode_seconds": 1.306013601,
+    "paired_ratio": 6.726074144460613,
+    "host_load_before": 4.1,
+    "host_load_after": 7.61,
+    "cause": "undetermined; host load rose concurrently",
+    "retained_in_report": true
+  },
+  "repeat_decode_ratio_range": [1.096290276399647, 1.1803640163009474],
+  "native_cli_memory_check": {
+    "binary_sha256": "ced9d6a5c4c3a8fb28b7468741fcaaeed1e7e572a000b34e982d1191114d9656",
+    "mode": "runtime",
+    "scale": 1,
+    "peak_rss_kib": 979000,
+    "elapsed_seconds": 6.66,
+    "settings": "same prompt, arithmetic, seed, threads, batch and context; CLI default cache; max-tokens 16",
+    "weights": "the file's own pages, read as they are touched",
+    "measurement": "GNU time; single separate CLI run, not a timing repetition",
+    "log_prefix": "/tmp/model-runner-adapter-r32-cli-"
+  },
+  "limitations": [
+    "Shared host: first batch load 2.96..7.61 and temperature 85.875..92.25 C; repeat temperature 87.25..93.25 C",
+    "Five paired repetitions per batch are descriptive, not a significance or worst-case latency bound",
+    "In-process benchmark RSS remains null; native model accounting excludes borrowed mapped pages",
+    "No premerged release arm or before/after no-adapter executable comparison was performed",
+    "Results do not qualify the released 27B adapter, other arithmetic policies, long contexts or device execution"
+  ]
+}

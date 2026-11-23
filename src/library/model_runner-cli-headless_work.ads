@@ -23,6 +23,16 @@ package Model_Runner.CLI.Headless_Work is
    --
    --  The operation identity is durable. Repeating the exact request returns
    --  its recorded outcome without starting another agent.
+   --  @param Project_Directory Initialized model_runner project.
+   --  @param Task_Id Exact native task identity.
+   --  @param Operation_Id Durable idempotency identity for this request.
+   --  @param Expected_Task_Revision Exact inspected task revision.
+   --  @param Expected_Project_Identity Exact inspected project identity.
+   --  @param Expected_Source_Fingerprint Exact inspected source fingerprint.
+   --  @param Execution_Policy Serialized execution policy for the request.
+   --  @param Timeout_Seconds Maximum native execution time.
+   --  @param Status Execution or compatibility diagnostic.
+   --  @return Schema-versioned JSON execution outcome or error.
    function Execute_Task
      (Project_Directory          : String;
       Task_Id                    : String;
@@ -35,6 +45,10 @@ package Model_Runner.CLI.Headless_Work is
       Status                     : out Model_Runner.Errors.Error_Info) return String;
 
    --  Read one durable operation without changing native work.
+   --  @param Project_Directory Initialized model_runner project.
+   --  @param Operation_Id Durable operation identity to look up.
+   --  @param Status Read or compatibility diagnostic.
+   --  @return Schema-versioned JSON operation snapshot or error.
    function Operation_Status
      (Project_Directory : String;
       Operation_Id      : String;

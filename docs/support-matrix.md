@@ -53,6 +53,10 @@ container validation and is rejected by `Model_Runner.Tensors.Make` with
 
 ### What each of them costs the predictions
 
+The numerical-quality figures below are historical observations preserved from the earlier source tree.
+They are not requalified against the current tree. Current format support is described above; the original
+quality measurement records remain in [the historical ledger](measured-figures-history.txt).
+
 The column this table did not have. `tests perplexity` scores a fixed corpus
 with one model in two formats and reports the Kullback-Leibler divergence
 between what they believe, in nats -- how much of the eight-bit model's

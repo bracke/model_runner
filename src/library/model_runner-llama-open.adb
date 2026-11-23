@@ -162,6 +162,9 @@ begin
    Mem.Record_Allocation
      (Item.Accounting, Mem.Activations,
       Item.Plan.Activation_Bytes + Item.Plan.Batch_Bytes);
+   Item.Adapter_Charged := 4 * Interfaces.Unsigned_64 (Runtime_Tile)
+     * (Interfaces.Unsigned_64 (Source.Runtime_Rank)
+                               + Interfaces.Unsigned_64 (Source.Runtime_Rows));
    Mem.Record_Allocation
      (Item.Accounting, Mem.Logits, Item.Plan.Logits_Bytes);
    Mem.Record_Allocation
@@ -181,6 +184,9 @@ begin
       if Session_Bounds.Max_Session_Bytes /= 0
         and then Needed > Session_Bounds.Max_Session_Bytes
       then
+         if Source.Runtime_Pairs /= null then
+            Close (Item);
+         end if;
          Status := E.Make (E.Memory_Limit_Exceeded);
          E.Add_Text (Status, "category", "kv_cache", E.Param_Identifier);
          E.Add_Integer
@@ -833,6 +839,15 @@ begin
    end;
 
    Item.Owner := Source'Unchecked_Access;
+   if Source.Runtime_Pairs /= null then
+      T.Allocate (Runtime_Tile * Source.Runtime_Rank, Item.Adapter_Rank);
+      T.Allocate (Runtime_Tile * Source.Runtime_Rows, Item.Adapter_Output);
+      if Item.Adapter_Rank = null or else Item.Adapter_Output = null then
+         Close (Item);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+   end if;
    Item.Team := Workers;
 
    --  LongRoPE's table, chosen by how far this session is opened rather

@@ -811,20 +811,33 @@ package body Model_Runner.CLI.Headless_Work is
       elsif Command = "inspect" then
          Require (Item, ["project", "task"], Problem);
          if E.Is_Ok (Problem) then
-            Answer := To_Unbounded_String (Inspect (Item, Problem));
+            Answer := To_Unbounded_String
+              (Inspect_Task (To_String (Item.Project), To_String (Item.Task_Id), Problem));
          end if;
       elsif Command = "execute" then
          Require
            (Item, ["project", "task", "operation", "expected_task_revision",
                    "expected_project_identity", "expected_source_fingerprint", "execution_policy"], Problem);
          if E.Is_Ok (Problem) then
-            Answer := To_Unbounded_String (Execute (Item, Problem));
+            --  Preserve the native validation and replay behavior of a request
+            --  that omitted the required noninteractive acknowledgement.
+            if not Item.Noninteractive then
+               Answer := To_Unbounded_String (Execute (Item, Problem));
+            else
+               Answer := To_Unbounded_String
+                 (Execute_Task
+                    (To_String (Item.Project), To_String (Item.Task_Id), To_String (Item.Operation),
+                     To_String (Item.Expected_Task_Revision), To_String (Item.Expected_Project_Identity),
+                     To_String (Item.Expected_Source_Fingerprint), To_String (Item.Execution_Policy),
+                     Item.Timeout_Seconds, Problem));
+            end if;
          end if;
       elsif Command = "status" or else Command = "cancel" or else Command = "integrate" then
          Require (Item, ["project", "operation"], Problem);
          if E.Is_Ok (Problem) then
             Answer := To_Unbounded_String
-              ((if Command = "status" then Status_Of (Item, Problem)
+              ((if Command = "status" then Operation_Status
+                  (To_String (Item.Project), To_String (Item.Operation), Problem)
                 elsif Command = "cancel" then Cancel (Item, Problem)
                 else Integrate (Item, Problem)));
          end if;

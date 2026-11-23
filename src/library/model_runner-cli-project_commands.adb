@@ -608,6 +608,9 @@ package body Model_Runner.CLI.Project_Commands is
       --  The tokens the work generated, its helpers' among them, and the
       --  most its conversation came to hold: what it cost the model.
       Generated     : Natural := 0;
+      Root_Generated : Natural := 0;
+      Delegated_Generated : Natural := 0;
+      Compactions : Natural := 0;
       Context_Most  : Natural := 0;
 
       --  Where the time went, from when its loop began: the model reading
@@ -1091,6 +1094,9 @@ package body Model_Runner.CLI.Project_Commands is
          end if;
          Prompt_Tokens := Natural'Max (Prompt_Tokens, Outcome.Prompt_Tokens);
          Runner.Generated := All_Spent;
+         Runner.Root_Generated := Tokens;
+         Runner.Delegated_Generated := All_Spent - Tokens;
+         Runner.Compactions := Runner.Compactions + Outcome.Compactions;
          Runner.Context_Most := Prompt_Tokens;
          Runner.Prompt_Ns := Runner.Prompt_Ns + Outcome.Prompt_Ns;
          Runner.Reply_Ns := Runner.Reply_Ns + Outcome.Reply_Ns;
@@ -1745,6 +1751,10 @@ package body Model_Runner.CLI.Project_Commands is
          else ", thoughts closed going round:" & Natural'Image (Self.Thoughts_Looped))
       & "; tokens generated:" & Natural'Image (Self.Generated)
       & ", context at most:" & Natural'Image (Self.Context_Most)
+      & "; root calls run:" & Natural'Image (Self.Made)
+      & "; root tokens generated:" & Natural'Image (Self.Root_Generated)
+      & "; delegated tokens:" & Natural'Image (Self.Delegated_Generated)
+      & "; compactions:" & Natural'Image (Self.Compactions)
       & "; " & Time_Split (Self, Now));
 
    overriding procedure Run

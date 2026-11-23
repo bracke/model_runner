@@ -1,0 +1,244 @@
+with Ada.Directories;
+with Ada.Strings.Fixed;
+with Ada.Strings.Unbounded;
+with Ada.Characters.Handling;
+with Hostkit;
+with Hostkit.Fs;
+with Hostkit.Process;
+with Project_Tools.Files;
+with Project_Tools.Text;
+
+package body Trial_Graders is
+
+   use Ada.Strings.Unbounded;
+   use type Ada.Directories.File_Size;
+
+   procedure Preserve (Root : String) is
+      Where : constant String := Root & "-verifier";
+   begin
+      if Ada.Directories.Exists (Where) then
+         Ada.Directories.Delete_Tree (Where);
+      end if;
+      Ada.Directories.Create_Path (Where & "/obj");
+      if Ada.Directories.Exists (Root & "/src/test_add.adb") then
+         Ada.Directories.Copy_File (Root & "/src/test_add.adb", Where & "/test_add.adb");
+      end if;
+      if Ada.Directories.Exists (Root & "/src/test_math.c") then
+         Ada.Directories.Copy_File (Root & "/src/test_math.c", Where & "/test_math.c");
+      end if;
+   end Preserve;
+
+   function Check_Changes (Root, Task_Name : String) return Agent_Trial.Verdict is
+      Words : Hostkit.String_Vectors.Vector;
+      Ran : Hostkit.Process.Process_Outcome;
+      Path : constant String := Root & "-verifier/changes.txt";
+      function Allowed (Name : String) return Boolean is
+        (if Task_Name in "large" | "described" then Name = "src/ledger.adb"
+         elsif Task_Name = "subtract" then Name in "src/calc.adb" | "src/calc.ads"
+         elsif Task_Name = "c-boundary" then Name = "src/math.c"
+         elsif Task_Name = "c-multi" then Name in "src/math.c" | "src/math.h"
+         elsif Task_Name = "delegate" then Name = "docs/calc.md"
+         elsif Task_Name in "edit" | "styled" | "convention" | "times-negative" | "delegate-edit"
+         then Name = "src/calc.adb"
+         else False);
+   begin
+      Words := [To_Unbounded_String ("-C"), To_Unbounded_String (Root),
+                To_Unbounded_String ("status"), To_Unbounded_String ("--porcelain"),
+                To_Unbounded_String ("--untracked-files=all"), To_Unbounded_String ("--"),
+                To_Unbounded_String ("src"), To_Unbounded_String ("docs")];
+      Ran := Hostkit.Process.Run_Captured
+        ("git", Words, Stdout_Path => Path, Stderr_Path => Hostkit.Fs.Null_Device, Timeout_Ms => 10_000);
+      if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0
+        or else Ada.Directories.Size (Path) > 65_536
+      then
+         return Agent_Trial.Infrastructure_Error;
+      end if;
+      declare
+         Text : constant String := Project_Tools.Files.Read_Raw_File (Path);
+         Start : Positive := Text'First;
+      begin
+         for I in Text'First .. Text'Last + 1 loop
+            if I > Text'Last or else Text (I) = ASCII.LF then
+               if I > Start and then (I - Start < 4 or else not Allowed (Text (Start + 3 .. I - 1))) then
+                  return Agent_Trial.Failed;
+               end if;
+               Start := I + 1;
+            end if;
+         end loop;
+      end;
+      return Agent_Trial.Passed;
+   exception
+      when others => return Agent_Trial.Infrastructure_Error;
+   end Check_Changes;
+
+   function Verify
+     (Root, Task_Name, Expect, Transcript : String;
+      Completed : Boolean) return Agent_Trial.Verdict
+   is
+      Where : constant String := Root & "-verifier";
+      Words : Hostkit.String_Vectors.Vector;
+      Ran   : Hostkit.Process.Process_Outcome;
+      function Has (Text, Part : String) return Boolean
+      is (Ada.Strings.Fixed.Index (Text, Part) > 0);
+      function Final_Answer return String is
+         At_It : constant Natural := Ada.Strings.Fixed.Index (Transcript, "status:", Ada.Strings.Backward);
+         Last : Natural;
+      begin
+         if At_It = 0 then
+            return "";
+         end if;
+         Last := Ada.Strings.Fixed.Index
+           (Transcript (At_It .. Transcript'Last), "the work as the harness recorded it");
+         return Ada.Characters.Handling.To_Lower
+           (Transcript (At_It .. (if Last = 0 then Transcript'Last else Last - 1)));
+      end Final_Answer;
+      function Has_Line_Five (Text : String) return Boolean is
+         function Reference (Part : String) return Boolean is
+            At_It : constant Natural := Ada.Strings.Fixed.Index (Text, Part);
+         begin
+            return At_It > 0 and then
+              (At_It + Part'Length > Text'Last or else Text (At_It + Part'Length) not in '0' .. '9');
+         end Reference;
+      begin
+         return Reference ("src/calc.ads:5") or else Reference ("line 5")
+           or else Reference ("line `5`") or else Reference ("line **5**");
+      end Has_Line_Five;
+   begin
+      if not Completed then
+         return Agent_Trial.Failed;
+      end if;
+      if Task_Name = "convention" then
+         declare
+            Path : constant String := Root & "/src/calc.adb";
+            License : constant String := "--  SPDX-License-Identifier: MIT" & ASCII.LF;
+         begin
+            if not Ada.Directories.Exists (Path) or else Ada.Directories.Size (Path) > 1_048_576 then
+               return Agent_Trial.Failed;
+            end if;
+            declare
+               Source : constant String := Project_Tools.Files.Read_Raw_File (Path);
+            begin
+               if Source'Length < License'Length
+                 or else Source (Source'First .. Source'First + License'Length - 1) /= License
+               then
+                  return Agent_Trial.Failed;
+               end if;
+            end;
+         end;
+      end if;
+
+      if Ada.Directories.Exists (Where & "/test_math.c") then
+         if Hostkit.Process.Locate ("cc") = "" then
+            return Agent_Trial.Infrastructure_Error;
+         elsif not Ada.Directories.Exists (Root & "/src/test_math.c")
+           or else Ada.Directories.Size (Root & "/src/test_math.c") > 16_384
+         then
+            return Agent_Trial.Failed;
+         elsif Project_Tools.Files.Read_Raw_File (Where & "/test_math.c")
+           /= Project_Tools.Files.Read_Raw_File (Root & "/src/test_math.c")
+         then
+            return Agent_Trial.Failed;
+         end if;
+         Words := [To_Unbounded_String ("-std=c99"), To_Unbounded_String ("-Wall"),
+                   To_Unbounded_String ("-Wextra"), To_Unbounded_String ("-Werror"),
+                   To_Unbounded_String ("-I" & Root & "/src"), To_Unbounded_String (Root & "/src/math.c"),
+                   To_Unbounded_String (Where & "/test_math.c"), To_Unbounded_String ("-o"),
+                   To_Unbounded_String (Where & "/check")];
+         Ran := Hostkit.Process.Run_Captured
+           ("cc", Words, Stdout_Path => Where & "/build.txt", Stderr_Path => Where & "/build-errors.txt",
+            Timeout_Ms => 60_000);
+         if not Ran.Started or else Ran.Timed_Out then
+            return Agent_Trial.Infrastructure_Error;
+         elsif Ran.Exit_Status /= 0 then
+            return Agent_Trial.Failed;
+         end if;
+         Words.Clear;
+         Ran := Hostkit.Process.Run_Captured
+           (Where & "/check", Words, Stdout_Path => Where & "/check.txt",
+            Stderr_Path => Where & "/check-errors.txt", Timeout_Ms => 10_000);
+         return (if not Ran.Started then Agent_Trial.Infrastructure_Error
+                 elsif Ran.Timed_Out then Agent_Trial.Failed
+                 elsif Ran.Exit_Status = 0 then Agent_Trial.Passed else Agent_Trial.Failed);
+      elsif Ada.Directories.Exists (Where & "/test_add.adb") then
+         if not Ada.Directories.Exists (Root & "/src/test_add.adb")
+           or else Ada.Directories.Size (Root & "/src/test_add.adb") > 16_384
+         then
+            return Agent_Trial.Failed;
+         end if;
+         declare
+            Original : constant String := Project_Tools.Files.Read_Raw_File (Where & "/test_add.adb");
+            Current : constant String := Project_Tools.Files.Read_Raw_File (Root & "/src/test_add.adb");
+            License : constant String := "--  SPDX-License-Identifier: MIT" & ASCII.LF;
+         begin
+            if Current /= Original and then Current /= License & Original then
+               return Agent_Trial.Failed;
+            end if;
+         end;
+         if Hostkit.Process.Locate ("gnatmake") = "" then
+            return Agent_Trial.Infrastructure_Error;
+         end if;
+         --  Force a rebuild into trusted storage, ignoring any objects produced by the agent.
+         Words := [To_Unbounded_String ("-q"), To_Unbounded_String ("-f"),
+                   To_Unbounded_String ("-D"), To_Unbounded_String (Where & "/obj"),
+                   To_Unbounded_String ("-aI" & Root & "/src"),
+                   To_Unbounded_String (Where & "/test_add.adb"), To_Unbounded_String ("-o"),
+                   To_Unbounded_String (Where & "/check")];
+         if Task_Name = "styled" then
+            Words.Append (To_Unbounded_String ("-gnatyy"));
+            Words.Append (To_Unbounded_String ("-gnatwae"));
+         end if;
+         Ran := Hostkit.Process.Run_Captured
+           ("gnatmake", Words, Stdout_Path => Where & "/build.txt", Stderr_Path => Where & "/build-errors.txt",
+            Timeout_Ms => 60_000);
+         if not Ran.Started or else Ran.Timed_Out then
+            return Agent_Trial.Infrastructure_Error;
+         elsif Ran.Exit_Status /= 0 then
+            return Agent_Trial.Failed;
+         end if;
+         Words.Clear;
+         Ran := Hostkit.Process.Run_Captured
+           (Where & "/check", Words, Stdout_Path => Where & "/check.txt",
+            Stderr_Path => Where & "/check-errors.txt", Timeout_Ms => 10_000);
+         return (if not Ran.Started then Agent_Trial.Infrastructure_Error
+                 elsif Ran.Timed_Out then Agent_Trial.Failed
+                 elsif Ran.Exit_Status = 0 then Agent_Trial.Passed else Agent_Trial.Failed);
+      elsif Task_Name = "find" or else Expect /= "" then
+         Words := [To_Unbounded_String ("-C"), To_Unbounded_String (Root),
+                   To_Unbounded_String ("status"), To_Unbounded_String ("--porcelain"),
+                   To_Unbounded_String ("--untracked-files=all"), To_Unbounded_String ("--"),
+                   To_Unbounded_String ("src"), To_Unbounded_String ("docs")];
+         Ran := Hostkit.Process.Run_Captured
+           ("git", Words, Stdout_Path => Where & "/changes.txt", Stderr_Path => Hostkit.Fs.Null_Device,
+            Timeout_Ms => 10_000);
+         if not Ran.Started or else Ran.Timed_Out or else Ran.Exit_Status /= 0 then
+            return Agent_Trial.Infrastructure_Error;
+         elsif Ada.Directories.Size (Where & "/changes.txt") /= 0 then
+            return Agent_Trial.Failed;
+         end if;
+         return (if Expect /= "" then
+                   (if Has (Final_Answer, Ada.Characters.Handling.To_Lower (Expect))
+                    then Agent_Trial.Passed else Agent_Trial.Failed)
+                 elsif Has (Final_Answer, "src/calc.ads") and then Has (Final_Answer, "src/main.adb")
+                   and then Has (Final_Answer, "times") and then Has_Line_Five (Final_Answer)
+                 then Agent_Trial.Passed else Agent_Trial.Failed);
+      elsif Task_Name = "delegate" then
+         if not Ada.Directories.Exists (Root & "/docs/calc.md")
+           or else Ada.Directories.Size (Root & "/docs/calc.md") > 1_048_576
+         then
+            return Agent_Trial.Failed;
+         end if;
+         declare
+            Text : constant String := To_String (Project_Tools.Text.Read_Text_File (Root & "/docs/calc.md"));
+         begin
+            return (if Has (Text, "Add") and then Has (Text, "Times")
+                      and then Has (Transcript, "delegate {")
+                    then Agent_Trial.Passed else Agent_Trial.Failed);
+         end;
+      end if;
+      return Agent_Trial.Ungraded;
+   exception
+      when others =>
+         return Agent_Trial.Infrastructure_Error;
+   end Verify;
+
+end Trial_Graders;

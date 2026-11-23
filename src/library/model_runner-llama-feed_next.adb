@@ -18,6 +18,12 @@ is
    V_Width  : constant Element_Count := KV_Heads * Value_Size;
    Layer_Index : constant Natural := Settings.Layers;
 begin
+   if Source.Runtime_Pairs /= null then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "runtime_adapter_drafting");
+      return;
+   end if;
+
    --  The rows this writes are the host's; the device's copy of them is
    --  put right by the next draft that reads it.
    Item.Next_Device_Upto := Natural'Min (Item.Next_Device_Upto, First);

@@ -6063,9 +6063,7 @@ package body Tests.Framework_Cases is
    is
       pragma Unreferenced (T);
       package Hw renames Model_Runner.CLI.Headless_Work;
-      Model : constant String := Dirs.Full_Name
-        ((if Dirs.Exists ("fixtures/tiny-model.gguf")
-          then "fixtures/tiny-model.gguf" else "tests/fixtures/tiny-model.gguf"));
+      Model : constant String := Dirs.Full_Name ("obj/headless-work-model.gguf");
       Store   : S.Store;
       Change  : S.Transaction;
       Status  : E.Error_Info;
@@ -6081,6 +6079,7 @@ package body Tests.Framework_Cases is
       Again   : Unbounded_String;
       Inspected : Unbounded_String;
    begin
+      Tiny_Model.Write (Model, Byte_Pair => True);
       Task_Project
         (Store, "headless-work",
          "scalar work.model = " & Model & LF

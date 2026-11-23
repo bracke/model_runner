@@ -2606,6 +2606,11 @@ package body Model_Runner.Llama is
          else Item.Output);
    begin
       Status := E.Success;
+      if Item.Runtime_Pairs /= null then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "runtime_adapter_draft", E.Param_Identifier);
+         return;
+      end if;
       if Item.Light_Head /= null then
          return;
       end if;
@@ -2756,6 +2761,11 @@ package body Model_Runner.Llama is
       end Lighten;
    begin
       Status := E.Success;
+      if Item.Runtime_Pairs /= null then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "runtime_adapter_repack", E.Param_Identifier);
+         return;
+      end if;
       if Item.Layers = null or else Item.Layers_Light /= null then
          return;
       end if;
@@ -2927,6 +2937,19 @@ package body Model_Runner.Llama is
    function Accounting (Item : Session) return Mem.Account
    is (Item.Accounting);
 
+   procedure Free_Runtime_Pairs is new Ada.Unchecked_Deallocation (Runtime_Pair_List, Runtime_Pair_Access);
+
+   function Runtime_Adapter_Bytes (Item : Model) return Interfaces.Unsigned_64 is (Item.Runtime_Bytes);
+   function Runtime_Adapter_Count (Item : Model) return Natural is (Item.Runtime_Files);
+
+   procedure Apply_Adapters
+     (Item : Session; Weight : T.View; Input : Real_Array; Into : in out Real_Array;
+      Status : out E.Error_Info) is separate;
+
+   procedure Apply_Adapters_Batch
+     (Item : Session; Weight : T.View; Input : Real_Array; Count : Element_Count;
+      Into : in out Real_Array; Status : out E.Error_Info) is separate;
+
    --  The product, through whichever backend this session was opened for.
    --
    --  Every matrix product in the engine goes through these two, so the
@@ -2956,6 +2979,11 @@ package body Model_Runner.Llama is
             Model_Runner.Backend.Device.Dispatch
               (Weight, Vector, Target, Status, Item.Stopping);
       end case;
+      if E.Is_Ok (Status) and then Item.Owner.Runtime_Pairs /= null then
+         Apply_Adapters
+           (Item, Weight, Vector.all (Vector'First .. Vector'First + Weight.Columns - 1),
+            Target.all (Target'First .. Target'First + Weight.Rows - 1), Status);
+      end if;
    end Product;
 
    --  Several matrices against one activation, as one thing where that is
@@ -3030,6 +3058,19 @@ package body Model_Runner.Llama is
         and then Apart = 0
       then
          Workers_CPU.Dispatch_Group (Item.Team, Weights, Vector, Into, Status, Roles => Item.Arithmetic);
+         if E.Is_Ok (Status) and then Item.Owner.Runtime_Pairs /= null then
+            for Index in Weights'Range loop
+               declare
+                  Weight : T.View renames Weights (Index);
+                  Output : constant T.Real_Array_Access := Into (Into'First + Index - Weights'First);
+               begin
+                  Apply_Adapters
+                    (Item, Weight, Vector.all (Vector'First .. Vector'First + Weight.Columns - 1),
+                     Output.all (Output'First .. Output'First + Weight.Rows - 1), Status);
+                  exit when E.Is_Error (Status);
+               end;
+            end loop;
+         end if;
          return;
       end if;
 
@@ -3283,14 +3324,6 @@ package body Model_Runner.Llama is
       end loop;
    end MLA_Expand;
 
-   procedure Product_Batch
-     (Item    : Session;
-      Weight  : T.View;
-      Vectors : T.Real_Array_Access;
-      Count   : Element_Count;
-      Target  : T.Real_Array_Access;
-      Status  : out E.Error_Info);
-
    --  DeepSeek's latent projection for a batch: what MLA_Project does a
    --  position, each projection taken once over every position -- the
    --  query (through its latent and norm where the file has one), the
@@ -3520,6 +3553,10 @@ package body Model_Runner.Llama is
             Model_Runner.Backend.Device.Dispatch_Batch
               (Weight, Vectors, Count, Target, Status, Item.Stopping);
       end case;
+      if E.Is_Ok (Status) and then Item.Owner.Runtime_Pairs /= null and then Count > 0 then
+         Apply_Adapters_Batch
+           (Item, Weight, Vectors.all, Count, Target.all, Status);
+      end if;
    end Product_Batch;
 
    --  One expert's product over a batch, out of the stack it is a slice
@@ -8204,6 +8241,20 @@ package body Model_Runner.Llama is
 
       Item.Ready := False;
 
+      if Item.Runtime_Pairs /= null then
+         for Pair of Item.Runtime_Pairs.all loop
+            T.Free (Pair.Down);
+            T.Free (Pair.Up);
+         end loop;
+         Free_Runtime_Pairs (Item.Runtime_Pairs);
+         Mem.Record_Release (Item.Accounting, Mem.Converted_Weights, Runtime_Adapter_Bytes (Item));
+      end if;
+      Item.Runtime_Bytes := 0;
+      Item.Runtime_Files := 0;
+      Item.Runtime_Rank := 0;
+      Item.Runtime_Rows := 0;
+      Item.Adapted := 0;
+
       declare
          --  A layer's vectors, of the stack or past it.
          procedure Free_Layer (Which : in out Layer) is
@@ -8502,6 +8553,13 @@ package body Model_Runner.Llama is
       Status : out E.Error_Info)
    is separate;
 
+   procedure Attach_Adapter
+     (Item : in out Model; Source : Containers.Container;
+      Bytes : in out Model_Runner.Byte_Sources.Source'Class;
+      Scale : Real := 1.0; Status : out E.Error_Info;
+      Bounds : Adapter_Limits := Default_Adapter_Limits;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null) is separate;
+
    ---------------------------------------------------------------------------
    --  Saved sessions
    ---------------------------------------------------------------------------
@@ -8781,6 +8839,21 @@ package body Model_Runner.Llama is
       Values  : Value_Precision := Same_As_Keys) is
    begin
       Plan_For (Item.Settings, Context, Plan, Status, Cache, Values);
+      if E.Is_Ok (Status) and then Item.Runtime_Pairs /= null then
+         declare
+            Extra : constant Interfaces.Unsigned_64 :=
+              4 * Interfaces.Unsigned_64 (Runtime_Tile)
+              * (Interfaces.Unsigned_64 (Item.Runtime_Rank) + Interfaces.Unsigned_64 (Item.Runtime_Rows));
+         begin
+            if Plan.Activation_Bytes > Interfaces.Unsigned_64'Last - Extra then
+               Status := E.Make (E.Memory_Plan_Overflow);
+               Plan.Valid := False;
+               return;
+            end if;
+            Plan.Activation_Bytes := Plan.Activation_Bytes + Extra;
+            Mem.Finalize_Session_Plan (Plan, Status);
+         end;
+      end if;
    end Plan_Session;
 
    ----------------------
@@ -9376,6 +9449,12 @@ package body Model_Runner.Llama is
       T.Free (Item.Half_Keys);
       T.Free (Item.Half_Values);
       T.Free (Item.Activation);
+      T.Free (Item.Adapter_Rank);
+      T.Free (Item.Adapter_Output);
+      if Item.Adapter_Charged > 0 then
+         Mem.Record_Release (Item.Accounting, Mem.Activations, Item.Adapter_Charged);
+         Item.Adapter_Charged := 0;
+      end if;
       T.Free (Item.Normalized);
       T.Free (Item.Post_Room);
       T.Free (Item.Kept_Input);
@@ -11821,6 +11900,7 @@ package body Model_Runner.Llama is
    function Drafts_Next (Item : Session) return Boolean
    is (Item.Current not in Closed | Failed
        and then Item.Owner /= null
+       and then Item.Owner.Runtime_Pairs = null
        and then Item.Owner.Next /= null
        and then Item.Next_Input /= null
        and then (Item.Held = Exact or else Item.Next_Keys /= null));

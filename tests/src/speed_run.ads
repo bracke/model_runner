@@ -114,6 +114,9 @@ package Speed_Run is
       Evaluate  : Duration := 0.0;
       Generate  : Duration := 0.0;
       Load      : Duration := 0.0;
+      Adapter_Load : Duration := 0.0;
+      Adapter_Bytes : Interfaces.Unsigned_64 := 0;
+      Model_Bytes : Interfaces.Unsigned_64 := 0;
    end record;
 
    --  Take the measurement.
@@ -204,6 +207,9 @@ package Speed_Run is
    --  @param No_Cache Whether run's panel cache is refused: unrefused, a
    --    model the processor reads in panels loads them from it as run does,
    --    so the load figure is run's.
+   --  @param Adapter Optional complete GGUF adapter for CPU measurements.
+   --  @param Adapter_Scale Finite adapter scale, including zero for the identity control.
+   --  @param Adapter_Runtime Attach over the base layout; False requires Repack=To_F32 for merging.
    procedure Run
      (Path        : String;
       Prompt_Path : String;
@@ -237,7 +243,10 @@ package Speed_Run is
       Turns       : String := "";
       Arithmetic  : String := "";
       Memory_Limit : Interfaces.Unsigned_64 := 0;
-      No_Cache    : Boolean := False);
+      No_Cache    : Boolean := False;
+      Adapter     : String := "";
+      Adapter_Scale : Model_Runner.Numerics.Real := 1.0;
+      Adapter_Runtime : Boolean := True);
 
    --  The digest this tool prints, over any text.
    --

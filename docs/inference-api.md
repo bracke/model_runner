@@ -42,6 +42,33 @@ boundary for mutually untrusted code in one process. Closing the owner releases
 the queue for a later session. Loading never resolves aliases or downloads a
 model.
 
+CPU sessions can load separate runtime LoRA adapters through `Open_Options.Runtime_Adapters` and
+`Runtime_Adapter_Count`. The bounded list holds at most eight `Adapter_Option` records, each with an exact
+local `Path` and finite `Scale`. Leading entries load in order; zero and negative scales are accepted.
+`Adapter_Bounds` can tighten the native limits on total files, pairs, rank and owned decoded bytes. The
+model's parsing limits, load observer and cancellation token also apply to adapter loading. Unused list
+entries are ignored. With a zero count, existing loading behavior is unchanged.
+
+```ada
+declare
+   Opening : I.Open_Options := (others => <>);
+begin
+   Opening.Runtime_Adapter_Count := 1;
+   Opening.Runtime_Adapters (1) :=
+     (Path => Model_Runner.Text.To_Bounded ("/models/adapter.gguf"), Scale => 0.5);
+   I.Open (Session, "/models/base.gguf", Opening, Status);
+end;
+```
+
+Attachments use the CPU runtime path without expanding or merging the base. Dense Llama, Qwen2, Qwen3 and
+Qwen35 main-layer projections follow the native attachment support boundary. An adapter request with a
+non-CPU backend, invalid scale/path or invalid file-count bounds is refused before device acquisition or
+model IO. Architecture, descriptor, tensor and memory checks occur during loading. The API does not select
+F32 merging or silently fall back from a requested backend. Sources close after their matrices are owned;
+completion no longer reads the adapter files. All attachments load before opening the generation context
+or allocating its worker pool. A failed later attachment closes the entire new session, preserving the
+primary diagnostic. As with every `Open`, the session's previous resources are closed first.
+
 `Prepare` converts a JSON Schema to a reusable grammar. The overload of
 `Complete` taking `Prepared_Schema` avoids compiling an invariant response
 contract for every request; the string overload remains available for one-off
@@ -61,6 +88,12 @@ explicit potentially expensive operation over the exact joined model bytes;
 `Open` never hashes the model implicitly. Hashing accepts cooperative
 cancellation and reports `Hashing_Model` byte progress through the normal load
 observer.
+
+For attached models, `Provenance.Runtime_Adapter_Count` and `Runtime_Adapter_Bytes` report attachment count
+and decoded matrix/descriptor storage. Adapter bytes exclude session scratch; they are not total process memory.
+The fingerprint binds adapter contents, application order, scales and runtime arithmetic identity.
+The existing `Bytes`, `Parts` and explicit `SHA256` continue to describe backbone and auxiliary files;
+they do not become a combined adapter-file size or digest. Closed sessions return empty provenance.
 
 ```ada
 with Ada.Text_IO;

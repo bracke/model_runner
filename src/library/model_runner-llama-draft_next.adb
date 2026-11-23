@@ -64,6 +64,12 @@ begin
    Logits := [others => 0.0];
    Next_State := [others => 0.0];
 
+   if Source.Runtime_Pairs /= null then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "runtime_adapter_drafting");
+      return;
+   end if;
+
    if not Drafts_Next (Item) then
       Status := E.Make (E.Lifecycle_Invalid_State);
       return;

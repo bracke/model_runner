@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "scope": "header inspection only; no tensor payload verified",
+  "payload_verified": false,
+  "failures": [],
+  "architecture": "qwen35",
+  "session_estimate_8192_q4t_bytes": 341169626,
+  "base_parameters": 26895998464,
+  "adapter_parameters": 159383552,
+  "adapter_pairs": 256,
+  "base_file_bytes": 28595763840,
+  "f32_weight_estimate_bytes": 107583993856,
+  "physical_memory_bytes": 32814366720,
+  "available_memory_bytes": 22787031040,
+  "q8_weights_fit_available_memory": false,
+  "headers_compatible": true
+}

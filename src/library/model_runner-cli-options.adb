@@ -3,6 +3,8 @@ with Ada.Unchecked_Deallocation;
 
 package body Model_Runner.CLI.Options is
 
+   use type Model_Runner.Backend.Backend_Kind;
+
    --  Every option, the commands that take it, and the help line that
    --  documents it.
    --
@@ -26,7 +28,7 @@ package body Model_Runner.CLI.Options is
    function Text (Value : String) return Entry_Text
    is (new String'(Value));
 
-   Registry : constant array (1 .. 153) of Registry_Row :=
+   Registry : constant array (1 .. 154) of Registry_Row :=
      [
       (Text ("--prompt"),
        [Command_Run | Command_Embed | Command_Image => True, others => False], Text ("prompt")),
@@ -112,6 +114,7 @@ package body Model_Runner.CLI.Options is
        Text ("lora")),
       (Text ("--lora-scale"), [Command_Run => True, others => False],
        Text ("lora_scale")),
+      (Text ("--lora-mode"), [Command_Run => True, others => False], Text ("lora_mode")),
       (Text ("--shard"), [Command_Run => True, others => False],
        Text ("shard")),
       (Text ("--ple"), [Command_Run => True, others => False],
@@ -1396,6 +1399,20 @@ package body Model_Runner.CLI.Options is
                         Result.Adapter_Path :=
                           Result.Adapters (1);
                      end if;
+                     Free_Text (Held);
+
+                  elsif Name = "--lora-mode" then
+                     Take_Value (Name, Value_Present, Value_First, Argument, Held, Good);
+                     if not Good then
+                        return;
+                     end if;
+                     if Held.all not in "merge" | "runtime" or else Result.Adapter_Mode_Set then
+                        Fail (E.CLI_Invalid_Option_Value, Name, Held.all);
+                        Free_Text (Held);
+                        return;
+                     end if;
+                     Result.Adapter_Runtime := Held.all = "runtime";
+                     Result.Adapter_Mode_Set := True;
                      Free_Text (Held);
 
                   elsif Name = "--lora-scale" then
@@ -3665,6 +3682,33 @@ package body Model_Runner.CLI.Options is
 
       --  Two options that set one thing, both given: one would be dropped
       --  without a word.
+      if Result.Adapter_Runtime then
+         if not Result.Backend_Set then
+            Result.Backend := Model_Runner.Backend.Backend_CPU;
+            Result.Backend_Set := True;
+         end if;
+         if not Result.Draft_Tokens_Set then
+            Result.Draft_Tokens := 0;
+            Result.Draft_Tokens_Set := True;
+         end if;
+         if Result.Adapter_Count = 0
+           or else Result.Backend = Model_Runner.Backend.Backend_Device
+           or else Result.Draft_Tokens /= 0 or else Result.Draft_Lookup or else not T.Is_Empty (Result.Draft_Path)
+         then
+            Status := E.Make (E.CLI_Option_Combination);
+            E.Add_Text (Status, "option", "--lora-mode runtime", E.Param_Identifier);
+            E.Add_Text (Status, "other",
+                        (if Result.Adapter_Count = 0 then "a run without --lora"
+                         elsif Result.Backend = Model_Runner.Backend.Backend_Device then "--backend device"
+                         else "drafting"), E.Param_Identifier);
+            return;
+         end if;
+      elsif Result.Adapter_Mode_Set and then Result.Adapter_Count = 0 then
+         Status := E.Make (E.CLI_Option_Combination);
+         E.Add_Text (Status, "option", "--lora-mode", E.Param_Identifier);
+         E.Add_Text (Status, "other", "a run without --lora", E.Param_Identifier);
+         return;
+      end if;
       declare
          First, Second : Model_Runner.Text.Bounded;
       begin

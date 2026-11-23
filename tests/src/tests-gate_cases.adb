@@ -15,6 +15,7 @@ with GNAT.SHA1;
 with Conformance;
 with Tiny_Model;
 with Suite_Filter;
+with Measurement_Publications;
 
 package body Tests.Gate_Cases is
 
@@ -507,9 +508,39 @@ package body Tests.Gate_Cases is
    -- Register_Tests --
    --------------------
 
+   procedure Device_Timings_Require_Active_Evidence (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Header : constant String := "### The device backend" & ASCII.LF;
+      Timing : constant String := Header & "| model | 1.25 s |" & ASCII.LF;
+      Record_Of : constant String := "# measured 1.25 s" & ASCII.LF & "device 0123456789ABCDEF source.adb";
+      function Valid (Table, Ledger : String) return Boolean
+        renames Measurement_Publications.Device_Table_Consistent;
+   begin
+      Assert (Valid (Header & "No current GPU timing is published.", "cpu 0123456789ABCDEF source.adb"),
+              "absence of a current device claim required invented measurements");
+      Assert (Valid (Timing, Record_Of), "a recorded current device timing was refused");
+      Assert (not Valid (Timing, "# historical device timing 1.25 s"),
+              "an archived timing or comment qualified a current claim");
+      Assert (not Valid (Header, Record_Of), "a registered device measurement disappeared from publication");
+      Assert (not Valid (Timing, "device 0123456789ABCDEF source.adb"), "an unrecorded number passed");
+      Assert (not Valid (Timing, "# 11.250 s" & ASCII.LF & "device 0123456789ABCDEF source.adb"),
+              "a substring of another timing qualified a current number");
+      Assert (not Valid (Timing, Record_Of & ASCII.LF & "device FEDCBA9876543210 other.adb"),
+              "duplicate active groups passed");
+      Assert (Valid (Header & "No timings." & ASCII.LF & "### History" & ASCII.LF & "| old | 1.25 s |", ""),
+              "a later section was borrowed as the current device table");
+      Assert (not Valid ("### Other" & ASCII.LF & "| value | 1.25 s |", Record_Of), "a missing section passed");
+      Assert (not Valid (Header & "No timings." & ASCII.LF & Timing, Record_Of),
+              "a duplicate device section borrowed another section's evidence");
+      Assert (Valid ("### The device backend" & ASCII.CR & ASCII.LF & "| model | 1.25 s |", Record_Of),
+              "Windows line endings changed publication validation");
+   end Device_Timings_Require_Active_Evidence;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Device_Timings_Require_Active_Evidence'Access, "current device timings require active exact evidence");
       Register_Routine
         (T, The_Tree_Holds_Its_Two_Cheap_Bounds'Access,
          "the build left no warnings and no file of the tree is past two "

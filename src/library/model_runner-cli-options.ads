@@ -774,6 +774,8 @@ package Model_Runner.CLI.Options is
         [others => 1.0];
       Adapter_Count  : Natural := 0;
       Scale_Count    : Natural := 0;
+      Adapter_Runtime : Boolean := False;
+      Adapter_Mode_Set : Boolean := False;
 
       --  The first of them, kept because the parts of the program that ask
       --  whether there is an adapter at all should not have to count.

@@ -1,0 +1,56 @@
+{
+  "schema": "model_runner.cpu_adapter_smoke.v1",
+  "date": "2026-11-22",
+  "purpose": "Synthetic execution and memory smoke; no trained-adapter quality result",
+  "model": {
+    "path": "/home/bent/models/qwen3.5-0.8b-q8_0.gguf",
+    "bytes": 833592096,
+    "sha256": "37ae482d336108d23516fa35e8e0c4126688d81018b87178a18d752a1357814f"
+  },
+  "fixture": {
+    "command": "tests adapter-fixture --model MODEL --out ADAPTER",
+    "path": "/tmp/model-runner-synthetic-lora.gguf",
+    "sha256": "6c90347b612c0ae6268d94d3dcccc939a556be043a1a83ad610011fdea0dccb1",
+    "bytes": 18752,
+    "target": "blk.0.ffn_gate.weight",
+    "down_shape": [1024, 2],
+    "up_shape": [2, 3584],
+    "format": "F16",
+    "decoded_matrix_bytes": 36864,
+    "session_adapter_scratch_bytes": 14344,
+    "trained": false
+  },
+  "common_arguments": [
+    "run", "MODEL", "--backend", "cpu", "--arith", "f32", "--draft-tokens", "0",
+    "--context-size", "512", "--temperature", "0", "--seed", "42", "--max-tokens", "3",
+    "--threads", "4", "--raw", "--prompt", "The capital of Denmark is", "--no-cache", "--show-stats"
+  ],
+  "measurement": "GNU time elapsed seconds and peak RSS KiB; CLI generation statistics",
+  "initial_binary_sha256": "bb0349a1606c18ddd97018064a7e670c30d233898b779297950768bb9ffb2e3c",
+  "runs": [
+    {"mode": "base", "repack": "none", "elapsed_seconds": 0.92, "peak_rss_kib": 930584},
+    {"mode": "runtime", "scale": 0, "repack": "none", "elapsed_seconds": 0.92, "peak_rss_kib": 926072},
+    {"mode": "runtime", "scale": 1, "repack": "none", "elapsed_seconds": 0.87, "peak_rss_kib": 927164},
+    {"mode": "merge", "scale": 1, "repack": "f32", "elapsed_seconds": 6.06, "peak_rss_kib": 4958228,
+     "reported_rewritten_bytes": 4106485760, "reported_rewrite_seconds": 4.866}
+  ],
+  "zero_scale_stdout_identical_to_base": true,
+  "final_build_confirmation": {
+    "binary_sha256": "2ae2f05e0aaffb8ca26de82b4abe0a5a3b9c6202017061260e48793589537fa1",
+    "mode": "runtime",
+    "scale": 1,
+    "elapsed_seconds": 3.78,
+    "peak_rss_kib": 930360,
+    "cache_state": "uncontrolled after full suite",
+    "automatic_cpu_and_drafting_policy": true,
+    "weights": "the file's own pages, read as they are touched"
+  },
+  "limitations": [
+    "One short warm-cache run per configuration, shared host with build activity; no overhead conclusion",
+    "One synthetic rank-two target; wide trained adapters and long contexts have not been timed",
+    "Peak RSS varies with mapping and page residency; decoded matrix/scratch bytes are accounting estimates",
+    "Text equality is a smoke check; independent projection and logit tests establish numerical correctness",
+    "The released 27B adapter campaign remains blocked by host RAM"
+  ],
+  "log_prefix": "/tmp/model-runner-runtime-"
+}

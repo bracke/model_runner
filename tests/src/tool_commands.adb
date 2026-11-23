@@ -25,6 +25,19 @@ package body Tool_Commands is
    Name_Shader         : aliased constant String := "shader";
    Name_Restamp        : aliased constant String := "restamp";
    Name_Fixtures       : aliased constant String := "fixtures";
+   Name_Adapter_Fixture : aliased constant String := "adapter-fixture";
+   Takes_Adapter_Fixture : aliased constant String :=
+     "--model PATH --out PATH [--tensor NAME] [--rank N] [--all-targets]";
+   Says_Adapter_Fixture : aliased constant String := "write a synthetic adapter for execution checks, not training";
+   Opts_Adapter_Fixture : aliased constant String := " --model --out --tensor --rank --all-targets ";
+   Name_Adapter_Bench : aliased constant String := "adapter-bench";
+   Takes_Adapter_Bench : aliased constant String :=
+     "--model PATH --adapter PATH --prompt-file PATH --out PATH [--repeats N] [--max-tokens N]"
+     & " [--threads N] [--batch-size N] [--context-size N] [--include-merge]";
+   Says_Adapter_Bench : aliased constant String := "paired CPU base, zero-scale, runtime and optional F32 merge timing";
+   Opts_Adapter_Bench : aliased constant String :=
+     " --model --adapter --prompt-file --out --repeats --max-tokens --threads --batch-size --context-size"
+     & " --include-merge ";
    Name_Package        : aliased constant String := "package";
    Name_Pristine       : aliased constant String := "pristine";
    Name_Schema         : aliased constant String := "schema";
@@ -38,6 +51,7 @@ package body Tool_Commands is
    Name_Token_Cross    : aliased constant String := "tokenizer-cross";
    Name_Agent_Eval     : aliased constant String := "agent-eval";
    Name_Agent_Trial    : aliased constant String := "agent-trial";
+   Name_Agent_Campaign : aliased constant String := "agent-campaign";
    Name_Quantize       : aliased constant String := "quantize";
    Name_Imatrix        : aliased constant String := "imatrix";
    Name_Probe          : aliased constant String := "probe";
@@ -229,6 +243,17 @@ package body Tool_Commands is
      "record the measured figures' moved fingerprints, saying why they stand";
    Says_Trial : aliased constant String :=
      "run a real model on /work tasks in fresh projects and say how each went";
+   Says_Campaign : aliased constant String :=
+     "compare original and adapted models in four paired /work arms, with resumable JSON results";
+   Takes_Campaign : aliased constant String :=
+     "--base PATH --adapted PATH --out DIR [--program PATH] [--task NAMES]"
+     & " [--options OPTIONS] [--repeats N] [--max-seconds N] [--context-size N] [--seed N] [--mode run|check|inspect]"
+     & " [--adapter PATH] [--base-bytes N] [--adapted-bytes N] [--adapter-bytes N]"
+     & " [--base-adapter PATH] [--adapted-adapter PATH] [--base-scale N] [--adapted-scale N]";
+   Opts_Campaign : aliased constant String :=
+     " --base --adapted --out --program --task --options --repeats --max-seconds --context-size --seed --mode"
+     & " --adapter --base-bytes --adapted-bytes --adapter-bytes"
+     & " --base-adapter --adapted-adapter --base-scale --adapted-scale ";
    Says_Fixtures : aliased constant String :=
      "write the committed test fixtures";
    Says_Package : aliased constant String :=
@@ -354,7 +379,7 @@ package body Tool_Commands is
    Takes_Speech_Corpus : aliased constant String := "--model PATH [--corpus FILE] [--threads N] [--device]";
    Opts_Speech_Corpus  : aliased constant String := " --model --corpus --threads --device ";
 
-   Held : constant array (1 .. 44) of Command :=
+   Held : constant array (1 .. 47) of Command :=
      [(Name_Test'Access, Takes_Test'Access, Says_Test'Access,
        Opts_Test'Access),
       (Name_Check'Access, Takes_Check'Access, Says_Check'Access,
@@ -408,6 +433,9 @@ package body Tool_Commands is
        Opts_Restamp'Access),
       (Name_Fixtures'Access, Takes_Fixtures'Access, Says_Fixtures'Access,
        Opts_None'Access),
+      (Name_Adapter_Fixture'Access, Takes_Adapter_Fixture'Access, Says_Adapter_Fixture'Access,
+       Opts_Adapter_Fixture'Access),
+      (Name_Adapter_Bench'Access, Takes_Adapter_Bench'Access, Says_Adapter_Bench'Access, Opts_Adapter_Bench'Access),
       (Name_Package'Access, Takes_Package'Access, Says_Package'Access,
        Opts_None'Access),
       (Name_Pristine'Access, Takes_Pristine'Access, Says_Pristine'Access,
@@ -428,6 +456,8 @@ package body Tool_Commands is
        Says_Agent_Eval'Access, Opts_Agent_Eval'Access),
       (Name_Agent_Trial'Access, Takes_Trial'Access,
        Says_Trial'Access, Opts_Trial'Access),
+      (Name_Agent_Campaign'Access, Takes_Campaign'Access,
+       Says_Campaign'Access, Opts_Campaign'Access),
       (Name_Probe'Access, Takes_Probe'Access, Says_Probe'Access,
        Opts_None'Access),
       (Name_Approve_Probe'Access, Takes_Approve'Access, Says_Approve'Access,

@@ -12,6 +12,7 @@ with Model_Runner.GGUF.Containers;
 with Model_Runner.GGUF.Shards;
 with Model_Runner.Limits;
 with Model_Runner.Llama;
+with Model_Runner.Numerics;
 with Model_Runner.Progress;
 with Model_Runner.Sampling;
 with Model_Runner.Text;
@@ -34,6 +35,18 @@ package Model_Runner.Inference is
      array (Positive range 1 .. Max_Auxiliary_Shards) of
        Model_Runner.Text.Bounded;
 
+   Max_Runtime_Adapters : constant := 8;
+
+   type Adapter_Option is record
+      Path  : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
+      Scale : Model_Runner.Numerics.Real := 1.0;
+   end record;
+   --  One CPU runtime attachment, loaded in list order without merging base weights.
+   --  @field Path Exact local adapter GGUF path.
+   --  @field Scale Finite multiplier, including zero and negative values.
+
+   type Adapter_List is array (Positive range 1 .. Max_Runtime_Adapters) of Adapter_Option;
+
    subtype UString is Ada.Strings.Unbounded.Unbounded_String;
    --  Owned completion text.
 
@@ -53,6 +66,9 @@ package Model_Runner.Inference is
       Auxiliary      : Auxiliary_List :=
         [others => Model_Runner.Text.Empty];
       Auxiliary_Count : Natural range 0 .. Max_Auxiliary_Shards := 0;
+      Runtime_Adapters : Adapter_List := [others => (others => <>)];
+      Runtime_Adapter_Count : Natural range 0 .. Max_Runtime_Adapters := 0;
+      Adapter_Bounds : Model_Runner.Llama.Adapter_Limits := Model_Runner.Llama.Default_Adapter_Limits;
       Panel_Cache    : Model_Runner.Text.Bounded := Model_Runner.Text.Empty;
       Fit_Required   : Boolean := True;
       Device_Memory  : Interfaces.Unsigned_64 := 0;
@@ -78,6 +94,9 @@ package Model_Runner.Inference is
    --  @field Paged Whether a device session uses the shared paged cache.
    --  @field Auxiliary Exact auxiliary GGUF paths, including PLE/engram files.
    --  @field Auxiliary_Count Number of leading Auxiliary entries to use.
+   --  @field Runtime_Adapters CPU runtime attachments and positional scales, in application order.
+   --  @field Runtime_Adapter_Count Number of leading Runtime_Adapters entries to load; zero disables attachment.
+   --  @field Adapter_Bounds Tightenable limits on total adapter files, pairs, rank and owned matrix/descriptor bytes.
    --  @field Panel_Cache Reusable repacked-panel file, or empty for none.
    --  @field Fit_Required Whether device preparation must keep all weights.
    --  @field Device_Memory Device matrix budget, or zero for the default.
@@ -229,6 +248,8 @@ package Model_Runner.Inference is
       Fingerprint    : Interfaces.Unsigned_64 := 0;
       Bytes          : Interfaces.Unsigned_64 := 0;
       Parts          : Natural := 0;
+      Runtime_Adapter_Count : Natural := 0;
+      Runtime_Adapter_Bytes : Interfaces.Unsigned_64 := 0;
    end record;
    --  Stable identity material for the open model.
    --  @field Canonical_Path Absolute path of the named backbone shard.
@@ -237,6 +258,8 @@ package Model_Runner.Inference is
    --  @field Fingerprint Engine cache-compatibility fingerprint.
    --  @field Bytes Total bytes across backbone and auxiliary shards.
    --  @field Parts Number of opened files.
+   --  @field Runtime_Adapter_Count Number of owned runtime attachments, separate from backbone/auxiliary parts.
+   --  @field Runtime_Adapter_Bytes Owned decoded adapter matrices and descriptors, excluding session scratch.
 
    --  Return provenance for an open session, or an empty record when closed.
    --  @param Item Session to inspect.

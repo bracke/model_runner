@@ -1528,6 +1528,43 @@ package Model_Runner.Llama is
    --  feed-forward's answers and matrices a long prompt's batch holds.
    Split_Margin : constant := 2 ** 29;
 
+   --  Tightenable bounds for CPU runtime attachments; callers cannot raise these initial hard caps.
+   type Adapter_Limits is record
+      Max_Adapters : Positive := 8;
+      Max_Pairs    : Positive := 4_096;
+      Max_Rank     : Positive := 64;
+      Max_Bytes    : Interfaces.Unsigned_64 := 1_073_741_824;
+   end record;
+
+   Default_Adapter_Limits : constant Adapter_Limits := (others => <>);
+
+   --  Keep owned F32 low-rank matrices beside the existing base layout, without expanding base weights.
+   --  CPU/reference dense Llama, Qwen2, Qwen3 and Qwen35 models are accepted. Device, mixture, lightened
+   --  layers and mixing runtime attachments with F32 merging are refused. Optional next-layer storage
+   --  is allowed, but attached sessions cannot execute its draft operation.
+   --  The entire file is validated before publication; failure leaves weights, identity and accounting unchanged.
+   --  @param Item Prepared model, with no open sessions.
+   --  @param Source Parsed adapter container; every tensor must belong to a supported pair.
+   --  @param Bytes Adapter payload source, which can close when this operation returns.
+   --  @param Scale Finite positional scale, including zero and negative values.
+   --  @param Status Success, lifecycle, compatibility, shape, scalar, source, limit or allocation refusal.
+   --  @param Bounds Limits on total attached files, pairs, rank and owned storage.
+   --  @param Cancel Optional cancellation observed between bounded reads and before publication.
+   procedure Attach_Adapter
+     (Item : in out Model; Source : Model_Runner.GGUF.Containers.Container;
+      Bytes : in out Model_Runner.Byte_Sources.Source'Class;
+      Scale : Real := 1.0; Status : out Model_Runner.Errors.Error_Info;
+      Bounds : Adapter_Limits := Default_Adapter_Limits;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  @param Item Model to inspect.
+   --  @return Owned runtime adapter matrices and descriptors in bytes, excluding per-session scratch.
+   function Runtime_Adapter_Bytes (Item : Model) return Interfaces.Unsigned_64;
+
+   --  @param Item Model to inspect.
+   --  @return Number of committed runtime adapter files; zero for ordinary or F32-merged models.
+   function Runtime_Adapter_Count (Item : Model) return Natural;
+
    --  Merge a low-rank adapter into a prepared model's weights.
    --
    --  An adapter says what a fine-tune changed, as two small matrices per
@@ -1546,6 +1583,10 @@ package Model_Runner.Llama is
    --
    --  Refused while a session is open: what a session has already committed
    --  to its cache came from the weights as they were.
+   --  All recognized pairs and their binary32 results are checked before any weight is written;
+   --  a malformed later pair leaves the model unchanged. Non-finite scales, values and results
+   --  are refused, as is malformed present alpha. Saved-context identity includes the full adapter
+   --  payload, tensor descriptors and scaling. This adds validation/hash work at merge time.
    --
    --  @param Item Prepared model, which the merge modifies.
    --  @param Source Parsed adapter container.
@@ -1555,7 +1596,7 @@ package Model_Runner.Llama is
    --  @param Status Success, Lifecycle_Model_Not_Ready,
    --    Lifecycle_Session_Active, Arch_Unsupported_Feature when the model was
    --    not prepared as binary32, Arch_Missing_Tensor when a pair is
-   --    incomplete, or Arch_Invalid_Tensor_Shape.
+   --    incomplete, Arch_Invalid_Tensor_Shape, Tensor_Non_Finite_Value or a metadata type/range error.
    procedure Merge_Adapter
      (Item   : in out Model;
       Source : Model_Runner.GGUF.Containers.Container;
@@ -2498,7 +2539,8 @@ package Model_Runner.Llama is
    --
    --  It is the validated shape -- every width, count and identifier the
    --  cache's layout depends on -- together with the size of the tensor
-   --  data and a sample of its bytes. That identifies a model file; it does
+   --  data and a sample of its bytes, plus full content/descriptor identity for merged adapters.
+   --  That identifies a model file; it does
    --  not verify one, and it is not meant to. Two files that agree on all
    --  of it are the same model for the purposes of a cache.
    --
@@ -2953,6 +2995,20 @@ package Model_Runner.Llama is
 
 private
 
+   --  Shared native projection routes, qualified by the test-crate child against an independent oracle.
+   procedure Product
+     (Item : Session; Weight : Model_Runner.Tensors.View;
+      Vector, Target : Model_Runner.Tensors.Real_Array_Access; Status : out Model_Runner.Errors.Error_Info);
+   procedure Product_Batch
+     (Item : Session; Weight : Model_Runner.Tensors.View; Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count : Element_Count; Target : Model_Runner.Tensors.Real_Array_Access;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   procedure Apply_Adapters_Batch
+     (Item : Session; Weight : Model_Runner.Tensors.View; Input : Model_Runner.Numerics.Real_Array;
+      Count : Model_Runner.Numerics.Element_Count; Into : in out Model_Runner.Numerics.Real_Array;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  How many positions a layer holds, and where its rows begin. One
    --  entry a layer; see the Session's own comment for what they mean.
    type Cell_Counts is
@@ -3378,6 +3434,17 @@ private
    end record;
    type Sample_Access is access Sample_Holder;
 
+   type Runtime_Pair is record
+      Target : Model_Runner.Tensors.View;
+      Down, Up : Model_Runner.Tensors.Real_Array_Access := null;
+      Rank : Model_Runner.Numerics.Element_Count := 0;
+      Factor : Model_Runner.Numerics.Wide_Real := 0.0;
+      Down_Index, Up_Index : Positive := 1;
+   end record;
+   type Runtime_Pair_List is array (Positive range <>) of Runtime_Pair;
+   type Runtime_Pair_Access is access Runtime_Pair_List;
+   Runtime_Tile : constant Model_Runner.Numerics.Element_Count := 8;
+
    type Model is limited new Ada.Finalization.Limited_Controlled with record
       Ready       : Boolean := False;
       Sessions    : Natural := 0;
@@ -3604,7 +3671,7 @@ private
       Device_Ticket : Natural := 0;
 
       --  What has been merged into those weights, as a digest of every
-      --  adapter and the scale it was applied at. Zero for a model as its
+      --  adapter's full payload, descriptors and scaling. Zero for a model as its
       --  file describes it.
       --
       --  It is part of what identifies the model because a merge replaces
@@ -3612,6 +3679,10 @@ private
       --  merged model never had, and the two would otherwise be
       --  indistinguishable to anything reading a saved context.
       Adapted     : Interfaces.Unsigned_64 := 0;
+      Runtime_Pairs : Runtime_Pair_Access := null;
+      Runtime_Files : Natural := 0;
+      Runtime_Bytes : Interfaces.Unsigned_64 := 0;
+      Runtime_Rank, Runtime_Rows : Model_Runner.Numerics.Element_Count := 0;
    end record;
 
    overriding procedure Finalize (Item : in out Model);
@@ -4002,6 +4073,8 @@ private
       --  while this one runs changes nothing here.
       Arithmetic : Model_Runner.Backend.CPU.Role_Set :=
         Model_Runner.Backend.CPU.No_Role;
+      Adapter_Rank, Adapter_Output : Model_Runner.Tensors.Real_Array_Access := null;
+      Adapter_Charged : Interfaces.Unsigned_64 := 0;
 
       --  Which of LongRoPE's two tables this session turns by: the long
       --  one where it is opened past the context the model was trained on.

@@ -13,7 +13,41 @@
 --  It needs a model file and a built program, and runs on the device or the
 --  processor as the program chooses; it is run by hand, on small models,
 --  and never by the gate.
+with Ada.Strings.Unbounded;
+with Hostkit;
+
 package Agent_Trial is
+
+   --  A campaign consumes these records rather than interpreting terminal output.
+   --  Metrics not reported by the harness remain -1, distinct from a measured zero.
+   type Verdict is (Passed, Failed, Ungraded, Infrastructure_Error);
+   type Attempt is record
+      Task_Name       : Ada.Strings.Unbounded.Unbounded_String;
+      Ending          : Ada.Strings.Unbounded.Unbounded_String;
+      Directory       : Ada.Strings.Unbounded.Unbounded_String;
+      Figures         : Ada.Strings.Unbounded.Unbounded_String;
+      Grade           : Verdict := Infrastructure_Error;
+      Seconds         : Duration := -1.0;
+      Work_Seconds    : Duration := -1.0;
+      Load_Seconds    : Duration := -1.0;
+      Calls           : Natural := 0;
+      Executed_Calls  : Long_Long_Integer := -1;
+      Generated_Tokens : Long_Long_Integer := -1;
+      Root_Tokens     : Long_Long_Integer := -1;
+      Delegated_Tokens : Long_Long_Integer := -1;
+      Compactions     : Long_Long_Integer := -1;
+      Prompt_Read     : Long_Long_Integer := -1;
+      Prompt_Reused   : Long_Long_Integer := -1;
+   end record;
+
+   --  @param Name One task name, without separators.
+   --  @return Whether the trial registry defines this task.
+   function Known_Task (Name : String) return Boolean;
+
+   --  Qualify the pilot's coding verifiers without a model.
+   --  @param Directory Scratch directory for fresh grader fixtures.
+   --  @param Clean Whether reference, no-op, wrong-answer and scope controls pass.
+   procedure Validate_Graders (Directory : String; Clean : out Boolean);
 
    --  Run the trial's tasks with a model.
    --
@@ -59,6 +93,9 @@ package Agent_Trial is
    --    for every call; helpers-off, as adaptive but with thinking off for
    --    a helper that writes only documents; or a profile's name, every call by it -- the measure
    --    of an inference policy against fixed settings.
+   --  @param Output_Directory Optional parent for isolated trial projects; empty retains the usual location.
+   --  @param On_Attempt Receives the independently graded result after the retained project has its final name.
+   --  @param Extra_Arguments Native arguments appended without splitting, preserving paths containing spaces.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -73,6 +110,9 @@ package Agent_Trial is
       Context_Size : Natural := 0;
       Accept_Lessons : Boolean := False;
       Whole_Files    : Boolean := False;
-      Inference      : String := "fixed");
+      Inference      : String := "fixed";
+      Output_Directory : String := "";
+      On_Attempt : access procedure (Item : Attempt) := null;
+      Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector);
 
 end Agent_Trial;

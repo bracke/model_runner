@@ -5,7 +5,77 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Build and audit recovery.** The linked database uses the workspace's
+  sibling Cryptolib consistently. Headless command dispatch reuses its
+  documented public API while preserving noninteractive validation, and
+  its integration fixture is generated locally. Historical performance
+  observations and fingerprints are archived rather than presented as
+  current-source measurements. Current device timing claims require an
+  active evidence group and exact recorded values.
+
+- **Recorded headless work execution.** The native versioned work adapter
+  supports exact task inspection, durable idempotent execution and operation
+  lookup, including independently tested negative outcomes and replay.
+
 ### Added
+
+- **Before/after CPU timing probe.** An identical Ada main can be compiled
+  against historical and current engines, with full warm-up, fixed work,
+  output digests and JSON timings. The probe refuses invalid bounds,
+  speculative work and incomplete generation.
+
+- **Embedded runtime adapters.** `Inference.Open_Options` accepts bounded
+  CPU adapter paths and individual scales, with tightenable loading limits.
+  Loading owns matrices and closes sources before the generation session
+  opens. Provenance exposes adapter count and decoded storage separately
+  from backbone bytes. The standalone inference project's source closure
+  includes the runtime adapter units.
+
+- **Per-arm runtime adapter campaigns.** `tests agent-campaign` accepts separate
+  adapter paths and scales for its base and adapted slots. Manifests bind
+  whole-file adapter digests, runtime mode and scales; finished attempts bind
+  their manifest digest. Shared adapter controls and uncontrolled backends
+  are refused. Paths containing spaces remain individual native arguments.
+
+- **Bounded CPU adapter tiles.** Prompt deltas use up to eight positions per
+  tile and the existing worker pool, with binary64 rank products and scaled
+  output accumulation. Session admission counts the bounded scratch before
+  allocation. Completed tiles publish only after all their adapters succeed.
+  Runtime identity is versioned for the changed reduction order, so earlier
+  runtime-adapter contexts must be regenerated.
+
+- **Paired CPU adapter timing.** `tests adapter-bench` reuses the speed runner
+  for base, zero-scale, runtime and optional same-base F32-merge arms, with
+  warm-ups, reversed order, fixed-work controls and raw JSON measurements.
+  The synthetic fixture generator can cover every supported main-layer
+  projection at ranks up to 64; numerical regressions also cover ranks 32
+  and 64. These controls do not claim trained-adapter quality.
+
+- **CPU adapters over quantized weights.** `Llama.Attach_Adapter` and
+  `--lora-mode runtime` own bounded F16/F32 adapter matrices and apply their
+  deltas in token and CPU batch projections without expanding the base.
+  Dense Llama, Qwen2, Qwen3 and Qwen35 are covered, with transactional loading,
+  cancellation, memory admission and content-bound saved contexts. Device,
+  experts and drafting remain unsupported. F32 merging remains the default.
+
+- **Independent adapter reference and safer F32 merging.** A bounded binary64
+  oracle checks all seven projections against quantized-base and hybrid-model
+  fixtures. Merging validates recognized pairs and numerical results before
+  writing weights, rejects invalid scalars and payload values, and binds saved
+  contexts to full adapter content and tensor descriptors. A rejected later
+  pair preserves existing weights and identity.
+
+- **Paired native agent campaigns.** `tests agent-campaign` compares original
+  and adapted model files with thinking enabled and disabled, pins artifact
+  and executable digests, preserves interrupted attempts, and records graded
+  JSON outcomes and descriptive paired costs. Twelve pilot tasks have
+  independent reference, no-op and wrong-answer controls; preserved verifiers
+  reject unrelated changes. Header inspection records structural adapter
+  compatibility separately from payload verification. Native work figures
+  expose executed root calls, root/helper tokens and compactions. No adapter
+  quality gain is claimed.
 
 - **A supported embedded inference API.** `Model_Runner.Inference` owns and
   reuses a bounded local generation session without the CLI. Its public

@@ -1,0 +1,66 @@
+{
+  "schema": "model_runner.cpu_adapter_tiling_evidence.v1",
+  "date": "2026-11-22",
+  "scope": "CPU prompt optimization with the same synthetic rank-32/96-pair fixture; no quality claim",
+  "inputs": "harness-adapter-cpu-r32-evidence.json",
+  "before": ["harness-adapter-cpu-r32-timing.json", "harness-adapter-cpu-r32-repeat.json"],
+  "after": ["harness-adapter-cpu-r32-tiled8.json", "harness-adapter-cpu-r32-tiled8-repeat.json"],
+  "runtime_mode": "model_runner.cpu_lora.v2.tiled8.wide",
+  "old_runtime_contexts_require_regeneration": true,
+  "tile_positions": 8,
+  "scratch_bytes_formula": "4 * 8 * (maximum attached rank + maximum attached output rows)",
+  "adapter_owned_bytes": 51130368,
+  "arithmetic": {
+    "down": "existing binary64 tensor product, row-partitioned through the CPU worker pool",
+    "up": "independent binary64 sums per position and row; scale and base addition precede final F32 rounding",
+    "rank_storage": "admitted per-session F32 scratch",
+    "fallback": "scalar for reference models, singleton products and non-little-endian hosts",
+    "publication": "complete tiles after all matching attachments succeed and worker shares join"
+  },
+  "median_paired_prompt_ratios": {
+    "scalar_first": 1.4418503842129167,
+    "scalar_repeat": 1.4588418636615115,
+    "tiled_first": 1.048260825353736,
+    "tiled_repeat": 1.0144599261196383
+  },
+  "median_paired_decode_ratios": {
+    "scalar_first": 1.1446854728967943,
+    "scalar_repeat": 1.1408982156688534,
+    "tiled_first": 1.1696724685947562,
+    "tiled_repeat": 1.135263341990423
+  },
+  "generated_digest": "c85e719a42725969",
+  "matches_saved_scalar_digest": true,
+  "controls_passed_in_both_batches": true,
+  "validation": {
+    "focused_adapter_cases": 11,
+    "full_suite_cases": 959,
+    "failed_assertions": 0,
+    "unexpected_errors": 0,
+    "repository_checks": 30552,
+    "known_repository_failures": 19
+  },
+  "native_cli_memory_check": {
+    "binary_sha256": "c4086fe9dc8b672df146152c0b2cde91ca648a8f671cae30b08a8062e2ee90d2",
+    "peak_rss_kib": 982332,
+    "elapsed_seconds": 5.07,
+    "cache": "f32, explicitly matched to the benchmark",
+    "weights": "the file's own pages, read as they are touched",
+    "log_prefix": "/tmp/model-runner-adapter-tile-cli-",
+    "note": "single RSS observation, not a cold-start timing comparison; earlier CLI memory check used default q4t"
+  },
+  "stack_evidence": {
+    "batch_frame_bytes": 12320,
+    "down_worker_frame_bytes": 128,
+    "up_worker_frame_bytes": 144,
+    "source": "obj/release/model_runner-llama.su; dynamic frames marked bounded"
+  },
+  "limitations": [
+    "Before and after are separate shared-host batches; paired controls are within each batch",
+    "First tiled batch load 1.38..5.80, temperature 83.125..93.875 C; repeat load 4.82..6.32, 87.625..91.125 C",
+    "Five repeats per batch are descriptive; no significance or worst-case latency bound is claimed",
+    "Token arithmetic was not optimized and no decode speedup is claimed",
+    "No previous-executable no-adapter comparison or released 27B adapter evaluation was performed",
+    "Device execution, other arithmetic policies and long contexts remain unqualified by these measurements"
+  ]
+}
