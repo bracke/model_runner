@@ -72,8 +72,14 @@ live under the project's already-ignored `obj` directory. The native boundary pr
 location and actual cache writes while retaining the original verifier, host-write and descendant attacks.
 That regression fails with the prior cache environment and all ten campaign cases pass with the fix.
 
-The replacement pilot will use a fresh manifest and harness checkpoint, with the same pinned inference
-program, models, template, sampler and work budgets. Generated panel files are removed only from finished
+After the startup fix, the mandatory suite again passes **969/969** and the final repository audit passes
+**30,617 checks with zero failures**. The audit's duration remains unqualified at host load 1.26; its
+195-second bound is unchanged.
+
+The replacement pilot starts at 2026-11-23 13:23 UTC under `tests/obj/trained-twil-pilot-v2`, using source
+checkpoint `ecdb93a3862743fd9056a4f9ff6f24c21f364a77` and a fresh manifest. Its pinned harness SHA-256 is
+`3d44c7bc0761b06fdd547d93f0ea046fdc3b1854c109c203f4ee1328a23b4229`. It retains the same inference
+program, models, template, sampler and work budgets. Results are pending. Generated panel files are removed only from finished
 attempts; transcripts, diffs, configurations and verifier results are retained. The process holds a temporary
 idle/sleep inhibitor and the existing hard deadline.
 
@@ -83,5 +89,6 @@ and uncertainty requirements. No model default has changed.
 
 Build and validation logs are retained under `/tmp/model-runner-twil-*.log`; plain generation output, process
 timing and panel cache are under `tests/obj/trained-twil-smoke`. Pinned executables and the shared template
-are under `tests/obj/twil-runtime-pinned`. Model payloads remain in
+are under `tests/obj/twil-runtime-pinned`; the replacement harness bundle is `tests/obj/twil-runtime-pinned-v2`.
+Model payloads remain in
 `/tmp/model-runner-trained-adapter-evaluation` at this checkpoint.
