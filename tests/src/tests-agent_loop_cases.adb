@@ -36,6 +36,11 @@ with Model_Runner.Tools.Builtin;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Tools.Runner;
 with Model_Runner.Trajectories;
+with Model_Runner.Tokenizer;
+with Jsonlib.Documents;
+with Jsonlib.Parsers;
+with Jsonlib.Errors;
+with Project_Tools.Files;
 
 with Tiny_Model;
 
@@ -286,9 +291,11 @@ package body Tests.Agent_Loop_Cases is
       Effort   : Model_Runner.Templates.Reasoning_Effort := Model_Runner.Templates.Effort_Unstated;
       Rounds   : access constant Model_Runner.Output.Repetition.Rule := null;
       Capture  : Model_Runner.Trajectories.Options := (others => <>);
-      Delegate : Model_Runner.Tools.Builtin.Delegator_Reference := null)
+      Delegate : Model_Runner.Tools.Builtin.Delegator_Reference := null;
+      Sampled  : Boolean := False;
+      Use_Image : access constant Model_Runner.Bytes.Byte_Array := null)
    is
-      Under    : Harness (Image);
+      Under    : Harness ((if Use_Image = null then Image else Use_Image));
       Session  : L.Session;
       --  The conversation: the caller's where it carries one on, as /work's
       --  rounds do; else one of its own.
@@ -325,6 +332,14 @@ package body Tests.Agent_Loop_Cases is
       Runner.Set_Base (Ada.Directories.Full_Name (Dir));
       Runner.Use_Delegator (Delegate);
       Request.Max_Tokens := Reply;
+      if Sampled then
+         --  End real sampled turns deterministically so the completion gate
+         --  exercises a later generation rather than a length-limit exit.
+         Request.Sampling.Temperature := 0.0;
+         Request.Bias_Count := 1;
+         Request.Bias_Tokens (1) := Model_Runner.Tokenizer.End_Token (L.Vocabulary (Under.Ready).all);
+         Request.Bias_Amounts (1) := 100.0;
+      end if;
       Ag.Run
         (Source     => Under.Ready,
          Session    => Session,
@@ -346,7 +361,7 @@ package body Tests.Agent_Loop_Cases is
          Watch      => Seen'Unchecked_Access,
          Approve    => Approver,
          Gate       => Completion,
-         Script     => Replies'Unchecked_Access,
+         Script     => (if Sampled then null else Replies'Unchecked_Access),
          Carry      => Carry,
          Max_Seconds => Seconds,
          Max_Total_Tokens => Total,
@@ -2238,6 +2253,55 @@ package body Tests.Agent_Loop_Cases is
       end;
    end Capture_Uses_The_Actual_Agent_Loop;
 
+   procedure Open_Reader_Keeps_Sampled_Constraints (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package J renames Jsonlib.Documents;
+      Settings : Model_Runner.Trajectories.Options;
+      Replies : Script;
+      Seen : Recorder;
+      Ended : Ag.Outcome;
+      Gate : aliased Completion_Check;
+      Generations : Natural := 0;
+      Sample_Image : Model_Runner.Bytes.Byte_Array_Access;
+   begin
+      if Ada.Directories.Exists (Dir) then
+         Ada.Directories.Delete_Tree (Dir);
+      end if;
+      Ada.Directories.Create_Path (Dir);
+      Tiny_Model.Build (Sample_Image, Room => 8_192);
+      Settings.Directory := To_Unbounded_String (Ada.Directories.Full_Name (Dir) & "/sampled-open");
+      Run (Replies, Seen, Ended, Syntax => Model_Runner.Tools.Open_JSON, Reply => 8,
+           Completion => Gate'Unchecked_Access, Capture => Settings, Sampled => True, Use_Image => Sample_Image);
+      Model_Runner.Bytes.Free (Sample_Image);
+      Assert (E.Is_Ok (Ended.Error) and then E.Is_Ok (Ended.Capture_Error) and then Gate.Asked = 2,
+              "the sampled open-reader loop did not reach its second answer: " & Ended.Reason'Image
+              & " " & Ended.Error.Code'Image & " capture " & Ended.Capture_Error.Code'Image
+              & " gate" & Gate.Asked'Image);
+      declare
+         Raw : constant String := Project_Tools.Files.Read_Raw_File (To_String (Ended.Capture_Path));
+         First : Positive := Raw'First;
+         Doc, Data : J.Document;
+         Error : Jsonlib.Errors.Error_Info;
+      begin
+         for Index in Raw'Range loop
+            if Raw (Index) = ASCII.LF then
+               Jsonlib.Parsers.Parse (Raw (First .. Index - 1), Doc, Error);
+               Assert (not Jsonlib.Errors.Failed (Error), "sampled loop capture was malformed");
+               if J.As_String (Doc, J.Member (Doc, J.Root (Doc), "kind")) = "generation_start" then
+                  Jsonlib.Parsers.Parse
+                    (J.As_String (Doc, J.Member (Doc, J.Root (Doc), "payload")), Data, Error);
+                  Assert (not Jsonlib.Errors.Failed (Error) and then
+                    J.As_Boolean (Data, J.Member (Data, J.Root (Data), "grammar_constrained")),
+                    "actual Open_JSON sampling dropped the tool grammar");
+                  Generations := Generations + 1;
+               end if;
+               First := Index + 1;
+            end if;
+         end loop;
+      end;
+      Assert (Generations >= 2, "the sampled constraint check never exercised a later reply");
+   end Open_Reader_Keeps_Sampled_Constraints;
+
    procedure Capture_Follows_A_Real_Helper (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
       package Traces renames Model_Runner.Trajectories;
@@ -2275,6 +2339,8 @@ package body Tests.Agent_Loop_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine (T, Open_Reader_Keeps_Sampled_Constraints'Access,
+        "sampled open-reader replies retain constraints after the first turn");
       Register_Routine (T, Capture_Uses_The_Actual_Agent_Loop'Access,
         "full capture observes real tool execution and never changes its outcome");
       Register_Routine (T, Capture_Follows_A_Real_Helper'Access,

@@ -217,15 +217,10 @@ package body Model_Runner.Agent is
       --  0.8B wrote <parameter/op> and lost the argument; shaped, it
       --  cannot. Gemma's Python calls are shaped the same way, the block
       --  that opens one the only fence prose may not hold.
-      --  Open_JSON alone is left free where tools are offered --
-      --  its point is to read the object a model writes without any
-      --  envelope, and the grammar's prose would admit that object and
-      --  shape nothing -- and shaped by the answer schema where none are,
-      --  since an answer is the same JSON whichever syntax the calls take.
-      Constrain : constant Boolean :=
-        (Have_Tools or else Answer_Schema /= "")
-        and then (Read_Syntax /= Model_Runner.Tools.Open_JSON
-                  or else not Have_Tools);
+      --  Open_JSON still reads bare objects, but marked calls must obey
+      --  their schemas too. Its prose admits bare JSON while excluding the
+      --  tool opener, so marked calls cannot escape through the prose arm.
+      Constrain : constant Boolean := Have_Tools or else Answer_Schema /= "";
 
       --  The grammar, compiled once: the tools do not change between steps,
       --  so neither does what a call may look like.
@@ -1198,6 +1193,9 @@ package body Model_Runner.Agent is
                   end if;
                   declare
                      Continued : constant String := Rendered.all & U.To_String (Thought_Before);
+                     Resumed_Rules : constant Gen.Grammar_Reference :=
+                       (if Gen."/=" (First_Rules, null) and then Result.Steps = 0
+                          and then not Prompt_Thought then First_Rules else Rules);
                   begin
                      --  The whole reply's room again after its thought, not
                      --  what the thought left: a thought at its budget left
@@ -1233,14 +1231,13 @@ package body Model_Runner.Agent is
                            Prompt   => Continued,
                            Item     => Request,
                            Stop_Set => Stop_Set,
-                           --  The call grammar holds a reply from its start:
-                           --  after a closing it starts one again, but in the
-                           --  middle of a call begun it would ask for another.
-                           Rules    =>
-                             (if not Was_Open then null
-                              elsif Gen."/=" (First_Rules, null) and then Result.Steps = 0
-                                and then not Prompt_Thought then First_Rules
-                              else Rules),
+                           --  A forced thought closing begins a fresh reply.
+                           --  A partial call instead resumes the grammar at
+                           --  the already generated prefix, without dropping it.
+                           Rules    => Resumed_Rules,
+                           Rules_Prefix =>
+                             (if not Was_Open and then Gen."/=" (Resumed_Rules, null)
+                              then U.To_String (Thought_Before) else ""),
                            Sink     => Watched,
                            Observer => null,
                            Time     => Time,

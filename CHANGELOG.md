@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Runtime call constraints.** Open JSON readers constrain marked calls on later turns as well as the
+  first. Generation resumed inside a partial call retains its grammar prefix; captured evidence records
+  that prefix and rejects invalid encodings or a prefix without a grammar.
+
 - **Edit selectors in constrained calls.** The advertised edit schema requires either a body reference
   or an exact old passage, and prevents calls with neither or both. Recovery errors name both modes;
   source-matching and revision checks remain in force.

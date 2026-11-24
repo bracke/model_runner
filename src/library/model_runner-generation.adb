@@ -198,7 +198,8 @@ package body Model_Runner.Generation is
         Model_Runner.Limits.Default_Session_Limits;
       Pictures : Picture_Set := No_Pictures;
       Capture  : access Model_Runner.Trajectories.Recorder := null;
-      Outcome  : out Result)
+      Outcome  : out Result;
+      Rules_Prefix : String := "")
    is
       Settings : constant L.Configuration := L.Config (Source);
       Words    : constant access constant Vocab.Vocabulary :=
@@ -1396,6 +1397,7 @@ package body Model_Runner.Generation is
                & ",""max_tokens"":" & I (Long_Long_Integer (Item.Max_Tokens))
                & ",""grammar_constrained"":" & (if Rules = null then "false" else "true")
                & ",""grammar"":" & (if Rules = null then "null" else Model_Runner.Grammar.Snapshot (Rules.all))
+               & ",""grammar_prefix_hex"":" & Q (Model_Runner.Trajectories.Hex_Bytes (Rules_Prefix))
                & ",""stop_tokens"" :[" & To_String (Stop_Tokens)
                & "],""stop_strings_hex"" :[" & To_String (Stop_Strings) & "]}");
          end;
@@ -1451,9 +1453,17 @@ package body Model_Runner.Generation is
          return;
       end if;
 
+      if Rules = null and then Rules_Prefix'Length > 0 then
+         Conclude (Runtime_Error, E.Make (E.Grammar_Syntax_Error));
+         Cleanup;
+         return;
+      end if;
       if Rules /= null then
          Vocab.Decode_All (Words.all, Spelt);
          Model_Runner.Grammar.Start (Rules.all, Shape, Status);
+         if E.Is_Ok (Status) and then Rules_Prefix'Length > 0 then
+            Model_Runner.Grammar.Advance (Rules.all, Shape, Rules_Prefix, Status);
+         end if;
          if E.Is_Error (Status) then
             Conclude (Runtime_Error, Status);
             Cleanup;

@@ -497,6 +497,16 @@ package body Model_Runner.Trajectories is
                   Refuse ("constrained generation is missing its compiled grammar");
                   return;
                end if;
+               if J.Is_Present (Field ("grammar_prefix_hex"))
+                 and then (Value_Kind_Of (Data, Field ("grammar_prefix_hex")) /= J.String_Value
+                   or else Text ("grammar_prefix_hex")'Length mod 2 /= 0
+                   or else (for some C of Text ("grammar_prefix_hex") => C not in '0' .. '9' | 'a' .. 'f')
+                   or else (Text ("grammar_prefix_hex")'Length > 0
+                     and then not J.As_Boolean (Data, Field ("grammar_constrained"))))
+               then
+                  Refuse ("invalid continuation prefix or missing grammar");
+                  return;
+               end if;
                Vocabulary_Size := Int ("vocabulary_size");
                Max_Tokens := Int ("max_tokens");
                Generating := True;

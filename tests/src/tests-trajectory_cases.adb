@@ -77,11 +77,13 @@ package body Tests.Trajectory_Cases is
       Assert (E.Is_Ok (Status), "could not open trajectory fixture: " & Status.Code'Image);
    end Start;
 
-   procedure Generation (Item : in out T.Recorder; Mask : Natural := 0; Tokens : Natural := 1) is
+   procedure Generation
+     (Item : in out T.Recorder; Mask : Natural := 0; Tokens : Natural := 1; Prefix : String := "") is
    begin
       T.Append (Item, T.Generation_Start,
         "{""vocabulary_size"":16,""max_tokens"":4,""sampling_ada"":""fixture"",""request_ada"":""fixture"","
-        & """grammar_constrained"":false,""grammar"":null,""stop_tokens"":[],""stop_strings_hex"":[]}");
+        & """grammar_constrained"":false,""grammar"":null,""grammar_prefix_hex"":" & T.Quote (Prefix)
+        & ",""stop_tokens"":[],""stop_strings_hex"":[]}");
       T.Append (Item, T.Model_Input,
         "{""prompt"":""hello"",""tokens"" :[1,4],""loss_mask"":" & T.Number (Long_Long_Integer (Mask)) & "}");
       T.Selected (Item, 5, [Character'Val (16#C3#)], False);
@@ -165,7 +167,7 @@ package body Tests.Trajectory_Cases is
       Status : E.Error_Info;
    begin
       Fresh ("structural");
-      for Which in 1 .. 4 loop
+      for Which in 1 .. 7 loop
          Start (Item, "structural");
          if Which = 1 then
             Generation (Item, Mask => 1);
@@ -173,8 +175,10 @@ package body Tests.Trajectory_Cases is
             Generation (Item, Tokens => 2);
          elsif Which = 3 then
             T.Append (Item, T.Tool_Result, "{""id"":1,""text"":""x"",""ending"":""answered""}");
-         else
+         elsif Which = 4 then
             T.Append (Item, T.Forced_Text, "{""text"":""</think>"",""loss_mask"":1}");
+         else
+            Generation (Item, Prefix => (case Which is when 5 => "6", when 6 => "xx", when others => "61"));
          end if;
          Finish (Item);
          T.Validate (T.Path (Item), Checked, Status);
@@ -393,6 +397,40 @@ package body Tests.Trajectory_Cases is
               and then Ada.Strings.Fixed.Index (Raw, "7a7a") > 0,
               "capture omitted the compiled constraint or exact stop-string bytes");
          end;
+         Model_Runner.Generation.Release (Captured);
+         Model_Runner.Grammar.Close (Rules);
+         Model_Runner.Llama.Reset (Session);
+         Model_Runner.Grammar.Compile (Rules, "root ::= ""abc""", Status);
+         Assert (E.Is_Ok (Status), "continuation grammar did not compile");
+         Start (Evidence, "native");
+         Model_Runner.Generation.Generate
+           (Ready, Session, "helloab", Request, Stop, Rules => Rules'Unchecked_Access,
+            Rules_Prefix => "ab", Sink => null, Observer => null, Time => null, Seeds => null, Cancel => null,
+            Capture => Evidence'Unchecked_Access, Outcome => Captured);
+         Finish (Evidence);
+         Assert (E.Is_Ok (Captured.Error) and then Captured.Generated_Tokens = 1
+           and then Model_Runner.Generation.Generated_Text (Captured) = "c",
+           "a sampled continuation restarted or discarded the grammar instead of resuming it");
+         T.Validate (T.Path (Evidence), Checked, Status);
+         Assert (E.Is_Ok (Status) and then Checked.Exact_Tokens,
+           "a constrained continuation lost exact capture eligibility");
+         Assert (Ada.Strings.Fixed.Index (Project_Tools.Files.Read_Raw_File (T.Path (Evidence)), "6162") > 0,
+           "capture omitted the already generated grammar prefix");
+         Model_Runner.Generation.Release (Captured);
+         Model_Runner.Llama.Reset (Session);
+         Model_Runner.Generation.Generate
+           (Ready, Session, "hello", Request, Stop, Rules => Rules'Unchecked_Access,
+            Rules_Prefix => "ax", Sink => null, Observer => null, Time => null, Seeds => null, Cancel => null,
+            Outcome => Captured);
+         Assert (E.Is_Error (Captured.Error) and then Captured.Generated_Tokens = 0,
+           "an invalid grammar prefix reached sampling");
+         Model_Runner.Generation.Release (Captured);
+         Model_Runner.Llama.Reset (Session);
+         Model_Runner.Generation.Generate
+           (Ready, Session, "hello", Request, Stop, Rules_Prefix => "ab",
+            Sink => null, Observer => null, Time => null, Seeds => null, Cancel => null, Outcome => Captured);
+         Assert (E.Is_Error (Captured.Error) and then Captured.Generated_Tokens = 0,
+           "a continuation prefix silently ran without its grammar");
          Model_Runner.Generation.Release (Captured);
          Model_Runner.Grammar.Close (Rules);
          Model_Runner.Llama.Close (Session);

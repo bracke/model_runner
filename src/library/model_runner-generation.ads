@@ -631,6 +631,8 @@ package Model_Runner.Generation is
    --    words, the whole picture and each crop framed the same way.
    --  @param Outcome Completion reason, counts, timings and any diagnostic.
    --  @param Capture Optional complete token recorder; failures affect capture only.
+   --  @param Rules_Prefix Already generated reply bytes to advance the grammar before sampling a continuation.
+   --    Requires Rules when nonempty; it is not generated, emitted or counted again.
    procedure Generate
      (Source   : Model_Runner.Llama.Model'Class;
       Session  : in out Model_Runner.Llama.Session;
@@ -650,6 +652,7 @@ package Model_Runner.Generation is
         Model_Runner.Limits.Default_Session_Limits;
       Pictures : Picture_Set := No_Pictures;
       Capture  : access Model_Runner.Trajectories.Recorder := null;
-      Outcome  : out Result);
+      Outcome  : out Result;
+      Rules_Prefix : String := "");
 
 end Model_Runner.Generation;

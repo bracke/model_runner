@@ -32,3 +32,20 @@ unchanged/reference controls qualify, and their complete task identity records e
 The corrected model run follows the full suite and repository audit; its eventual results must be
 reported separately, including every failure. This adaptive engineering evaluation reuses tasks observed
 before the repair and cannot serve as a blind confirmation of a general adapter improvement.
+
+That comparison was subsequently stopped after four CRLF attempts: base seed 71 passes; the other three
+time out. Its [four native records](ada-transfer-schema-partial.json) remain unchanged, with twenty planned
+attempts unattempted. Trained seed 72 emits another selector-less marked edit despite the corrected schema.
+Its actual `Open_JSON` agent path deliberately disables generation constraints after the first call.
+The schema and grammar tests therefore did not prove the constraint was active in this workflow.
+
+The runtime repair constrains marked calls on every open-reader turn while retaining bare JSON prose.
+It also resumes the grammar at an already generated prefix when a thought budget cuts a call in progress,
+instead of dropping the grammar for the continuation. A sampled agent regression checks both first and
+later generations. A separate native sampling regression requires only the remaining suffix, records the
+prefix in the capture and rejects invalid prefixes before sampling. All ten trajectory checks pass.
+The complete runtime-repair suite passes **1,002/1,002 tests**, with zero failed assertions and unexpected
+errors. The normal production/dependent tests build passes in 143.77 seconds, followed by the final
+incremental tests build in 17.73 seconds; changed units have no compiler warnings.
+The [runtime protocol](ada-transfer-runtime-protocol.md) controls the next separate comparison and requires
+checking actual generation metadata, including continuations, rather than assuming grammar use.

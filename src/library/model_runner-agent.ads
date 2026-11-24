@@ -526,9 +526,9 @@ package Model_Runner.Agent is
    --    Tool_Call_JSON, is the <tool_call> convention; Function_XML
    --    (MiniCPM's <function>/<param>) and Qwen_XML (Qwen3-Coder's
    --    <function=..>/<parameter=..>) are shaped as tags, a <think> block
-   --    admitted ahead of the reply; Open_JSON (Gemma's) reads the envelope
-   --    and the bare or fenced object a model writes instead, and is left
-   --    free where tools are offered.
+   --    admitted ahead of the reply; Open_JSON reads the envelope and the
+   --    bare or fenced object a model writes instead. Marked calls obey the
+   --    tool schemas; bare JSON remains admissible as prose.
    --  @param Thinking Whether to ask the template for a thinking block.
    --  @param Effort How much to ask it to reason, where its template takes
    --    a level; unstated leaves it to Thinking.

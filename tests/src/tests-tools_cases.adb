@@ -329,6 +329,10 @@ package body Tests.Tools_Cases is
       --  These reproduce the selector-less calls observed in both trained native timeouts.
       Assert (not Full_Set_Takes (Call ("{" & Path & "," & Neww & "}")),
               "a selector-less edit remained possible in the constrained call grammar");
+      Assert (not Full_Set_Takes_In (Tools.Open_JSON, Call ("{" & Path & "," & Neww & "}")),
+              "the open reader's marked calls admitted a selector-less edit");
+      Assert (Full_Set_Takes_In (Tools.Open_JSON, "Example: {""name"":""sample""}"),
+              "the open reader's prose lost ordinary JSON examples");
       Assert (Full_Set_Takes (Call ("{" & Path & "," & Ref & "," & Neww & "}")),
               "the constrained grammar refused a valid body-reference edit");
       Assert (Full_Set_Takes (Call ("{" & Path & "," & Old & "," & Neww & "}")),

@@ -9,6 +9,10 @@ defect. Its [six preserved results](ada-transfer-original-partial.json) remain u
 attempts were not run. The [corrective protocol](ada-transfer-selector-protocol.md) declares a separate
 24-attempt comparison after the [edit-contract repair](ada-transfer-selector-repair.md). Results from
 these two harness versions must not be combined as one comparison.
+The schema-only comparison also stopped after four attempts when actual Mellum generation exposed an
+unconstrained open-reader path. Its [partial results](ada-transfer-schema-partial.json) remain separate.
+The [runtime protocol](ada-transfer-runtime-protocol.md) declares the subsequent evaluation and requires
+checking actual captured generation constraints.
 
 Each snapshot contains the original tracked `src` tree from the parent of its specified historical fix,
 the original license, a small compilation main, public checks and a tracked empty object directory.
