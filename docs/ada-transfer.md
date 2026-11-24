@@ -4,6 +4,12 @@ The [predeclared protocol](ada-transfer-protocol.md) defines six real-source tas
 regexp and versionlib, at two paired seeds, using base Mellum and the unchanged selected merged model.
 The tools are native Ada programs in the tests crate. They add no production dependency or model default.
 
+The original run was stopped after six attempts when repeated timeouts exposed an edit-tool contract
+defect. Its [six preserved results](ada-transfer-original-partial.json) remain unchanged; eighteen planned
+attempts were not run. The [corrective protocol](ada-transfer-selector-protocol.md) declares a separate
+24-attempt comparison after the [edit-contract repair](ada-transfer-selector-repair.md). Results from
+these two harness versions must not be combined as one comparison.
+
 Each snapshot contains the original tracked `src` tree from the parent of its specified historical fix,
 the original license, a small compilation main, public checks and a tracked empty object directory.
 The Boolean parser task adds a real public API in the specification and body. Matcher tasks operate on

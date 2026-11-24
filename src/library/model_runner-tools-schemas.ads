@@ -71,6 +71,15 @@ package Model_Runner.Tools.Schemas is
       Description : String;
       Parameters  : Parameter_List) return String;
 
+   --  A tool whose arguments must match one of two closed parameter objects.
+   --  @param Name The function's name.
+   --  @param Description What it does, for the model.
+   --  @param First First complete argument shape, including its required parameters.
+   --  @param Second Second complete argument shape, including its required parameters.
+   --  @return The JSON definition, with both argument shapes expressed as anyOf alternatives.
+   function Alternative_Definition
+     (Name, Description : String; First, Second : Parameter_List) return String;
+
    --  A string as JSON writes it: quoted, with every quote, backslash and
    --  control character escaped.
    --

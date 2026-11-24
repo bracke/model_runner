@@ -819,6 +819,11 @@ package body Model_Runner.Schema is
             if Refused then
                return;
             end if;
+            if Has_Member (Source, "additionalProperties") then
+               --  Merging closed allOf members would admit keys each separate member forbids.
+               Refuse ("allOf with closed object members");
+               return;
+            end if;
 
             Named_Type (Source, Type_First, Type_Last);
             if Type_Last >= Type_First
@@ -1407,8 +1412,8 @@ package body Model_Runner.Schema is
       --  order the schema names them. Unlike the JSON shape no comma
       --  stands between them, so a property that may be absent may be
       --  absent wherever it stands, the first included.
-      procedure Tag_Object_Shape (From : Natural) is
-         At_Props : Natural;
+      procedure Tag_Object_Shape (From : Natural; Depth : Natural := 0) is
+         At_Props, At_Any : Natural;
          Failed   : Boolean;
          Item     : Reader;
          Count    : Natural := 0;
@@ -1416,6 +1421,61 @@ package body Model_Runner.Schema is
       begin
          Known_Keywords (From);
          if Refused or else Malformed then
+            return;
+         end if;
+         if Depth > Max_Depth then
+            Refuse ("nesting");
+            return;
+         end if;
+         Find_Member (Text, From, "anyOf", At_Any, Failed);
+         if not Failed and then At_Any /= 0 then
+            if Has_Member (From, "type") or else Has_Member (From, "properties")
+              or else Has_Member (From, "required") or else Has_Member (From, "const")
+              or else Has_Member (From, "enum") or else Has_Member (From, "$ref")
+              or else Has_Member (From, "allOf") or else Has_Member (From, "oneOf")
+            then
+               Refuse ("tag anyOf with schema siblings");
+               return;
+            end if;
+            Item := (At_Char => At_Any, others => <>);
+            Skip_Blanks (Text, Item);
+            if Item.At_Char > Text'Last or else Text (Item.At_Char) /= '[' then
+               Malformed := True;
+               return;
+            end if;
+            Item.At_Char := Item.At_Char + 1;
+            Put ("(");
+            loop
+               Skip_Blanks (Text, Item);
+               exit when Item.At_Char > Text'Last or else Text (Item.At_Char) = ']';
+               declare
+                  First, Last_At : Natural;
+               begin
+                  Read_Value (Text, Item, First, Last_At);
+                  if Item.Failed or else Text (First) /= '{' then
+                     Malformed := True;
+                     return;
+                  end if;
+                  Count := Count + 1;
+                  if Count > 64 then
+                     Refuse ("too many schema alternatives");
+                     return;
+                  end if;
+                  if Count > 1 then
+                     Put (" | ");
+                  end if;
+                  Tag_Object_Shape (First, Depth + 1);
+                  exit when Refused or else Malformed;
+                  Skip_Blanks (Text, Item);
+                  if Item.At_Char <= Text'Last and then Text (Item.At_Char) = ',' then
+                     Item.At_Char := Item.At_Char + 1;
+                  end if;
+               end;
+            end loop;
+            Put (")");
+            if Count = 0 then
+               Malformed := True;
+            end if;
             return;
          end if;
 
@@ -1554,8 +1614,21 @@ package body Model_Runner.Schema is
 
                declare
                   Word : constant String := Text (Key_First .. Key_Last);
+                  Type_First, Type_Last : Natural;
                begin
-                  if Word /= "type" and then Word /= "properties"
+                  if Word = "additionalProperties" then
+                     Named_Type (From, Type_First, Type_Last);
+                     if Text (Value_First .. Value_Last) /= "false"
+                       or else Type_Last < Type_First or else Text (Type_First .. Type_Last) /= "object"
+                       or else not Has_Member (From, "properties")
+                       or else Has_Member (From, "$ref") or else Has_Member (From, "const")
+                       or else Has_Member (From, "enum") or else Has_Member (From, "allOf")
+                       or else Has_Member (From, "anyOf") or else Has_Member (From, "oneOf")
+                     then
+                        Refuse ("additionalProperties outside a plain closed object");
+                        return;
+                     end if;
+                  elsif Word /= "type" and then Word /= "properties"
                     and then Word /= "required" and then Word /= "items"
                     and then Word /= "enum" and then Word /= "const"
                     and then Word /= "allOf"

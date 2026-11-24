@@ -62,10 +62,7 @@ package body Model_Runner.Tools.Schemas is
    -- Definition --
    ----------------
 
-   function Definition
-     (Name        : String;
-      Description : String;
-      Parameters  : Parameter_List) return String
+   function Parameter_Schema (Parameters : Parameter_List; Closed : Boolean := False) return String
    is
       Properties : Unbounded_String;
       Required   : Unbounded_String;
@@ -92,12 +89,30 @@ package body Model_Runner.Tools.Schemas is
             end if;
          end;
       end loop;
-      return "{""type"": ""function"", ""function"": {""name"": " & Quoted (Name)
-        & ", ""description"": " & Quoted (Description)
-        & ", ""parameters"": {""type"": ""object"", ""properties"": {"
+      return "{""type"": ""object"", ""properties"": {"
         & To_String (Properties) & "}"
         & (if Length (Required) = 0 then "" else ", ""required"": [" & To_String (Required) & "]")
-        & "}}}";
+        & (if Closed then ", ""additionalProperties"": false" else "") & "}";
+   end Parameter_Schema;
+
+   function Definition
+     (Name        : String;
+      Description : String;
+      Parameters  : Parameter_List) return String
+   is
+   begin
+      return "{""type"": ""function"", ""function"": {""name"": " & Quoted (Name)
+        & ", ""description"": " & Quoted (Description)
+        & ", ""parameters"": " & Parameter_Schema (Parameters) & "}}";
    end Definition;
+
+   function Alternative_Definition
+     (Name, Description : String; First, Second : Parameter_List) return String is
+   begin
+      return "{""type"": ""function"", ""function"": {""name"": " & Quoted (Name)
+        & ", ""description"": " & Quoted (Description)
+        & ", ""parameters"": {""anyOf"": [" & Parameter_Schema (First, Closed => True)
+        & ", " & Parameter_Schema (Second, Closed => True) & "]}}}";
+   end Alternative_Definition;
 
 end Model_Runner.Tools.Schemas;

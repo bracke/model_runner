@@ -77,16 +77,17 @@ package body Model_Runner.Tools.Registry is
          ("list_directory", "List the entries of a directory.", [Sc.Text ("path")]))),
       (W ("find"), Read_Files, True, Reads, Files, True, Reads_Path, null),
       (W ("edit_file"), Write_Files, True, Changes, Files, False, Writes_Path,
-       W (Sc.Definition
+       W (Sc.Alternative_Definition
          ("edit_file",
-            "For a whole Ada function/procedure body, prefer ref from find kind declaration: give path, ref"
+            "Give exactly one selector: ref or old_text. Do not include displayed line-number prefixes."
+            & " For a whole Ada function/procedure body, prefer ref from find kind declaration: give path, ref"
             & " and new_text (the complete replacement body), without old_text or copied indentation."
             & " The ref must name one complete multiline body, at most 400 lines, at its current revision."
             & " Success returns a fresh ref for another edit."
             & " Otherwise give path, old_text and new_text to replace one passage; old_text must occur once."
             & " Optional revision protects a passage edit; in ref mode it must agree with ref.",
-            [Sc.Text ("path"), Sc.Text ("ref", Required => False), Sc.Text ("new_text"),
-             Sc.Text ("old_text", Required => False), Sc.Text ("revision", Required => False)]))),
+            [Sc.Text ("path"), Sc.Text ("ref"), Sc.Text ("new_text"), Sc.Text ("revision", Required => False)],
+            [Sc.Text ("path"), Sc.Text ("old_text"), Sc.Text ("new_text"), Sc.Text ("revision", Required => False)]))),
       (W ("write_file"), Write_Files, True, Changes, Files, False, Writes_Path,
        W (Sc.Definition
          ("write_file", "Write a new file, or one rewritten whole -- edit_file changes part of one.",

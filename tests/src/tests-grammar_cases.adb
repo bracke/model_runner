@@ -696,6 +696,21 @@ package body Tests.Grammar_Cases is
       Check ("{""type"":""object"",""properties"":"
              & "{""a"":{""type"":""integer""}}}",
              "{""a"":1,""c"":2}", False, "an object with one too many");
+      Check ("{""type"":""object"",""properties"":{""a"":{""type"":""integer""}},"
+             & """additionalProperties"":false}",
+             "{""a"":1}", True, "an explicitly closed object");
+      Check ("{""type"":""object"",""properties"":{""a"":{""type"":""integer""}},"
+             & """additionalProperties"":false}",
+             "{""a"":1,""extra"":2}", False, "an extra key in an explicitly closed object");
+      Refuses ("{""allOf"":[{""type"":""object"",""properties"":{""a"":{""type"":""integer""}},"
+               & """additionalProperties"":false},{""type"":""object"",""properties"":{"
+               & """b"":{""type"":""integer""}}}]}", "closed allOf members cannot be merged permissively");
+      Refuses ("{""type"":""object"",""properties"":{},""additionalProperties"":false,"
+               & """anyOf"":[{""type"":""object"",""properties"":{""a"":{""type"":""integer""}}}]}",
+               "a closed object constraint cannot be dropped beside anyOf");
+      Refuses ("{""$ref"":""#/$defs/value"",""additionalProperties"":false,"
+               & """$defs"":{""value"":{""type"":""object"",""properties"":{""a"":{""type"":""integer""}}}}}",
+               "a closed object constraint cannot be dropped beside a reference");
 
       Check ("{""type"":""array"",""items"":{""type"":""integer""}}",
              "[]", True, "an empty array");

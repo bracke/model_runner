@@ -292,6 +292,49 @@ package body Tests.Tools_Cases is
       return Held;
    end Full_Set_Takes_In;
 
+   procedure Edit_Selectors_Are_Required (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      function Call (Args : String) return String is
+        ("<tool_call>{""name"":""edit_file"",""arguments"":" & Args & "}</tool_call>");
+      function Tag_Call (Selector : String) return String is
+        ("<tool_call><function=edit_file><parameter=path>src/demo.adb</parameter>" & Selector
+         & "<parameter=new_text>fixed</parameter></function></tool_call>");
+      Path : constant String := """path"":""src/demo.adb""";
+      Ref : constant String := """ref"":""src/demo.adb:1-3@0123456789abcdef""";
+      Old : constant String := """old_text"":""old""";
+      Neww : constant String := """new_text"":""fixed""";
+   begin
+      --  These reproduce the selector-less calls observed in both trained native timeouts.
+      Assert (not Full_Set_Takes (Call ("{" & Path & "," & Neww & "}")),
+              "a selector-less edit remained possible in the constrained call grammar");
+      Assert (Full_Set_Takes (Call ("{" & Path & "," & Ref & "," & Neww & "}")),
+              "the constrained grammar refused a valid body-reference edit");
+      Assert (Full_Set_Takes (Call ("{" & Path & "," & Old & "," & Neww & "}")),
+              "the constrained grammar refused a valid exact-passage edit");
+      Assert (Full_Set_Takes (Call ("{" & Path & "," & Old & "," & Neww & ",""revision"":""v1""}")),
+              "an optional passage revision was lost");
+      Assert (not Full_Set_Takes (Call ("{" & Path & "," & Ref & "," & Old & "," & Neww & "}")),
+              "the grammar admitted two conflicting edit selectors");
+      Assert (not Full_Set_Takes (Call ("{" & Path & "," & Ref & "}")),
+              "a replacement-free edit was admitted");
+      Assert (not Full_Set_Takes_In (Tools.Qwen_XML, Tag_Call ("")),
+              "the tag grammar fell back to admitting selector-less edits");
+      Assert (Full_Set_Takes_In
+                (Tools.Qwen_XML, Tag_Call
+                   ("<parameter=ref>src/demo.adb:1-3@0123456789abcdef</parameter>")),
+              "the tag grammar refused a body-reference selector");
+      Assert (Full_Set_Takes_In (Tools.Qwen_XML, Tag_Call ("<parameter=old_text>old</parameter>")),
+              "the tag grammar refused an exact-passage selector");
+      Assert (not Full_Set_Takes_In
+                (Tools.Function_XML,
+                 "<function name=""edit_file""><param name=""path"">src/demo.adb</param>"
+                 & "<param name=""new_text"">fixed</param></function>"),
+              "a second tag dialect admitted a selector-less edit");
+      Assert (Ada.Strings.Fixed.Index
+                (Answer ("edit_file", "{" & Path & "," & Neww & "}"), "exactly one of ref or old_text") > 0,
+              "runtime recovery failed to name both valid selector modes");
+   end Edit_Selectors_Are_Required;
+
    --  The two tag syntaxes are shaped by the grammar as the envelope is:
    --  a call in the Qwen3-Coder form or the MiniCPM form names a tool on
    --  offer and gives each parameter in its own tag, with the tool's
@@ -5637,6 +5680,8 @@ package body Tests.Tools_Cases is
         (T, Full_Set_Is_Tight'Access,
          "the whole built-in set builds the tight grammar, not the loose "
          & "fallback");
+      Register_Routine
+        (T, Edit_Selectors_Are_Required'Access, "edit calls require exactly one selector in JSON and tag grammars");
       Register_Routine
         (T, Retrieve_Ranks_The_Folder'Access,
          "retrieve ranks a folder tree's passages against a query, descends "

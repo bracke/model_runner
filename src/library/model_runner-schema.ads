@@ -23,6 +23,7 @@ with Model_Runner.Errors;
 --    allOf         exact primitive intersection or closed-object merge
 --    anyOf         a union of supported member schemas
 --    oneOf         a union where member types are provably disjoint
+--    additionalProperties false on a plain object with properties; closed allOf merges remain refused
 --    $ref          document-local JSON pointers through $defs/definitions
 --
 --  Everything else is refused where it is met rather than approximated. A
@@ -86,7 +87,7 @@ package Model_Runner.Schema is
    --  themselves without quotes, a number or a boolean is written as it
    --  would be anywhere, and an object or an array is JSON, since that is
    --  what those families write for one. The schema must be an object
-   --  with properties; anything else is refused.
+   --  with properties or an anyOf union of those objects; anything else is refused.
    --
    --  @param Text The schema, as JSON.
    --  @param Before What opens a parameter's tag, before its name.

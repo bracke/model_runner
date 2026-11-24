@@ -1,5 +1,9 @@
 # Real Ada transfer implementation validation
 
+This page records the original harness qualification. The original model comparison was subsequently
+stopped after six attempts; see the [preserved partial results](ada-transfer-original-partial.json) and
+[edit-contract repair](ada-transfer-selector-repair.md) for the separate corrective evaluation.
+
 The normal production build passes in 18.74 seconds. The forced tests build passes in 1,586.18 seconds,
 including dependency rebuilds for production and test profiles. Changed project units have no compiler
 warnings. Existing dependency diagnostics remain subject to the repository's recorded allowances.

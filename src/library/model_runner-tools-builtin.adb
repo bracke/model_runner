@@ -1259,7 +1259,9 @@ package body Model_Runner.Tools.Builtin is
          return As_Reply (Model_Runner.Tools.Editing.Edit_Reference (Path, Ref, Neww, Base));
       end if;
       if not (Have_P and then Have_O and then Have_N) then
-         return Failure ("edit_file needs a path, old_text and new_text");
+         return Failure
+           ("edit_file needs a path and new_text, plus exactly one of ref or old_text."
+            & " Get a whole body ref with find kind declaration, or copy old_text exactly from a fresh read.");
       end if;
       return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev, Base));
    end Edit_File;
@@ -1277,7 +1279,9 @@ package body Model_Runner.Tools.Builtin is
          return Edit_File (Args, Base);
       end if;
       if not (Have_P and then Have_O and then Have_N) then
-         return Failure ("edit_file needs a path, old_text and new_text");
+         return Failure
+           ("edit_file needs a path and new_text, plus exactly one of ref or old_text."
+            & " Get a whole body ref with find kind declaration, or copy old_text exactly from a fresh read.");
       end if;
       return As_Reply (Model_Runner.Tools.Editing.Edit (Path, Old, Neww, Rev, Base, First, Last));
    end Edit_File_Near;

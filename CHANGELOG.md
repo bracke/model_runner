@@ -7,6 +7,10 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Edit selectors in constrained calls.** The advertised edit schema requires either a body reference
+  or an exact old passage, and prevents calls with neither or both. Recovery errors name both modes;
+  source-matching and revision checks remain in force.
+
 - **Multi-file completion guidance.** Root, child and helper instructions specify commas or following
   lines between changed paths while preserving spaces within a filename. Existing path checks remain in force.
 
