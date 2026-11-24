@@ -1,5 +1,9 @@
 # Historical Ada transfer evaluation
 
+**Closed: adapter retired by the user.** The [decision and outcomes](ada-transfer-results.md) record three
+completed runtime-qualified pairs, one final unpaired failure and seventeen unattempted jobs. No further
+adapter evaluation is scheduled. All earlier partial comparisons remain preserved separately.
+
 The [predeclared protocol](ada-transfer-protocol.md) defines six real-source tasks from project_tools,
 regexp and versionlib, at two paired seeds, using base Mellum and the unchanged selected merged model.
 The tools are native Ada programs in the tests crate. They add no production dependency or model default.

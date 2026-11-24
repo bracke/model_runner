@@ -1,5 +1,9 @@
 # Mellum local training and held-out results
 
+**Subsequent decision: checkpoint retired.** The user rejected this adapter after the
+[historical Ada transfer check](ada-transfer-results.md). The original pilot below remains unchanged;
+its small descriptive difference did not establish a general benefit.
+
 The original predeclared comparison is complete: **trained 5/9, base 4/9**, with two trained wins,
 one trained loss, three pairs both passed and three both failed. All eighteen attempts finished with
 zero infrastructure errors. This is a descriptive pilot on three task families and three seeds;
@@ -107,7 +111,7 @@ confinement was hardened to hide all sibling attempts; its real visibility/write
 Observed teaching file requests stayed within the fixture sources.
 
 Local retained artifacts are under `artifacts/mellum-learning-v1/obj/`:
-`fitted/selected.gguf` is the trained adapter; `mellum-output-lora-r8-merged.gguf` is the usable model.
+`fitted/selected.gguf` is the retired adapter; `mellum-output-lora-r8-merged.gguf` is its retired merged model.
 The zero control, all epochs, final checkpoint, features, datasets, raw projects/captures and frozen programs
 remain local. Large weights are excluded from version control. See [usage and limits](mellum-learning.md).
 

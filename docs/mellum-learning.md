@@ -1,5 +1,9 @@
 # Native local Mellum output-adapter experiment
 
+**Checkpoint retired on 2026-11-24.** The [historical Ada transfer check](ada-transfer-results.md) gives
+base 1/3 and trained 0/3 on completed matched pairs. The user chose to ditch this adapter; no further
+evaluation or fitting is scheduled. Local weights remain preserved as experimental evidence.
+
 The [protocol](mellum-learning-protocol.md) and [data-selection contract](mellum-learning-curation.md)
 define this experiment. It trains a rank-eight low-rank output-projection update against the exact local
 quantized Mellum base. The transformer is frozen. This is a small supervised local experiment, not
@@ -76,7 +80,7 @@ with paired seeds and unchanged thinking defaults. It reports every failure and 
 nine pairs on three task families cannot establish a broad accuracy or non-inferiority claim.
 
 Local weights and evidence live under `artifacts/mellum-learning-v1/obj/`, outside version control:
-`fitted/selected.gguf` is the trained adapter, and `mellum-output-lora-r8-merged.gguf` is the usable model.
+`fitted/selected.gguf` is the retired adapter; `mellum-output-lora-r8-merged.gguf` is its retired merged model.
 `fitted/` also retains the zero control, every epoch and the final checkpoint. The original collection and
 the two infrastructure starts are preserved in `collection-evidence.tar.gz`, with repository-relative paths.
 `evaluation-evidence.tar.gz` preserves all eighteen original attempts and the separate failed-source checks.

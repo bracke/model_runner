@@ -1,5 +1,8 @@
 {
   "schema": "model_runner.mellum_learning_artifacts.v1",
+  "checkpoint_status": "retired",
+  "retirement_record": "RETIRED.json",
+  "decision_report": "docs/ada-transfer-results.md",
   "root": "artifacts/mellum-learning-v1/obj",
   "excluded_from_version_control": true,
   "collection_archive": {

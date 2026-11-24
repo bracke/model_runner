@@ -1,0 +1,68 @@
+{
+  "schema": "model_runner.ada_transfer_artifacts.v1",
+  "checkpoint_status": "retired",
+  "decision_report": "docs/ada-transfer-results.md",
+  "complete_native_partial_report": "docs/ada-transfer-runtime-partial.json",
+  "private_root": "artifacts/ada-transfer-v1/obj",
+  "excluded_from_version_control": true,
+  "counts": {
+    "original_partial": 6,
+    "schema_only_partial": 4,
+    "runtime_partial": 7,
+    "runtime_unattempted": 17,
+    "completed_runtime_pairs": 3
+  },
+  "archives": [
+    {
+      "path": "archives/original-partial.tar.gz",
+      "bytes": 369949865,
+      "sha256": "d83d0c79dc088ba351e2cff995affb1ca9416c987d0b3907cd29c90fc2cd749f"
+    },
+    {
+      "path": "archives/schema-only-partial.tar.gz",
+      "bytes": 190781048,
+      "sha256": "0ca5940a6a0cdf1d3b6c2c69a7b3a607c3f3221dc3900c327115236d8fa59569"
+    },
+    {
+      "path": "archives/runtime-retired-partial.tar.gz",
+      "bytes": 419520805,
+      "sha256": "5fcc6bf4cc1ce826e96a964cc6673a8214cfbf30e4d451da1932ab5e3aa6eb18"
+    },
+    {
+      "path": "archives/verified-source-7e721b7b.tar.gz",
+      "bytes": 13646678,
+      "sha256": "5e7a76432fa2b63695418ffb884e5985ca2938924287ac3fc5e84a8c0f47034c"
+    },
+    {
+      "path": "archives/retirement-record.tar.gz",
+      "bytes": 47802,
+      "sha256": "4a6fabfc4839436c057cc3fc25ff5917645c0a7ca64ab8e7e528a2913887a1be"
+    }
+  ],
+  "archive_checksums": "archives/SHA256SUMS",
+  "archive_integrity_verified": true,
+  "model_and_configuration_identities_unchanged": true,
+  "model_configuration_checksums": "runtime/validation/final-model-and-config.sha256",
+  "retirement_marker": "artifacts/mellum-learning-v1/obj/RETIRED.json",
+  "retired_adapter_sha256": "535c8f558cfd2f27f689d128c1daf7f4d853cc4d96d01ad472e867ebb66baf22",
+  "retired_merged_sha256": "49d512650e5a8cfc79f22357a5d6fad5ef863fa8307b8aacda01bb9bf0ff1b5a",
+  "runtime_program_sha256": "646bc12c2379779a2f24c5c6b72f1873c0c1c19cfbb0795d8351a76332109fac",
+  "runtime_driver_sha256": "e0241f3c52622d12ace48c8f8d1f1b0e7fb139317c9faa8af42ce18bffc9f2e0",
+  "runtime_manifest_sha256": "de3a3ac0d03e1386c7aaed71d282f65be88e14c093d503e36f5568139325538f",
+  "native_captures_match_program_identity": true,
+  "all_runtime_generations_constrained": true,
+  "runtime_generation_count": 38,
+  "full_suite": {
+    "tests": 1002,
+    "failed_assertions": 0,
+    "unexpected_errors": 0
+  },
+  "repository_audit": {
+    "checks": 30954,
+    "failures": 0,
+    "duration_qualified": false
+  },
+  "cpu_requalification": "docs/runtime-no-adapter-evidence.json",
+  "further_evaluation_or_training_scheduled": false,
+  "model_default_changed": false
+}

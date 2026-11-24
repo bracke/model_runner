@@ -1,11 +1,16 @@
 # Harness adapters: measure transfer, reduce memory, then prepare training data
 
-Status, 2026-11-24: the separately authorized [Mellum learning pilot](mellum-learning-results.md) has
+Current status, 2026-11-24: **the user retired this adapter** after the
+[historical Ada transfer check](ada-transfer-results.md). Three completed runtime-qualified pairs give
+base 1/3 and trained 0/3; the final unpaired trained attempt also fails. Remaining evaluation is stopped,
+and no further fitting or adapter evaluation is scheduled. The verified tool repairs are retained.
+
+Earlier checkpoint: the separately authorized [Mellum learning pilot](mellum-learning-results.md) has
 trained and compared an output-projection adapter on verified local trajectories. All eighteen held-out
 attempts finish: trained 5/9, base 4/9, two trained wins and one loss. This small descriptive pilot does
 not establish a reliable general gain. Its [eight-epoch fit](mellum-learning-fit.json) selects epoch six;
 the [applied GGUF check](mellum-learning-merge-verification.json) confirms unchanged bytes elsewhere.
-The final complete functional suite passes 998/998 and the audit passes 30,924 checks. A separately declared
+That checkpoint's functional suite passes 998/998 and the audit passes 30,924 checks. A separately declared
 [multi-file report-guidance correction](mellum-completion-files-results.md) passes fresh native checks
 with both models on seed 61; those outcomes remain separate from the original nine-pair comparison.
 This output-only experiment does not implement device
@@ -328,9 +333,10 @@ and carry independently verifiable outcomes. Project-owned capture, validation a
 
 ## Optional follow-on: train and evaluate a model_runner-specific adapter
 
-The user has authorized the [local Mellum protocol](mellum-learning-protocol.md), including its hardware,
-data split, eight-epoch fit and held-out workflow comparison. Its trained output-only weights are a narrow
-supervised pilot; they do not establish the broader transfer, runtime attachment or reinforcement-learning gates.
+The authorized [local Mellum protocol](mellum-learning-protocol.md), including its hardware, data split,
+eight-epoch fit and held-out comparison, is complete. The user subsequently retired that checkpoint and
+stopped further evaluation. Its trained output-only weights are a narrow supervised pilot; they do not
+establish the broader transfer, runtime attachment or reinforcement-learning gates.
 
 Any broader training experiment requires a proposal naming the exact base model, dataset, licenses, method, hardware,
 cost ceiling and held-out evaluation. Published recipes use external training infrastructure; this plan does
