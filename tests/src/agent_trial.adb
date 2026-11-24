@@ -233,6 +233,7 @@ package body Agent_Trial is
          begin
             for Word of Hostkit.String_Vectors.Vector'
               ([To_Unbounded_String ("clone"), To_Unbounded_String ("--quiet"), To_Unbounded_String ("--local"),
+                To_Unbounded_String ("--no-hardlinks"),
                 To_Unbounded_String (Tree), To_Unbounded_String (Root)])
             loop
                Line.Append (Word);
@@ -607,7 +608,8 @@ package body Agent_Trial is
 
    function Check_Line
      (Tested : Boolean; Apart : Boolean := False; Knowledge : Boolean := True; Styled : Boolean := False;
-      Convention : Boolean := False; Tree : Boolean := False; Variant : Fixture_Kind := Calculation)
+      Convention : Boolean := False; Tree : Boolean := False; Variant : Fixture_Kind := Calculation;
+      Modern : Boolean := False)
       return String is
      --  Another project's tree is not built: the task there only finds.
      (if Variant in C_Clamp | C_Span then
@@ -621,8 +623,9 @@ package body Agent_Trial is
            & Time_Bound & Knowledge_Words (Knowledge) & " confirm=yes"
       elsif Tested
       then "/reconfigure add set.execution.allowed gnatmake obj/test_add" & (if Convention then " sh" else "") & " "
-           & "profile.checks=""build: gnatmake -q" & Style_Words (Styled) & " -D obj -aIsrc src/main.adb -o obj/main;"
-           & " test: gnatmake -q" & Style_Words (Styled)
+           & "profile.checks=""build: gnatmake -q" & (if Modern then " -gnat2022" else "")
+           & Style_Words (Styled) & " -D obj -aIsrc src/main.adb -o obj/main;"
+           & " test: gnatmake -q" & (if Modern then " -gnat2022" else "") & Style_Words (Styled)
            & " -D obj -aIsrc src/test_add.adb -o obj/test_add; run: obj/test_add"
            & (if Convention then "; header: sh check_header.sh" else "") & """"
            & Time_Bound & Apart_Words (Apart) & Knowledge_Words (Knowledge) & " confirm=yes"
@@ -772,7 +775,10 @@ package body Agent_Trial is
       Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
       Isolation_Root : String := "";
       Fixture_Root : String := "";
-      Fixture_Notes : String := "")
+      Fixture_Notes : String := "";
+      Fixture_Paths : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
+      Fixture_Test : String := "";
+      Isolation_Readable : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector)
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -1029,6 +1035,7 @@ package body Agent_Trial is
    begin
       Clean := True;
       if (Fixture_Root = "") /= (Fixture_Notes = "")
+        or else (Fixture_Root = "" and then (not Fixture_Paths.Is_Empty or else Fixture_Test /= ""))
         or else (Fixture_Root /= "" and then
           (Only /= "edit" or else Fixture_Notes'Length > 2_048
            or else Ada.Strings.Fixed.Index (Fixture_Notes, String'(1 => ASCII.LF)) /= 0
@@ -1039,6 +1046,21 @@ package body Agent_Trial is
          Discard_Copy;
          return;
       end if;
+      for Path of Fixture_Paths loop
+         declare
+            Name : constant String := To_String (Path);
+         begin
+            if Name'Length not in 5 .. 256 or else Name (Name'First .. Name'First + 3) /= "src/"
+              or else Ada.Strings.Fixed.Index (Name, "..") /= 0
+              or else (for some Ch of Name => Ch in ASCII.LF | ASCII.CR | ASCII.NUL)
+            then
+               Ada.Text_IO.Put_Line ("agent-trial: custom fixture paths must be bounded relative source paths");
+               Clean := False;
+               Discard_Copy;
+               return;
+            end if;
+         end;
+      end loop;
       --  A name no task has runs nothing: said, not an empty trial.
       if not (for some One of Tasks => Chosen (Only, To_String (One.Name))) then
          declare
@@ -1406,7 +1428,7 @@ package body Agent_Trial is
                         Reset_Sources (Root);
                      else
                         Make_Project (Root, One.Tested, One.Convention, One.Large, Tree_At, One.Variant);
-                        Trial_Graders.Preserve (Root);
+                        Trial_Graders.Preserve (Root, Fixture_Test);
                      end if;
                      if not Hostkit.Pty.Is_Supported or else not Hostkit.Pty.Open (Pair) then
                         Ada.Text_IO.Put_Line ("agent-trial: no terminal to run a session on");
@@ -1462,9 +1484,10 @@ package body Agent_Trial is
                      Words.Append_Vector (Extra_Arguments);
                      if Isolation_Root /= "" then
                         declare
-                           Inputs : Hostkit.String_Vectors.Vector := [To_Unbounded_String (Model)];
+                           Inputs : Hostkit.String_Vectors.Vector := Isolation_Readable;
                            Config : constant String := Ada.Environment_Variables.Value ("MODEL_RUNNER_CONFIG", "");
                         begin
+                           Inputs.Append (To_Unbounded_String (Model));
                            if Config /= "" then
                               Inputs.Append (To_Unbounded_String (Config));
                            end if;
@@ -1516,7 +1539,8 @@ package body Agent_Trial is
                                                    or else (Send_Then
                                                               (Check_Line (One.Tested, Apart, Knowledge,
                                                                            One.Styled, One.Convention,
-                                                                           Length (One.Tree) > 0, One.Variant))
+                                                                           Length (One.Tree) > 0, One.Variant,
+                                                                           not Fixture_Paths.Is_Empty))
                                                             and then Wait_For ("is now revision", 30.0)
                                                             and then Prompt_Ready)))
                               then
@@ -1762,9 +1786,10 @@ package body Agent_Trial is
                           (Root, Name, To_String (One.Expect), Text,
                            Completed => Worked
                              and then Ada.Strings.Fixed.Index (To_String (Outcome), "the task is complete") = 1,
-                           Confine => Isolation_Root /= "");
+                           Confine => Isolation_Root /= "", Modern => not Fixture_Paths.Is_Empty,
+                           Hidden_Root => (if Fixture_Paths.Is_Empty then "" else Isolation_Root));
                         if Result.Grade = Passed then
-                           Result.Grade := Trial_Graders.Check_Changes (Root, Name);
+                           Result.Grade := Trial_Graders.Check_Changes (Root, Name, Fixture_Paths);
                            if Isolation_Root /= ""
                              and then Result.Configuration_Before /= Result.Configuration_After
                            then

@@ -1,9 +1,9 @@
 with Ada.Directories;
+with Ada.Containers;
 with Jsonlib.Documents;
 with Jsonlib.Parsers;
 with Jsonlib.Serializers;
 with Jsonlib.Errors;
-with Hostkit;
 with Ada.Strings.Unbounded;
 with Learning_Lora_Files;
 with Campaign_Statistics;
@@ -16,17 +16,23 @@ package body Learning_Report is
    use Ada.Strings.Unbounded;
    use type J.Value_Kind;
    use type Ada.Directories.File_Size;
+   use type Ada.Containers.Count_Type;
    function Text (Doc : J.Document; Node : J.Node; Key : String) return String is
      (if J.Kind (Doc, Node) = J.Object_Value and then J.Has_Member (Doc, Node, Key)
        and then J.Kind (Doc, J.Member (Doc, Node, Key)) = J.String_Value
       then J.As_String (Doc, J.Member (Doc, Node, Key)) else "");
-   procedure Run (Root, Output : String; Status : out E.Error_Info) is
+   procedure Run
+     (Root, Output : String; Status : out E.Error_Info;
+      Task_Names : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
+      First_Seed : Natural := 51; Seed_Count : Positive := 3) is
       Manifest, Doc, Statistics : J.Document;
       Object : constant J.Node := J.New_Object (Doc);
       Attempts : constant J.Node := J.New_Array (Doc);
       Error : Jsonlib.Errors.Error_Info;
       Tasks : constant Hostkit.String_Vectors.Vector :=
-        [To_Unbounded_String ("edit"), To_Unbounded_String ("times-negative"), To_Unbounded_String ("subtract")];
+        (if not Task_Names.Is_Empty then Task_Names else
+         Hostkit.String_Vectors.Vector'
+           ([To_Unbounded_String ("edit"), To_Unbounded_String ("times-negative"), To_Unbounded_String ("subtract")]));
       function Read (Path : String; Into : in out J.Document) return Boolean is
       begin
          if not Ada.Directories.Exists (Path) or else Ada.Directories.Size (Path) > 1_048_576 then
@@ -37,7 +43,9 @@ package body Learning_Report is
       end Read;
    begin
       Status := E.Success;
-      if Ada.Directories.Exists (Output) or else not Read (Root & "/manifest.json", Manifest) then
+      if Tasks.Length > 64 or else Seed_Count > 32 or else First_Seed > Natural'Last - Seed_Count
+        or else Ada.Directories.Exists (Output) or else not Read (Root & "/manifest.json", Manifest)
+      then
          Status := E.Make (E.IO_Read_Failed);
          return;
       end if;
@@ -54,10 +62,12 @@ package body Learning_Report is
          end;
       end loop;
       J.Set_Root (Doc, Object);
-      J.Insert (Doc, Object, "schema", J.New_String (Doc, "model_runner.mellum_learning_results.v1"));
+      J.Insert (Doc, Object, "schema", J.New_String
+        (Doc, (if Task_Names.Is_Empty then "model_runner.mellum_learning_results.v1"
+               else "model_runner.ada_transfer_results.v1")));
       J.Insert (Doc, Object, "manifest", J.Copy (Doc, Manifest, J.Root (Manifest)));
       for Task_Name of Tasks loop
-         for Seed in 51 .. 53 loop
+         for Seed in First_Seed .. First_Seed + Seed_Count - 1 loop
             for Role in 1 .. 2 loop
                declare
                   Arm : constant String := (if Role = 1 then "base" else "adapted");
@@ -71,6 +81,15 @@ package body Learning_Report is
                     or else Text (Item, J.Root (Item), "arm") /= Arm
                     or else J.As_Integer (Item, J.Member (Item, J.Root (Item), "seed")) /= Long_Long_Integer (Seed)
                     or else Text (Item, J.Root (Item), "isolation") /= "bubblewrap-v1"
+                    or else Text (Item, J.Root (Item), "manifest_sha256") /=
+                      (if Task_Names.Is_Empty then Text (Manifest, J.Root (Manifest), "protocol_sha256")
+                       else Learning_Lora_Files.Digest (Root & "/manifest.json"))
+                  then
+                     Status := E.Make (E.IO_Read_Failed);
+                     return;
+                  end if;
+                  if not Task_Names.Is_Empty and then not J.As_Boolean
+                    (Item, J.Member (Item, J.Root (Item), "initial_source_identity_matched"))
                   then
                      Status := E.Make (E.IO_Read_Failed);
                      return;
@@ -89,7 +108,7 @@ package body Learning_Report is
          end loop;
       end loop;
       J.Insert (Doc, Object, "attempts", Attempts);
-      for Pair in 0 .. 8 loop
+      for Pair in 0 .. Natural (Tasks.Length) * Seed_Count - 1 loop
          declare
             Base : constant J.Node := J.Element (Doc, Attempts, Pair * 2 + 1);
             Adapted : constant J.Node := J.Element (Doc, Attempts, Pair * 2 + 2);
@@ -142,7 +161,9 @@ package body Learning_Report is
       end if;
       J.Insert (Doc, Object, "statistics", J.Copy (Doc, Statistics, J.Root (Statistics)));
       J.Insert (Doc, Object, "scope", J.New_String
-        (Doc, "Nine paired attempts on three task families; descriptive pilot, no reliable general accuracy margin."));
+        (Doc, (if Task_Names.Is_Empty then
+           "Nine paired attempts on three task families; descriptive pilot, no reliable general accuracy margin."
+         else "Predeclared historical Ada task replay; paired descriptive outcomes, limited task-family coverage.")));
       Project_Tools.Files.Write_Raw_File (Output, Jsonlib.Serializers.To_String (Doc) & ASCII.LF);
    exception
       when others =>

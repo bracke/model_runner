@@ -7,6 +7,9 @@ Keep a Changelog and the project uses semantic versioning.
 
 ### Fixed
 
+- **Multi-file completion guidance.** Root, child and helper instructions specify commas or following
+  lines between changed paths while preserving spaces within a filename. Existing path checks remain in force.
+
 - **XML-framed completion reports.** Standalone closing call-envelope tags no
   longer become claimed filenames in a plain final report. Real missing-file
   claims still fail verification, and inline or unrelated markup is preserved.
@@ -32,6 +35,13 @@ Keep a Changelog and the project uses semantic versioning.
   lookup, including independently tested negative outcomes and replay.
 
 ### Added
+
+- **Historical Ada transfer evaluation.** Native test-crate tools construct pinned real-project snapshots,
+  qualify protected independent graders, isolate upstream answers and sibling attempts, and compare frozen
+  model weights on paired tasks with exact source and configuration identities. Failed workflows remain outcomes.
+
+- **Native local output-adapter learning.** Test-crate tools curate verified captures, extract frozen features,
+  fit an output-projection adapter and apply it into a new quantized GGUF with lineage and numerical controls.
 
 - **Reference editing.** Agents can replace a complete multiline Ada routine body using a revision-bound
   declaration reference, with structural boundary checks and a fresh reference returned after success.

@@ -34,3 +34,4 @@
 
 # Retained local Mellum training weights and workflow evidence
 /artifacts/mellum-learning-v1/
+/artifacts/ada-transfer-v1/

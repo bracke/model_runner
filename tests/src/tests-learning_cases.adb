@@ -18,6 +18,7 @@ with Learning_Data;
 with Ada.Streams.Stream_IO;
 with Interfaces;
 with Project_Tools.Files;
+with Project_Tools.Text;
 with Jsonlib.Documents;
 with Jsonlib.Parsers;
 with Jsonlib.Serializers;
@@ -30,6 +31,8 @@ with Trial_Confinement;
 with Hostkit.Process;
 with Hostkit.Fs;
 with Ada.Strings.Unbounded;
+with Trial_Graders;
+with Agent_Trial;
 
 package body Tests.Learning_Cases is
    use AUnit.Assertions;
@@ -462,6 +465,90 @@ package body Tests.Learning_Cases is
       Learning_Curriculum.Validate (Root, Clean);
       Assert (Clean, "teaching grader rejected a reference or accepted unchanged code");
    end Teaching_Graders;
+   procedure Independent_Custom_Grading (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use Ada.Strings.Unbounded;
+      use type Agent_Trial.Verdict;
+      Root : constant String := Ada.Directories.Full_Name (Fresh ("transfer-grading"));
+      Project : constant String := Root & "/project";
+      Ran : Hostkit.Process.Process_Outcome;
+      Scope : constant Hostkit.String_Vectors.Vector := [To_Unbounded_String ("src/value.adb")];
+      Public : constant String := "with Value; procedure Test_Add is begin"
+        & " if Value.Get < 0 then raise Program_Error; end if; end Test_Add;";
+      procedure Git (Words : Hostkit.String_Vectors.Vector) is
+         use type Hostkit.String_Vectors.Vector;
+      begin
+         Ran := Hostkit.Process.Run_Captured
+           ("git", [To_Unbounded_String ("-C"), To_Unbounded_String (Project), To_Unbounded_String ("-c"),
+                    To_Unbounded_String ("user.name=custom grader"), To_Unbounded_String ("-c"),
+                    To_Unbounded_String ("user.email=fixture@example.invalid")] & Words,
+            Stdout_Path => Root & "/git.txt", Stderr_Path => Root & "/git-errors.txt", Timeout_Ms => 10_000);
+         Assert (Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0, "custom fixture Git failed");
+      end Git;
+      function Grade return Agent_Trial.Verdict is
+        (Trial_Graders.Verify (Project, "edit", "", "", True, Confine => True, Modern => True, Hidden_Root => Root));
+   begin
+      Ada.Directories.Create_Path (Project & "/src");
+      Ada.Directories.Create_Path (Project & "/obj");
+      Project_Tools.Files.Write_Raw_File
+        (Project & "/src/value.ads", "package Value is function Get return Integer; end Value;");
+      Project_Tools.Files.Write_Raw_File
+        (Project & "/src/value.adb", "package body Value is function Get return Integer is (17); end Value;");
+      Project_Tools.Files.Write_Raw_File (Project & "/src/test_add.adb", Public);
+      Project_Tools.Files.Write_Raw_File (Project & "/.gitignore", "obj/" & ASCII.LF);
+      Project_Tools.Files.Write_Raw_File
+        (Root & "/hidden_test.adb", "with Value; procedure Hidden_Test is begin"
+           & " if Value.Get /= 19 then raise Program_Error; end if; end Hidden_Test;");
+      Git ([To_Unbounded_String ("init"), To_Unbounded_String ("-q")]);
+      Git ([To_Unbounded_String ("add"), To_Unbounded_String (".")]);
+      Git ([To_Unbounded_String ("commit"), To_Unbounded_String ("-qm"), To_Unbounded_String ("custom baseline")]);
+      Trial_Graders.Preserve (Project, Root & "/hidden_test.adb");
+      Assert (Grade = Agent_Trial.Failed, "public-only correctness bypassed the independent test");
+      Project_Tools.Files.Write_Raw_File
+        (Project & "/src/value.adb", "package body Value is function Get return Integer is (19); end Value;");
+      Assert (Grade = Agent_Trial.Passed, "correct custom source failed its isolated independent rebuild");
+      Assert (Trial_Graders.Check_Changes (Project, "edit", Scope) = Agent_Trial.Passed,
+              "custom exact source scope rejected its permitted path");
+      Assert (Trial_Graders.Check_Changes (Project, "edit") = Agent_Trial.Failed,
+              "custom source scope changed the ordinary Calc policy");
+      Project_Tools.Files.Write_Raw_File (Project & "/src/test_add.adb", "procedure Test_Add is begin null; end;");
+      Assert (Grade = Agent_Trial.Failed, "a modified public test was accepted");
+      Project_Tools.Files.Write_Raw_File (Project & "/src/test_add.adb", Public);
+      Project_Tools.Files.Write_Raw_File (Project & "/src/unrelated.txt", "unrelated");
+      Assert (Trial_Graders.Check_Changes (Project, "edit", Scope) = Agent_Trial.Failed,
+              "an unrelated new file was accepted by custom scope");
+   end Independent_Custom_Grading;
+   procedure Workspace_Resources_Stay_Narrow (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      use Ada.Strings.Unbounded;
+      Root : constant String := Ada.Directories.Full_Name (Fresh ("transfer-resources"));
+      Project : constant String := Root & "/active/project";
+      Visible : constant String := Root & "/resources/marker.txt";
+      Hidden : constant String := Root & "/upstream/fixed-source.adb";
+      Cat : constant String := Hostkit.Process.Locate ("cat");
+      Ran : Hostkit.Process.Process_Outcome;
+      function Read_Inside (Path : String) return Hostkit.Process.Process_Outcome is
+        (Hostkit.Process.Run_Captured
+           (Trial_Confinement.Executable,
+            Trial_Confinement.Wrap (Cat, [To_Unbounded_String (Path)], Project, Root,
+                                    [To_Unbounded_String (Root & "/resources")]),
+            Stdout_Path => Root & "/read.txt", Stderr_Path => Root & "/read-errors.txt", Timeout_Ms => 10_000));
+   begin
+      Ada.Directories.Create_Path (Project);
+      Ada.Directories.Create_Path (Root & "/resources");
+      Ada.Directories.Create_Path (Root & "/upstream");
+      Project_Tools.Files.Write_Raw_File (Visible, "allowed runtime resource");
+      Project_Tools.Files.Write_Raw_File (Hidden, "protected historical answer");
+      Assert (Trial_Confinement.Ready (Project), "workspace confinement is unavailable");
+      Ran := Read_Inside (Visible);
+      Assert (Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status = 0
+                and then To_String (Project_Tools.Text.Read_Text_File (Root & "/read.txt")) =
+                  "allowed runtime resource" & ASCII.LF,
+              "a narrow runtime resource was not rebound inside the hidden workspace");
+      Ran := Read_Inside (Hidden);
+      Assert (Ran.Started and then not Ran.Timed_Out and then Ran.Exit_Status /= 0,
+              "rebinding runtime resources exposed protected upstream source");
+   end Workspace_Resources_Stay_Narrow;
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
@@ -478,5 +565,9 @@ package body Tests.Learning_Cases is
         (T, Feature_Target_Alignment'Access, "features align frozen states with the next assistant token");
       Register_Routine (T, Default_Arm_Statistics'Access, "default-arm reports preserve regressions and honest costs");
       Register_Routine (T, Sibling_Attempts_Are_Hidden'Access, "learning attempts cannot see sibling solutions");
+      Register_Routine
+        (T, Independent_Custom_Grading'Access, "custom source scopes use protected independent tests");
+      Register_Routine
+        (T, Workspace_Resources_Stay_Narrow'Access, "hidden workspaces expose only declared runtime resources");
    end Register_Tests;
 end Tests.Learning_Cases;

@@ -1,0 +1,97 @@
+{
+  "schema": "model_runner.ada_transfer_curriculum.v1",
+  "protocol_sha256": "dd1a05b5b980e66e89885d53037ff16069cb5b943f4192e4fc9752b0df4242ca",
+  "tasks": [
+    {
+      "task": "text-crlf",
+      "repository": "project_tools",
+      "fix_commit": "e0a591849bcf1bbf41936b793da7fa1079a377ea",
+      "parent_commit": "693fa3f9ebcbfa1234eacf54be730900a712da19",
+      "initial_src_git_tree": "a9e52cfb5aa0563d077ac2dd1ab86aa572bfae9c",
+      "notes": "Fix Project_Tools.Text.Line_Value so values from CRLF files do not retain the carriage return, including a final CR without LF. Preserve LF, missing-key and empty-value behavior. Change only src/project_tools-text.adb; keep the public API and other functions unchanged.",
+      "public_test_sha256": "482527bff009cceacafcee7b4af0456de6fc99c4cc3eb95e84d2c09e7871d6fd",
+      "independent_test_sha256": "d529fe37310d41c66001ca4aac53a56c350bac2252a91a9024568cdd5f367638",
+      "unchanged_control": "failed",
+      "reference_control": "passed",
+      "permitted_paths": [
+        "src/project_tools-text.adb"
+      ]
+    },
+    {
+      "task": "toml-empty",
+      "repository": "project_tools",
+      "fix_commit": "bddc1ebef8572662167610c4dfbbc8a337b590c0",
+      "parent_commit": "58bbdb796ceb71a0b0acd63b7cde7dd6f34668f2",
+      "initial_src_git_tree": "ed9d18a0365f4a23b8722eaf23fa20c7282aa41b",
+      "notes": "Fix Project_Tools.TOML.Parse_String_After: an empty quoted value is Parsed_String with an empty value, not a reason to read a later occurrence of the key. Preserve nonempty, missing and malformed handling. Change only src/project_tools-toml.adb.",
+      "public_test_sha256": "8144bf192c1413529d6a5093861afd433ccbad1939730bac634a381b26de001c",
+      "independent_test_sha256": "63a06cf893f707500d59e32c6a9da0dff406fa47e10247c8df17c4a0d58d8438",
+      "unchanged_control": "failed",
+      "reference_control": "passed",
+      "permitted_paths": [
+        "src/project_tools-toml.adb"
+      ]
+    },
+    {
+      "task": "toml-boolean",
+      "repository": "project_tools",
+      "fix_commit": "eaf8dd79b889b78e2540ef2c070d17d8483314ca",
+      "parent_commit": "c3878f081a0377e2193bfe72036123b9b51a377b",
+      "initial_src_git_tree": "b31faec72f5cfc2de3c2071d6acc46cf61b5d94e",
+      "notes": "Add Project_Tools.TOML.Boolean_Parse_Status (Parsed_Boolean, Missing_Boolean, Malformed_Boolean), Boolean_Parse_Result with Status default Missing_Boolean and Value Boolean default False, and Parse_Boolean_After (Text, Key : String; From : Positive) returning that record. Follow the existing natural and string parser conventions: find Key at or after From, skip spaces, parse lowercase true or false, distinguish missing from malformed, return False on those outcomes, and contain Constraint_Error as malformed. Change only src/project_tools-toml.ads and .adb.",
+      "public_test_sha256": "9e706ea6efa59d3c75127c5340d3d861824d60736a61353ddf5c5062e475145d",
+      "independent_test_sha256": "a0d819c10ac3cf812f9013d73f727e28a25b05fac0fb78f6b74881cc3093c53f",
+      "unchanged_control": "failed",
+      "reference_control": "passed",
+      "permitted_paths": [
+        "src/project_tools-toml.ads",
+        "src/project_tools-toml.adb"
+      ]
+    },
+    {
+      "task": "regexp-property",
+      "repository": "regexp",
+      "fix_commit": "d6606bd1b0b1b098bf67abbdfa4fb7384d86436e",
+      "parent_commit": "83b749f1fae6675cd3db846633250c2036c43163",
+      "initial_src_git_tree": "021dd990a0e0deb624d3792d614e8e49b06391ee",
+      "notes": "Fix Regexp character classes: literal p and P in [dp], [pq] and [^p] must compile as letters. A Unicode property inside brackets is written [\\p{digit}], recognized after the escape; outside properties must keep working. Preserve ordinary classes and invalid-property diagnostics. Change only src/regexp.adb.",
+      "public_test_sha256": "85de1931e2f43b5db1fd22d8a9b3fd99ba8311f33832b8af18b78ebd4cbe876f",
+      "independent_test_sha256": "e047e4ce6db582d86b2b3c541a7f12f375ca4f851abd684e3d4158c869a94449",
+      "unchanged_control": "failed",
+      "reference_control": "passed",
+      "permitted_paths": [
+        "src/regexp.adb"
+      ]
+    },
+    {
+      "task": "regexp-backreference",
+      "repository": "regexp",
+      "fix_commit": "83b749f1fae6675cd3db846633250c2036c43163",
+      "parent_commit": "fe08ee002c97aa232b34ad0660ce0fb77efee2fb",
+      "initial_src_git_tree": "6d3cdb50563ef194143fcc8ba793f2f485488edf",
+      "notes": "Fix Regexp so a backreference consumes its entire captured span, including groups longer than one character: (ab)\\1 must fully match abab and reject abac. Preserve captures, alternatives, quantified groups and matching options. Keep ordinary patterns working and bound pathological backtracking using the existing match-limit result. Change only src/regexp.adb.",
+      "public_test_sha256": "85bacc646c2b53937b4e3dd379575a54bc4905afeec0b77f49ed9f4a982b83f8",
+      "independent_test_sha256": "58a10260c59e5f74a2745cc267e56b5e6c7ac625955e2233005c4fc478d4d048",
+      "unchanged_control": "failed",
+      "reference_control": "passed",
+      "permitted_paths": [
+        "src/regexp.adb"
+      ]
+    },
+    {
+      "task": "version-refnames",
+      "repository": "versionlib",
+      "fix_commit": "d096a96cee8523581d422cad5e41bc76d5b59b0b",
+      "parent_commit": "a21667ef9a683b50a403480c1dade205d8f562f8",
+      "initial_src_git_tree": "dea28e2b579a56fdd96e09193545d0601d748789",
+      "notes": "Fix Version.Ref_Names.Is_Valid_Ref_Name: valid multi-level ref names must not be restricted to an allowlist of familiar hierarchies. refs/pull/12/head, refs/bisect/good and vendor/topic are valid; retain grammar and path-safety rejection of malformed or unsafe names. Preserve the public API and branch/tag/remote validation. Change only src/version-ref_names.adb.",
+      "public_test_sha256": "06537ebcfbafc4b8c9d19973ee081b9d93b64b9f60741477e8f05d77c333477a",
+      "independent_test_sha256": "f5f14c253c6f2e816bf45b7acdf2f257e504e9254558f06685da29264bae8acb",
+      "unchanged_control": "failed",
+      "reference_control": "passed",
+      "permitted_paths": [
+        "src/version-ref_names.adb"
+      ]
+    }
+  ]
+}

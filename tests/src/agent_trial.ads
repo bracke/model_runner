@@ -100,9 +100,12 @@ package Agent_Trial is
    --  @param Output_Directory Optional parent for isolated trial projects; empty retains the usual location.
    --  @param On_Attempt Receives the independently graded result after the retained project has its final name.
    --  @param Extra_Arguments Native arguments appended without splitting, preserving paths containing spaces.
-   --  @param Isolation_Root Campaign directory hidden from the confined session except its own project and inputs.
-   --  @param Fixture_Root Optional committed teaching fixture for the single edit task; only calc.adb may change.
+   --  @param Isolation_Root Directory hidden from the confined session except its own project and declared inputs.
+   --  @param Fixture_Root Optional committed fixture for the single edit task; default scope is calc.adb.
    --  @param Fixture_Notes Task instructions for that fixture, required together with Fixture_Root.
+   --  @param Fixture_Paths Exact source paths that a trusted custom fixture permits changing.
+   --  @param Fixture_Test Independent Hidden_Test body kept outside the actor project.
+   --  @param Isolation_Readable Additional trusted runtime resources exposed inside confinement.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -123,6 +126,9 @@ package Agent_Trial is
       Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
       Isolation_Root : String := "";
       Fixture_Root : String := "";
-      Fixture_Notes : String := "");
+      Fixture_Notes : String := "";
+      Fixture_Paths : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
+      Fixture_Test : String := "";
+      Isolation_Readable : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector);
 
 end Agent_Trial;

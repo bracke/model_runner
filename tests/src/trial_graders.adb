@@ -2,7 +2,6 @@ with Ada.Directories;
 with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Characters.Handling;
-with Hostkit;
 with Hostkit.Fs;
 with Hostkit.Process;
 with Project_Tools.Files;
@@ -104,7 +103,7 @@ package body Trial_Graders is
       when others => return False;
    end Uses_Reference_Edit;
 
-   procedure Preserve (Root : String) is
+   procedure Preserve (Root : String; Independent_Test : String := "") is
       Where : constant String := Root & "-verifier";
       Ran : Hostkit.Process.Process_Outcome;
    begin
@@ -114,6 +113,9 @@ package body Trial_Graders is
       Ada.Directories.Create_Path (Where & "/obj");
       if Ada.Directories.Exists (Root & "/src/test_add.adb") then
          Ada.Directories.Copy_File (Root & "/src/test_add.adb", Where & "/test_add.adb");
+      end if;
+      if Independent_Test /= "" then
+         Ada.Directories.Copy_File (Independent_Test, Where & "/hidden_test.adb");
       end if;
       if Ada.Directories.Exists (Root & "/src/test_math.c") then
          Ada.Directories.Copy_File (Root & "/src/test_math.c", Where & "/test_math.c");
@@ -174,12 +176,17 @@ package body Trial_Graders is
       when others => return False;
    end Seal;
 
-   function Check_Changes (Root, Task_Name : String) return Agent_Trial.Verdict is
+   function Check_Changes
+     (Root, Task_Name : String;
+      Allowed_Paths : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector)
+      return Agent_Trial.Verdict is
       Words : Hostkit.String_Vectors.Vector;
       Ran : Hostkit.Process.Process_Outcome;
       Path : constant String := Root & "-verifier/changes.txt";
       function Allowed (Name : String) return Boolean is
-        (if Task_Name in "large" | "described" then Name = "src/ledger.adb"
+        (if not Allowed_Paths.Is_Empty then
+           (for some Path of Allowed_Paths => Name = To_String (Path))
+         elsif Task_Name in "large" | "described" then Name = "src/ledger.adb"
          elsif Task_Name = "subtract" then Name in "src/calc.adb" | "src/calc.ads"
          elsif Task_Name = "c-boundary" then Name = "src/math.c"
          elsif Task_Name = "c-multi" then Name in "src/math.c" | "src/math.h"
@@ -241,7 +248,8 @@ package body Trial_Graders is
 
    function Verify
      (Root, Task_Name, Expect, Transcript : String;
-      Completed : Boolean; Confine : Boolean := False) return Agent_Trial.Verdict
+      Completed : Boolean; Confine : Boolean := False; Modern : Boolean := False;
+      Hidden_Root : String := "") return Agent_Trial.Verdict
    is
       Where : constant String := Ada.Directories.Full_Name (Root & "-verifier");
       Words : Hostkit.String_Vectors.Vector;
@@ -259,7 +267,7 @@ package body Trial_Graders is
          end if;
          return Hostkit.Process.Run_Captured
            (Trial_Confinement.Executable, Trial_Confinement.Wrap
-              (Native, Words, Where & "/obj", Readable =>
+              (Native, Words, Where & "/obj", Hidden => Hidden_Root, Readable =>
                  [To_Unbounded_String (Ada.Directories.Full_Name (Root)), To_Unbounded_String (Where)]),
             Stdout_Path => Output, Stderr_Path => Errors, Timeout_Ms => Timeout);
       end Run_Check;
@@ -367,8 +375,13 @@ package body Trial_Graders is
          Words := [To_Unbounded_String ("-q"), To_Unbounded_String ("-f"),
                    To_Unbounded_String ("-D"), To_Unbounded_String (Where & "/obj"),
                    To_Unbounded_String ("-aI" & Ada.Directories.Full_Name (Root & "/src")),
-                   To_Unbounded_String (Where & "/test_add.adb"), To_Unbounded_String ("-o"),
+                   To_Unbounded_String
+                     (Where & (if Ada.Directories.Exists (Where & "/hidden_test.adb")
+                               then "/hidden_test.adb" else "/test_add.adb")), To_Unbounded_String ("-o"),
                    To_Unbounded_String (Where & "/obj/check")];
+         if Modern then
+            Words.Append (To_Unbounded_String ("-gnat2022"));
+         end if;
          if Task_Name = "styled" then
             Words.Append (To_Unbounded_String ("-gnatyy"));
             Words.Append (To_Unbounded_String ("-gnatwae"));
