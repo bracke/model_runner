@@ -294,6 +294,7 @@ package body Tests.Tools_Cases is
 
    procedure Edit_Selectors_Are_Required (T : in out AUnit.Test_Cases.Test_Case'Class) is
       pragma Unreferenced (T);
+      package Sc renames Model_Runner.Tools.Schemas;
       function Call (Args : String) return String is
         ("<tool_call>{""name"":""edit_file"",""arguments"":" & Args & "}</tool_call>");
       function Tag_Call (Selector : String) return String is
@@ -304,6 +305,27 @@ package body Tests.Tools_Cases is
       Old : constant String := """old_text"":""old""";
       Neww : constant String := """new_text"":""fixed""";
    begin
+      declare
+         Defs : Tools.Definitions;
+         Rules : G.Compiled;
+         State : G.Matcher;
+         Status : E.Error_Info;
+      begin
+         Tools.Read
+           (Defs, "[" & Sc.Alternative_Definition
+              ("edit_file", "selectors",
+               [Sc.Text ("path"), Sc.Text ("ref"), Sc.Text ("new_text")],
+               [Sc.Text ("path"), Sc.Text ("old_text"), Sc.Text ("new_text")]) & "]", Status);
+         Assert (E.Is_Ok (Status), "the alternative definition was not valid tool JSON");
+         Constraint.Compile_Call_Grammar (Defs, Rules, Status);
+         Assert (E.Is_Ok (Status) and then G.Is_Ready (Rules), "alternative parameters would not compile");
+         G.Start (Rules, State, Status);
+         G.Advance (Rules, State, Call ("{" & Path & "," & Neww & "}"), Status);
+         Assert (E.Is_Error (Status) or else not G.Is_Complete (Rules, State),
+                 "the schema helper lost its alternative required selectors");
+         G.Close (Rules);
+         Tools.Close (Defs);
+      end;
       --  These reproduce the selector-less calls observed in both trained native timeouts.
       Assert (not Full_Set_Takes (Call ("{" & Path & "," & Neww & "}")),
               "a selector-less edit remained possible in the constrained call grammar");
