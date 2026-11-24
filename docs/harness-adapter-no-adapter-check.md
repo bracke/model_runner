@@ -4,6 +4,26 @@ This campaign checks the CPU cost added to ordinary inference by the adapter imp
 the pre-adapter engine at commit `a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b` against the current working tree.
 It does not measure trained-adapter quality, device execution, or an adapter's active arithmetic overhead.
 
+## Runtime-constraint requalification
+
+The runtime grammar and continuation changes were requalified on 2026-11-24 using a
+[predeclared protocol](runtime-no-adapter-protocol.md) and [28 fresh samples](runtime-no-adapter-evidence.json).
+Both batches pass the unchanged 1.05 paired-median boundary:
+
+| Batch | Pairs | Prompt time change | Decode time change |
+| --- | ---: | ---: | ---: |
+| 1 | 7 | -0.27% | +0.49% |
+| 2 | 7 | +0.64% | +0.37% |
+
+Every run reads 100 prompt tokens, generates sixteen tokens and produces digest `c85e719a42725969`.
+Original sources match their historical commit; actual release compiler arguments match, including
+`-O3 -gnatn`. Frozen binaries, normalized source archive, current dependency archives, model and prompt
+remain unchanged through the 317.768-second campaign. Capture is disabled in both arms. No build, test,
+audit or other model job runs alongside timing; all samples are retained without retries or exclusions.
+The full runtime-repair suite passes **1,002/1,002**. This qualifies the local descriptive boundary and
+provides no significance, tail-latency or trained-adapter-quality conclusion. Earlier evidence below remains
+historical and unchanged.
+
 ## Capture-disabled requalification
 
 The trajectory generation hooks were requalified on 2026-11-23 using the

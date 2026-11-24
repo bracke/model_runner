@@ -2394,8 +2394,8 @@ identical probes and matched settings. Both phases passed a predeclared +5% pair
 
 | Batch | Paired median prompt time change | Paired median decode time change |
 | --- | ---: | ---: |
-| 1 | +0.02% | -0.01% |
-| 2 | +0.04% | +0.32% |
+| 1 | -0.27% | +0.49% |
+| 2 | +0.64% | +0.37% |
 
 Every measured run read 100 prompt tokens, generated sixteen tokens and produced identical text.
 All samples remain in the linked evidence. These medians do not
