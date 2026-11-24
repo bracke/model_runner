@@ -1,0 +1,31 @@
+{
+  "schema": "model_runner.mellum_learning_artifacts.v1",
+  "root": "artifacts/mellum-learning-v1/obj",
+  "excluded_from_version_control": true,
+  "collection_archive": {
+    "path": "collection-evidence.tar.gz",
+    "bytes": 297788671,
+    "sha256": "5bfb65a085ece0ba7b109106ec5ae5aae21774578651be696c8010c4496a5c48"
+  },
+  "original_evaluation_archive": {
+    "path": "evaluation-evidence.tar.gz",
+    "bytes": 126303494,
+    "sha256": "4f3713afda04953c92c7276cac2ad6fc7533f5926b7969ddd361560d3fd94d2f"
+  },
+  "selected_adapter": {
+    "path": "fitted/selected.gguf",
+    "bytes": 3219968,
+    "sha256": "535c8f558cfd2f27f689d128c1daf7f4d853cc4d96d01ad472e867ebb66baf22"
+  },
+  "merged_model": {
+    "path": "mellum-output-lora-r8-merged.gguf",
+    "bytes": 8071295264,
+    "sha256": "49d512650e5a8cfc79f22357a5d6fad5ef863fa8307b8aacda01bb9bf0ff1b5a"
+  },
+  "checksums": "SHA256SUMS",
+  "completion_archive": {
+    "path": "completion-evidence.tar.gz",
+    "bytes": 13545753,
+    "sha256": "663f38ae3651a1516627b6b8eb984f0bc9f26355193489525cbaecf6063823d4"
+  }
+}

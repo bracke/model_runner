@@ -20,7 +20,8 @@ package body Campaign_Statistics is
               else (Copy (Count / 2) + Copy (Count / 2 + 1)) / 2.0);
    end Median;
 
-   function Describe (From : J.Document; Attempts : J.Node) return String is
+   function Describe
+     (From : J.Document; Attempts : J.Node; Default_Only : Boolean := False) return String is
       Doc : J.Document;
       Root : constant J.Node := J.New_Object (Doc);
       Arms : constant J.Node := J.New_Array (Doc);
@@ -50,11 +51,12 @@ package body Campaign_Statistics is
       J.Insert (Doc, Root, "scope", J.New_String (Doc, "descriptive; no independence or significance claim"));
       J.Insert (Doc, Root, "arms", Arms);
       J.Insert (Doc, Root, "comparisons", Comparisons);
-      for Arm in 1 .. 4 loop
+      for Arm in 1 .. (if Default_Only then 2 else 4) loop
          declare
             Name : constant String :=
-              (case Arm is when 1 => "base-off", when 2 => "adapted-off",
-                           when 3 => "base-on", when others => "adapted-on");
+              (if Default_Only then (if Arm = 1 then "base" else "adapted")
+               else (case Arm is when 1 => "base-off", when 2 => "adapted-off",
+                                when 3 => "base-on", when others => "adapted-on"));
             Item : constant J.Node := J.New_Object (Doc);
             Passed, Failed, Infrastructure, Ungraded : Natural := 0;
             Times, Tokens, Calls : Values.Vector;
@@ -97,15 +99,21 @@ package body Campaign_Statistics is
             J.Append (Doc, Arms, Item);
          end;
       end loop;
-      for Thinking in Boolean loop
+      for Mode in 1 .. (if Default_Only then 1 else 2) loop
          declare
-            Base : constant String := (if Thinking then "base-on" else "base-off");
-            Adapted : constant String := (if Thinking then "adapted-on" else "adapted-off");
+            Thinking : constant Boolean := Mode = 2;
+            Base : constant String := (if Default_Only then "base" elsif Thinking then "base-on" else "base-off");
+            Adapted : constant String :=
+              (if Default_Only then "adapted" elsif Thinking then "adapted-on" else "adapted-off");
             Item : constant J.Node := J.New_Object (Doc);
             Wins, Losses, Both_Pass, Both_Fail, Missing, Ineligible : Natural := 0;
             Base_Times, Adapted_Times : Values.Vector;
          begin
-            J.Insert (Doc, Item, "thinking", J.New_Boolean (Doc, Thinking));
+            if Default_Only then
+               J.Insert (Doc, Item, "thinking_mode", J.New_String (Doc, "unchanged native default"));
+            else
+               J.Insert (Doc, Item, "thinking", J.New_Boolean (Doc, Thinking));
+            end if;
             for Index in 1 .. J.Length (From, Attempts) loop
                declare
                   Row : constant J.Node := J.Element (From, Attempts, Index);

@@ -1,0 +1,65 @@
+[
+  {
+    "epoch": 0,
+    "train_cross_entropy": 0.03773241805654862,
+    "validation_cross_entropy": 0.05423763380420279,
+    "elapsed_seconds": 5.542985,
+    "checkpoint_sha256": "90331f88f06952801d457fac56d8f4805ca547b75e1a8af01e91dd80b2a1e0aa"
+  },
+  {
+    "epoch": 1,
+    "train_cross_entropy": 0.0194869556870853,
+    "validation_cross_entropy": 0.05541293916292403,
+    "elapsed_seconds": 14.433587,
+    "checkpoint_sha256": "5dac16418334eedfb0211556fde66ca60d44b54eb0e829f1c4be0ec14a5ca0ce"
+  },
+  {
+    "epoch": 2,
+    "train_cross_entropy": 0.0107627074198666,
+    "validation_cross_entropy": 0.05084519293526438,
+    "elapsed_seconds": 23.296788,
+    "checkpoint_sha256": "a9cb1640a8c5373ec750b59548c5daffbdc824103ad3a1858bc0fed4f5df6ada"
+  },
+  {
+    "epoch": 3,
+    "train_cross_entropy": 0.00717046215327227,
+    "validation_cross_entropy": 0.0567700801090773,
+    "elapsed_seconds": 32.139032,
+    "checkpoint_sha256": "458bbaec47abd0acc2fae2e916502510704495953dbd784b9e71b42f87b06e7a"
+  },
+  {
+    "epoch": 4,
+    "train_cross_entropy": 0.00487325219031139,
+    "validation_cross_entropy": 0.04540087360525417,
+    "elapsed_seconds": 40.939658,
+    "checkpoint_sha256": "baa2b593560923656d088c753fafc1c8eca8df725dc38922effc74c13d71f468"
+  },
+  {
+    "epoch": 5,
+    "train_cross_entropy": 0.00534598114791268,
+    "validation_cross_entropy": 0.0458690724710469,
+    "elapsed_seconds": 49.769459,
+    "checkpoint_sha256": "99a547665385dbc4b2356c51e38511d0bac426fcab90d89830486b6af201eca7"
+  },
+  {
+    "epoch": 6,
+    "train_cross_entropy": 0.00508937748900172,
+    "validation_cross_entropy": 0.04401747116151197,
+    "elapsed_seconds": 58.636413,
+    "checkpoint_sha256": "535c8f558cfd2f27f689d128c1daf7f4d853cc4d96d01ad472e867ebb66baf22"
+  },
+  {
+    "epoch": 7,
+    "train_cross_entropy": 0.00686994824318169,
+    "validation_cross_entropy": 0.04579207312077163,
+    "elapsed_seconds": 67.463057,
+    "checkpoint_sha256": "1e5308fa4c95347f43e45a497b20d95daa3d96e426f7d7075c1d8cf100367696"
+  },
+  {
+    "epoch": 8,
+    "train_cross_entropy": 0.00439386110682582,
+    "validation_cross_entropy": 0.04481650527405507,
+    "elapsed_seconds": 76.28711,
+    "checkpoint_sha256": "762b6a13a34307c1c61342da60fb7b931cb638d75bca978d4acd3eecc4b12cb3"
+  }
+]

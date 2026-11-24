@@ -15,6 +15,7 @@ with Tests.Accounting_Cases;
 with Tests.Agent_Loop_Cases;
 with Tests.Trajectory_Cases;
 with Tests.Reference_Edit_Cases;
+with Tests.Learning_Cases;
 with Tests.Sampling_Cases;
 with Tests.Speech_Cases;
 with Tests.Template_Cases;
@@ -45,6 +46,7 @@ package body Tests.Suite is
    Agent_Loop_Case : aliased Tests.Agent_Loop_Cases.Case_Type;
    Trajectory_Case : aliased Tests.Trajectory_Cases.Case_Type;
    Reference_Edit_Case : aliased Tests.Reference_Edit_Cases.Case_Type;
+   Learning_Case : aliased Tests.Learning_Cases.Case_Type;
    Platform_Case  : aliased Tests.Platform_Cases.Case_Type;
    Speech_Case    : aliased Tests.Speech_Cases.Case_Type;
 
@@ -63,6 +65,7 @@ package body Tests.Suite is
       AUnit.Test_Suites.Add_Test (Result'Access, Campaign_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Trajectory_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Reference_Edit_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Learning_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Backend_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Adapter_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Accounting_Case'Access);

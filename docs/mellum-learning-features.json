@@ -1,0 +1,16 @@
+{
+  "schema": "model_runner.frozen_output_features.v1",
+  "model_sha256": "ecc4d5b8107fc219e23c494b2d107552137637b6c6002ee713e0ba8af7fa2755",
+  "train_dataset_sha256": "4bfc421a5e0171b5f0957798b031d5dfb711cc443b5ac1eeb6dc57b35025c056",
+  "validation_dataset_sha256": "77287083e9ded55b4f9f81ed5d3caad16099dc2c077d9576f8812ea20bd3dc52",
+  "train_features_sha256": "ba408c9b713b47595d51798abcf452110c65cfa5b4f91a2a2a5587141b6460c3",
+  "validation_features_sha256": "7686d03599b4173c377cf645fadd8a5fd013e58a0d36e5bd522a78d7b020fe36",
+  "dtype": "little-endian-f32; u32 token targets",
+  "backend": "device",
+  "cache_keys": "q4t",
+  "cache_values": "q4",
+  "context_limit": 16384,
+  "batch_limit": 64,
+  "width": 2304,
+  "vocabulary": 98304
+}

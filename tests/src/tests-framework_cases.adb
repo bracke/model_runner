@@ -165,6 +165,17 @@ package body Tests.Framework_Cases is
       Answer      : out Unbounded_String;
       Status      : out E.Error_Info);
 
+   type Report_Files_Agent is new Model_Runner.Framework.Work.Agent_Runner with record
+      Answer : Unbounded_String;
+   end record;
+
+   overriding procedure Run
+     (Self        : Report_Files_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info);
+
    --  One whose run faults: the work ends all the same, as any end.
    type Raising_Agent is new Scripted_Agent with null record;
 
@@ -7407,6 +7418,22 @@ package body Tests.Framework_Cases is
          Dirs.Create_Path (Project & "/src");
          Put_File (Project & "/" & To_String (Self.File), "procedure Hello is begin null; end;");
       end if;
+   end Run;
+
+   overriding procedure Run
+     (Self        : Report_Files_Agent;
+      Prompt_Path : String;
+      Project     : String;
+      Answer      : out Unbounded_String;
+      Status      : out E.Error_Info)
+   is
+   begin
+      Assert (Dirs.Exists (Prompt_Path), "the multi-file agent was not given its context");
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/notes (draft).txt", "first changed file");
+      Put_File (Project & "/src/second.txt", "second changed file");
+      Answer := Self.Answer;
+      Status := E.Success;
    end Run;
 
    overriding procedure Run
@@ -15252,6 +15279,46 @@ package body Tests.Framework_Cases is
               "evidence for some tests stayed current over a change nothing can trace");
       S.Close (Store);
    end Verification_Follows_What_Changed;
+
+   procedure Multi_File_Completion_Reports (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Store : aliased S.Store;
+      Status : E.Error_Info;
+      Done : Wk.Report;
+      procedure Check (Name, Files : String; Expected_Complete : Boolean) is
+         Change : S.Transaction;
+         Id : Unbounded_String;
+      begin
+         Task_Project
+           (Store, "file-report-" & Name,
+            "set execution.allowed = true" & LF
+            & "profile checks = pass: true" & LF
+            & "scalar profile_capability.checks = run_tests" & LF
+            & "scalar verification.default = checks" & LF);
+         Tk.Create (Store, Change, Fields ("Report both changed paths", "analysis"), "user", "", Id, Status);
+         S.Commit (Store, Change, Status);
+         Tk.Move (Store, Change, To_String (Id), "accepted", "", Status => Status);
+         S.Commit (Store, Change, Status);
+         Wk.Execute
+           (Store, To_String (Id),
+            Report_Files_Agent'(Answer => To_Unbounded_String
+              ("status: done" & LF & "summary: wrote both files" & LF & "changed_files: " & Files)),
+            Cx.Profile (Store, ""), Done, Status);
+         Assert (E.Is_Ok (Status) and then (To_String (Done.Final_State) = "complete") = Expected_Complete,
+                 "multi-file report changed its path boundaries: " & Name & " " & To_String (Done.Reason));
+         if Expected_Complete then
+            Assert (Natural (Done.Changed_Files.Length) = 2
+                      and then Done.Changed_Files.Contains ("src/notes (draft).txt")
+                      and then Done.Changed_Files.Contains ("src/second.txt"),
+                    "a space-containing path was split or a changed file was lost");
+         end if;
+         S.Close (Store);
+      end Check;
+   begin
+      Check ("comma", "src/notes (draft).txt, src/second.txt", True);
+      Check ("lines", LF & "- src/notes (draft).txt" & LF & "- src/second.txt", True);
+      Check ("spaces", "src/notes (draft).txt src/second.txt", False);
+   end Multi_File_Completion_Reports;
 
    --  Work taken in by the harness on its own is reported as work taken in
    --  by hand is, and its workspace goes once that is kept; a Git
@@ -23825,6 +23892,9 @@ package body Tests.Framework_Cases is
       Register_Routine
         (T, Verification_Follows_What_Changed'Access,
          "how widely work is verified follows what it changed and the policy");
+      Register_Routine
+        (T, Multi_File_Completion_Reports'Access,
+         "multi-file reports preserve commas, lines and spaces inside paths");
       Register_Routine
         (T, Contexts_Models_And_Evidence_Say_What_They_Must'Access,
          "contexts, model profiles, manifests and evidence say what they must");

@@ -1,8 +1,19 @@
 # Harness adapters: measure transfer, reduce memory, then prepare training data
 
-Status: opt-in text capture, export and validation implemented, 2026-11-23. The complete suite passes
-982/982; see [capture validation](trajectory-capture-validation.md). The separate three-pair adapter screen
-shows no local benefit and the cancelled pilot stays stopped. No model_runner-specific adapter is trained.
+Status, 2026-11-24: the separately authorized [Mellum learning pilot](mellum-learning-results.md) has
+trained and compared an output-projection adapter on verified local trajectories. All eighteen held-out
+attempts finish: trained 5/9, base 4/9, two trained wins and one loss. This small descriptive pilot does
+not establish a reliable general gain. Its [eight-epoch fit](mellum-learning-fit.json) selects epoch six;
+the [applied GGUF check](mellum-learning-merge-verification.json) confirms unchanged bytes elsewhere.
+The final complete functional suite passes 998/998 and the audit passes 30,924 checks. A separately declared
+[multi-file report-guidance correction](mellum-completion-files-results.md) passes fresh native checks
+with both models on seed 61; those outcomes remain separate from the original nine-pair comparison.
+This output-only experiment does not implement device
+runtime attachment or reopen a cancelled released-model campaign.
+
+The earlier capture checkpoint implemented opt-in text capture, export and validation, 2026-11-23.
+Its complete suite passed 982/982; see [capture validation](trajectory-capture-validation.md).
+The separate three-pair released-adapter screen showed no local benefit and the cancelled pilot stays stopped.
 
 Earlier checkpoints below retain their original scope. The original Q8 released-model campaign remains
 held at its resource gate.
@@ -38,7 +49,8 @@ Device attachment remains unimplemented. Complete text-trajectory capture now ha
 The shared agent/generation boundary records exact tokens, full contexts, tools and parent-linked helpers.
 Native validators check captures and self-contained exports; independent verifier evidence controls
 demonstration eligibility. Multimodal rows, rolling context and scripted replies remain ineligible for
-training under this schema. Dataset curation and model_runner-specific training remain separate work.
+training under this schema. Dataset curation and training are separate from capture; the subsequent
+[Mellum pilot](mellum-learning.md) implements those operations for its declared output-only scope.
 See [the execution report](harness-adapter-execution.md) and
 [campaign guide](harness-adapter-campaign.md).
 
@@ -316,7 +328,11 @@ and carry independently verifiable outcomes. Project-owned capture, validation a
 
 ## Optional follow-on: train and evaluate a model_runner-specific adapter
 
-This requires a separate proposal naming the exact base model, dataset, licenses, training method, hardware,
+The user has authorized the [local Mellum protocol](mellum-learning-protocol.md), including its hardware,
+data split, eight-epoch fit and held-out workflow comparison. Its trained output-only weights are a narrow
+supervised pilot; they do not establish the broader transfer, runtime attachment or reinforcement-learning gates.
+
+Any broader training experiment requires a proposal naming the exact base model, dataset, licenses, method, hardware,
 cost ceiling and held-out evaluation. Published recipes use external training infrastructure; this plan does
 not add a trainer or require that infrastructure to run model_runner. Any external experiment remains separate
 from project-owned tooling and production dependencies.

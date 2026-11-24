@@ -1,0 +1,19 @@
+{
+  "schema": "model_runner.output_lora_fit.v1",
+  "base_sha256": "ecc4d5b8107fc219e23c494b2d107552137637b6c6002ee713e0ba8af7fa2755",
+  "train_features_sha256": "ba408c9b713b47595d51798abcf452110c65cfa5b4f91a2a2a5587141b6460c3",
+  "validation_features_sha256": "7686d03599b4173c377cf645fadd8a5fd013e58a0d36e5bd522a78d7b020fe36",
+  "selected_sha256": "535c8f558cfd2f27f689d128c1daf7f4d853cc4d96d01ad472e867ebb66baf22",
+  "final_sha256": "762b6a13a34307c1c61342da60fb7b931cb638d75bca978d4acd3eecc4b12cb3",
+  "selected_epoch": 6,
+  "epochs": 8,
+  "rank": 8,
+  "train_positions": 1024,
+  "validation_positions": 256,
+  "zero_train_cross_entropy": 0.03773241805654862,
+  "zero_validation_cross_entropy": 0.05423763380420279,
+  "selected_validation_cross_entropy": 0.04401747116151197,
+  "final_train_cross_entropy": 0.00439386110682582,
+  "final_up_squared_norm": 483.01788228025856,
+  "validation_improved": true
+}

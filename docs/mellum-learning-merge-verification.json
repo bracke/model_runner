@@ -1,0 +1,21 @@
+{
+  "schema": "model_runner.output_lora_merge_verification.v1",
+  "base_sha256": "ecc4d5b8107fc219e23c494b2d107552137637b6c6002ee713e0ba8af7fa2755",
+  "adapter_sha256": "535c8f558cfd2f27f689d128c1daf7f4d853cc4d96d01ad472e867ebb66baf22",
+  "merged_sha256": "49d512650e5a8cfc79f22357a5d6fad5ef863fa8307b8aacda01bb9bf0ff1b5a",
+  "file_bytes": 8071295264,
+  "tensor": "output.weight",
+  "shape": [2304, 98304],
+  "format": "Q6_K",
+  "head_byte_offset": 3589408,
+  "head_bytes": 185794560,
+  "suffix_byte_offset": 189383968,
+  "comparison": "Independent cmp over the full prefix, head and suffix; offsets read from the GGUF descriptor.",
+  "prefix_identical": true,
+  "suffix_identical": true,
+  "head_changed": true,
+  "native_inspect_exit_code": 0,
+  "update_squared_norm": 1629.1255700377053,
+  "quantization_squared_error": 52.292011454421036,
+  "maximum_quantization_error": 0.00346996821463108
+}

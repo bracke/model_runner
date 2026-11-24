@@ -75,6 +75,10 @@ package body Model_Runner.Framework.Work is
      & "summary: one line on what you found" & ASCII.LF
      & "changed_files: none" & ASCII.LF & ASCII.LF;
 
+   Changed_Files_Guidance : constant String :=
+     "Separate changed_files paths with commas or put each on its own following line."
+     & " Spaces inside a path are not separators.";
+
    --  Only what the agent has is described: a sentence about a tool it
    --  does not hold is tokens spent on nothing, or a call it cannot make.
    function Instructions_For
@@ -100,7 +104,8 @@ package body Model_Runner.Framework.Work is
        & ASCII.LF & ASCII.LF
        & "status: done" & ASCII.LF
        & "summary: one line on what you did" & ASCII.LF
-       & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF)
+       & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF
+       & Changed_Files_Guidance & ASCII.LF & ASCII.LF)
        & "If you could not do it, status: failed, and the summary says why; blocked is for a"
        & " decision only a person can make."
        --  One line each, said what it is for: written as a list on one
@@ -1288,7 +1293,8 @@ package body Model_Runner.Framework.Work is
              & "status: done" & ASCII.LF
              & "summary: one line on what you did" & ASCII.LF
              & "findings: what you were asked for, in as many lines as it needs" & ASCII.LF
-             & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF)
+             & "changed_files: the files you wrote" & ASCII.LF & ASCII.LF
+             & Changed_Files_Guidance & ASCII.LF & ASCII.LF)
        & "If you could not do it, status: failed, and the summary says why." & ASCII.LF);
 
    function Child_Opening (Role : String) return String

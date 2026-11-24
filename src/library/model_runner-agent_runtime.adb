@@ -190,7 +190,8 @@ package body Model_Runner.Agent_Runtime is
        & "findings: what you were asked for, in as many lines as it needs"
        & ASCII.LF & ASCII.LF
        & "If you could not do it, the status is failed and the summary says"
-       & " why. Add changed_files: for any file you wrote." & ASCII.LF);
+       & " why. Add changed_files: for any file you wrote. Separate paths with commas"
+       & " or put each on its own following line. Spaces inside a path are not separators." & ASCII.LF);
 
    --------------------
    -- Helper_Opening --

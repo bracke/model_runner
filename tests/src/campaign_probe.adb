@@ -30,6 +30,9 @@ package body Campaign_Probe is
       if Write_Only then
          return (if Write (Guarded) then 0 else 9);
       end if;
+      if Ada.Directories.Exists (Guarded) then
+         return 4;
+      end if;
       if Ada.Environment_Variables.Value ("XDG_CACHE_HOME", "") /= Writable & "/obj" then
          return 2;
       end if;

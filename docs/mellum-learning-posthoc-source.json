@@ -1,0 +1,106 @@
+{
+  "schema": "model_runner.mellum_learning_posthoc_source_checks.v1",
+  "scope": "After all original timed attempts; frozen final Calc sources rebuilt against original protected tests in fresh object directories. These diagnostics do not change any workflow outcome.",
+  "original_workflow_grades_unchanged": true,
+  "attempts": [
+    {
+      "task": "edit",
+      "seed": 52,
+      "arm": "adapted",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 1,
+      "source_tests_passed": false,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/edit-52-adapted"
+    },
+    {
+      "task": "subtract",
+      "seed": 51,
+      "arm": "adapted",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 0,
+      "source_tests_passed": true,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/subtract-51-adapted"
+    },
+    {
+      "task": "subtract",
+      "seed": 51,
+      "arm": "base",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 0,
+      "source_tests_passed": true,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/subtract-51-base"
+    },
+    {
+      "task": "subtract",
+      "seed": 52,
+      "arm": "adapted",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 0,
+      "source_tests_passed": true,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/subtract-52-adapted"
+    },
+    {
+      "task": "subtract",
+      "seed": 52,
+      "arm": "base",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 0,
+      "source_tests_passed": true,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/subtract-52-base"
+    },
+    {
+      "task": "subtract",
+      "seed": 53,
+      "arm": "base",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 0,
+      "source_tests_passed": true,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/subtract-53-base"
+    },
+    {
+      "task": "times-negative",
+      "seed": 52,
+      "arm": "adapted",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 4,
+      "test_exit_code": null,
+      "source_tests_passed": false,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/times-negative-52-adapted"
+    },
+    {
+      "task": "times-negative",
+      "seed": 52,
+      "arm": "base",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 0,
+      "source_tests_passed": true,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/times-negative-52-base"
+    },
+    {
+      "task": "times-negative",
+      "seed": 53,
+      "arm": "base",
+      "original_workflow_grade": "failed",
+      "frozen_source_and_trusted_test_matched": true,
+      "compile_exit_code": 0,
+      "test_exit_code": 1,
+      "source_tests_passed": false,
+      "artifact_directory": "/home/bent/Projekte/Ada/model_runner/artifacts/mellum-learning-v1/obj/posthoc/times-negative-53-base"
+    }
+  ]
+}

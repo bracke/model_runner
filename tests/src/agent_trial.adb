@@ -770,7 +770,9 @@ package body Agent_Trial is
       Output_Directory : String := "";
       On_Attempt : access procedure (Item : Attempt) := null;
       Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
-      Isolation_Root : String := "")
+      Isolation_Root : String := "";
+      Fixture_Root : String := "";
+      Fixture_Notes : String := "")
    is
       --  How many of the runs of each task ended complete.
       Completed : array (Tasks'Range) of Natural := [others => 0];
@@ -1026,6 +1028,17 @@ package body Agent_Trial is
       end Artifact_Ready;
    begin
       Clean := True;
+      if (Fixture_Root = "") /= (Fixture_Notes = "")
+        or else (Fixture_Root /= "" and then
+          (Only /= "edit" or else Fixture_Notes'Length > 2_048
+           or else Ada.Strings.Fixed.Index (Fixture_Notes, String'(1 => ASCII.LF)) /= 0
+           or else Ada.Strings.Fixed.Index (Fixture_Notes, String'(1 => ASCII.CR)) /= 0))
+      then
+         Ada.Text_IO.Put_Line ("agent-trial: a teaching fixture requires one edit task and bounded single-line notes");
+         Clean := False;
+         Discard_Copy;
+         return;
+      end if;
       --  A name no task has runs nothing: said, not an empty trial.
       if not (for some One of Tasks => Chosen (Only, To_String (One.Name))) then
          declare
@@ -1070,7 +1083,8 @@ package body Agent_Trial is
                      --  The other project's tree the task is run in, beside
                      --  this one; "" for the trial's own.
                      Tree_At : constant String :=
-                       (if Length (One.Tree) = 0 then ""
+                       (if Fixture_Root /= "" then Ada.Directories.Full_Name (Fixture_Root)
+                        elsif Length (One.Tree) = 0 then ""
                         else Ada.Directories.Full_Name ("../../" & To_String (One.Tree)));
                      Pair    : Hostkit.Pty.Pair;
                      Spawned : Hostkit.Spawn.Options;
@@ -1502,7 +1516,7 @@ package body Agent_Trial is
                                                    or else (Send_Then
                                                               (Check_Line (One.Tested, Apart, Knowledge,
                                                                            One.Styled, One.Convention,
-                                                                           Tree_At /= "", One.Variant))
+                                                                           Length (One.Tree) > 0, One.Variant))
                                                             and then Wait_For ("is now revision", 30.0)
                                                             and then Prompt_Ready)))
                               then
@@ -1541,10 +1555,11 @@ package body Agent_Trial is
                                        --  In another project's tree, the project
                                        --  itself by its crate's name, as /init
                                        --  took it: its files ranked for the task.
-                                       & (if Tree_At /= "" then " component=" & To_String (One.Tree)
+                                       & (if Length (One.Tree) > 0 then " component=" & To_String (One.Tree)
                                           elsif To_String (One.Kind) = "implementation"
                                           then " component=" & Project else "")
-                                       & " notes=" & To_String (One.Notes));
+                                       & " notes=" & (if Fixture_Root = "" then To_String (One.Notes)
+                                                      else Fixture_Notes));
                                  if Wait_For ("created TASK-", 30.0) and then Prompt_Ready then
                                     Task_Id := To_Unbounded_String (Made_Task);
                                     Send ("/accept " & To_String (Task_Id));

@@ -31,3 +31,6 @@
 # Stray compiler output from a syntax check run outside a project
 *.ali
 *.o
+
+# Retained local Mellum training weights and workflow evidence
+/artifacts/mellum-learning-v1/

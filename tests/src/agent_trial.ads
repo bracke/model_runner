@@ -101,6 +101,8 @@ package Agent_Trial is
    --  @param On_Attempt Receives the independently graded result after the retained project has its final name.
    --  @param Extra_Arguments Native arguments appended without splitting, preserving paths containing spaces.
    --  @param Isolation_Root Campaign directory hidden from the confined session except its own project and inputs.
+   --  @param Fixture_Root Optional committed teaching fixture for the single edit task; only calc.adb may change.
+   --  @param Fixture_Notes Task instructions for that fixture, required together with Fixture_Root.
    procedure Run
      (Model     : String;
       Program   : String;
@@ -119,6 +121,8 @@ package Agent_Trial is
       Output_Directory : String := "";
       On_Attempt : access procedure (Item : Attempt) := null;
       Extra_Arguments : Hostkit.String_Vectors.Vector := Hostkit.String_Vectors.Empty_Vector;
-      Isolation_Root : String := "");
+      Isolation_Root : String := "";
+      Fixture_Root : String := "";
+      Fixture_Notes : String := "");
 
 end Agent_Trial;
