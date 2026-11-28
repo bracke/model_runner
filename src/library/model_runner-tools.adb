@@ -454,6 +454,38 @@ package body Model_Runner.Tools is
       return Reply (Open .. (if Shut = 0 then Reply'Last else Shut - 1));
    end Harmony_Answer;
 
+   function Inkling_Answer (Reply : String) return String is
+      Result : Ada.Strings.Unbounded.Unbounded_String;
+      Cursor : Natural := Reply'First;
+   begin
+      if Ada.Strings.Fixed.Index (Reply, Inkling_Model) = 0 then
+         return Reply;
+      end if;
+      loop
+         declare
+            Header : constant Natural := Ada.Strings.Fixed.Index (Reply (Cursor .. Reply'Last), Inkling_Model);
+            Body_At : constant Natural := Header + Inkling_Model'Length;
+         begin
+            exit when Header = 0;
+            declare
+               End_At : constant Natural :=
+                 Ada.Strings.Fixed.Index (Reply (Body_At .. Reply'Last), Inkling_End_Message);
+               Last : constant Natural := (if End_At = 0 then Reply'Last else End_At - 1);
+            begin
+               if Body_At + Inkling_Text'Length - 1 <= Last
+                 and then Reply (Body_At .. Body_At + Inkling_Text'Length - 1) = Inkling_Text
+               then
+                  Ada.Strings.Unbounded.Append
+                    (Result, Reply (Body_At + Inkling_Text'Length .. Last));
+               end if;
+               exit when End_At = 0;
+               Cursor := End_At + Inkling_End_Message'Length;
+            end;
+         end;
+      end loop;
+      return Ada.Strings.Unbounded.To_String (Result);
+   end Inkling_Answer;
+
    -----------------
    -- Spoken_Span --
    -----------------
@@ -470,6 +502,11 @@ package body Model_Runner.Tools is
       is (Position + Marker'Length - 1 <= Reply'Last
           and then Reply (Position .. Position + Marker'Length - 1) = Marker);
    begin
+      if Syntax = Inkling_Call then
+         First := Reply'First;
+         Last := Reply'First - 1;
+         return;
+      end if;
       if Syntax = Python_Code then
          --  The prose before the first fenced call, or the whole reply
          --  when it wrote none -- and then a <tool_call> it wrote instead.
@@ -1034,6 +1071,7 @@ package body Model_Runner.Tools is
             Named_Args : constant String := Member (Holder, "arguments");
             Given      : constant String :=
               (if Named_Args /= "" then Named_Args
+               elsif Syntax = Inkling_Call then Member (Holder, "args")
                else Member (Holder, "parameters"));
             Name_At   : Span;
             Where     : Span;
@@ -1041,7 +1079,8 @@ package body Model_Runner.Tools is
             --  An object standing open is a call only where it names a tool
             --  on offer, when the caller said what was offered: one that a
             --  JSON answer holds, naming anything, is the answer's text.
-            if Called = "" or else (not Announced and then Given = "")
+            if (Syntax = Inkling_Call and then (Given = "" or else Given (Given'First) /= '{'))
+              or else Called = "" or else (not Announced and then Given = "")
               or else (not Announced and then Offered /= null
                        and then not Offers (Offered.all, Called))
             then
@@ -2554,6 +2593,58 @@ package body Model_Runner.Tools is
                end if;
             end loop;
          end;
+
+      when Inkling_Call =>
+         Index := Reply'First;
+         while Index <= Reply'Last loop
+            if Marks (Index, Inkling_Model) then
+               declare
+                  Body_At : constant Natural := Index + Inkling_Model'Length;
+                  End_At : constant Natural :=
+                    Ada.Strings.Fixed.Index (Reply (Body_At .. Reply'Last), Inkling_End_Message);
+                  Tool_At : constant Natural :=
+                    Ada.Strings.Fixed.Index (Reply (Body_At .. Reply'Last), Inkling_Tool_JSON);
+                  Next_Header : constant Natural :=
+                    Ada.Strings.Fixed.Index (Reply (Body_At .. Reply'Last), Inkling_Model);
+                  Is_Tool : constant Boolean := Tool_At > 0
+                    and then (End_At = 0 or else Tool_At < End_At)
+                    and then (Next_Header = 0 or else Tool_At < Next_Header);
+               begin
+                  if Is_Tool then
+                     if End_At = 0 or else (Next_Header > 0 and then Next_Header < End_At) then
+                        Malformed;
+                        return;
+                     end if;
+                     declare
+                        Name : constant String := Reply (Body_At .. Tool_At - 1);
+                        JSON : constant String := Reply (Tool_At + Inkling_Tool_JSON'Length .. End_At - 1);
+                        Taken : Boolean;
+                        Before : constant Natural := Item.Used;
+                     begin
+                        Take_One (JSON, Taken => Taken);
+                        if Taken and then Called (Item, Item.Used) /= Name then
+                           Item.Used := Before;
+                           Malformed;
+                           return;
+                        end if;
+                     end;
+                  elsif End_At > 0
+                    and then not Marks (Body_At, Inkling_Text)
+                    and then not Marks (Body_At, Inkling_Thinking)
+                  then
+                     Malformed;
+                     return;
+                  end if;
+                  exit when End_At = 0;
+                  Index := End_At + Inkling_End_Message'Length;
+                  if not Read_On then
+                     return;
+                  end if;
+               end;
+            else
+               Index := Index + 1;
+            end if;
+         end loop;
 
       when Harmony_Call =>
          --  gpt-oss's harmony form: a call is a message whose header names

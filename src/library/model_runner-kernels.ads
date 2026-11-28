@@ -50,6 +50,16 @@ package Model_Runner.Kernels is
    --  @param Factor Scalar factor.
    procedure Scale (Target : in out Real_Array; Factor : Real);
 
+   --  Sum weighted expert rows in rank order, starting at positive zero.
+   --  Values contains Weights'Length contiguous rows of Target'Length.
+   --  Each multiplication rounds to Real before addition; there is no FMA.
+   --  Input arrays are read only and must not overlap Target. Invalid lengths
+   --  leave Target untouched. Zero expert rows produce a zero target.
+   --  @param Target Weighted sum, replaced in place.
+   --  @param Values Contiguous expert outputs, in their original rank order.
+   --  @param Weights One scalar per expert row, with arbitrary array bounds.
+   procedure Weighted_Sum (Target : in out Real_Array; Values, Weights : Real_Array);
+
    --  Dot product of two vectors.
    --
    --  Accumulates in Wide_Real and rounds once.
@@ -570,6 +580,22 @@ package Model_Runner.Kernels is
    --  @param Allowed True where the host has the wider instructions.
    procedure Use_Wide_Lanes (Allowed : Boolean);
 
+   --  Finish eight consecutive attention scores with learned relative bias.
+   --  Each lane retains scalar channel accumulation and separate multiply/add.
+   --  Unsupported shapes or hosts leave Scores unchanged and return False.
+   --
+   --  @param Scores Eight dot products, replaced by finished scores.
+   --  @param Relative Learned coefficients for one attention head.
+   --  @param Table Row-major relative features, Extent rows of Relative'Length.
+   --  @param Distance Distance of the first score; subsequent lanes are nearer.
+   --  @param Extent Number of valid relative positions; farther lanes have zero bias.
+   --  @param Scale Multiplier for each dot product.
+   --  @param Sink Learned sink subtracted from each bias.
+   --  @param Handled True only when all eight scores were written.
+   procedure Relative_Scores_Eight
+     (Scores : in out Real_Array; Relative, Table : Real_Array;
+      Distance, Extent : Element_Count; Scale, Sink : Real; Handled : out Boolean);
+
    --  Values into binary16, as To_Half writes each of them: eight a step
    --  through the conversion instruction where Use_Wide_Lanes allowed it
    --  and every one of the eight is finite and either zero or at least the
@@ -583,6 +609,34 @@ package Model_Runner.Kernels is
    procedure To_Halves (Values : Real_Array; Halves : out Half_Array)
    with Pre => Halves'Length = Values'Length;
 
+   --  Expand binary16 storage, preserving To_Real's exceptional encodings.
+   --  @param Halves Stored values, with arbitrary array bounds.
+   --  @param Values Expanded values, with the same length.
+   procedure From_Halves (Halves : Half_Array; Values : out Real_Array)
+   with Pre => Halves'Length = Values'Length;
+
+   --  Precision of the intermediate stages in RMS normalization.
+   --  Binary32_Stages rounds squares, mean and reciprocal root to binary32;
+   --  both modes accumulate the reduction in Wide_Real.
+   type RMS_Arithmetic is (Extended_Stages, Binary32_Stages);
+
+   --  Measure the Binary32_Stages learned-row normalization without writing it.
+   --  @param Value Complete input row; squares round before wide accumulation.
+   --  @param Epsilon Stabilizer added after rounding the mean.
+   --  @return Binary32 multiplier, or zero for an empty row.
+   function RMS_Scale (Value : Real_Array; Epsilon : Real) return Real;
+
+   --  Normalize a learned binary32 row in place. Squares round to Real,
+   --  the sum is sequential Wide_Real, then scale and weight round separately.
+   --  @param Value Row to replace after its complete norm has been measured.
+   --  @param Weight Learned gains, with the same length as Value.
+   --  @param Epsilon Stabilizer added to the binary32 mean.
+   --  @param Finite Optional output validity, checked while writing values.
+   --    Null retains the preceding unchecked output loop.
+   procedure RMS_Norm_In_Place
+     (Value : in out Real_Array; Weight : Real_Array; Epsilon : Real;
+      Finite : access Boolean := null);
+
    --  Root-mean-square normalization with a per-element gain.
    --
    --  Computes Target (i) = Source (i) / sqrt (mean of squares + Epsilon)
@@ -595,11 +649,21 @@ package Model_Runner.Kernels is
    --  @param Epsilon Positive stabilizer from the model metadata.
    --  @param Target Output vector; must have Source's length. May alias
    --    Source.
+   --  @param Arithmetic Precision of squares, mean and normalization scale.
    procedure RMS_Norm
      (Source  : Real_Array;
       Weight  : Real_Array;
       Epsilon : Real;
-      Target  : out Real_Array);
+      Target  : out Real_Array;
+      Arithmetic : RMS_Arithmetic := Extended_Stages);
+
+   --  Unweighted RMS normalization using the Binary32_Stages contract.
+   --  Squares round to binary32, accumulate in binary64, then the mean,
+   --  scale and output round as in the weighted overload with unit gains.
+   --  @param Source Input vector, which may alias Target.
+   --  @param Epsilon Stabilizer added to the binary32 mean.
+   --  @param Target Output; zeroed when lengths disagree or Source is empty.
+   procedure RMS_Norm (Source : Real_Array; Epsilon : Real; Target : out Real_Array);
 
    --  Layer normalization: centre, scale, then gain and bias.
    --
@@ -655,6 +719,17 @@ package Model_Runner.Kernels is
    --
    --  @param Target Values to activate, updated in place.
    procedure SiLU (Target : in out Real_Array);
+
+   --  Reference SiTU: softcap both arms, sigmoid the raw gate, and multiply.
+   --  Every stage rounds to binary32. SIMD preserves the scalar tanhf/expf
+   --  contract; unsupported hosts and tails use scalar platform math.
+   --  @param Gate Gate projection, replaced by the activation.
+   --  @param Up Up projection, at least as long as Gate and read only.
+   --  @param Gate_Cap Positive finite gate softcap.
+   --  @param Up_Cap Positive finite up softcap.
+   --  @exception Constraint_Error Invalid lengths or softcaps, before writes.
+   procedure Reference_SiTU
+     (Gate : in out Real_Array; Up : Real_Array; Gate_Cap, Up_Cap : Real);
 
    --  The logistic of each element in place, 1 / (1 + e**-x): what SiLU is
    --  without the multiply by the input, for a router that weights its

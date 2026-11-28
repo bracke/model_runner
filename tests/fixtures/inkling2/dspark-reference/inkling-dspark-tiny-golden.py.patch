@@ -1,0 +1,46 @@
+--- /dev/null
++++ inkling-dspark-tiny-golden.py
+@@ -0,0 +1,43 @@
++import json,subprocess,sys,struct,hashlib
++from pathlib import Path
++import numpy as np
++work=Path('/tmp/inkling-dspark-tiny')
++subprocess.run([sys.executable,'/tmp/inkling-dspark-investigation/read-header.py',str(work/'tiny-dspark.gguf'),str(work/'header.json')],check=True,stdout=subprocess.DEVNULL)
++h=json.loads((work/'header.json').read_text());base=(h['header_end']+31)//32*32;file=(work/'tiny-dspark.gguf').read_bytes();weights={}
++for t in h['tensors']:
++ n=int(np.prod(t['dims']));off=base+t['offset'];assert t['type'] in (0,8,30)
++ if t['type']==30:arr=(np.frombuffer(file,dtype='<u2',count=n,offset=off).astype('<u4')<<16).view('<f4')
++ elif t['type']==0:arr=np.frombuffer(file,dtype='<f4',count=n,offset=off)
++ else:continue
++ weights[t['name']]=arr.reshape(t['dims'][::-1])
++ref=work/'reference';hidden_name=next(line.split('\t')[0]for line in (ref/'tensors.tsv').read_text().splitlines() if line.split('\t')[0].endswith('-result_norm'))
++hidden=np.fromfile(ref/(hidden_name+'.f32'),dtype='<f4').reshape(8,32)
++raw=np.fromfile(ref/'logits.f32',dtype='<f4').reshape(8,16);context=np.fromfile(ref/'context.f32',dtype='<f4').reshape(3,32)[-1]
++def brain_round(values):
++ values=np.asarray(values,dtype=np.float32);bits=values.view(np.uint32)
++ return ((bits+0x7fff+((bits>>16)&1))&0xffff0000).view(np.float32)
++state=np.zeros(4,dtype=np.float32);prev=3;rows=[];tokens=[]
++for i in range(1,8):
++ inp=brain_round(np.concatenate([state,weights['markov_w1.weight'][prev],hidden[i],context]))
++ joint=weights['joint_proj.weight']@inp+weights['joint_proj.bias']
++ gate=1/(1+np.exp(-joint[:4]));cand=np.tanh(joint[4:8]);state=cand+gate*(state-cand)
++ markov=brain_round(np.tanh(joint[8:]));bias=weights['markov_w2.weight']@markov+weights['markov_w2.bias']
++ corrected=30*np.tanh((raw[i]+bias)/30)
++ prev=int(np.argmax(corrected));tokens.append(prev);rows.append(corrected)
++np.asarray(rows,dtype='<f4').tofile(work/'corrected.f32')
++(work/'proposals.json').write_text(json.dumps(tokens)+'\n')
++# Preserve only independently meaningful arrays, not all temporary graph nodes.
++golden={'context.f32':ref/'context.f32','raw.f32':ref/'logits.f32','hidden.f32':ref/(hidden_name+'.f32'),'corrected.f32':work/'corrected.f32','features.f32':work/'features.f32','tiny-dspark.gguf':work/'tiny-dspark.gguf'}
++for layer in range(3):
++ for label in ['Kcur_injected','Vcur_injected']:
++  name=next(line.split('\t')[0]for line in(ref/'tensors.tsv').read_text().splitlines()if line.split('\t')[0].endswith(f'-{label}-{layer}'))
++  golden[f'{label.lower()}-{layer}.f32']=ref/(name+'.f32')
++manifest={'reference_revision':'4c7344447cb1727f1e2f982febc99a8f88dcb77f','proposals':tokens,'reference':'pinned GGML CPU backbone/context; independent NumPy Markov recurrence with BF16 matrix inputs rounded to nearest even','files':{}}
++for name,path in golden.items():manifest['files'][name]={'bytes':path.stat().st_size,'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
++(work/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');print(json.dumps(manifest,indent=2))
++# install only on explicit request, after builds have finished
++if '--install' in sys.argv:
++ import shutil
++ dst=Path('/home/bent/Projekte/Ada/model_runner/tests/fixtures/inkling2/dspark-tiny');dst.mkdir(exist_ok=True)
++ for name,path in golden.items():shutil.copy2(path,dst/name)
++ shutil.copy2(work/'manifest.json',dst/'manifest.json')

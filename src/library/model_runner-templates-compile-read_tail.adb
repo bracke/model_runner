@@ -360,7 +360,8 @@ begin
                      elsif Word = "tojson" then
                         return (if Named ("indent") then 1
                                 elsif Named ("ensure_ascii") then 2
-                                elsif Named ("sort_keys") then 3 else 0);
+                                elsif Named ("sort_keys") then 3
+                                elsif Named ("separators") then 4 else 0);
                      elsif Word = "int" then
                         return (if Named ("default") then 1
                                 elsif Named ("base") then 2 else 0);
@@ -538,7 +539,7 @@ begin
                   Result.Numeric := True;
                elsif Word = "tojson" then
                   Step.Kind := Filter_JSON;
-                  Read_Arguments (3, 0);
+                  Read_Arguments (4, 0);
                elsif Word = "params" then
                   Step.Kind := Filter_Params;
                elsif Word = "qwen_params" then

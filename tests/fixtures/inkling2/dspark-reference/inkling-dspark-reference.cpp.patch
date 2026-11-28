@@ -1,0 +1,63 @@
+--- /dev/null
++++ inkling-dspark-reference.cpp
+@@ -0,0 +1,60 @@
++#include "llama.h"
++#include "ggml.h"
++#include "ggml-backend.h"
++#include <vector>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <string>
++#include <stdexcept>
++static std::string dest;
++static int phase=0,serial=0;
++static void save(const std::string& name,const void* p,size_t size) {auto *f=fopen((dest+"/"+name).c_str(),"wb");if(!f)throw std::runtime_error("open output");if(fwrite(p,1,size,f)!=size)throw std::runtime_error("write");fclose(f);}
++static bool callback(ggml_tensor* t,bool ask,void*) {
++ if(t->type!=GGML_TYPE_F32||!ggml_is_contiguous(t))return false;
++ if(ask)return true;
++ const size_t n=ggml_nbytes(t);if(n>16*1024*1024)return true;
++ std::vector<float>x(n/4);ggml_backend_tensor_get(t,x.data(),0,n);
++ std::string name=std::to_string(phase)+"-"+std::to_string(serial++)+"-"+t->name;
++ for(auto&c:name)if(c=='/'||c==' ')c='_';
++ save(name+".f32",x.data(),n);
++ auto*f=fopen((dest+"/tensors.tsv").c_str(),"a");fprintf(f,"%s\t%lld\t%lld\t%lld\t%lld\n",name.c_str(),(long long)t->ne[0],(long long)t->ne[1],(long long)t->ne[2],(long long)t->ne[3]);fclose(f);return true;
++}
++int main(int argc,char**argv){try{
++ if(argc!=8&&argc!=9)throw std::runtime_error("target draft features output H V anchor");
++ dest=argv[4];int H=atoi(argv[5]),V=atoi(argv[6]),anchor=atoi(argv[7]),N=argc==9?atoi(argv[8]):3;
++ llama_backend_init();auto mp=llama_model_default_params();mp.n_gpu_layers=0;;
++ auto*target=llama_model_load_from_file(argv[1],mp);if(!target)throw std::runtime_error("target model");
++ auto*draft=llama_model_load_from_file(argv[2],mp);if(!draft)throw std::runtime_error("draft model");
++ auto cp=llama_context_default_params();cp.n_ctx=N+32;cp.n_batch=16;cp.n_ubatch=16;cp.n_threads=2;cp.n_threads_batch=2;cp.type_k=GGML_TYPE_F32;cp.type_v=GGML_TYPE_F32;cp.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_DISABLED;cp.offload_kqv=false;cp.op_offload=false;
++ auto*tc=llama_init_from_model(target,cp);if(!tc)throw std::runtime_error("target ctx");
++ cp.ctx_other=tc;cp.cb_eval=callback;cp.cb_eval_user_data=nullptr;
++ auto*dc=llama_init_from_model(draft,cp);if(!dc)throw std::runtime_error("draft ctx");
++ llama_set_embeddings_nextn(dc,true,false);llama_set_causal_attn(dc,false);
++ std::vector<float> features(N*4*H);
++ if(strcmp(argv[3],"@target")==0){
++  for(int layer: {5,23,41,48})llama_set_embeddings_layer_inp(tc,layer,true);
++  auto*tb=llama_batch_ext_init(tc);int ids[3]={32269,11,152717};
++  for(int i=0;i<3;i++){int idx=llama_batch_ext_add_token(tb,0,ids[i]);llama_pos pos=i;llama_batch_ext_set_pos(tb,idx,&pos);llama_batch_ext_set_output_logits(tb,idx,true);}
++  if(llama_process(tc,LLAMA_PROCESS_TYPE_DECODE,tb))throw std::runtime_error("target decode");
++  int taps[4]={5,23,41,48};for(int k=0;k<4;k++){auto*p=llama_get_embeddings_layer_inp(tc,taps[k]);if(!p)throw std::runtime_error("target taps");for(int i=0;i<3;i++)memcpy(features.data()+i*4*H+k*H,p+i*H,H*4);}
++  save("features.f32",features.data(),features.size()*4);auto*l=llama_get_logits(tc);save("target-logits.f32",l,3*V*4);
++  anchor=0;for(int j=1;j<V;j++)if(l[2*V+j]>l[2*V+anchor])anchor=j;
++  auto*f=fopen((dest+"/anchor.txt").c_str(),"w");fprintf(f,"%d\n",anchor);fclose(f);llama_batch_ext_free(tb);
++ }else{auto*f=fopen(argv[3],"rb");if(!f||fread(features.data(),4,features.size(),f)!=features.size())throw std::runtime_error("features");fclose(f);}
++ auto*b=llama_batch_ext_init(dc);phase=1;std::vector<float> context(N*H);float*h=nullptr;
++ for(int off=0;off<N;off+=16){llama_batch_ext_clear(b);int n=std::min(16,N-off);
++  for(int k=0;k<n;k++){int i=off+k;llama_embd e{features.data()+i*4*H,1,(size_t)4*H};int idx=llama_batch_ext_add_embd(b,0,e);llama_pos pos[4]={i,i,i,0};if(idx<0||!llama_batch_ext_set_pos(b,idx,pos))throw std::runtime_error("injection batch");}
++  if(llama_process(dc,LLAMA_PROCESS_TYPE_DECODE,b))throw std::runtime_error("inject decode");
++  h=llama_get_embeddings_nextn(dc);if(!h)throw std::runtime_error("no context output");memcpy(context.data()+off*H,h,n*H*4);
++ }
++ std::vector<float> state(context.end()-H,context.end());save("context.f32",context.data(),N*H*4);
++ llama_batch_ext_clear(b);phase=2;
++ std::vector<float> allstate(8*H,0);memcpy(allstate.data(),state.data(),H*4);
++ for(int i=0;i<8;i++){int idx=llama_batch_ext_add_token(b,0,i?0:anchor);llama_pos pos=N+i;llama_embd e{allstate.data()+i*H,1,(size_t)H};if(idx<0||!llama_batch_ext_set_pos(b,idx,&pos)||(H>=130&&!llama_batch_ext_set_embd_state(b,idx,e))||!llama_batch_ext_set_output_logits(b,idx,true))throw std::runtime_error("block batch");}
++ if(llama_process(dc,LLAMA_PROCESS_TYPE_DECODE,b))throw std::runtime_error("block decode");
++ auto*logits=llama_get_logits(dc);if(!logits)throw std::runtime_error("no logits");save("logits.f32",logits,8*V*4);
++ h=llama_get_embeddings_nextn(dc);if(h)save("draws.f32",h,8*H*4);
++ auto*rf=fopen((dest+"/proposals.txt").c_str(),"w");for(int i=1;i<8;i++){int best=0;for(int j=1;j<V;j++)if(logits[i*V+j]>logits[i*V+best])best=j;fprintf(rf,"%d\n",best);}fclose(rf);
++ llama_batch_ext_free(b);llama_free(dc);llama_free(tc);llama_model_free(draft);llama_model_free(target);llama_backend_free();return 0;
++ }catch(const std::exception&e){fprintf(stderr,"fixture: %s\n",e.what());return 1;}}

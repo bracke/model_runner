@@ -1,0 +1,29 @@
+{
+  "origin": "Deterministic synthetic blocks, random seed 7312906; no model weight excerpts.",
+  "reference_commit": "4c7344447cb1727f1e2f982febc99a8f88dcb77f",
+  "shape": {
+    "rows": 4,
+    "columns": 2304,
+    "vectors": 9
+  },
+  "method": "Initialize GGML CPU, quantize_row_q8_K, then seven independent ggml_vec_dot_iq*_q8_K routines. Source generators included; compile reference with the pinned checkout include paths and link build/bin/libggml-cpu and libggml-base.",
+  "sha256": {
+    "iq1_s.bin": "ab96973e9d67c9e5740de7934f055b8f01ea9c3151ff6539bf272c455b2ff98d",
+    "reference-generator.cpp.patch": "bce9c2880559773357a8fc2d23a6632ec877f6c2d29f761e8e1019ac26c7b87f",
+    "iq1_m.f32": "c0bc7911ec0e0b172f6bc59a091ff3705caca3ca765f2f3aacc4d6d6f9b7532e",
+    "iq3_s.f32": "30295ad87740ca5ba0ad1cdff6d493fc66620ae94cfb0fda1423be97052a1dff",
+    "iq2_xs.f32": "3f4f96c322d2836e7c8402cdb17a087efbbf8c2b705b82ade30bafeafd102710",
+    "iq3_s.bin": "e8bfc8015542112b07d8ea915ac9633db0c6507711509f0d0aec5c9cd3636b67",
+    "input.f32": "694eeb12f80f8a3fd83550c2d3bf33cb04a41dee10cfe477c46bcf683901ca1a",
+    "iq2_xxs.f32": "a002b3709773eb883a4a612bba92cb5d068df47d8daade4f803065fbd1aea663",
+    "iq3_xxs.f32": "4fab8f96b660c42641e6de61c2e94222a313fbcecd9f6ed3a6bc33f39de3890f",
+    "weights-generator.py.patch": "f339390784755cdd4bfe109f1de34efcb26202e080ab5301fe5a2f7a900a2dc6",
+    "iq2_xs.bin": "0c8a64ba0d0ff6c0e89c58f350ca5e845658103c2bc6c1da39325fedb186c047",
+    "iq1_s.f32": "d689d1dbbb42bdb379c46232a3a89e641f17863c32f4c4f8922d64d633688fe1",
+    "iq2_s.bin": "46ef2d7fd072df5beb1893437f3bfb0994392fd710c88b885cd2bf051ccb80ae",
+    "iq1_m.bin": "1c429b5135914688164fea7d652ee67e96b82463c29e045a0fbfd0d0c0a7dc09",
+    "iq3_xxs.bin": "2c3754a39cae41ea29034b283f9305241e4ca79f5f6ae4183340c680dc54b3a8",
+    "iq2_s.f32": "969af38ef70dbf2dbaee0f88d65ed02430222d598f99e3852e3cf3f69a7c7290",
+    "iq2_xxs.bin": "385631319fc51d73d9c27719c530aec1bd962979f92e128fc89e6e43b5db8c4d"
+  }
+}

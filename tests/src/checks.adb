@@ -6049,28 +6049,36 @@ package body Checks is
             Fail ("src/shaders/combine.comp has changed since it was "
                   & "compiled; compile it and run 'tests shader' again with "
                   & "every shader named");
+         elsif Digest /= Model_Runner.Shaders.Combine_Native_Digest then
+            Fail ("the NATIVE_CONTROLS compilation of "
+                  & "src/shaders/combine.comp is older than the source; "
+                  & "compile it with -DNATIVE_CONTROLS and regenerate "
+                  & "the committed shader words");
          end if;
       end;
 
-      --  The integer walks' rounding, asked the same way.
-      declare
-         Found : Boolean;
-
-         Digest : constant Interfaces.Unsigned_64 :=
-           Shader_Generation.Source_Digest
-             (Root & "/src/shaders/round_vectors.comp", Found);
-      begin
-         Result.Performed := Result.Performed + 1;
-
-         if not Found then
-            Fail ("src/shaders/round_vectors.comp is missing, and the words "
-                  & "compiled from it are committed");
-         elsif Digest /= Model_Runner.Shaders.Round_Vectors_Digest then
-            Fail ("src/shaders/round_vectors.comp has changed since it was "
-                  & "compiled; compile it and run 'tests shader' again with "
-                  & "every shader named");
-         end if;
-      end;
+      --  Both integer activation packers must match their committed words.
+      for Kind in 1 .. 3 loop
+         declare
+            Name : constant String := (case Kind is when 1 => "round_vectors", when 2 => "round_reference",
+                                      when others => "reference_activation");
+            Found : Boolean;
+            Digest : constant Interfaces.Unsigned_64 :=
+              Shader_Generation.Source_Digest (Root & "/src/shaders/" & Name & ".comp", Found);
+            Recorded : constant Interfaces.Unsigned_64 :=
+              (case Kind is when 1 => Model_Runner.Shaders.Round_Vectors_Digest,
+               when 2 => Model_Runner.Shaders.Round_Reference_Digest,
+               when others => Model_Runner.Shaders.Reference_Activation_Digest);
+         begin
+            Result.Performed := Result.Performed + 1;
+            if not Found then
+               Fail ("src/shaders/" & Name & ".comp is missing, and its compiled words are committed");
+            elsif Digest /= Recorded then
+               Fail ("src/shaders/" & Name & ".comp changed since compilation; compile it and run 'tests shader' "
+                     & "again with every shader named");
+            end if;
+         end;
+      end loop;
 
       --  The keeper's kernel, asked the same way.
       declare
@@ -7209,10 +7217,11 @@ package body Checks is
       --  once, and Q4_K's gate and up at once for one and for a few --
       --  and Q4_K's two few-position walks, Q5_K's and Q6_K's again as
       --  integers.
-      for Which in 1 .. 16 loop
+      for Which in 1 .. 17 loop
          declare
             Name : constant String :=
-              (if Which in 7 | 9 | 16 then "row_product_super6"
+              (if Which = 17 then "row_product_reference"
+               elsif Which in 7 | 9 | 16 then "row_product_super6"
                elsif Which in 8 | 10 | 11 | 13 | 14 then "row_product_super"
                elsif Which in 12 | 15 then "row_product_super5"
                else
@@ -7266,6 +7275,8 @@ package body Checks is
                   when 16 =>
                      Model_Runner.Shaders.Super
                        .Row_Product_Super6_Multi_Dots_Digest,
+                  when 17 =>
+                     Model_Runner.Shaders.Super.Row_Product_Super_Reference_Digest,
                   when others =>
                      Model_Runner.Shaders.Super.Row_Product_Super6_Mid_Digest);
          begin

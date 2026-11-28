@@ -18,6 +18,11 @@ package Model_Runner.Output.Harmony is
    --  The filter, writing what it shows to Target.
    type Filter (Target : Sink_Reference) is limited new Sink with private;
 
+   --  Select Inkling typed blocks instead of Harmony channels.
+   --  @param Self Existing streaming block filter.
+   --  @param On True for Inkling, false for Harmony (the default).
+   procedure Inkling_Blocks (Self : in out Filter; On : Boolean);
+
    --  Show the final channel's messages alone, the reasoning left out --
    --  run --hide-reasoning. Off, every message but a call's is shown.
    --
@@ -71,6 +76,7 @@ private
       Used  : Natural := 0;
       Shut  : Boolean := False;
       Only_Final : Boolean := False;
+      Inkling : Boolean := False;
       Shown : Boolean := False;
       --  Whether the message shown is the analysis channel's -- reasoning,
       --  shown in the target's reasoning style -- and whether it is now.

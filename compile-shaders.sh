@@ -60,6 +60,35 @@ compile_dots () {
     PAIRS="$PAIRS ../src/shaders/$src $out"
 }
 
+# Controlled reference arithmetic needs explicit IEEE modes in SPIR-V.
+# The source is ordinary GLSL; these modes are part of its recorded build.
+compile_controlled () {
+    name=$1; src=$2
+    out="$SPV/$name.spv"
+    glslangValidator --target-env vulkan1.1 "$ROOT/src/shaders/$src" -o "$out"
+    spirv-dis "$out" -o "$SPV/controlled.asm"
+    entry_point=$(awk '$1 == "OpEntryPoint" && $2 == "GLCompute" { print $3; exit }' "$SPV/controlled.asm")
+    awk -v entry="$entry_point" '
+      /OpCapability Shader/ {
+        print; print "OpCapability DenormPreserve"; print "OpCapability SignedZeroInfNanPreserve";
+        print "OpCapability RoundingModeRTE"; next
+      }
+      /OpExtInstImport/ { print "OpExtension \"SPV_KHR_float_controls\"" }
+      { print }
+      /OpExecutionMode .* LocalSize/ {
+        print "OpExecutionMode " entry " DenormPreserve 32";
+        print "OpExecutionMode " entry " DenormPreserve 64";
+        print "OpExecutionMode " entry " SignedZeroInfNanPreserve 32";
+        print "OpExecutionMode " entry " SignedZeroInfNanPreserve 64";
+        print "OpExecutionMode " entry " RoundingModeRTE 32";
+        print "OpExecutionMode " entry " RoundingModeRTE 64"
+      }
+    ' "$SPV/controlled.asm" > "$SPV/controlled-modes.asm"
+    spirv-as --target-env vulkan1.1 "$SPV/controlled-modes.asm" -o "$out"
+    spirv-val --target-env vulkan1.1 "$out"
+    PAIRS="$PAIRS ../src/shaders/$src $out"
+}
+
 compile attention                    attention.comp        vulkan1.0
 compile attention_subgroups          attention.comp        vulkan1.1 SUBGROUPS WIDE
 compile attention_tiled              attention.comp        vulkan1.1 SUBGROUPS QUERY_TILE
@@ -68,6 +97,7 @@ compile attention_bundled            attention.comp        vulkan1.1 SUBGROUPS H
 compile attention_bundle_exact       attention.comp        vulkan1.1 SUBGROUPS WIDE FOURS GROUPED
 compile attention_grouped_exact      attention.comp        vulkan1.1 SUBGROUPS WIDE GROUPED
 compile combine                      combine.comp          vulkan1.0
+compile combine_native               combine.comp          vulkan1.0 NATIVE_CONTROLS=1
 compile row_product                  row_product.comp      vulkan1.0
 compile row_product_low              row_product.comp      vulkan1.0 LOW_BITS
 compile row_product_super            row_product_super.comp vulkan1.1 NUM_ROWS=2u
@@ -75,9 +105,13 @@ compile row_product_super_long       row_product_super.comp vulkan1.1 NUM_ROWS=2
 compile row_product_super_multi      row_product_super.comp vulkan1.1 NUM_ROWS=8u MULTI
 compile row_product_super_glu        row_product_super.comp vulkan1.1 NUM_ROWS=1u GLU
 compile row_product_super_glu_multi  row_product_super.comp vulkan1.1 NUM_ROWS=4u MULTI GLU
+compile_dots row_product_super_reference row_product_reference.comp vulkan1.1
 compile_dots row_product_super_multi_dots     row_product_super.comp vulkan1.1 NUM_ROWS=8u MULTI DOTS
 compile_dots row_product_super_glu_multi_dots row_product_super.comp vulkan1.1 NUM_ROWS=4u MULTI GLU DOTS
+compile row_product_gsq_reference row_product_gsq_reference.comp vulkan1.1
 compile round_vectors                round_vectors.comp    vulkan1.0
+compile round_reference              round_reference.comp  vulkan1.1
+compile_controlled reference_activation reference_activation.comp
 compile row_product_super5           row_product_super5.comp vulkan1.1 NUM_ROWS=2u
 compile row_product_super5_long      row_product_super5.comp vulkan1.1 NUM_ROWS=2u KSPLIT=2u
 compile row_product_super5_multi     row_product_super5.comp vulkan1.1 NUM_ROWS=8u MULTI

@@ -21,7 +21,7 @@ is
      (if Item.Next_Keys /= null
       then B.Byte_Count (Value_Row_Width (Settings))
       else V_Width);
-   Layers   : constant B.Byte_Count := B.Byte_Count (Settings.Layers);
+   Layers   : constant B.Byte_Count := B.Byte_Count (Runtime_Layers (Settings));
 
    --  Where each layer's run begins, and how long it is. A layer that
    --  holds everything begins at zero and runs to what was committed,
@@ -295,6 +295,12 @@ is
       At_Byte := At_Byte + B.Byte_Count (Count) * 2;
    end Put_Run;
 begin
+   if Source.Settings.Kind = DFlash then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "dflash.snapshot", E.Param_Identifier);
+      Into := null;
+      return;
+   end if;
    Into := null;
    Status := E.Success;
 
@@ -336,8 +342,8 @@ begin
 
    Put (Interfaces.Unsigned_64'(Session_Magic));
    Put_Count (Natural'(Session_Version));
-   Put (Fingerprint (Source));
-   Put_Count (Settings.Layers);
+   Put (Cache_Identity (Source, Item));
+   Put_Count (Runtime_Layers (Settings));
    Put_Count (Settings.KV_Heads);
    Put_Count (Settings.Head_Size);
    Put_Count (Settings.Value_Size);

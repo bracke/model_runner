@@ -51,7 +51,8 @@ package body Model_Runner.Platform.X86_Features is
 
    procedure Features
      (Wide : out Boolean;
-      Deep : out Boolean)
+      Deep : out Boolean;
+      Brain : out Boolean)
    is
       package Sets renames Model_Runner.Platform.X86_Feature_Sets;
 
@@ -59,10 +60,12 @@ package body Model_Runner.Platform.X86_Features is
       Basic_C, Leaf_7_B      : U32;
       Leaf_7_C, Extended_C   : U32;
       State                  : U32 := 0;
+      Leaf_7_1_A : U32 := 0;
       Found                  : Sets.Feature_Set := Sets.No_Features;
    begin
       Wide := False;
       Deep := False;
+      Brain := False;
 
       CPUID (0, 0, A, B, C, D);
       if A < 7 then
@@ -80,6 +83,10 @@ package body Model_Runner.Platform.X86_Features is
       CPUID (7, 0, A, B, C, D);
       Leaf_7_B := B;
       Leaf_7_C := C;
+      if A >= 1 then
+         CPUID (7, 1, A, B, C, D);
+         Leaf_7_1_A := A;
+      end if;
 
       CPUID (16#8000_0000#, 0, A, B, C, D);
       if A < 16#8000_0001# then
@@ -112,28 +119,38 @@ package body Model_Runner.Platform.X86_Features is
          AVX512CD   => Has_Bit (Leaf_7_B, 28),
          AVX512BW   => Has_Bit (Leaf_7_B, 30),
          AVX512VL   => Has_Bit (Leaf_7_B, 31),
-         AVX512VNNI => Has_Bit (Leaf_7_C, 11));
+         AVX512VNNI => Has_Bit (Leaf_7_C, 11),
+         AVX512BF16 => Has_Bit (Leaf_7_1_A, 5));
 
       Wide := Sets.Supports_V3 (Found);
       Deep := Sets.Supports_V4_VNNI (Found);
+      Brain := Sets.Supports_BF16 (Found);
    exception
       when others =>
          Wide := False;
          Deep := False;
+      Brain := False;
    end Features;
 
    function Wide_Vectors return Boolean is
-      Wide, Deep : Boolean;
+      Wide, Deep, Brain : Boolean;
    begin
-      Features (Wide, Deep);
+      Features (Wide, Deep, Brain);
       return Wide;
    end Wide_Vectors;
 
    function Byte_Products return Boolean is
-      Wide, Deep : Boolean;
+      Wide, Deep, Brain : Boolean;
    begin
-      Features (Wide, Deep);
+      Features (Wide, Deep, Brain);
       return Deep;
    end Byte_Products;
+
+   function Brain_Products return Boolean is
+      Wide, Deep, Brain : Boolean;
+   begin
+      Features (Wide, Deep, Brain);
+      return Brain;
+   end Brain_Products;
 
 end Model_Runner.Platform.X86_Features;

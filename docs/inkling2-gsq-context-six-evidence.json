@@ -1,0 +1,593 @@
+{
+  "schema": "model_runner.inkling2_gsq_context_six.v1",
+  "status": "Complete: six implemented and qualified; combined candidate not selected and preceding sources/binaries restored.",
+  "checkpoint": {
+    "status": "complete",
+    "started_at": "2026-11-27T20:13:22.505900+00:00",
+    "repository": "ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF",
+    "filename": "Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+    "destination": "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+    "partial": "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf.part",
+    "revision": "f0da1097633dd7c2f5733e4077cff861be122245",
+    "expected_sha256": "8a3515374c3cd9b65a1677b17e805bb1e32df8e98756e5f0d2fe1837d62aa4cb",
+    "expected_bytes": 11425259648,
+    "method": "Eight concurrent HTTP ranges; validated Content-Range, resumable pieces, final pinned SHA-256.",
+    "piece_directory": "/home/bent/models/.Inkling-2-Mini-GSQ-RCO-IQ3_S.download",
+    "connections": 8,
+    "superseded_method": "Single curl stream; its downloaded prefix retained.",
+    "parallel_started_at": "2026-11-27T20:19:21.896223+00:00",
+    "actual_sha256": "8a3515374c3cd9b65a1677b17e805bb1e32df8e98756e5f0d2fe1837d62aa4cb",
+    "finished_at": "2026-11-27T21:24:36.086187+00:00"
+  },
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Full-mask Q4T value kernel",
+      "status": "implemented_qualified_measured_reverted_combined",
+      "decision": "The six changes were timed together with fresh selective PGO. No isolated performance attribution; restore the preceding selected engine after its paired comparison."
+    },
+    {
+      "id": 2,
+      "title": "Hoisted Q4T probabilities and addresses",
+      "status": "implemented_qualified_measured_reverted_combined",
+      "decision": "The six changes were timed together with fresh selective PGO. No isolated performance attribution; restore the preceding selected engine after its paired comparison."
+    },
+    {
+      "id": 3,
+      "title": "Vector drafter context mixing",
+      "status": "implemented_qualified_measured_reverted_combined",
+      "decision": "The six changes were timed together with fresh selective PGO. No isolated performance attribution; restore the preceding selected engine after its paired comparison."
+    },
+    {
+      "id": 4,
+      "title": "Injection rotary-table reuse",
+      "status": "implemented_qualified_measured_reverted_combined",
+      "decision": "The six changes were timed together with fresh selective PGO. No isolated performance attribution; restore the preceding selected engine after its paired comparison."
+    },
+    {
+      "id": 5,
+      "title": "Parallel head normalization and rotation",
+      "status": "implemented_qualified_measured_reverted_combined",
+      "decision": "The six changes were timed together with fresh selective PGO. No isolated performance attribution; restore the preceding selected engine after its paired comparison."
+    },
+    {
+      "id": 6,
+      "title": "Invariant Markov context reuse",
+      "status": "implemented_qualified_measured_reverted_combined",
+      "decision": "The six changes were timed together with fresh selective PGO. No isolated performance attribution; restore the preceding selected engine after its paired comparison."
+    }
+  ],
+  "candidate": {
+    "status": "passed",
+    "started_at": "2026-11-28T11:19:23.568532+00:00",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-context-02-pgo-v1",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/02-pgo/measurement/cpu.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/02-pgo/measurement/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+    ],
+    "binary_sha256": "3e0114213818a8b5ea649ee09c3e4af9e0039601f0205719e4e3dcf80134de31",
+    "protocol": "One warmup and one measured pass. Compressed IQ3_S weights, Q4T, int8, no repack, seven proposals. No concurrent build, test or model job.",
+    "baseline_rates": {
+      "prefill_tok_s": 24.72,
+      "decode_tok_s": 16.32
+    },
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "prefill_tok_s": 24.58,
+    "decode_tok_s": 15.25,
+    "prefill_seconds": 83.316,
+    "decode_seconds": 1.049,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 14,
+    "accepted": 14,
+    "finished_at": "2026-11-28T11:22:12.391687+00:00",
+    "output_and_acceptance_match": true
+  },
+  "candidate_validation": {
+    "status": "passed",
+    "binary_sha256": "3e0114213818a8b5ea649ee09c3e4af9e0039601f0205719e4e3dcf80134de31",
+    "cases": [
+      {
+        "filter": "native Inkling",
+        "count": 51,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/00.log"
+      },
+      {
+        "filter": "cpu backend : GSQ small-block",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/01.log"
+      },
+      {
+        "filter": "gguf container : integer products : independent seven-format grid",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/02.log"
+      },
+      {
+        "filter": "gguf container : integer products : the grid",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/03.log"
+      },
+      {
+        "filter": "gguf container : integer products : GSQ",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/04.log"
+      },
+      {
+        "filter": "gguf container : the integer kernels prove",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/05.log"
+      },
+      {
+        "filter": "cpu backend : a parallel product",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/06.log"
+      },
+      {
+        "filter": "cpu backend : the partition covers",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/02-pgo/qualification/07.log"
+      }
+    ]
+  },
+  "candidate_source_archive": "artifacts/inkling2/obj/gsq-context-six/02-pgo/source.tar",
+  "candidate_source_manifest": "artifacts/inkling2/obj/gsq-context-six/02-pgo/source-sha256.json",
+  "candidate_patch": "artifacts/inkling2/obj/gsq-context-six/candidate.patch",
+  "matched_training": {
+    "status": "passed",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-context-decoder-training",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/01-training/training.time",
+      "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf",
+      "--turns",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/training-turns"
+    ],
+    "binary_sha256": "64d315351508f04954b7c2e7fac0b632cd4982b91bb92735e632917fd0a3c4c0",
+    "started_at": "2026-11-28T11:12:33.493448+00:00",
+    "profiled_units": [
+      "llama",
+      "backend-cpu"
+    ],
+    "protocol": "Only decoder/CPU orchestration counters. One actual 2048/16 CPU run, eight workers, batch 128, Q4T/int8/seven DSpark proposals, using existing one-turn mode to avoid an unnecessary training warmup. Training rates are not a performance comparison.",
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 14,
+    "accepted": 14,
+    "finished_at": "2026-11-28T11:18:08.316406+00:00"
+  },
+  "profile_manifest": "artifacts/inkling2/obj/gsq-context-six/profile-sha256.json",
+  "profile_archive": "artifacts/inkling2/obj/gsq-context-six/profiles.tar.gz",
+  "paired_baseline": {
+    "status": "passed",
+    "started_at": "2026-11-28T11:23:07.902765+00:00",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-context-baseline-confirmation",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/03-baseline-confirmation/cpu.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/before/tests/bin/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+    ],
+    "binary_sha256": "72faf87f281c95cc2cc9ff83b7986721b0872f20695c17ef9a0face5f9e865ff",
+    "source_manifest": "artifacts/inkling2/obj/gsq-more-six/02-pgo/source-sha256.json",
+    "source_archive": "artifacts/inkling2/obj/gsq-more-six/02-pgo/source.tar",
+    "validation": {
+      "status": "passed",
+      "binary_sha256": "72faf87f281c95cc2cc9ff83b7986721b0872f20695c17ef9a0face5f9e865ff",
+      "cases": [
+        {
+          "filter": "native Inkling",
+          "count": 49,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/00.log"
+        },
+        {
+          "filter": "cpu backend : GSQ small-block",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/01.log"
+        },
+        {
+          "filter": "gguf container : integer products : independent seven-format grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/02.log"
+        },
+        {
+          "filter": "gguf container : integer products : the grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/03.log"
+        },
+        {
+          "filter": "gguf container : integer products : GSQ",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/04.log"
+        },
+        {
+          "filter": "gguf container : the integer kernels prove",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/05.log"
+        },
+        {
+          "filter": "cpu backend : a parallel product",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/06.log"
+        },
+        {
+          "filter": "cpu backend : the partition covers",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/07.log"
+        }
+      ]
+    },
+    "protocol": "One targeted paired baseline confirmation, one warmup plus one measured 2048/16 pass with the unchanged frozen preceding binary. No concurrent build, test or model work.",
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "prefill_tok_s": 24.75,
+    "decode_tok_s": 15.68,
+    "prefill_seconds": 82.733,
+    "decode_seconds": 1.021,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 14,
+    "accepted": 14,
+    "finished_at": "2026-11-28T11:25:56.696199+00:00",
+    "output_and_acceptance_match": true
+  },
+  "selected_stage": "preceding_frozen_baseline",
+  "measurement": {
+    "status": "passed",
+    "started_at": "2026-11-28T11:23:07.902765+00:00",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-context-baseline-confirmation",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/03-baseline-confirmation/cpu.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-context-six/before/tests/bin/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+    ],
+    "binary_sha256": "72faf87f281c95cc2cc9ff83b7986721b0872f20695c17ef9a0face5f9e865ff",
+    "source_manifest": "artifacts/inkling2/obj/gsq-more-six/02-pgo/source-sha256.json",
+    "source_archive": "artifacts/inkling2/obj/gsq-more-six/02-pgo/source.tar",
+    "validation": {
+      "status": "passed",
+      "binary_sha256": "72faf87f281c95cc2cc9ff83b7986721b0872f20695c17ef9a0face5f9e865ff",
+      "cases": [
+        {
+          "filter": "native Inkling",
+          "count": 49,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/00.log"
+        },
+        {
+          "filter": "cpu backend : GSQ small-block",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/01.log"
+        },
+        {
+          "filter": "gguf container : integer products : independent seven-format grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/02.log"
+        },
+        {
+          "filter": "gguf container : integer products : the grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/03.log"
+        },
+        {
+          "filter": "gguf container : integer products : GSQ",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/04.log"
+        },
+        {
+          "filter": "gguf container : the integer kernels prove",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/05.log"
+        },
+        {
+          "filter": "cpu backend : a parallel product",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/06.log"
+        },
+        {
+          "filter": "cpu backend : the partition covers",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-more-six/02-pgo/qualification/07.log"
+        }
+      ]
+    },
+    "protocol": "One targeted paired baseline confirmation, one warmup plus one measured 2048/16 pass with the unchanged frozen preceding binary. No concurrent build, test or model work.",
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "prefill_tok_s": 24.75,
+    "decode_tok_s": 15.68,
+    "prefill_seconds": 82.733,
+    "decode_seconds": 1.021,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 14,
+    "accepted": 14,
+    "finished_at": "2026-11-28T11:25:56.696199+00:00",
+    "output_and_acceptance_match": true
+  },
+  "validation": {
+    "status": "passed",
+    "binary_sha256": "72faf87f281c95cc2cc9ff83b7986721b0872f20695c17ef9a0face5f9e865ff",
+    "cases": [
+      {
+        "filter": "native Inkling",
+        "count": 49,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/00.log"
+      },
+      {
+        "filter": "cpu backend : GSQ small-block",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/01.log"
+      },
+      {
+        "filter": "gguf container : integer products : independent seven-format grid",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/02.log"
+      },
+      {
+        "filter": "gguf container : integer products : the grid",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/03.log"
+      },
+      {
+        "filter": "gguf container : integer products : GSQ",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/04.log"
+      },
+      {
+        "filter": "gguf container : the integer kernels prove",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/05.log"
+      },
+      {
+        "filter": "cpu backend : a parallel product",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/06.log"
+      },
+      {
+        "filter": "cpu backend : the partition covers",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/07.log"
+      }
+    ]
+  },
+  "source_manifest": "artifacts/inkling2/obj/gsq-more-six/02-pgo/source-sha256.json",
+  "source_archive": "artifacts/inkling2/obj/gsq-more-six/02-pgo/source.tar",
+  "binary_sha256": {
+    "bin/model_runner": "8445c1d181e1198d93b95075c25a9e2dbc71c71080e72204fcf9c11738902e64",
+    "tests/bin/tests": "72faf87f281c95cc2cc9ff83b7986721b0872f20695c17ef9a0face5f9e865ff",
+    "tests/bin/no_adapter_probe": "7b8e36f06d23c67997f51a44979c2771ec7966481cc5f4b274d65e77270fad5d"
+  },
+  "protected_kernel_sha256": "c551092b42e47746131552936b7d44ebfcf3a41e832975288a15cbbaa02873a5",
+  "existing_fixture_files_unchanged": 254,
+  "retained_patch": "artifacts/inkling2/obj/gsq-context-six/retained.patch",
+  "restored_build_environment": {
+    "MODEL_RUNNER_PGO": "use",
+    "MODEL_RUNNER_PGO_DIR": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-more-six/pgo-data",
+    "MODEL_RUNNER_PGO_UNITS": "decoder"
+  },
+  "restored_qualification": "artifacts/inkling2/obj/gsq-context-six/04-restored/qualification/evidence.json",
+  "memory": "Q4T and compressed IQ3_S weights retained; no weight expansion. New per-visit expert descriptors and bounded greedy output tiles are budgeted. Query/head inverses are local scalars; existing retained projection packing and eight worker tiles are reused. Full raw/correction buffers remain allocated for observer/full-output paths. Existing host/device memory policy remains.",
+  "limitations": [
+    "One warmup and one measured 2048/16 pass per binary, no repeatability claim.",
+    "Six changes timed together with fresh two-unit PGO; no isolated attribution.",
+    "No new full-checkpoint independent conformance, coding-quality benchmark, whole-engine audit or release-gate run."
+  ],
+  "finished_at": "2026-11-28T11:30:26.957703+00:00"
+}

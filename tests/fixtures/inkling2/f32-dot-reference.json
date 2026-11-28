@@ -1,0 +1,49 @@
+{
+  "reference": "Pinned independent llama.cpp commit29b52d398b294509746ec0a3f28948a3107c0213, original optimized ggml_vec_dot_f32, AVX-512 four-stream reduction.",
+  "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "command": [
+    "cc",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "tests/fixtures/inkling2/f32-dot-reference.c",
+    "-ldl",
+    "-o",
+    "/tmp/inkling-f32-dot-reference"
+  ],
+  "run": [
+    "/tmp/inkling-f32-dot-reference",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0",
+    "tests/fixtures/inkling2/q8k-input.f32",
+    "tests/fixtures/inkling2/f32-dot-reference.bin"
+  ],
+  "layout": "2rows x2vectors,512 binary32 coordinates each; outputs in row-major order, all files little-endian.",
+  "sha256": {
+    "tests/fixtures/inkling2/f32-dot-reference.bin": "bc9c85ac8ac4c05636c3a28dca0a6dc54f90dedc70663b2e19eae0e8ece20d17",
+    "tests/fixtures/inkling2/q8k-input.f32": "9a04784bdc34dbfc6fb6d93f88c69f7aaa15487ca5806b743c5d62c56c01d631",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0": "b6565a96976188378673ef11ddad6b3893259fc7bc21e0d236c74b44c1da4278",
+    "tests/fixtures/inkling2/reference-integer-fixture-producers.patch": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f"
+  },
+  "external_producer_patch": {
+    "file": "reference-integer-fixture-producers.patch",
+    "sha256": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f",
+    "apply_to": "Independent llama.cpp checkout; patch -p1. Compile the extracted C source outside model_runner."
+  },
+  "original_capture_commands_preserved": true,
+  "reproduce_command": [
+    "cc",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "/tmp/llama.cpp-inkling-reference/examples/inkling2-fixtures/f32-dot-reference.c",
+    "-ldl",
+    "-o",
+    "/tmp/inkling-f32-dot-reference"
+  ],
+  "source_hashes_in_external_patch": {
+    "f32-dot-reference.c": "b5cb40d5c86bb1ef6f62db5fb15a17d03d954fbb1ec9902515fab63c9f07cd08"
+  },
+  "historical_source_sha256": {
+    "tests/fixtures/inkling2/f32-dot-reference.c": "b5cb40d5c86bb1ef6f62db5fb15a17d03d954fbb1ec9902515fab63c9f07cd08"
+  }
+}

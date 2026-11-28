@@ -4,10 +4,10 @@ with Ada.Streams.Stream_IO;
 
 with Interfaces;
 
-with Model_Runner.GGUF;
 with Model_Runner.Numerics;
 
 with Fixtures;
+with Project_Tools.Files;
 
 package body Tiny_Model is
 
@@ -18,6 +18,37 @@ package body Tiny_Model is
    use type N.Element_Count;
    use type N.Real;
    use type N.Wide_Real;
+
+   procedure Build_Inkling
+     (Result : out Model_Runner.Bytes.Byte_Array_Access;
+      Fault : Inkling_Fault := Inkling_Valid;
+      Quantized : Boolean := False;
+      Room : Positive := 32;
+      Uniform_Router : Boolean := False;
+      Down_Format : Model_Runner.GGUF.Tensor_Type := Model_Runner.GGUF.Type_Q8_0)
+   is separate;
+
+   procedure Build_DSpark (Result : out Model_Runner.Bytes.Byte_Array_Access) is separate;
+
+   function DSpark_Fixture return String is
+      use type Model_Runner.Bytes.Byte_Count;
+      Image : Model_Runner.Bytes.Byte_Array_Access := null;
+      Path : constant String := "obj/tiny-dspark.gguf";
+   begin
+      Build_DSpark (Image);
+      declare
+         Raw : String (1 .. Integer (Image'Length));
+      begin
+         for I in Raw'Range loop
+            Raw (I) := Character'Val (Image (Image'First + Model_Runner.Bytes.Byte_Count (I - Raw'First)));
+         end loop;
+         Project_Tools.Files.Write_Raw_File (Path, Raw);
+      end;
+      Model_Runner.Bytes.Free (Image);
+      return Path;
+   exception
+      when others => Model_Runner.Bytes.Free (Image); raise;
+   end DSpark_Fixture;
 
    -----------
    -- Build --
@@ -2300,6 +2331,37 @@ package body Tiny_Model is
 
       Write (Suite_Fixture);
    end Write_Suite_Fixture;
+
+   procedure Write_Inkling
+     (Path : String; Quantized : Boolean := False; Room : Positive := 32;
+      Fault : Inkling_Fault := Inkling_Valid)
+   is
+      use Ada.Streams;
+      use type Model_Runner.Bytes.Byte_Count;
+      Image : Model_Runner.Bytes.Byte_Array_Access := null;
+      Handle : Stream_IO.File_Type;
+   begin
+      Build_Inkling (Image, Fault => Fault, Quantized => Quantized, Room => Room);
+      Stream_IO.Create (Handle, Stream_IO.Out_File, Path);
+      declare
+         Block : Stream_Element_Array (1 .. Stream_Element_Offset (Image.all'Length));
+      begin
+         for Index in Block'Range loop
+            Block (Index) := Stream_Element (Image.all (Image.all'First
+              + Model_Runner.Bytes.Byte_Count (Index - Block'First)));
+         end loop;
+         Stream_IO.Write (Handle, Block);
+      end;
+      Stream_IO.Close (Handle);
+      Model_Runner.Bytes.Free (Image);
+   exception
+      when others =>
+         if Stream_IO.Is_Open (Handle) then
+            Stream_IO.Close (Handle);
+         end if;
+         Model_Runner.Bytes.Free (Image);
+         raise;
+   end Write_Inkling;
 
    --------------------
    -- Write_Adapter --

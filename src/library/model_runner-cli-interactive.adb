@@ -746,9 +746,8 @@ package body Model_Runner.CLI.Interactive is
       Unthought : aliased Model_Runner.Output.Reasoning.Filter
         (Sink'Unchecked_Access);
       function Harmony return Boolean
-      is (Model_Runner.Tools."="
-            (Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)),
-             Model_Runner.Tools.Harmony_Call));
+      is (Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared))
+            in Model_Runner.Tools.Harmony_Call | Model_Runner.Tools.Inkling_Call);
       Clock    : aliased Model_Runner.Clocks.System_Clock;
       Seeds    : aliased Model_Runner.Entropy.Host_Source;
 
@@ -2283,6 +2282,9 @@ package body Model_Runner.CLI.Interactive is
               Effort => Item.Effort);
 
          Gen.Release (Last_Result);
+         Tidied.Inkling_Blocks
+           (Model_Runner.Tools."="
+              (Model_Runner.Templates.Syntax_Of (L.Template_Format (Prepared)), Model_Runner.Tools.Inkling_Call));
          Tidied.Answer_Only (Item.Hide_Reasoning);
          Unthought.Start_Reply
            (Inside => Model_Runner.Agent.Thought_Open ("", Rendered.all));

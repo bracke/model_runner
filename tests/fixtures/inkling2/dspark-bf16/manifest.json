@@ -1,0 +1,12 @@
+{
+  "reference_revision": "4c7344447cb1727f1e2f982febc99a8f88dcb77f",
+  "generator": "pinned ggml_vec_dot_bf16, native CPU compilation; BF16 conversion includes ties",
+  "rows": 5,
+  "columns": 256,
+  "vectors": 3,
+  "files": {
+    "input.f32": "324ffd8ed206cfb2bd49dfc489e8ea76bd05a97f6dfe800e4f62f4829b1e777f",
+    "weights.bf16": "6603e7c89818056ab7511288c49bf4ad339c1502ae59caf048c4ea89064b1d51",
+    "expected.f32": "a892f482b7b7a2834be2271f75957eea3af7f0336b67dc2bba646ad865b90fb8"
+  }
+}

@@ -151,6 +151,70 @@ package body Model_Runner.Cache_Codecs.Transformed_Four_Bit is
       Transform (Source, Target, Forward, Valid);
    end Rotate_Key;
 
+   procedure Rotate_Rows
+     (Rows : in out Real_Array; Width, Count : Element_Count; Valid : out Boolean)
+   is
+      Scratch : N.Wide_Real_Array (0 .. Group_Size * 4 - 1);
+      Normalizer : constant Wide_Real := 1.0 / N.Sqrt (Wide_Real (Group_Size));
+      First : Element_Count := 0;
+   begin
+      Valid := False;
+      if Width = 0 or else Width mod Group_Size /= 0 or else Count = 0
+        or else Count > Rows'Length / Width
+      then return; end if;
+      while First < Count loop
+         declare
+            Held : constant Element_Count := Element_Count'Min (4, Count - First);
+         begin
+            for Group in 0 .. Width / Group_Size - 1 loop
+               for C in 0 .. Group_Size - 1 loop
+                  for Lane in 0 .. Held - 1 loop
+                     declare
+                        Value : constant Real := Rows (Rows'First + (First + Lane) * Width + Group * Group_Size + C);
+                     begin
+                        if not N.Is_Finite (Value) then return; end if;
+                        Scratch (C * 4 + Lane) := (if Positive_Sign (C) then Wide_Real (Value) else -Wide_Real (Value));
+                     end;
+                  end loop;
+               end loop;
+               declare
+                  Step : Element_Count := 1;
+               begin
+                  while Step < Group_Size loop
+                     declare
+                        Block : Element_Count := 0;
+                     begin
+                        while Block < Group_Size loop
+                           for C in 0 .. Step - 1 loop
+                              for Lane in 0 .. Held - 1 loop
+                                 declare
+                                    A : constant Wide_Real := Scratch ((Block + C) * 4 + Lane);
+                                    B : constant Wide_Real := Scratch ((Block + C + Step) * 4 + Lane);
+                                 begin
+                                    Scratch ((Block + C) * 4 + Lane) := A + B;
+                                    Scratch ((Block + C + Step) * 4 + Lane) := A - B;
+                                 end;
+                              end loop;
+                           end loop;
+                           Block := Block + Step * 2;
+                        end loop;
+                     end;
+                     Step := Step * 2;
+                  end loop;
+               end;
+               for C in 0 .. Group_Size - 1 loop
+                  for Lane in 0 .. Held - 1 loop
+                     Rows (Rows'First + (First + Lane) * Width + Group * Group_Size + C) :=
+                       Real (Scratch (C * 4 + Lane) * Normalizer);
+                  end loop;
+               end loop;
+            end loop;
+            First := First + Held;
+         end;
+      end loop;
+      Valid := True;
+   end Rotate_Rows;
+
    procedure Restore_Key
      (Source : Real_Array;
       Target : out Real_Array;

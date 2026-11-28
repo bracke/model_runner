@@ -231,6 +231,18 @@ package Model_Runner.Inference is
      (Item   : in out Session;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Set prefix reuse for subsequent Complete calls. Disabled by default;
+   --  callers still supply the complete rendered prompt on every call.
+   --  @param Item Session whose completion policy is changed.
+   --  @param Enabled Whether validated committed prompt tokens may be retained.
+   procedure Reuse_Prompt_Prefix (Item : in out Session; Enabled : Boolean := True);
+
+   --  Number of prompt tokens retained by the last Complete call, or zero
+   --  before completion and after Close or a reuse-policy change.
+   --  @param Item Session whose last completion is inspected.
+   --  @return Count reported by the existing generation prefix mechanism.
+   function Reused_Prompt_Tokens (Item : Session) return Natural;
+
    --  Return whether a model and generation session are ready.
    --  @param Item Session to inspect.
    --  @return True after successful Open and before Close.
@@ -302,6 +314,8 @@ private
         Model_Runner.Limits.Default_Session_Limits;
       Path           : UString;
       Canonical_Path : UString;
+      Reuse_Prefix   : Boolean := False;
+      Last_Reused    : Natural := 0;
       Opened         : Boolean := False;
       Device_Owned   : Boolean := False;
       Device_Lease   : Model_Runner.Backend.Device.Exclusive_Lease;

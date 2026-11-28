@@ -652,6 +652,11 @@ is
    --  that is to measure them the same way.
    Mark : Ada.Real_Time.Time := Ada.Real_Time.Clock;
 begin
+   if Source.Settings.Kind = DFlash then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "dflash.requires_target_features", E.Param_Identifier);
+      return;
+   end if;
    --  Where the products can reach it. Not cleared on the way out, and
    --  it does not need to be: every entry point that reaches a product
    --  sets it first, so what is read is always this call's token. A
@@ -734,7 +739,7 @@ begin
    --  the way Bert does -- the batch path does this too, and a generated
    --  token is the first place the single-token path meets an
    --  architecture that carries the tensor.
-   if Source.Embedding_Norm /= null then
+   if Source.Embedding_Norm /= null and then Settings.Kind /= Inkling2_Loop then
       Normalize
         (Source, Item.Activation.all, Source.Embedding_Norm.all,
          Source.Embedding_Norm_Bias, Item.Normalized.all);
@@ -763,6 +768,14 @@ begin
 
    --  Room for this position in the layers that slide a window.
    Make_Room (Item, Settings, Reserved);
+
+   if Settings.Kind = Inkling2_Loop then
+      Inkling_Evaluate (Item, Source, Row, Cancel, Status);
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      goto Logits_Finished;
+   end if;
 
    --  The ring over, and the one run this position is.
    if (Hybrid (Settings.Kind) or else Is_Lfm3 (Settings.Kind))

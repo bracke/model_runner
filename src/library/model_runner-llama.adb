@@ -1,3 +1,4 @@
+with System.Machine_Code;
 with System.Atomic_Operations.Integer_Arithmetic;
 with Ada.Strings.Fixed;
 with Ada.Real_Time;
@@ -19,6 +20,14 @@ with Model_Runner.Zeroed_Storage;
 
 package body Model_Runner.Llama is
 
+   --  Metadata tables stay in mapped host storage; only actual products
+   --  enter the backend matrix-residency inventory.
+   function Inkling_Matrix_Role (Role : Inkling_Weight_Role) return Boolean is
+     (Role in Inkling_Query .. Inkling_Attention_Gate
+        | Inkling_Sink | Inkling_Relative | Inkling_Key_Dynamic | Inkling_Value_Dynamic
+        | Inkling_Attention_Depth | Inkling_Feed_Depth | Inkling_Message_Query
+        | Inkling_Q_Down .. Inkling_FFN_Forget);
+
    package Q4T renames Model_Runner.Cache_Codecs.Transformed_Four_Bit;
 
    --  A counter the workers of a pool job take items from.
@@ -35,7 +44,13 @@ package body Model_Runner.Llama is
    is
       Counts : constant Model_Runner.Expert_Cache.Statistics :=
         Model_Runner.Expert_Cache.Current_Statistics (Item.Expert_Policy);
+      Largest : Interfaces.Unsigned_64 := 0;
    begin
+      if Item.Inkling_Layer_Scale_Bytes /= null then
+         for Bytes of Item.Inkling_Layer_Scale_Bytes.all loop
+            Largest := Interfaces.Unsigned_64'Max (Largest, Bytes);
+         end loop;
+      end if;
       return
         (Observations => Counts.Observations,
          Hits         => Counts.Hits,
@@ -44,6 +59,11 @@ package body Model_Runner.Llama is
          Evictions    => Counts.Evictions,
          Admissions   => Item.Expert_Cache_Admissions,
          Device_Runs  => Item.Expert_Cache_Device_Runs,
+         Batched_Device_Aggregations => Item.Inkling_Batched_Reductions,
+         Metadata_Bytes => Item.Inkling_Scale_Bytes,
+         Largest_Metadata_Layer => Largest,
+         Work_Plan_Hits => Item.Inkling_Plan_Hits,
+         Work_Plan_Misses => Item.Inkling_Plan_Misses,
          Resident_Bytes => Item.Expert_Cache_Used,
          Reserve_Bytes  =>
            (if Item.Owner = null then 0 else Item.Owner.Expert_Cache_Room));
@@ -136,6 +156,11 @@ package body Model_Runner.Llama is
    procedure Free_Cells is
      new Ada.Unchecked_Deallocation (Cell_Counts, Cell_Counts_Access);
 
+   procedure Free_Scale_Totals is new Ada.Unchecked_Deallocation
+     (Inkling_Scale_Totals, Inkling_Scale_Totals_Access);
+   procedure Free_Inkling_Decoded is new Ada.Unchecked_Deallocation
+     (Inkling_Decoded_Array, Inkling_Decoded_Access);
+
    --  Whether a layer is one of the windowed ones of an architecture that
    --  windows some layers and not others. Asked whether or not the window
    --  survived being folded away against the context: the base a windowed
@@ -145,6 +170,21 @@ package body Model_Runner.Llama is
    is (Settings.Alternating
        and then Layer <= Layer_Flags'Last
        and then Settings.Window_Layers (Layer));
+
+   function Runtime_Layers (Settings : Configuration) return Natural
+   is (if Settings.Kind = Inkling2_Loop then Settings.Inkling.Runtime_Layers else Settings.Layers);
+
+   function Inkling_Conv_Room (Settings : Configuration) return Element_Count
+   is (Element_Count (Settings.Inkling.Runtime_Layers)
+       * Element_Count (Settings.Inkling.Convolution_Length - 1)
+       * (2 * Element_Count (Settings.KV_Heads * Settings.Head_Size)
+          + 2 * Element_Count (Settings.Embedding)));
+
+   function Inkling_Work_Room (Settings : Configuration) return Element_Count
+   is (19 * Element_Count (Settings.Embedding)
+       + Element_Count (Settings.Heads)
+         * (Element_Count (Settings.Inkling.Relative_Width) + Element_Count (Settings.Head_Size) + 1)
+       + 2 * Element_Count (Settings.KV_Heads) * Element_Count (Settings.Inkling.Convolution_Length));
 
    --  Whether a layer slides a window.
    --
@@ -408,7 +448,8 @@ package body Model_Runner.Llama is
        * State_Cells (Settings));
 
    function Conv_Room (Settings : Configuration) return Element_Count
-   is (Element_Count (Linear_Ordinal (Settings, Settings.Layers))
+   is (if Settings.Kind = Inkling2_Loop then Inkling_Conv_Room (Settings)
+       else Element_Count (Linear_Ordinal (Settings, Settings.Layers))
        * Element_Count (Settings.Conv_Kernel - 1)
        * Conv_Width (Settings));
 
@@ -432,6 +473,265 @@ package body Model_Runner.Llama is
    --  other runtime computes them.
    function Sigmoid (Value : Real) return Real
    is (Real (1.0 / (1.0 + N.Exp (N.Wide_Real (-Value)))));
+
+   --  The integer-profile reference rounds transcendental results and
+   --  each surrounding arithmetic stage to binary32. These are ordinary
+   --  platform math functions, with no external model executor involved.
+   function Reference_Exp (Value : Real) return Real
+     with Import, Convention => C, External_Name => "expf";
+   function Reference_Tanh (Value : Real) return Real
+     with Import, Convention => C, External_Name => "tanhf";
+
+   function Reference_Sigmoid (Value : Real) return Real is
+     (if Value <= -88.72283935546875 then 0.0
+      else 1.0 / (1.0 + Reference_Exp (-Value)));
+
+   --  Padded reference attention uses the AVX-512 exponential polynomial,
+   --  even with fewer than sixteen live positions. Evaluate one lane with
+   --  the same binary32 FMAs; sinks and short depth softmax still use expf.
+   function Reference_Attention_Exp (Value : Real) return Real is
+      Coefficients : constant Real_Array :=
+        [N.From_Bits (16#4B40_0000#), N.From_Bits (16#3FB8_AA3B#),
+         N.From_Bits (16#35BF_BE8E#), N.From_Bits (16#3F31_7200#),
+         N.From_Bits (16#3C07_2010#), N.From_Bits (16#3D2B_9F17#),
+         N.From_Bits (16#3E2A_AF33#), N.From_Bits (16#3EFF_FEDB#),
+         N.From_Bits (16#3F7F_FFF6#), 1.0];
+      Result : Real;
+      LF : constant Character := ASCII.LF;
+   begin
+      if Value < -104.0 then return 0.0; end if;
+      if not Workers_CPU.Byte_Products then return Reference_Exp (Value); end if;
+      System.Machine_Code.Asm
+        ("vmovss %1, %%xmm0" & LF
+         & "vmovss 0(%2), %%xmm1" & LF
+         & "vfmadd231ss 4(%2), %%xmm0, %%xmm1" & LF
+         & "vsubss 0(%2), %%xmm1, %%xmm1" & LF
+         & "vfnmadd231ss 12(%2), %%xmm1, %%xmm0" & LF
+         & "vfnmadd231ss 8(%2), %%xmm1, %%xmm0" & LF
+         & "vmulss %%xmm0, %%xmm0, %%xmm2" & LF
+         & "vmovss 20(%2), %%xmm3" & LF
+         & "vfmadd231ss 16(%2), %%xmm0, %%xmm3" & LF
+         & "vmovss 28(%2), %%xmm4" & LF
+         & "vfmadd231ss 24(%2), %%xmm0, %%xmm4" & LF
+         & "vfmadd231ss %%xmm3, %%xmm2, %%xmm4" & LF
+         & "vmovss 36(%2), %%xmm5" & LF
+         & "vfmadd231ss 32(%2), %%xmm0, %%xmm5" & LF
+         & "vfmadd231ss %%xmm4, %%xmm2, %%xmm5" & LF
+         & "vscalefss %%xmm1, %%xmm5, %%xmm5" & LF
+         & "vmovss %%xmm5, %0" & LF
+         & "vzeroupper",
+         Outputs => [Real'Asm_Output ("=m", Result)],
+         Inputs => [Real'Asm_Input ("m", Value),
+                    System.Address'Asm_Input ("r", Coefficients (0)'Address)],
+         Clobber => "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,cc,memory", Volatile => True);
+      return Result;
+   end Reference_Attention_Exp;
+
+   procedure Draft_Vector_Exp (Values : in out Real_Array; Subtract : Real := 0.0) is
+      Coefficients : constant Real_Array :=
+        [N.From_Bits (16#4B40_0000#), N.From_Bits (16#3FB8_AA3B#),
+         N.From_Bits (16#35BF_BE8E#), N.From_Bits (16#3F31_7200#),
+         N.From_Bits (16#3C07_2010#), N.From_Bits (16#3D2B_9F17#),
+         N.From_Bits (16#3E2A_AF33#), N.From_Bits (16#3EFF_FEDB#),
+         N.From_Bits (16#3F7F_FFF6#), 1.0, -104.0, N.From_Bits (16#8000_0000#)];
+      Blocks : constant Element_Count := (if Workers_CPU.Byte_Products then Values'Length / 16 else 0);
+      LF : constant Character := ASCII.LF;
+   begin
+      if Blocks > 0 then
+         System.Machine_Code.Asm
+           ("movq %0, %%r8" & LF
+            & "movq %1, %%r9" & LF
+            & "movq %2, %%r10" & LF
+            & "movq %3, %%r11" & LF
+            & "vbroadcastss 0(%%r10), %%zmm16" & LF
+            & "vbroadcastss 4(%%r10), %%zmm17" & LF
+            & "vbroadcastss 8(%%r10), %%zmm18" & LF
+            & "vbroadcastss 12(%%r10), %%zmm19" & LF
+            & "vbroadcastss 16(%%r10), %%zmm20" & LF
+            & "vbroadcastss 20(%%r10), %%zmm21" & LF
+            & "vbroadcastss 24(%%r10), %%zmm22" & LF
+            & "vbroadcastss 28(%%r10), %%zmm23" & LF
+            & "vbroadcastss 32(%%r10), %%zmm24" & LF
+            & "vbroadcastss 36(%%r10), %%zmm25" & LF
+            & "vbroadcastss 40(%%r10), %%zmm26" & LF
+            & "vbroadcastss 44(%%r10), %%zmm27" & LF
+            & "vbroadcastss %4, %%zmm29" & LF
+            & "1:" & LF
+            & "vmovups (%%r8), %%zmm0" & LF
+            & "vsubps %%zmm29, %%zmm0, %%zmm0" & LF
+            & "vcmpps $17, %%zmm26, %%zmm0, %%k1" & LF
+            & "vmovaps %%zmm16, %%zmm1" & LF
+            & "vfmadd231ps %%zmm17, %%zmm0, %%zmm1" & LF
+            & "vsubps %%zmm16, %%zmm1, %%zmm1" & LF
+            & "vfnmadd231ps %%zmm19, %%zmm1, %%zmm0" & LF
+            & "vfnmadd231ps %%zmm18, %%zmm1, %%zmm0" & LF
+            & "vmulps %%zmm0, %%zmm0, %%zmm2" & LF
+            & "vmovaps %%zmm21, %%zmm3" & LF
+            & "vfmadd231ps %%zmm20, %%zmm0, %%zmm3" & LF
+            & "vmovaps %%zmm23, %%zmm4" & LF
+            & "vfmadd231ps %%zmm22, %%zmm0, %%zmm4" & LF
+            & "vfmadd231ps %%zmm3, %%zmm2, %%zmm4" & LF
+            & "vmovaps %%zmm25, %%zmm5" & LF
+            & "vfmadd231ps %%zmm24, %%zmm0, %%zmm5" & LF
+            & "vfmadd231ps %%zmm4, %%zmm2, %%zmm5" & LF
+            & "vscalefps %%zmm1, %%zmm5, %%zmm5" & LF
+            & "vxorps %%zmm28, %%zmm28, %%zmm28" & LF
+            & "vmovaps %%zmm28, %%zmm5%{%%k1%}" & LF
+            & "vmovups %%zmm5, (%%r8)" & LF
+            & "addq $64, %%r8" & LF
+            & "decq %%r9" & LF
+            & "jnz 1b" & LF
+            & "vzeroupper",
+            Inputs => [System.Address'Asm_Input ("r", Values (Values'First)'Address),
+                       Element_Count'Asm_Input ("r", Blocks),
+                       System.Address'Asm_Input ("r", Coefficients (0)'Address),
+                       System.Address'Asm_Input ("r", Coefficients'Address),
+                       Real'Asm_Input ("m", Subtract)],
+            Clobber => "r8,r9,r10,r11,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,k1,"
+              & "zmm16,zmm17,zmm18,zmm19,zmm20,zmm21,zmm22,zmm23,zmm24,zmm25,"
+              & "zmm26,zmm27,zmm28,zmm29,zmm30,cc,memory", Volatile => True);
+      end if;
+      for I in Blocks * 16 .. Values'Length - 1 loop
+         Values (Values'First + I) := Reference_Attention_Exp (Values (Values'First + I) - Subtract);
+      end loop;
+   end Draft_Vector_Exp;
+
+   procedure Draft_Vector_Activate (Gate : in out Real_Array; Up : Real_Array) is
+      Coefficients : constant Real_Array :=
+        [N.From_Bits (16#4B40_0000#), N.From_Bits (16#3FB8_AA3B#),
+         N.From_Bits (16#35BF_BE8E#), N.From_Bits (16#3F31_7200#),
+         N.From_Bits (16#3C07_2010#), N.From_Bits (16#3D2B_9F17#),
+         N.From_Bits (16#3E2A_AF33#), N.From_Bits (16#3EFF_FEDB#),
+         N.From_Bits (16#3F7F_FFF6#), 1.0, -104.0, N.From_Bits (16#8000_0000#)];
+      Blocks : constant Element_Count := (if Workers_CPU.Byte_Products then Gate'Length / 16 else 0);
+      LF : constant Character := ASCII.LF;
+   begin
+      pragma Assert (Up'Length >= Gate'Length);
+      if Blocks > 0 then
+         System.Machine_Code.Asm
+           ("movq %0, %%r8" & LF
+            & "movq %1, %%r9" & LF
+            & "movq %2, %%r10" & LF
+            & "movq %3, %%r11" & LF
+            & "vbroadcastss 0(%%r10), %%zmm16" & LF
+            & "vbroadcastss 4(%%r10), %%zmm17" & LF
+            & "vbroadcastss 8(%%r10), %%zmm18" & LF
+            & "vbroadcastss 12(%%r10), %%zmm19" & LF
+            & "vbroadcastss 16(%%r10), %%zmm20" & LF
+            & "vbroadcastss 20(%%r10), %%zmm21" & LF
+            & "vbroadcastss 24(%%r10), %%zmm22" & LF
+            & "vbroadcastss 28(%%r10), %%zmm23" & LF
+            & "vbroadcastss 32(%%r10), %%zmm24" & LF
+            & "vbroadcastss 36(%%r10), %%zmm25" & LF
+            & "vbroadcastss 40(%%r10), %%zmm26" & LF
+            & "vbroadcastss 44(%%r10), %%zmm27" & LF
+            & "1:" & LF
+            & "vmovups (%%r8), %%zmm0" & LF
+            & "vmovaps %%zmm0, %%zmm30" & LF
+            & "vxorps %%zmm27, %%zmm0, %%zmm0" & LF
+            & "vcmpps $17, %%zmm26, %%zmm0, %%k1" & LF
+            & "vmovaps %%zmm16, %%zmm1" & LF
+            & "vfmadd231ps %%zmm17, %%zmm0, %%zmm1" & LF
+            & "vsubps %%zmm16, %%zmm1, %%zmm1" & LF
+            & "vfnmadd231ps %%zmm19, %%zmm1, %%zmm0" & LF
+            & "vfnmadd231ps %%zmm18, %%zmm1, %%zmm0" & LF
+            & "vmulps %%zmm0, %%zmm0, %%zmm2" & LF
+            & "vmovaps %%zmm21, %%zmm3" & LF
+            & "vfmadd231ps %%zmm20, %%zmm0, %%zmm3" & LF
+            & "vmovaps %%zmm23, %%zmm4" & LF
+            & "vfmadd231ps %%zmm22, %%zmm0, %%zmm4" & LF
+            & "vfmadd231ps %%zmm3, %%zmm2, %%zmm4" & LF
+            & "vmovaps %%zmm25, %%zmm5" & LF
+            & "vfmadd231ps %%zmm24, %%zmm0, %%zmm5" & LF
+            & "vfmadd231ps %%zmm4, %%zmm2, %%zmm5" & LF
+            & "vscalefps %%zmm1, %%zmm5, %%zmm5" & LF
+            & "vxorps %%zmm28, %%zmm28, %%zmm28" & LF
+            & "vmovaps %%zmm28, %%zmm5%{%%k1%}" & LF
+            & "vaddps %%zmm25, %%zmm5, %%zmm5" & LF
+            & "vdivps %%zmm5, %%zmm30, %%zmm5" & LF
+            & "vmulps (%%r11), %%zmm5, %%zmm5" & LF
+            & "addq $64, %%r11" & LF
+            & "vmovups %%zmm5, (%%r8)" & LF
+            & "addq $64, %%r8" & LF
+            & "decq %%r9" & LF
+            & "jnz 1b" & LF
+            & "vzeroupper",
+            Inputs => [System.Address'Asm_Input ("r", Gate (Gate'First)'Address),
+                       Element_Count'Asm_Input ("r", Blocks),
+                       System.Address'Asm_Input ("r", Coefficients (0)'Address),
+                       System.Address'Asm_Input ("r", Up (Up'First)'Address)],
+            Clobber => "r8,r9,r10,r11,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,k1,"
+              & "zmm16,zmm17,zmm18,zmm19,zmm20,zmm21,zmm22,zmm23,zmm24,zmm25,"
+              & "zmm26,zmm27,zmm28,zmm29,zmm30,cc,memory", Volatile => True);
+      end if;
+      for I in Blocks * 16 .. Gate'Length - 1 loop
+         declare
+            At_Gate : constant Element_Count := Gate'First + I;
+            Value : constant Real := Gate (At_Gate);
+         begin
+            Gate (At_Gate) := (Value / (1.0 + Reference_Attention_Exp (-Value))) * Up (Up'First + I);
+         end;
+      end loop;
+   end Draft_Vector_Activate;
+
+   procedure Draft_Exp (Values : in out Real_Array; Subtract : Real := 0.0) is
+   begin
+      if Workers_CPU.Byte_Products and then Values'Length >= 16 then
+         Draft_Vector_Exp (Values, Subtract);
+      else
+         for Value of Values loop Value := Reference_Attention_Exp (Value - Subtract); end loop;
+      end if;
+   end Draft_Exp;
+
+   procedure Draft_Activate (Gate : in out Real_Array; Up : Real_Array) is
+   begin
+      pragma Assert (Up'Length >= Gate'Length);
+      if Workers_CPU.Byte_Products and then Gate'Length >= 16 then
+         Draft_Vector_Activate (Gate, Up);
+      else
+         for I in Gate'Range loop
+            Gate (I) := (Gate (I) / (1.0 + Reference_Attention_Exp (-Gate (I)))) * Up (Up'First + I - Gate'First);
+         end loop;
+      end if;
+   end Draft_Activate;
+
+   function Reference_Sum_Sixteen (Values : Real_Array) return Real is
+      Eight : Real_Array (0 .. 7);
+      Four : Real_Array (0 .. 3);
+   begin
+      pragma Assert (Values'Length = 16);
+      for Index in Element_Count range 0 .. 7 loop
+         Eight (Index) := Values (Values'First + Index + 8) + Values (Values'First + Index);
+      end loop;
+      for Index in Element_Count range 0 .. 3 loop
+         Four (Index) := Eight (Index + 4) + Eight (Index);
+      end loop;
+      return (Four (2) + Four (0)) + (Four (3) + Four (1));
+   end Reference_Sum_Sixteen;
+
+   --  Depth mixing has at most five candidates, so the pinned reference
+   --  takes its scalar expf tail and accumulates those results in binary64.
+   procedure Reference_Depth_Softmax (Values : in out Real_Array; Ok : out Boolean) is
+      Largest : Real := Real'First;
+      Total : N.Wide_Real := 0.0;
+   begin
+      Ok := False;
+      if Values'Length = 0 then return; end if;
+      for Value of Values loop
+         if not N.Is_Finite (Value) then return; end if;
+         Largest := Real'Max (Largest, Value);
+      end loop;
+      for Value of Values loop
+         Value := Reference_Exp (Value - Largest);
+         Total := Total + N.Wide_Real (Value);
+      end loop;
+      declare
+         Inverse : constant Real := Real (1.0 / Total);
+      begin
+         for Value of Values loop Value := Value * Inverse; end loop;
+      end;
+      Ok := True;
+   end Reference_Depth_Softmax;
 
    --  The weight a shared expert's answer is added with: the sigmoid of
    --  the layer's own router row against the input, or one where the
@@ -698,6 +998,101 @@ package body Model_Runner.Llama is
       Settings.Stretched := not K."=" (Settings.Scaling.Kind, K.Unscaled);
    end Apply_Stretch;
 
+   procedure Inkling_Tensors
+     (Item : in out Model; Source : Containers.Container;
+      Settings : Configuration; Load : Boolean; Status : out E.Error_Info);
+
+   --  The feature-conditioned adapter's explicit binary32 contract.
+   --  These bind platform scalar math, never an external model runtime.
+   function Draft_FMA (Left, Right, Added : Real) return Real
+     with Import, Convention => C, External_Name => "fmaf";
+   function Draft_Power (Left, Right : Real) return Real
+     with Import, Convention => C, External_Name => "powf";
+   function Draft_Cosine (Value : Real) return Real
+     with Import, Convention => C, External_Name => "cosf";
+   function Draft_Sine (Value : Real) return Real
+     with Import, Convention => C, External_Name => "sinf";
+
+   procedure Draft_Rotate
+     (Values : in out Real_Array; Heads, Width : Element_Count; Position : Natural; Base : Wide_Real)
+   is
+      Step : constant Real := Draft_Power (Real (Base), -2.0 / Real (Width));
+      Angle : Real := Real (Position);
+   begin
+      for Pair in 0 .. Width / 2 - 1 loop
+         declare
+            C : constant Real := Draft_Cosine (Angle);
+            S : constant Real := Draft_Sine (Angle);
+         begin
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  At_Left : constant Element_Count := Values'First + Head * Width + Pair;
+                  At_Right : constant Element_Count := At_Left + Width / 2;
+                  Left : constant Real := Values (At_Left);
+                  Right : constant Real := Values (At_Right);
+               begin
+                  Values (At_Left) := Draft_FMA (Left, C, -(Right * S));
+                  Values (At_Right) := Draft_FMA (Left, S, Right * C);
+               end;
+            end loop;
+         end;
+         Angle := Angle * Step;
+      end loop;
+   end Draft_Rotate;
+
+   procedure Draft_Rotation (Width : Element_Count; Position : Natural; Base : Wide_Real;
+                             Table : out Real_Array) is
+      Step : constant Real := Draft_Power (Real (Base), -2.0 / Real (Width));
+      Angle : Real := Real (Position);
+   begin
+      pragma Assert (Width > 0 and then Width mod 2 = 0 and then Table'Length >= Width);
+      for Pair in 0 .. Width / 2 - 1 loop
+         Table (Table'First + 2 * Pair) := Draft_Cosine (Angle);
+         Table (Table'First + 2 * Pair + 1) := Draft_Sine (Angle);
+         Angle := Angle * Step;
+      end loop;
+   end Draft_Rotation;
+
+   procedure Draft_Apply_Rotation (Values : in out Real_Array; Heads, Width : Element_Count;
+                                   Table : Real_Array) is
+   begin
+      pragma Assert (Width mod 2 = 0 and then Table'Length >= Width and then Values'Length >= Heads * Width);
+      for Pair in 0 .. Width / 2 - 1 loop
+         declare
+            C : constant Real := Table (Table'First + 2 * Pair);
+            S : constant Real := Table (Table'First + 2 * Pair + 1);
+         begin
+            for Head in 0 .. Heads - 1 loop
+               declare
+                  At_Left : constant Element_Count := Values'First + Head * Width + Pair;
+                  At_Right : constant Element_Count := At_Left + Width / 2;
+                  Left : constant Real := Values (At_Left);
+                  Right : constant Real := Values (At_Right);
+               begin
+                  Values (At_Left) := Draft_FMA (Left, C, -(Right * S));
+                  Values (At_Right) := Draft_FMA (Left, S, Right * C);
+               end;
+            end loop;
+         end;
+      end loop;
+   end Draft_Apply_Rotation;
+
+   procedure DSpark_Tensors
+     (Item : in out Model; Source : Containers.Container;
+      Settings : Configuration; Load : Boolean; Status : out E.Error_Info);
+
+   procedure Read_DSpark_Configuration
+     (Source : Containers.Container; Bounds : Model_Runner.Limits.Model_Limits;
+      Settings : out Configuration; Status : out E.Error_Info)
+   is separate;
+
+   procedure Read_Inkling_Configuration
+     (Source   : Containers.Container;
+      Bounds   : Model_Runner.Limits.Model_Limits;
+      Settings : out Configuration;
+      Status   : out E.Error_Info)
+   is separate;
+
    procedure Read_Configuration
      (Source   : Containers.Container;
       Bounds   : Model_Runner.Limits.Model_Limits;
@@ -760,7 +1155,9 @@ package body Model_Runner.Llama is
         --  the experts.
         + (if Item.Settings.Layer_Input > 0 then 2 else 0)
         + (if Item.Settings.Kind = Gemma4 and then Item.Settings.Experts > 0
-           then 3 else 0);
+           then 3 else 0)
+        + (if Item.Settings.Kind = Inkling2_Loop then Inkling_Weight_Role'Pos (Inkling_Weight_Role'Last) + 1
+           else 0);
 
       --  Four beside the layers -- the embedding table, the output
       --  projection, the positions and the segments -- though no
@@ -771,7 +1168,7 @@ package body Model_Runner.Llama is
       --  And one more for Gemma4's projection into its embedding a layer,
       --  which is present only where it has one.
       Room  : View_List
-        (1 .. 5 + Per_Layer * (Item.Settings.Layers + Item.Settings.Next_Layers));
+        (1 .. 6 + Per_Layer * (Item.Settings.Layers + Item.Settings.Next_Layers));
       Count : Natural := 0;
 
       procedure Add (Where : View_Access) is
@@ -785,6 +1182,11 @@ package body Model_Runner.Llama is
       --  A layer's matrices, of the stack or past it.
       procedure Add_Layer (Which : in out Layer) is
       begin
+         for Role in Inkling_Weight_Role loop
+            if Inkling_Matrix_Role (Role) then
+               Add (Which.Inkling_Weights (Role)'Unchecked_Access);
+            end if;
+         end loop;
          Add (Which.Query'Unchecked_Access);
 
          --  DeepSeek's latent projections, read through the product like
@@ -847,6 +1249,7 @@ package body Model_Runner.Llama is
    begin
       Add (Item.Embeddings'Unchecked_Access);
       Add (Item.Output'Unchecked_Access);
+      Add (Item.Inkling_Output_Query'Unchecked_Access);
       Add (Item.Positions'Unchecked_Access);
       Add (Item.Segments'Unchecked_Access);
 
@@ -870,6 +1273,523 @@ package body Model_Runner.Llama is
    --  One routed expert as the device sees it.  A split model's Expert
    --  views may be processor panels, while the stack views deliberately
    --  retain the source layout.
+   procedure Draft_Dots (Queries, Key : Real_Array; Width, Many : Element_Count; Result : out Real_Array) is
+      type Addresses is array (0 .. 3) of System.Address;
+      Inputs : aliased Addresses;
+      Output : Real_Array (0 .. 3) := [others => 0.0];
+      LF : constant Character := ASCII.LF;
+   begin
+      pragma Assert (Many in 1 .. 4 and then Width > 0 and then Width mod 64 = 0
+                     and then Queries'Length >= Many * Width and then Key'Length >= Width
+                     and then Result'Length >= Many);
+      for I in Element_Count range 0 .. 3 loop
+         Inputs (Integer (I)) := Queries (Queries'First + Element_Count'Min (I, Many - 1) * Width)'Address;
+      end loop;
+      case Many is
+         when 1 =>
+            System.Machine_Code.Asm
+              ("movq %1, %%r8" & LF
+               & "movq %2, %%r9" & LF
+               & "movq %3, %%r10" & LF
+               & "vxorps %%zmm0, %%zmm0, %%zmm0" & LF
+               & "vxorps %%zmm1, %%zmm1, %%zmm1" & LF
+               & "vxorps %%zmm2, %%zmm2, %%zmm2" & LF
+               & "vxorps %%zmm3, %%zmm3, %%zmm3" & LF
+               & "1:" & LF
+               & "vmovups 0(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm0" & LF
+               & "vmovups 64(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm1" & LF
+               & "vmovups 128(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm2" & LF
+               & "vmovups 192(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm3" & LF
+               & "addq $256, %%r8" & LF
+               & "addq $256, 0(%%r9)" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b" & LF
+               & "vaddps %%zmm2, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm3, %%zmm1, %%zmm1" & LF
+               & "vaddps %%zmm1, %%zmm0, %%zmm0" & LF
+               & "vextractf64x4 $1, %%zmm0, %%ymm1" & LF
+               & "vaddps %%ymm0, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 0(%0)",
+               Inputs => [System.Address'Asm_Input ("r", Output'Address),
+                    System.Address'Asm_Input ("r", Key (Key'First)'Address),
+                    System.Address'Asm_Input ("r", Inputs'Address), Element_Count'Asm_Input ("r", Width / 64)],
+               Clobber => "rdx,r8,r9,r10,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,"
+                 & "zmm10,zmm11,zmm12,zmm13,zmm14,zmm15,zmm16,zmm17,zmm18,cc,memory", Volatile => True);
+         when 2 =>
+            System.Machine_Code.Asm
+              ("movq %1, %%r8" & LF
+               & "movq %2, %%r9" & LF
+               & "movq %3, %%r10" & LF
+               & "vxorps %%zmm0, %%zmm0, %%zmm0" & LF
+               & "vxorps %%zmm1, %%zmm1, %%zmm1" & LF
+               & "vxorps %%zmm2, %%zmm2, %%zmm2" & LF
+               & "vxorps %%zmm3, %%zmm3, %%zmm3" & LF
+               & "vxorps %%zmm4, %%zmm4, %%zmm4" & LF
+               & "vxorps %%zmm5, %%zmm5, %%zmm5" & LF
+               & "vxorps %%zmm6, %%zmm6, %%zmm6" & LF
+               & "vxorps %%zmm7, %%zmm7, %%zmm7" & LF
+               & "1:" & LF
+               & "vmovups 0(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm0" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm4" & LF
+               & "vmovups 64(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm1" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm5" & LF
+               & "vmovups 128(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm2" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm6" & LF
+               & "vmovups 192(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm3" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm7" & LF
+               & "addq $256, %%r8" & LF
+               & "addq $256, 0(%%r9)" & LF
+               & "addq $256, 8(%%r9)" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b" & LF
+               & "vaddps %%zmm2, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm3, %%zmm1, %%zmm1" & LF
+               & "vaddps %%zmm1, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm6, %%zmm4, %%zmm4" & LF
+               & "vaddps %%zmm7, %%zmm5, %%zmm5" & LF
+               & "vaddps %%zmm5, %%zmm4, %%zmm4" & LF
+               & "vextractf64x4 $1, %%zmm0, %%ymm1" & LF
+               & "vaddps %%ymm0, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 0(%0)" & LF
+               & "vextractf64x4 $1, %%zmm4, %%ymm1" & LF
+               & "vaddps %%ymm4, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 4(%0)",
+               Inputs => [System.Address'Asm_Input ("r", Output'Address),
+                    System.Address'Asm_Input ("r", Key (Key'First)'Address),
+                    System.Address'Asm_Input ("r", Inputs'Address), Element_Count'Asm_Input ("r", Width / 64)],
+               Clobber => "rdx,r8,r9,r10,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,"
+                 & "zmm10,zmm11,zmm12,zmm13,zmm14,zmm15,zmm16,zmm17,zmm18,cc,memory", Volatile => True);
+         when 3 =>
+            System.Machine_Code.Asm
+              ("movq %1, %%r8" & LF
+               & "movq %2, %%r9" & LF
+               & "movq %3, %%r10" & LF
+               & "vxorps %%zmm0, %%zmm0, %%zmm0" & LF
+               & "vxorps %%zmm1, %%zmm1, %%zmm1" & LF
+               & "vxorps %%zmm2, %%zmm2, %%zmm2" & LF
+               & "vxorps %%zmm3, %%zmm3, %%zmm3" & LF
+               & "vxorps %%zmm4, %%zmm4, %%zmm4" & LF
+               & "vxorps %%zmm5, %%zmm5, %%zmm5" & LF
+               & "vxorps %%zmm6, %%zmm6, %%zmm6" & LF
+               & "vxorps %%zmm7, %%zmm7, %%zmm7" & LF
+               & "vxorps %%zmm8, %%zmm8, %%zmm8" & LF
+               & "vxorps %%zmm9, %%zmm9, %%zmm9" & LF
+               & "vxorps %%zmm10, %%zmm10, %%zmm10" & LF
+               & "vxorps %%zmm11, %%zmm11, %%zmm11" & LF
+               & "1:" & LF
+               & "vmovups 0(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm0" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm4" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm8" & LF
+               & "vmovups 64(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm1" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm5" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm9" & LF
+               & "vmovups 128(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm2" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm6" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm10" & LF
+               & "vmovups 192(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm3" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm7" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm11" & LF
+               & "addq $256, %%r8" & LF
+               & "addq $256, 0(%%r9)" & LF
+               & "addq $256, 8(%%r9)" & LF
+               & "addq $256, 16(%%r9)" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b" & LF
+               & "vaddps %%zmm2, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm3, %%zmm1, %%zmm1" & LF
+               & "vaddps %%zmm1, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm6, %%zmm4, %%zmm4" & LF
+               & "vaddps %%zmm7, %%zmm5, %%zmm5" & LF
+               & "vaddps %%zmm5, %%zmm4, %%zmm4" & LF
+               & "vaddps %%zmm10, %%zmm8, %%zmm8" & LF
+               & "vaddps %%zmm11, %%zmm9, %%zmm9" & LF
+               & "vaddps %%zmm9, %%zmm8, %%zmm8" & LF
+               & "vextractf64x4 $1, %%zmm0, %%ymm1" & LF
+               & "vaddps %%ymm0, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 0(%0)" & LF
+               & "vextractf64x4 $1, %%zmm4, %%ymm1" & LF
+               & "vaddps %%ymm4, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 4(%0)" & LF
+               & "vextractf64x4 $1, %%zmm8, %%ymm1" & LF
+               & "vaddps %%ymm8, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 8(%0)",
+               Inputs => [System.Address'Asm_Input ("r", Output'Address),
+                    System.Address'Asm_Input ("r", Key (Key'First)'Address),
+                    System.Address'Asm_Input ("r", Inputs'Address), Element_Count'Asm_Input ("r", Width / 64)],
+               Clobber => "rdx,r8,r9,r10,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,"
+                 & "zmm10,zmm11,zmm12,zmm13,zmm14,zmm15,zmm16,zmm17,zmm18,cc,memory", Volatile => True);
+         when 4 =>
+            System.Machine_Code.Asm
+              ("movq %1, %%r8" & LF
+               & "movq %2, %%r9" & LF
+               & "movq %3, %%r10" & LF
+               & "vxorps %%zmm0, %%zmm0, %%zmm0" & LF
+               & "vxorps %%zmm1, %%zmm1, %%zmm1" & LF
+               & "vxorps %%zmm2, %%zmm2, %%zmm2" & LF
+               & "vxorps %%zmm3, %%zmm3, %%zmm3" & LF
+               & "vxorps %%zmm4, %%zmm4, %%zmm4" & LF
+               & "vxorps %%zmm5, %%zmm5, %%zmm5" & LF
+               & "vxorps %%zmm6, %%zmm6, %%zmm6" & LF
+               & "vxorps %%zmm7, %%zmm7, %%zmm7" & LF
+               & "vxorps %%zmm8, %%zmm8, %%zmm8" & LF
+               & "vxorps %%zmm9, %%zmm9, %%zmm9" & LF
+               & "vxorps %%zmm10, %%zmm10, %%zmm10" & LF
+               & "vxorps %%zmm11, %%zmm11, %%zmm11" & LF
+               & "vxorps %%zmm12, %%zmm12, %%zmm12" & LF
+               & "vxorps %%zmm13, %%zmm13, %%zmm13" & LF
+               & "vxorps %%zmm14, %%zmm14, %%zmm14" & LF
+               & "vxorps %%zmm15, %%zmm15, %%zmm15" & LF
+               & "1:" & LF
+               & "vmovups 0(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm0" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm4" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm8" & LF
+               & "movq 24(%%r9), %%rdx" & LF
+               & "vfmadd231ps 0(%%rdx), %%zmm16, %%zmm12" & LF
+               & "vmovups 64(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm1" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm5" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm9" & LF
+               & "movq 24(%%r9), %%rdx" & LF
+               & "vfmadd231ps 64(%%rdx), %%zmm16, %%zmm13" & LF
+               & "vmovups 128(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm2" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm6" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm10" & LF
+               & "movq 24(%%r9), %%rdx" & LF
+               & "vfmadd231ps 128(%%rdx), %%zmm16, %%zmm14" & LF
+               & "vmovups 192(%%r8), %%zmm16" & LF
+               & "movq 0(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm3" & LF
+               & "movq 8(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm7" & LF
+               & "movq 16(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm11" & LF
+               & "movq 24(%%r9), %%rdx" & LF
+               & "vfmadd231ps 192(%%rdx), %%zmm16, %%zmm15" & LF
+               & "addq $256, %%r8" & LF
+               & "addq $256, 0(%%r9)" & LF
+               & "addq $256, 8(%%r9)" & LF
+               & "addq $256, 16(%%r9)" & LF
+               & "addq $256, 24(%%r9)" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b" & LF
+               & "vaddps %%zmm2, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm3, %%zmm1, %%zmm1" & LF
+               & "vaddps %%zmm1, %%zmm0, %%zmm0" & LF
+               & "vaddps %%zmm6, %%zmm4, %%zmm4" & LF
+               & "vaddps %%zmm7, %%zmm5, %%zmm5" & LF
+               & "vaddps %%zmm5, %%zmm4, %%zmm4" & LF
+               & "vaddps %%zmm10, %%zmm8, %%zmm8" & LF
+               & "vaddps %%zmm11, %%zmm9, %%zmm9" & LF
+               & "vaddps %%zmm9, %%zmm8, %%zmm8" & LF
+               & "vaddps %%zmm14, %%zmm12, %%zmm12" & LF
+               & "vaddps %%zmm15, %%zmm13, %%zmm13" & LF
+               & "vaddps %%zmm13, %%zmm12, %%zmm12" & LF
+               & "vextractf64x4 $1, %%zmm0, %%ymm1" & LF
+               & "vaddps %%ymm0, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 0(%0)" & LF
+               & "vextractf64x4 $1, %%zmm4, %%ymm1" & LF
+               & "vaddps %%ymm4, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 4(%0)" & LF
+               & "vextractf64x4 $1, %%zmm8, %%ymm1" & LF
+               & "vaddps %%ymm8, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 8(%0)" & LF
+               & "vextractf64x4 $1, %%zmm12, %%ymm1" & LF
+               & "vaddps %%ymm12, %%ymm1, %%ymm1" & LF
+               & "vextractf128 $1, %%ymm1, %%xmm2" & LF
+               & "vaddps %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vpermilps $0x4e, %%xmm2, %%xmm1" & LF
+               & "vaddps %%xmm2, %%xmm1, %%xmm1" & LF
+               & "vmovaps %%xmm1, %%xmm2" & LF
+               & "vshufps $0x55, %%xmm1, %%xmm1, %%xmm1" & LF
+               & "vaddss %%xmm1, %%xmm2, %%xmm2" & LF
+               & "vmovss %%xmm2, 12(%0)",
+               Inputs => [System.Address'Asm_Input ("r", Output'Address),
+                    System.Address'Asm_Input ("r", Key (Key'First)'Address),
+                    System.Address'Asm_Input ("r", Inputs'Address), Element_Count'Asm_Input ("r", Width / 64)],
+               Clobber => "rdx,r8,r9,r10,zmm0,zmm1,zmm2,zmm3,zmm4,zmm5,zmm6,zmm7,zmm8,zmm9,"
+                 & "zmm10,zmm11,zmm12,zmm13,zmm14,zmm15,zmm16,zmm17,zmm18,cc,memory", Volatile => True);
+         when others => null;
+      end case;
+      Result (Result'First .. Result'First + Many - 1) := Output (0 .. Many - 1);
+   end Draft_Dots;
+
+   procedure Draft_Values (Value, Gains : Real_Array; Into : in out Real_Array;
+                           Stride, Many : Element_Count) is
+      LF : constant Character := ASCII.LF;
+   begin
+      pragma Assert (Many in 1 .. 4 and then Value'Length > 0 and then Value'Length mod 8 = 0
+                     and then Gains'Length >= Many and then Stride >= Value'Length
+                     and then Into'Length >= (Many - 1) * Stride + Value'Length);
+      case Many is
+         when 1 =>
+            System.Machine_Code.Asm
+              ("movq %0, %%r8" & LF
+               & "movq %1, %%r9" & LF
+               & "movq %2, %%rdx" & LF
+               & "movq %3, %%r11" & LF
+               & "movq %4, %%r10" & LF
+               & "vbroadcastss 0(%%rdx), %%ymm0" & LF
+               & "1:" & LF
+               & "vmovups (%%r8), %%ymm4" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r9), %%ymm0, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r9)" & LF
+               & "addq $32, %%r9" & LF
+               & "addq $32, %%r8" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b",
+               Inputs => [System.Address'Asm_Input ("r", Value (Value'First)'Address),
+                          System.Address'Asm_Input ("r", Into (Into'First)'Address),
+                          System.Address'Asm_Input ("r", Gains (Gains'First)'Address),
+                          Element_Count'Asm_Input ("r", Stride * 4),
+                          Element_Count'Asm_Input ("r", Value'Length / 8)],
+               Clobber => "rdx,r8,r9,r10,r11,r12,r13,r14,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,cc,memory",
+               Volatile => True);
+         when 2 =>
+            System.Machine_Code.Asm
+              ("movq %0, %%r8" & LF
+               & "movq %1, %%r9" & LF
+               & "movq %2, %%rdx" & LF
+               & "movq %3, %%r11" & LF
+               & "movq %4, %%r10" & LF
+               & "vbroadcastss 0(%%rdx), %%ymm0" & LF
+               & "leaq (%%r9,%%r11), %%r12" & LF
+               & "vbroadcastss 4(%%rdx), %%ymm1" & LF
+               & "1:" & LF
+               & "vmovups (%%r8), %%ymm4" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r9), %%ymm0, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r9)" & LF
+               & "addq $32, %%r9" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r12), %%ymm1, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r12)" & LF
+               & "addq $32, %%r12" & LF
+               & "addq $32, %%r8" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b",
+               Inputs => [System.Address'Asm_Input ("r", Value (Value'First)'Address),
+                          System.Address'Asm_Input ("r", Into (Into'First)'Address),
+                          System.Address'Asm_Input ("r", Gains (Gains'First)'Address),
+                          Element_Count'Asm_Input ("r", Stride * 4),
+                          Element_Count'Asm_Input ("r", Value'Length / 8)],
+               Clobber => "rdx,r8,r9,r10,r11,r12,r13,r14,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,cc,memory",
+               Volatile => True);
+         when 3 =>
+            System.Machine_Code.Asm
+              ("movq %0, %%r8" & LF
+               & "movq %1, %%r9" & LF
+               & "movq %2, %%rdx" & LF
+               & "movq %3, %%r11" & LF
+               & "movq %4, %%r10" & LF
+               & "vbroadcastss 0(%%rdx), %%ymm0" & LF
+               & "leaq (%%r9,%%r11), %%r12" & LF
+               & "vbroadcastss 4(%%rdx), %%ymm1" & LF
+               & "leaq (%%r12,%%r11), %%r13" & LF
+               & "vbroadcastss 8(%%rdx), %%ymm2" & LF
+               & "1:" & LF
+               & "vmovups (%%r8), %%ymm4" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r9), %%ymm0, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r9)" & LF
+               & "addq $32, %%r9" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r12), %%ymm1, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r12)" & LF
+               & "addq $32, %%r12" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r13), %%ymm2, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r13)" & LF
+               & "addq $32, %%r13" & LF
+               & "addq $32, %%r8" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b",
+               Inputs => [System.Address'Asm_Input ("r", Value (Value'First)'Address),
+                          System.Address'Asm_Input ("r", Into (Into'First)'Address),
+                          System.Address'Asm_Input ("r", Gains (Gains'First)'Address),
+                          Element_Count'Asm_Input ("r", Stride * 4),
+                          Element_Count'Asm_Input ("r", Value'Length / 8)],
+               Clobber => "rdx,r8,r9,r10,r11,r12,r13,r14,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,cc,memory",
+               Volatile => True);
+         when 4 =>
+            System.Machine_Code.Asm
+              ("movq %0, %%r8" & LF
+               & "movq %1, %%r9" & LF
+               & "movq %2, %%rdx" & LF
+               & "movq %3, %%r11" & LF
+               & "movq %4, %%r10" & LF
+               & "vbroadcastss 0(%%rdx), %%ymm0" & LF
+               & "leaq (%%r9,%%r11), %%r12" & LF
+               & "vbroadcastss 4(%%rdx), %%ymm1" & LF
+               & "leaq (%%r12,%%r11), %%r13" & LF
+               & "vbroadcastss 8(%%rdx), %%ymm2" & LF
+               & "leaq (%%r13,%%r11), %%r14" & LF
+               & "vbroadcastss 12(%%rdx), %%ymm3" & LF
+               & "1:" & LF
+               & "vmovups (%%r8), %%ymm4" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r9), %%ymm0, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r9)" & LF
+               & "addq $32, %%r9" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r12), %%ymm1, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r12)" & LF
+               & "addq $32, %%r12" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r13), %%ymm2, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r13)" & LF
+               & "addq $32, %%r13" & LF
+               & "vmovaps %%ymm4, %%ymm5" & LF
+               & "vfmadd213ps (%%r14), %%ymm3, %%ymm5" & LF
+               & "vmovups %%ymm5, (%%r14)" & LF
+               & "addq $32, %%r14" & LF
+               & "addq $32, %%r8" & LF
+               & "decq %%r10" & LF
+               & "jnz 1b",
+               Inputs => [System.Address'Asm_Input ("r", Value (Value'First)'Address),
+                          System.Address'Asm_Input ("r", Into (Into'First)'Address),
+                          System.Address'Asm_Input ("r", Gains (Gains'First)'Address),
+                          Element_Count'Asm_Input ("r", Stride * 4),
+                          Element_Count'Asm_Input ("r", Value'Length / 8)],
+               Clobber => "rdx,r8,r9,r10,r11,r12,r13,r14,ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,cc,memory",
+               Volatile => True);
+         when others => null;
+      end case;
+   end Draft_Values;
+
+   procedure Pick_Eight_Of_128 (Scores : Real_Array; Result : out Choice_List) is
+      Count : Natural := 0;
+      At_Pos : Natural;
+   begin
+      pragma Assert (Scores'Length = 128 and then Result'Length = 8);
+      Result := [others => 0];
+      for Which in Natural range 0 .. 127 loop
+         if Count < 8 or else Scores (Scores'First + Element_Count (Which)) >
+           Scores (Scores'First + Element_Count (Result (Result'First + 7)))
+         then
+            At_Pos := Natural'Min (Count, 7);
+            while At_Pos > 0 and then Scores (Scores'First + Element_Count (Which)) >
+              Scores (Scores'First + Element_Count (Result (Result'First + At_Pos - 1)))
+            loop
+               Result (Result'First + At_Pos) := Result (Result'First + At_Pos - 1);
+               At_Pos := At_Pos - 1;
+            end loop;
+            Result (Result'First + At_Pos) := Which;
+            Count := Natural'Min (8, Count + 1);
+         end if;
+      end loop;
+   end Pick_Eight_Of_128;
+
    procedure Device_Expert_Views
      (Current : Layer;
       Which   : Natural;
@@ -898,7 +1818,14 @@ package body Model_Runner.Llama is
             Status  => Status);
       end Rows_Of;
    begin
+      Gate := T.Empty_View;
+      Up := T.Empty_View;
+      Down := T.Empty_View;
       Status := E.Success;
+      if Current.Experts = null or else Which not in Current.Experts'Range then
+         Status := E.Make (E.Tensor_Out_Of_Bounds);
+         return;
+      end if;
       if T.Is_Present (Current.Fused_Stack) then
          Rows_Of
            (Current.Fused_Stack, Element_Count (Which) * 2 * Feed,
@@ -919,6 +1846,17 @@ package body Model_Runner.Llama is
       if E.Is_Ok (Status) then
          Rows_Of
            (Current.Down_Stack, Element_Count (Which) * Width, Width, Down);
+      end if;
+      if E.Is_Ok (Status) then
+         --  Storage comes from the original stack, but the per-expert
+         --  views own the prepared architecture's activation contract.
+         --  In particular, keep unsupported reference formats on the CPU.
+         Gate.Role := Current.Experts (Which).Gate.Role;
+         Gate.Reference_Activations := Current.Experts (Which).Gate.Reference_Activations;
+         Up.Role := Current.Experts (Which).Up.Role;
+         Up.Reference_Activations := Current.Experts (Which).Up.Reference_Activations;
+         Down.Role := Current.Experts (Which).Down.Role;
+         Down.Reference_Activations := Current.Experts (Which).Down.Reference_Activations;
       end if;
    end Device_Expert_Views;
 
@@ -1574,6 +2512,16 @@ package body Model_Runner.Llama is
       end loop;
    end Resolve_Experts;
 
+   procedure Inkling_Tensors
+     (Item : in out Model; Source : Containers.Container;
+      Settings : Configuration; Load : Boolean; Status : out E.Error_Info)
+   is separate;
+
+   procedure DSpark_Tensors
+     (Item : in out Model; Source : Containers.Container;
+      Settings : Configuration; Load : Boolean; Status : out E.Error_Info)
+   is separate;
+
    ---------------------
    -- Release_Weights --
    ---------------------
@@ -1646,6 +2594,64 @@ package body Model_Runner.Llama is
          K.SiLU (Target);
       end if;
    end Gate_Activation;
+
+   --  The complete gated expert activation, shared by scalar and grouped
+   --  execution. SITU softcaps both arms while retaining the raw gate's
+   --  sigmoid; it cannot be represented by activating the gate alone.
+   procedure Expert_Activation
+     (Item : Model'Class; Gate : in out Real_Array; Up : Real_Array;
+      Reference_Arithmetic : Boolean := False; Peak : access Real := null;
+      Block_Peaks : access Real_Array := null) is
+      Settings : Configuration renames Item.Settings;
+   begin
+      if Block_Peaks /= null then
+         if Settings.Kind /= Inkling2_Loop or else not Reference_Arithmetic
+           or else Gate'Length mod 32 /= 0 or else Block_Peaks.all'Length /= Gate'Length / 32
+         then raise Constraint_Error with "invalid whole-run activation peaks"; end if;
+         Block_Peaks.all := [others => 0.0];
+      end if;
+      if Settings.Kind = Inkling2_Loop and then Reference_Arithmetic then
+         K.Reference_SiTU (Gate, Up, Settings.Inkling.Gate_Softcap, Settings.Inkling.Up_Softcap);
+         if Block_Peaks /= null or else Peak /= null then
+            for Index in Gate'Range loop
+               if Block_Peaks /= null then
+                  declare
+                     P : Real renames Block_Peaks.all (Block_Peaks.all'First + (Index - Gate'First) / 32);
+                  begin
+                     if P >= 0.0 then
+                        if N.Is_Finite (Gate (Index)) then P := Real'Max (P, abs (Gate (Index)));
+                        else P := -1.0; end if;
+                     end if;
+                  end;
+               elsif Peak.all >= 0.0 then
+                  if N.Is_Finite (Gate (Index)) then Peak.all := Real'Max (Peak.all, abs (Gate (Index)));
+                  else Peak.all := -1.0; end if;
+               end if;
+            end loop;
+         end if;
+      elsif Settings.Kind = Inkling2_Loop then
+         for Index in Gate'Range loop
+            declare
+               Raw : constant Real := Gate (Index);
+               Value : constant Real := Up (Up'First + Index - Gate'First);
+               Gate_Value : Real := Settings.Inkling.Gate_Softcap
+                 * Real (N.Tanh (N.Wide_Real (Raw / Settings.Inkling.Gate_Softcap)));
+               Up_Value : constant Real := Settings.Inkling.Up_Softcap
+                 * Real (N.Tanh (N.Wide_Real (Value / Settings.Inkling.Up_Softcap)));
+            begin
+               --  Below -104 the binary32 sigmoid is zero; avoid an
+               --  overflowing intermediate exponential for finite inputs.
+               Gate_Value := Gate_Value * (if Raw < -104.0 then 0.0 else Sigmoid (Raw));
+               Gate (Index) := Gate_Value * Up_Value;
+            end;
+         end loop;
+      elsif Settings.Gate_Alpha > 0.0 then
+         K.Clamped_Gate (Gate, Up, Settings.Gate_Alpha, Settings.Gate_Limit);
+      else
+         Gate_Activation (Item, Gate);
+         K.Multiply (Gate, Up);
+      end if;
+   end Expert_Activation;
 
    --  The base a layer turns its rotation on.
    --
@@ -1725,9 +2731,9 @@ package body Model_Runner.Llama is
    --  rather than after it.
    procedure Finish_Logits
      (Source : Model'Class;
-      Values : in out Real_Array) is
+      Values : in out Real_Array; Reference_Arithmetic : Boolean := False; Add_Bias : Boolean := True) is
    begin
-      if Source.Output_Bias /= null
+      if Add_Bias and then Source.Output_Bias /= null
         and then Source.Output_Bias.all'Length = Values'Length
       then
          K.Add (Values, Source.Output_Bias.all);
@@ -1749,7 +2755,19 @@ package body Model_Runner.Llama is
          K.Scale (Values, Source.Settings.Logit_Scale);
       end if;
 
-      Cap_Logits (Source.Settings, Values);
+      if Reference_Arithmetic and then Source.Settings.Kind = Inkling2_Loop
+        and then Source.Settings.Logit_Cap > 0.0
+      then
+         declare
+            Reciprocal : constant Real := 1.0 / Source.Settings.Logit_Cap;
+         begin
+            for Value of Values loop
+               Value := Source.Settings.Logit_Cap * Reference_Tanh (Value * Reciprocal);
+            end loop;
+         end;
+      else
+         Cap_Logits (Source.Settings, Values);
+      end if;
    end Finish_Logits;
 
    --  Every normalization here multiplies by the gain as the file stores
@@ -2716,6 +3734,10 @@ package body Model_Runner.Llama is
    is
       Layers : E.Error_Info;
    begin
+      if Item.Settings.Kind = DFlash then
+         Status := E.Success;
+         return;
+      end if;
       Lighten_Head (Item, Threads, Status);
       Lighten_Layers (Item, Threads, Layers);
       if E.Is_Ok (Status) then
@@ -2914,7 +3936,8 @@ package body Model_Runner.Llama is
       Cache    : Cache_Precision := Exact;
       Paged    : Boolean := True;
       Beside   : Interfaces.Unsigned_64 := 0;
-      Expert_Cache : Interfaces.Unsigned_64 := 0)
+      Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Target : access Model'Class := null)
    is separate;
 
    -----------
@@ -2978,8 +4001,14 @@ package body Model_Runner.Llama is
             Model_Runner.Backend.Reference.Product
               (Weight, Vector, Target, Status);
          when Model_Runner.Backend.Backend_Device =>
+            if Item.Owner.Settings.Kind = Inkling2_Loop and then (for some Role of Item.Arithmetic => Role)
+              and then Weight.Format in Model_Runner.GGUF.Type_F32
+            then
+               Workers_CPU.Dispatch (Item.Team, Weight, Vector, Target, Status, Roles => Item.Arithmetic);
+            else
             Model_Runner.Backend.Device.Dispatch
               (Weight, Vector, Target, Status, Item.Stopping);
+            end if;
       end case;
       if E.Is_Ok (Status) and then Item.Owner.Runtime_Pairs /= null then
          Apply_Adapters
@@ -3006,16 +4035,129 @@ package body Model_Runner.Llama is
    --  @param Vector The activation all of them read.
    --  @param Into Receives each matrix's result, in the same order.
    --  @param Status Success, or the first refusal among them.
+   --  @param Count Contiguous inputs; grouped CPU batches reuse their packing.
    procedure Product_Group
      (Item    : Session;
       Weights : T.View_Group;
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
       Status  : out E.Error_Info;
-      Apart   : Element_Count := 0)
+      Apart   : Element_Count := 0;
+      Count   : Element_Count := 1)
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
+      if Count /= 1 then
+         Status := E.Success;
+         if Vector = null or else Weights'Length /= Into'Length then
+            Status := E.Make (E.Tensor_Shape_Mismatch); return;
+         end if;
+         if Apart /= 0 then
+            Status := E.Make (E.Backend_Capability_Missing); return;
+         end if;
+         if Weights'Length = 0 then return; end if;
+         if (Item.Host_Feed or else Item.Owner.Able.Kind = Model_Runner.Backend.Backend_CPU)
+           and then Item.Seen = null and then Item.Owner.Runtime_Pairs = null
+           and then (for all Weight of Weights =>
+             Item.Arithmetic (Weight.Role) = Item.Arithmetic (Weights (Weights'First).Role))
+         then
+            Workers_CPU.Dispatch_Group
+              (Item.Team, Weights, Vector, Into, Status, Roles => Item.Arithmetic, Count => Count);
+         else
+            for Index in Weights'Range loop
+               Product_Batch
+                 (Item, Weights (Index), Vector, Count, Into (Into'First + Index - Weights'First), Status);
+               exit when E.Is_Error (Status);
+            end loop;
+         end if;
+         return;
+      end if;
+      if Item.Owner.Settings.Kind = Inkling2_Loop and then (for some Role of Item.Arithmetic => Role)
+        and then Item.Owner.Able.Kind = Model_Runner.Backend.Backend_Device and then not Item.Host_Feed
+      then
+         if Vector = null or else Weights'Length /= Into'Length then
+            Status := E.Make (E.Tensor_Shape_Mismatch); return;
+         end if;
+         if Weights'Length > 1 and then Item.Owner.Runtime_Pairs = null then
+            declare
+               function Native (Weight : T.View) return Boolean is
+                 (Weight.Reference_Activations and then not Weight.Interleaved
+                  and then Item.Arithmetic (Weight.Role)
+                  and then Weight.Format in Model_Runner.GGUF.Type_Q4_K | Model_Runner.GGUF.Type_Q5_K
+                    | Model_Runner.GGUF.Type_Q6_K | Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0);
+               Number : Natural := 0;
+            begin
+               for Weight of Weights loop if Native (Weight) then Number := Number + 1; end if; end loop;
+               if Number > 1 then
+                  declare
+                     Selected : T.View_Group (1 .. Number);
+                     Targets : T.Target_Group (1 .. Number);
+                     Columns : constant Element_Count := Weights (Weights'First).Columns;
+                     Inputs : aliased Real_Array (0 .. Element_Count (Number) * Columns - 1);
+                     At_View : Natural := 0;
+                  begin
+                     for Index in Weights'Range loop
+                        declare
+                           First : constant Element_Count := Vector.all'First
+                             + Element_Count (Index - Weights'First) * Apart;
+                           Weight : T.View renames Weights (Index);
+                        begin
+                           if Weight.Columns /= Columns or else First < Vector.all'First
+                             or else First - Vector.all'First > Vector.all'Length
+                             or else Columns > Vector.all'Length - (First - Vector.all'First)
+                           then Status := E.Make (E.Tensor_Shape_Mismatch); return; end if;
+                           if Native (Weight) then
+                              At_View := At_View + 1; Selected (At_View) := Weight;
+                              Targets (At_View) := Into (Into'First + Index - Weights'First);
+                              Inputs (Element_Count (At_View - 1) * Columns
+                                .. Element_Count (At_View) * Columns - 1) :=
+                                  Vector.all (First .. First + Columns - 1);
+                              if Item.Seen /= null then
+                                 Tell (Item, Weight, Vector.all (First .. First + Columns - 1), 1);
+                              end if;
+                           end if;
+                        end;
+                     end loop;
+                     Model_Runner.Backend.Device.Dispatch_Group
+                       (Selected, Inputs'Unrestricted_Access, Targets, Status, Item.Stopping, Apart => Columns);
+                     if E.Is_Error (Status) then return; end if;
+                     for Index in Weights'Range loop
+                        if not Native (Weights (Index)) then
+                           declare
+                              First : constant Element_Count := Vector.all'First
+                                + Element_Count (Index - Weights'First) * Apart;
+                           begin
+                              Product (Item, Weights (Index),
+                                Vector.all (First .. First + Columns - 1)'Unrestricted_Access,
+                                Into (Into'First + Index - Weights'First), Status);
+                              if E.Is_Error (Status) then return; end if;
+                           end;
+                        end if;
+                     end loop;
+                     return;
+                  end;
+               end if;
+            end;
+         end if;
+         for Index in Weights'Range loop
+            if Apart = 0 then
+               Product (Item, Weights (Index), Vector, Into (Into'First + Index - Weights'First), Status);
+            else
+               declare
+                  First : constant Element_Count := Vector.all'First + Element_Count (Index - Weights'First) * Apart;
+               begin
+                  if First + Weights (Index).Columns > Vector.all'First + Vector.all'Length then
+                     Status := E.Make (E.Tensor_Shape_Mismatch); return;
+                  end if;
+                  Product (Item, Weights (Index),
+                    Vector.all (First .. First + Weights (Index).Columns - 1)'Unrestricted_Access,
+                    Into (Into'First + Index - Weights'First), Status);
+               end;
+            end if;
+            if E.Is_Error (Status) then return; end if;
+         end loop;
+         return;
+      end if;
       --  Every matrix of the group, because a group is what a generated
       --  token's three projections are: hooking only the single product
       --  below would miss them, and did -- a watched run named the
@@ -3552,14 +4694,151 @@ package body Model_Runner.Llama is
               (Weight, Vectors, Count, Target, Status);
 
          when Model_Runner.Backend.Backend_Device =>
+            if Item.Owner.Settings.Kind = Inkling2_Loop and then (for some Role of Item.Arithmetic => Role)
+              and then Weight.Format in Model_Runner.GGUF.Type_F32
+            then
+               Workers_CPU.Dispatch_Batch (Item.Team, Weight, Vectors, Count, Target, Status, Roles => Item.Arithmetic);
+            else
             Model_Runner.Backend.Device.Dispatch_Batch
               (Weight, Vectors, Count, Target, Status, Item.Stopping);
+            end if;
       end case;
       if E.Is_Ok (Status) and then Item.Owner.Runtime_Pairs /= null and then Count > 0 then
          Apply_Adapters_Batch
            (Item, Weight, Vectors.all, Count, Target.all, Status);
       end if;
    end Product_Batch;
+
+   procedure Draft_Product_Add
+     (Item : in out Session; Weight : T.View; Input : T.Real_Array_Access; Count : Element_Count;
+      Residual, Room : T.Real_Array_Access; Status : out E.Error_Info)
+   is
+      use type Model_Runner.GGUF.Tensor_Type;
+      Tile_Size : constant Element_Count := 128;
+      Packed : Boolean := False;
+      Eligible : constant Boolean := Item.Seen = null and then Item.Owner /= null
+        and then Item.Owner.Settings.Kind = DFlash and then Item.Owner.Runtime_Pairs = null
+        and then Model_Runner.Backend."=" (Item.Owner.Able.Kind, Model_Runner.Backend.Backend_CPU)
+        and then Count in 1 .. 8 and then Weight.Rows > 0 and then Input /= null
+        and then Residual /= null and then Residual'Length >= Count * Weight.Rows
+        and then Weight.Format = Model_Runner.GGUF.Type_Q8_0 and then not Weight.Interleaved
+        and then Item.Arithmetic (Weight.Role) and then Workers_CPU.Byte_Products;
+   begin
+      if Eligible then
+         Workers_CPU.Pack (Item.Draft_Residual_Packed, Input, Count, Weight.Columns, False, Packed,
+                           Roles => Item.Arithmetic, Reference_Arithmetic => Weight.Reference_Activations,
+                           Half_Scales => True, Team => Item.Team);
+      end if;
+      if not Packed then
+         Product_Batch (Item, Weight, Input, Count, Room, Status);
+         if E.Is_Ok (Status) then
+            for I in 0 .. Count * Weight.Rows - 1 loop
+               Residual (Residual'First + I) := Residual (Residual'First + I) + Room (Room'First + I);
+            end loop;
+         end if;
+         return;
+      end if;
+      declare
+         Errors : array (0 .. 7) of E.Error_Info := [others => E.Success];
+         type Product_Share is limited new Workers_CPU.Task_Item with record
+            Next_Slot : aliased Take_Counter := 0;
+         end record;
+         overriding procedure Run (Work : in out Product_Share; From, To : Element_Count);
+         overriding procedure Run (Work : in out Product_Share; From, To : Element_Count) is
+            Slot : constant Natural := Natural (Takes.Atomic_Fetch_And_Add (Work.Next_Slot, 1));
+            First : Element_Count := From;
+            Values : aliased Real_Array (0 .. Count * Tile_Size - 1);
+            Slice : T.View;
+            Done : Boolean;
+         begin
+            pragma Assert (Slot < 8);
+            while First <= To loop
+               if C.Is_Cancelled (Item.Stopping) then
+                  Errors (Slot) := E.Make (E.Generation_Cancelled); return;
+               end if;
+               declare
+                  Rows : constant Element_Count := Element_Count'Min (Tile_Size, To - First + 1);
+               begin
+                  Slice := Weight; Slice.Rows := Rows; Slice.Scales := null;
+                  Slice.Offset := Weight.Offset + B.Byte_Count (First) * T.Row_Bytes (Weight);
+                  Slice.Length := B.Byte_Count (Rows) * T.Row_Bytes (Weight);
+                  Workers_CPU.Multiply_Packed_Whole (Slice, Item.Draft_Residual_Packed, Values, Done);
+                  if not Done then
+                     Workers_CPU.Dispatch_Batch
+                       (null, Slice, Input, Count, Values'Unrestricted_Access, Errors (Slot), Roles => Item.Arithmetic);
+                  end if;
+                  if E.Is_Error (Errors (Slot)) then return; end if;
+                  for Token in 0 .. Count - 1 loop
+                     for Row in 0 .. Rows - 1 loop
+                        declare
+                           At_Row : constant Element_Count := Residual'First + Token * Weight.Rows + First + Row;
+                        begin
+                           Residual (At_Row) := Residual (At_Row) + Values (Token * Rows + Row);
+                        end;
+                     end loop;
+                  end loop;
+                  First := First + Rows;
+               end;
+            end loop;
+         end Run;
+         Work : aliased Product_Share;
+      begin
+         Workers_CPU.Dispatch_Shares
+           (Item.Team, Weight.Rows, Work'Unchecked_Access, Status,
+            Cost => Count * Weight.Rows * Weight.Columns, Team_Size => 8);
+         if E.Is_Error (Status) then return; end if;
+         for Error of Errors loop
+            if E.Is_Error (Error) then Status := Error; return; end if;
+         end loop;
+         Item.Draft_Residual_Runs := Item.Draft_Residual_Runs + 1;
+      end;
+   end Draft_Product_Add;
+
+   procedure Draft_Project_Proposals
+     (Item : Session; Weight : T.View; Input : T.Real_Array_Access; Count : Element_Count;
+      Output : T.Real_Array_Access; Status : out E.Error_Info) is
+   begin
+      pragma Assert (Count in 2 .. 8 and then Input /= null and then Output /= null
+                     and then Input'Length >= Count * Weight.Columns and then Output'Length >= Count * Weight.Rows);
+      if Item.Seen = null then
+         declare
+            Inputs : Real_Array renames Input.all
+              (Input'First + Weight.Columns .. Input'First + Count * Weight.Columns - 1);
+            Outputs : Real_Array renames Output.all
+              (Output'First + Weight.Rows .. Output'First + Count * Weight.Rows - 1);
+         begin
+            Product_Batch
+              (Item, Weight, Inputs'Unrestricted_Access, Count - 1, Outputs'Unrestricted_Access, Status);
+         end;
+      else
+         Product_Batch (Item, Weight, Input, Count, Output, Status);
+      end if;
+   end Draft_Project_Proposals;
+
+   function Draft_Feature_Layers (Source : Model'Class) return Feature_Layers is
+     (if Source.Settings.Kind = DFlash then Feature_Layers (Source.Settings.DSpark.Target_Layers)
+      else Feature_Layers'(1 .. 0 => 0));
+
+   function Draft_Feature_Room (Item : Session) return T.Real_Array_Access
+   is (Item.Draft_Features);
+
+   procedure Inject_Draft_Context
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array;
+      Features : T.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info)
+   is separate;
+
+   procedure Propose_Draft_Block
+     (Item : in out Session; Source : Model'Class;
+      Anchor : Model_Runner.Tokenizer.Token_Id;
+      Tokens : out Model_Runner.Tokenizer.Token_Array;
+      Every : T.Real_Array_Access := null;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info)
+   is separate;
+
 
    --  One expert's product over a batch, out of the stack it is a slice
    --  of, where the device holds the stacks; Product_Batch on the slice's
@@ -3594,6 +4873,10 @@ package body Model_Runner.Llama is
    is
       use type Model_Runner.Backend.Backend_Kind;
    begin
+      if Item.Owner.Settings.Kind = Inkling2_Loop and then (for some Role of Item.Arithmetic => Role) then
+         Product_Batch (Item, Slice, Vectors, Count, Target, Status);
+         return;
+      end if;
       if not Item.Owner.all.Stacked
         or else Item.Owner.Able.Kind /= Model_Runner.Backend.Backend_Device
         or else not T.Is_Present (Stack)
@@ -5193,7 +6476,8 @@ package body Model_Runner.Llama is
    --  How wide a session's block is, in elements: the exact cache's keys
    --  and values, or the packed cache's words.
    function Block_Span_Of (Item : Session) return Element_Count
-   is (if Item.Held = Exact
+   is (if Item.Inkling_Device_Extra > 0 then Packed_Layout (Item).Span + Item.Inkling_Device_Extra
+       elsif Item.Held = Exact
        then (if Item.Keys = null or else Item.Values = null then 0
              elsif Item.Values_In_Keys then Item.Keys.all'Length
              else Item.Keys.all'Length + Item.Values.all'Length)
@@ -5214,7 +6498,8 @@ package body Model_Runner.Llama is
    --  every element of every block, for elements no kernel would read a
    --  half of.
    function Copy_Span_Of (Item : Session) return Element_Count
-   is (if Item.Held = Exact then Block_Span_Of (Item)
+   is (if Item.Inkling_Device_Extra > 0 then 0
+       elsif Item.Held = Exact then Block_Span_Of (Item)
        elsif Item.Held in Eighth | Fourth | Float_Eighth | Transformed_Fourth
        then Element_Count
               ((Key_Row_Width (Item.Owner.Settings) + Value_Row_Width (Item.Owner.Settings)))
@@ -7474,11 +8759,85 @@ package body Model_Runner.Llama is
       Width  : Element_Count;
       Scales : Real_Array;
       Held   : Cache_Precision;
-      Target : out Real_Array)
+      Target : out Real_Array;
+      Widen  : Boolean := False)
    is
    begin
       if Element_Count (Target'Length) /= Width then
          raise Constraint_Error with "packed cache row width mismatch";
+      end if;
+
+      --  Complete nibble blocks in their stored basis. The caller has
+      --  validated vector support; snapshots retain their scalar contract.
+      if Widen and then Held = Fourth and then Width > 0
+        and then Width mod Block = 0 and then Origin mod Block = 0
+      then
+         declare
+            At_Byte : constant B.Byte_Count := Byte_Of (Held, Origin, Width);
+            At_Scale : constant Element_Count := Scales'First + Scale_Of (Held, Origin, Width);
+            LF : constant Character := ASCII.LF;
+         begin
+            if not B.Has_Room (From, At_Byte - From'First, B.Byte_Count (Width / 2))
+              or else At_Scale < Scales'First or else At_Scale + Width / Block - 1 > Scales'Last
+            then
+               raise Constraint_Error with "packed cache row outside storage";
+            end if;
+            System.Machine_Code.Asm
+              (
+                  "movq %0, %%r8" & LF
+                & "movq %1, %%r9" & LF
+                & "movq %2, %%r10" & LF
+                & "movq %3, %%r11" & LF
+                & "movl $0x0F0F0F0F, %%eax" & LF
+                & "vmovd %%eax, %%xmm14" & LF
+                & "vpbroadcastd %%xmm14, %%xmm14" & LF
+                & "movl $0x41000000, %%eax" & LF
+                & "vmovd %%eax, %%xmm15" & LF
+                & "vbroadcastss %%xmm15, %%ymm15" & LF
+                & "1:" & LF
+                & "vmovdqu (%%r8), %%xmm0" & LF
+                & "vpand %%xmm14, %%xmm0, %%xmm1" & LF
+                & "vpsrlw $4, %%xmm0, %%xmm2" & LF
+                & "vpand %%xmm14, %%xmm2, %%xmm2" & LF
+                & "vpunpcklbw %%xmm2, %%xmm1, %%xmm4" & LF
+                & "vpunpckhbw %%xmm2, %%xmm1, %%xmm5" & LF
+                & "vpmovzxbd %%xmm4, %%ymm0" & LF
+                & "vpsrldq $8, %%xmm4, %%xmm4" & LF
+                & "vpmovzxbd %%xmm4, %%ymm1" & LF
+                & "vpmovzxbd %%xmm5, %%ymm2" & LF
+                & "vpsrldq $8, %%xmm5, %%xmm5" & LF
+                & "vpmovzxbd %%xmm5, %%ymm3" & LF
+                & "vbroadcastss (%%r10), %%ymm6" & LF
+                & "vcvtdq2ps %%ymm0, %%ymm0" & LF
+                & "vsubps %%ymm15, %%ymm0, %%ymm0" & LF
+                & "vmulps %%ymm6, %%ymm0, %%ymm0" & LF
+                & "vmovups %%ymm0, 0(%%r9)" & LF
+                & "vcvtdq2ps %%ymm1, %%ymm1" & LF
+                & "vsubps %%ymm15, %%ymm1, %%ymm1" & LF
+                & "vmulps %%ymm6, %%ymm1, %%ymm1" & LF
+                & "vmovups %%ymm1, 32(%%r9)" & LF
+                & "vcvtdq2ps %%ymm2, %%ymm2" & LF
+                & "vsubps %%ymm15, %%ymm2, %%ymm2" & LF
+                & "vmulps %%ymm6, %%ymm2, %%ymm2" & LF
+                & "vmovups %%ymm2, 64(%%r9)" & LF
+                & "vcvtdq2ps %%ymm3, %%ymm3" & LF
+                & "vsubps %%ymm15, %%ymm3, %%ymm3" & LF
+                & "vmulps %%ymm6, %%ymm3, %%ymm3" & LF
+                & "vmovups %%ymm3, 96(%%r9)" & LF
+                & "addq $16, %%r8" & LF
+                & "addq $128, %%r9" & LF
+                & "addq $4, %%r10" & LF
+                & "decq %%r11" & LF
+                & "jnz 1b" & LF
+                & "vzeroupper",
+               Inputs => [System.Address'Asm_Input ("r", From (At_Byte)'Address),
+                          System.Address'Asm_Input ("r", Target (Target'First)'Address),
+                          System.Address'Asm_Input ("r", Scales (At_Scale)'Address),
+                          Element_Count'Asm_Input ("r", Width / Block)],
+               Clobber => "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm14, ymm15, "
+                 & "rax, r8, r9, r10, r11, cc, memory", Volatile => True);
+            return;
+         end;
       end if;
 
       if Held = Transformed_Fourth then
@@ -8124,12 +9483,15 @@ package body Model_Runner.Llama is
       Ok      : out Boolean;
       Status  : out E.Error_Info);
 
+   type Mixture_Observer is access procedure (Which : String; Values : Real_Array);
+
    procedure Mixture_Body
      (Item    : in out Session;
       Current : Layer;
       Input   : T.Real_Array_Access;
       Result  : T.Real_Array_Access;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Trace   : Mixture_Observer := null)
    is separate;
 
    --  The mixture, on the processor's pool where the device runs only the
@@ -8139,12 +9501,13 @@ package body Model_Runner.Llama is
       Current : Layer;
       Input   : T.Real_Array_Access;
       Result  : T.Real_Array_Access;
-      Status  : out E.Error_Info)
+      Status  : out E.Error_Info;
+      Trace   : Mixture_Observer := null)
    is
       Was : constant Boolean := Item.Host_Feed;
    begin
       Item.Host_Feed := Was or else Item.Owner.all.Split_Feed;
-      Mixture_Body (Item, Current, Input, Result, Status);
+      Mixture_Body (Item, Current, Input, Result, Status, Trace);
       Item.Host_Feed := Was;
    exception
       when others =>
@@ -8235,13 +9598,43 @@ package body Model_Runner.Llama is
      (Item   : in out Model;
       Status : out E.Error_Info) is
    begin
-      if Item.Sessions > 0 then
+      if Item.Sessions > 0 or else Item.Borrowers > 0 then
          Status := E.Make (E.Lifecycle_Session_Active);
          E.Add_Integer (Status, "sessions", Long_Long_Integer (Item.Sessions));
          return;
       end if;
 
       Item.Ready := False;
+      if Item.Settings.Kind = DFlash and then Item.Named /= null then
+         declare
+            procedure Free is new Ada.Unchecked_Deallocation (Named_View_List, Named_View_Access);
+         begin
+            Free (Item.Named);
+            Item.Named_Up := 0;
+         end;
+      end if;
+      if Item.DSpark_Target /= null then
+         Item.DSpark_Target.Borrowers := Item.DSpark_Target.Borrowers - 1;
+         Item.DSpark_Target := null;
+      end if;
+      if Item.DSpark_Views /= null then
+         T.Free (Item.Embedding_Norm);
+         for Context of Item.DSpark_Views.Contexts loop
+            T.Free (Context.Mix);
+            T.Free (Context.Norm);
+            T.Free (Context.Key_Norm);
+         end loop;
+         T.Free (Item.DSpark_Views.Context_Mix);
+         T.Free (Item.DSpark_Views.Context_Norm);
+         T.Free (Item.DSpark_Views.Markov_Bias);
+         T.Free (Item.DSpark_Views.Joint_Bias);
+         declare
+            procedure Free is new Ada.Unchecked_Deallocation
+              (DSpark_Weights, DSpark_Weights_Access);
+         begin
+            Free (Item.DSpark_Views);
+         end;
+      end if;
 
       if Item.Runtime_Pairs /= null then
          for Pair of Item.Runtime_Pairs.all loop
@@ -8421,6 +9814,7 @@ package body Model_Runner.Llama is
       Item.Draft_Head := T.Empty_View;
       Item.Embeddings := T.Empty_View;
       Item.Output := T.Empty_View;
+      Item.Inkling_Output_Query := T.Empty_View;
       Item.Output_As_Stored := T.Empty_View;
       Item.Settings := (others => <>);
       Model_Runner.Tokenizer.Close (Item.Words);
@@ -8646,6 +10040,39 @@ package body Model_Runner.Llama is
       Mix_Count (Item.Settings.Experts_Used);
       Mix_Count (Repack_Mode'Pos (Item.Packing));
 
+      if Item.Settings.Kind = Inkling2_Loop then
+         declare
+            Shape : Inkling_Configuration renames Item.Settings.Inkling;
+            procedure Scalar (Value : Real) is
+            begin
+               Mix (Interfaces.Unsigned_64 (N.Bits (Value)));
+            end Scalar;
+         begin
+            Mix_Count (Shape.First_Layer);
+            Mix_Count (Shape.End_Layer);
+            Mix_Count (Shape.Iterations);
+            Mix_Count (Shape.Runtime_Layers);
+            Mix_Count (Shape.Block_Size);
+            Mix_Count (Shape.Gate_Rank);
+            Mix_Count (Shape.Relative_Width);
+            Mix_Count (Shape.Relative_Extent);
+            Mix_Count (Shape.Convolution_Length);
+            Mix_Count (Shape.Padded_Vocabulary);
+            Mix_Count (Shape.Log_Scale_Floor);
+            Scalar (Shape.QK_Clip);
+            Scalar (Shape.Relative_Clip);
+            Scalar (Shape.Log_Scale_Alpha);
+            Scalar (Shape.Gate_Softcap);
+            Scalar (Shape.Up_Softcap);
+            Scalar (Item.Settings.Epsilon);
+            Scalar (Item.Settings.Expert_Scale);
+            Scalar (Item.Settings.Logit_Cap);
+            for Index in 0 .. Item.Settings.Layers - 1 loop
+               Mix_Count (Boolean'Pos (Item.Settings.Window_Layers (Index)));
+            end loop;
+         end;
+      end if;
+
       --  And whatever has been merged into the weights since, because a
       --  model with an adapter in it is not the model its file describes.
       Mix (Item.Adapted);
@@ -8721,6 +10148,20 @@ package body Model_Runner.Llama is
 
       return Digest;
    end Fingerprint;
+
+   --  Inkling caches also bind activation arithmetic. The rest of the
+   --  established snapshot format and other architectures' identities stay
+   --  unchanged; a precision change requires rebuilding the token prefix.
+   function Cache_Identity (Source : Model'Class; Item : Session) return Interfaces.Unsigned_64 is
+      Result : Interfaces.Unsigned_64 := Fingerprint (Source);
+   begin
+      if Source.Settings.Kind = Inkling2_Loop then
+         for Rounded of Item.Arithmetic loop
+            Result := (Result xor Interfaces.Unsigned_64 (Boolean'Pos (Rounded))) * 16#0000_0100_0000_01B3#;
+         end loop;
+      end if;
+      return Result;
+   end Cache_Identity;
 
    --------------
    -- Snapshot --
@@ -8814,12 +10255,27 @@ package body Model_Runner.Llama is
    --  every step of an agent's task, 254,793 positions read and 7,763
    --  kept. Its windowed layers keep the whole context, as its others do;
    --  five of its eleven attention layers, under twice its cache.
+   --  One bounded injection batch and an eight-position draft block.
+   function DSpark_Work_Room (Settings : Configuration; Capacity : Natural) return Element_Count is
+      H : constant Element_Count := Element_Count (Settings.Embedding);
+      Q : constant Element_Count := Element_Count (Settings.Heads * Settings.Head_Size);
+      KV : constant Element_Count := Element_Count (Settings.KV_Heads * Settings.Head_Size);
+      F : constant Element_Count := Element_Count (Settings.Feed_Forward);
+      V : constant Element_Count := Element_Count (Settings.Vocabulary);
+      R : constant Element_Count := Element_Count (Settings.DSpark.Markov_Rank);
+   begin
+      return 8 * Element_Count (Settings.Head_Size) + 512 * H + 34 * H + 16 * Q + 16 * KV + 16 * F + 9 * V + 8 * R
+        + 8 * Element_Count'Min (4, Element_Count (Settings.Group_Size))
+          * (Element_Count (Capacity) + 8 + 64 * Element_Count (Settings.Head_Size));
+   end DSpark_Work_Room;
+
    function Layer_Cells
      (Settings : Configuration;
       Capacity : Natural;
       Layer    : Natural) return Natural
-   is (if Layer < Settings.Layers and then Linear (Settings, Layer) then 0
-       elsif Layer < Settings.Layers and then Settings.Window > 0
+   is (if Settings.Kind = DFlash then Capacity
+       elsif Layer < Settings.Layers and then Linear (Settings, Layer) then 0
+       elsif Layer < Runtime_Layers (Settings) and then Settings.Window > 0
          and then Slides (Settings, Layer)
          and then Linear_Ordinal (Settings, Settings.Layers) = 0
        then Natural'Min
@@ -8867,6 +10323,10 @@ package body Model_Runner.Llama is
       Cache    : Cache_Precision) return Boolean
    is
    begin
+      if Settings.Kind = DFlash and then Cache /= Exact then return False; end if;
+      if Settings.Kind = Inkling2_Loop and then Cache not in Exact | Halved | Transformed_Fourth then
+         return False;
+      end if;
       if Cache /= Transformed_Fourth then
          return True;
       elsif Settings.Layers = 0 then
@@ -8915,7 +10375,7 @@ package body Model_Runner.Llama is
       function Positions return Interfaces.Unsigned_64 is
          Total : Interfaces.Unsigned_64 := 0;
       begin
-         for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
+         for Layer in 0 .. Runtime_Layers (Settings) + Settings.Next_Layers - 1 loop
             Total := Total + Interfaces.Unsigned_64 (Cells_Of (Layer));
          end loop;
          return Total;
@@ -8956,6 +10416,16 @@ package body Model_Runner.Llama is
    begin
       Plan := (others => <>);
 
+      if Settings.Kind = Inkling2_Loop
+        and then (Cache not in Exact | Halved | Transformed_Fourth
+                  or else (if Cache = Transformed_Fourth then Values_Held (Cache, Values) /= Fourth
+                           else Values_Held (Cache, Values) not in Exact | Halved))
+      then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "inkling2_loop.cache_precision", E.Param_Identifier);
+         return;
+      end if;
+
       --  The host experiment rotates flat query and key rows in groups of
       --  thirty-two. Keep every head boundary on a group boundary until an
       --  arbitrary-width session layout is specified. Plan and Open share
@@ -8974,9 +10444,81 @@ package body Model_Runner.Llama is
          return;
       end if;
 
+      if Settings.Kind = DFlash and then
+        (Cache /= Exact or else Values_Held (Cache, Values) /= Exact)
+      then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "dflash.cache_precision", E.Param_Identifier);
+         return;
+      end if;
+
       Plan.KV_Cache_Bytes := A.Value (Room) + Linear_Bytes;
       Plan.Activation_Bytes :=
         Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 4;
+      if Settings.Kind = Inkling2_Loop then
+         --  Convolution history and the rollback copy are independent of
+         --  context length. Include the bounded adapter workspace as well.
+         Plan.Activation_Bytes := Plan.Activation_Bytes
+           --  Read-only per-visit expert descriptors coexist with the workers.
+           + Interfaces.Unsigned_64 (Settings.Experts)
+             * Interfaces.Unsigned_64 (Expert'Size / System.Storage_Unit)
+           --  Each logical visit owns a bounded, exact-key CPU scheduling plan.
+           + Interfaces.Unsigned_64 (Settings.Inkling.Runtime_Layers)
+             * (Interfaces.Unsigned_64 (Inkling_Route_Plan'Size / System.Storage_Unit)
+                + 4 * Interfaces.Unsigned_64 (96 * Settings.Experts_Used + 7 * Settings.Experts + 80))
+           --  Seven extra query rows for eight-query compressed attention.
+           + Interfaces.Unsigned_64 (Settings.Heads) * Interfaces.Unsigned_64 (Capacity) * 28
+           + Interfaces.Unsigned_64 (Inkling_Conv_Room (Settings)) * 8
+           + 128 * 1024 * 1024 --  Bounded physical quantization scale tables.
+           + Interfaces.Unsigned_64 (Settings.Layers)
+             * Interfaces.Unsigned_64 (Inkling_Weight_Role'Pos (Inkling_Weight_Role'Last) + 1) * 16
+           + Interfaces.Unsigned_64 (Settings.Layers) * Interfaces.Unsigned_64 (Settings.Experts) * 16
+           --  Four additional call-boundary checkpoints and retained worker scratch.
+           + Interfaces.Unsigned_64 (Inkling_Conv_Room (Settings)
+               + 2 * Element_Count (Settings.Embedding) + Element_Count (Settings.Vocabulary)) * 16
+           --  Two shared layer buffers coexist with worker/head packing.
+           + 3 * Interfaces.Unsigned_64 (Max_Batch) * Interfaces.Unsigned_64 (Settings.Embedding)
+           + 2 * Interfaces.Unsigned_64 (Workers_CPU.Packed_Rows'Size / System.Storage_Unit)
+           --  Compact verification retains eight normalized rows and bounded output tiles.
+           + 8 * Interfaces.Unsigned_64 (Settings.Embedding) * 4
+           + Interfaces.Unsigned_64 (Workers_CPU.Max_Workers + 1) * 8 * 128 * 4
+           --  Integer chunks hold up to 32 members. Reserve the four
+           --  F32 rooms and coexisting packed input/down workspaces.
+           + Interfaces.Unsigned_64 (Workers_CPU.Max_Workers + 1) * 2
+             * Interfaces.Unsigned_64 (Workers_CPU.Packed_Rows'Size / System.Storage_Unit)
+           + Interfaces.Unsigned_64 (Workers_CPU.Max_Workers + 1) * 32 * 12
+             * Interfaces.Unsigned_64 (Settings.Embedding + Natural'Max (Settings.Expert_Feed, Settings.Shared_Feed))
+           + Interfaces.Unsigned_64 (2 * Settings.Embedding + Settings.Vocabulary) * 4
+           + Interfaces.Unsigned_64 (Settings.Embedding) * 4 * 48
+           + Interfaces.Unsigned_64 (Settings.Heads)
+             * Interfaces.Unsigned_64 (Settings.Head_Size + Settings.Inkling.Relative_Width) * 4 * 8
+           + Interfaces.Unsigned_64 (Settings.Inkling.Gate_Rank) * 4 * 8
+           --  Lazy physical-layer tables; independent of logical visits.
+           + Interfaces.Unsigned_64 (Settings.Layers) * 4 *
+             (4 * Interfaces.Unsigned_64 (Settings.Embedding)
+              + Interfaces.Unsigned_64 (Settings.Heads)
+                * Interfaces.Unsigned_64 (Settings.Head_Size + Settings.Inkling.Relative_Width)
+              + Interfaces.Unsigned_64 (Settings.Inkling.Convolution_Length)
+                * Interfaces.Unsigned_64 (2 * Settings.KV_Heads * Settings.Head_Size + 2 * Settings.Embedding)
+              + Interfaces.Unsigned_64 (Natural'Min
+                  (Capacity, Natural'Max (Settings.Window, Settings.Inkling.Relative_Extent)))
+                * Interfaces.Unsigned_64 (Settings.Inkling.Relative_Width))
+           + Interfaces.Unsigned_64 (Settings.Layers)
+             * Interfaces.Unsigned_64 (Inkling_Weight_Role'Pos (Inkling_Weight_Role'Last) + 1) * 16
+           + Interfaces.Unsigned_64 (Settings.Layers) * Interfaces.Unsigned_64 (Settings.Experts) * 16;
+      end if;
+      if Settings.Kind = DFlash then
+         Plan.Activation_Bytes := Plan.Activation_Bytes
+           + 24 * Interfaces.Unsigned_64
+               (Natural'Max (Settings.Heads * Settings.Head_Size,
+                             Natural'Max (Settings.Embedding, Settings.Feed_Forward)))
+           + Interfaces.Unsigned_64 (Workers_CPU.Packed_Rows'Size / System.Storage_Unit)
+           + 8 * 8 * 128 * 4 --  Bounded projection/residual worker tiles.
+           + Interfaces.Unsigned_64 (Workers_CPU.Max_Workers + 1) * 512 * 4 --  Greedy correction tiles.
+           + 4 * (Interfaces.Unsigned_64 (DSpark_Work_Room (Settings, Capacity))
+                  + Interfaces.Unsigned_64 (Settings.Embedding)
+                    * (2048 + Interfaces.Unsigned_64 (Capacity)));
+      end if;
       Plan.Batch_Bytes :=
         Interfaces.Unsigned_64 (Feed_Width (Settings)) * 4 * 2
         + Interfaces.Unsigned_64 (Settings.Experts) * 4
@@ -8986,6 +10528,9 @@ package body Model_Runner.Llama is
       Plan.Logits_Bytes := Interfaces.Unsigned_64 (Settings.Vocabulary) * 4;
       Plan.Sampling_Bytes := Plan.Logits_Bytes;
       Plan.Token_History_Bytes := Interfaces.Unsigned_64 (Capacity) * 4;
+      if Settings.Kind = Inkling2_Loop then
+         Plan.Token_History_Bytes := Plan.Token_History_Bytes * 2;
+      end if;
       Plan.Decoder_Bytes := 64;
       Plan.Stop_Bytes := 4096;
       Plan.Rendering_Bytes := 0;
@@ -9019,7 +10564,7 @@ package body Model_Runner.Llama is
       --  values are packed into it (Packs_Values).
       Elements_Held : U64 := 0;
    begin
-      for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
+      for Layer in 0 .. Runtime_Layers (Settings) + Settings.Next_Layers - 1 loop
          declare
             Here : constant U64 := U64 (Layer_Cells (Settings, Capacity, Layer));
             Cells : constant U64 :=
@@ -9201,6 +10746,9 @@ package body Model_Runner.Llama is
       --  The widest layer's positions.
       Widest  : U64 := 0;
    begin
+      if Settings.Kind = Inkling2_Loop then
+         return 0;
+      end if;
       for Layer in 0 .. Settings.Layers + Settings.Next_Layers - 1 loop
          Widest :=
            U64'Max (Widest, U64 (Layer_Cells (Settings, Capacity, Layer)));
@@ -9329,6 +10877,8 @@ package body Model_Runner.Llama is
 
    procedure Give_Back_Device_Cache (Item : in out Session) is
    begin
+      Item.Inkling_Device_Base := Element_Count'Last;
+      if Item.Inkling_Device_Marks /= null then Item.Inkling_Device_Marks.all := [others => Element_Count'Last]; end if;
       --  The pages of the device's cache this session held, given back --
       --  every slot it owns, wherever they are -- and the buffer let go
       --  once nobody holds a page, as a block does. Not cleared: a page
@@ -9407,6 +10957,7 @@ package body Model_Runner.Llama is
       Item.Expert_Cache_Used := 0;
       Item.Expert_Cache_Admissions := 0;
       Item.Expert_Cache_Device_Runs := 0;
+      Item.Inkling_Batched_Reductions := 0;
 
       --  What its replies learned of drafting is this model's, and the next
       --  session opened in its place may be another's.
@@ -9450,6 +11001,9 @@ package body Model_Runner.Llama is
       T.Free (Item.Value_Scales);
       T.Free (Item.Half_Keys);
       T.Free (Item.Half_Values);
+      T.Free (Item.Draft_Features);
+      T.Free (Item.Draft_Work);
+      T.Free (Item.Draft_Context);
       T.Free (Item.Activation);
       T.Free (Item.Adapter_Rank);
       T.Free (Item.Adapter_Output);
@@ -9524,6 +11078,44 @@ package body Model_Runner.Llama is
       T.Free (Item.Shared_Given);
       Release_State_Room (Item'Unchecked_Access);
       T.Free (Item.Conv_State);
+      Workers_CPU.Unpack (Item.Mixture_Super); Workers_CPU.Unpack (Item.Mixture_Plain);
+      Workers_CPU.Unpack (Item.Draft_Residual_Packed); Item.Draft_Residual_Runs := 0;
+      Item.Inkling_Plan_Slot := 0;
+      T.Free (Item.Verify_Normals); Item.Verify_Count := 0; Item.Compact_Verify := False;
+      for Packed of Item.Expert_Packed loop
+         Workers_CPU.Unpack (Packed);
+      end loop;
+      for Room of Item.Expert_Work loop
+         T.Free (Room);
+      end loop;
+      T.Free (Item.Inkling_Conv_Backup);
+      T.Free (Item.Inkling_Workspace);
+      T.Free (Item.Inkling_Arena);
+      T.Free (Item.Inkling_Check_Rows);
+      for Buffer of Item.Inkling_Rewinds loop
+         T.Free (Buffer);
+      end loop;
+      for Buffer of Item.Inkling_Rewind_Convs loop T.Free (Buffer); end loop;
+      Item.Inkling_Check_Valid := False;
+      Item.Inkling_Rewind_At := [others => 0];
+      Item.Inkling_Prefix_Held := False;
+      if Item.Inkling_Scale_Data /= null then
+         for Values of Item.Inkling_Scale_Data.all loop T.Free (Values); end loop;
+         Free_Inkling_Decoded (Item.Inkling_Scale_Data);
+      end if;
+      Item.Inkling_Scale_Bytes := 0;
+      Free_Scale_Totals (Item.Inkling_Layer_Scale_Bytes);
+      Free_Scale_Totals (Item.Inkling_Scale_Priorities);
+      Free_Cells (Item.Inkling_Device_Marks);
+      Item.Inkling_Device_Runs := 0;
+      Item.Inkling_Device_Extra := 0; Item.Inkling_Device_Base := Element_Count'Last;
+      T.Free (Item.Inkling_Head_Rows);
+      if Item.Inkling_Decoded /= null then
+         for Values of Item.Inkling_Decoded.all loop
+            T.Free (Values);
+         end loop;
+         Free_Inkling_Decoded (Item.Inkling_Decoded);
+      end if;
       T.Free (Item.Delta_State);
       T.Free (Item.Check_State);
       T.Free (Item.Check_Conv);
@@ -9546,7 +11138,18 @@ package body Model_Runner.Llama is
       declare
          procedure Release is
            new Ada.Unchecked_Deallocation (Choice_List, Choice_Access);
+         procedure Release_Plans is new Ada.Unchecked_Deallocation
+           (Inkling_Route_Plans, Inkling_Route_Plans_Access);
       begin
+         if Item.Inkling_Plans /= null then
+            for Plan of Item.Inkling_Plans.all loop
+               Release (Plan.Choices); Release (Plan.Listed); Release (Plan.Starts); Release (Plan.Counts);
+               Release (Plan.Active); Release (Plan.Chunk_Expert); Release (Plan.Chunk_Start);
+               Release (Plan.Chunk_Count); Release (Plan.Ordering);
+            end loop;
+            Release_Plans (Item.Inkling_Plans);
+         end if;
+         Item.Inkling_Plan_Hits := 0; Item.Inkling_Plan_Misses := 0;
          if Item.Pick_Which /= null then
             Release (Item.Pick_Which);
          end if;
@@ -9831,6 +11434,8 @@ package body Model_Runner.Llama is
    -- Rewind --
    ------------
 
+   procedure Inkling_Replay (Item : in out Session; Position : Natural; Status : out E.Error_Info);
+
    procedure Rewind
      (Item     : in out Session;
       Position : Natural;
@@ -9851,6 +11456,13 @@ package body Model_Runner.Llama is
          Status := E.Make (E.Tensor_Shape_Mismatch);
          E.Add_Integer (Status, "input", Long_Long_Integer (Position));
          E.Add_Integer (Status, "expected", Long_Long_Integer (Item.Committed));
+         return;
+      end if;
+
+      if Item.Owner /= null and then Item.Owner.Settings.Kind = Inkling2_Loop
+        and then Position < Item.Committed
+      then
+         Inkling_Replay (Item, Position, Status);
          return;
       end if;
 
@@ -10097,6 +11709,18 @@ package body Model_Runner.Llama is
 
    procedure Reset (Item : in out Session) is
    begin
+      Item.Verify_Count := 0; Item.Compact_Verify := False;
+      if Item.Draft_Features /= null then Item.Draft_Features.all := [others => 0.0]; end if;
+      if Item.Draft_Work /= null then Item.Draft_Work.all := [others => 0.0]; end if;
+      if Item.Draft_Context /= null then Item.Draft_Context.all := [others => 0.0]; end if;
+      Item.Inkling_Last_Row_Valid := False;
+      Item.Inkling_Partial_Row := False;
+      Item.Inkling_Head_Selection := null;
+      Item.Inkling_Device_Runs := 0;
+      if Item.Inkling_Device_Marks /= null then Item.Inkling_Device_Marks.all := [others => Element_Count'Last]; end if;
+      Item.Inkling_Check_Valid := False;
+      Item.Inkling_Rewind_At := [others => 0];
+      Item.Inkling_Prefix_Held := False;
       Item.Skipped_Count := 0;
       Item.Next_Device_Upto := 0;
 
@@ -12148,6 +13772,14 @@ package body Model_Runner.Llama is
    --  failure. Row is the session's own or the caller's: the head writes
    --  straight into the caller's where it can, a copy of the vocabulary
    --  fewer on that stretch.
+   procedure Inkling_Evaluate
+     (Item : in out Session; Source : Model'Class; Row : T.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference; Status : out E.Error_Info;
+      Batch_Count : Element_Count := 1; Embeddings : T.Real_Array_Access := null;
+      States : T.Real_Array_Access := null; Every : T.Real_Array_Access := null;
+      Normalized : Boolean := True; Transaction : Boolean := True)
+   is separate;
+
    procedure Evaluate_Token_Body
      (Item   : in out Session;
       Source : Model'Class;
@@ -12234,6 +13866,111 @@ package body Model_Runner.Llama is
          raise;
    end Evaluate_Token;
 
+   procedure Inkling_Replay (Item : in out Session; Position : Natural; Status : out E.Error_Info) is
+      Kept : Token_History_Access := null;
+      Base : Natural := (if Item.Inkling_Check_Valid then Item.Inkling_Check_At else 0);
+      Selected : Integer := -1;
+      Reachable : Boolean;
+   begin
+      if Base > Position then Base := 0; end if;
+      for Index in Item.Inkling_Rewind_At'Range loop
+         if Item.Inkling_Rewind_At (Index) > Position then
+            Item.Inkling_Rewind_At (Index) := 0;
+            if Index = 0 then Item.Inkling_Prefix_Held := False; end if;
+         elsif Item.Inkling_Rewind_At (Index) > Base then
+            Base := Item.Inkling_Rewind_At (Index);
+            Selected := Index;
+         end if;
+      end loop;
+      Reachable := Base > 0;
+      if Position = 0 then
+         Reset (Item);
+         Status := E.Success;
+         return;
+      end if;
+      --  Restore the most recent call boundary while its KV history is
+      --  still reachable. Otherwise reconstruct through the ordinary path.
+      --  One bounded convolution checkpoint serves every logical visit.
+      if Reachable and then Item.Origin /= null then
+         for Origin of Item.Origin.all loop
+            if Origin > 0 and then Origin + Element_Count (Item.Owner.Settings.Window) > Element_Count (Base) then
+               Reachable := False;
+            end if;
+         end loop;
+      end if;
+      if Reachable then
+         declare
+            Width : constant Element_Count := Element_Count (Item.Owner.Settings.Embedding);
+         begin
+            if Selected >= 0 then
+               declare
+                  Buffer : Real_Array renames Item.Inkling_Rewinds (Selected).all;
+               begin
+                  Item.Conv_State.all := Item.Inkling_Rewind_Convs (Selected).all;
+                  Item.Activation.all := Buffer (0 .. Width - 1);
+                  Item.Normalized.all := Buffer (Width .. 2 * Width - 1);
+                  Item.Logit_Row.all := Buffer (2 * Width .. Buffer'Last);
+               end;
+            else
+            Item.Conv_State.all := Item.Inkling_Conv_Backup.all;
+            Item.Activation.all := Item.Inkling_Check_Rows.all (0 .. Width - 1);
+            Item.Normalized.all := Item.Inkling_Check_Rows.all (Width .. 2 * Width - 1);
+            Item.Logit_Row.all := Item.Inkling_Check_Rows.all
+              (2 * Width .. Item.Inkling_Check_Rows.all'Last);
+            end if;
+            Item.Committed := Base;
+            Item.Inkling_Last_Row_Valid := True;
+            Item.Inkling_Partial_Row := False;
+            Item.Inkling_Workspace.all (0 .. Width - 1) := Item.Activation.all;
+         end;
+         if Position = Base then
+            if Item.Notes /= null then
+               for Index in Position .. Item.Notes.all'Last loop
+                  Item.Notes.all (Index) := 0;
+               end loop;
+            end if;
+            Status := E.Success;
+            return;
+         end if;
+      else
+         Base := 0;
+      end if;
+      Kept := new Token_History'(Item.History.all (Base .. Position - 1));
+      if not Reachable then
+         Reset (Item);
+      end if;
+      declare
+         First : Natural := Kept.all'First;
+         Limit : constant Positive := Batch_Limit (Item.Owner.all);
+      begin
+         while First <= Kept.all'Last loop
+            declare
+               Last : constant Natural := Natural'Min (First + Limit - 1, Kept.all'Last);
+               Tokens : Model_Runner.Tokenizer.Token_Array (1 .. Last - First + 1);
+            begin
+               for Index in Tokens'Range loop
+                  Tokens (Index) := Kept.all (First + Index - 1);
+               end loop;
+               Evaluate_Batch (Item, Item.Owner.all, Tokens, Item.Logit_Row.all, Status => Status);
+               exit when E.Is_Error (Status);
+               First := Last + 1;
+            end;
+         end loop;
+      end;
+      Deallocate_History (Kept);
+      if E.Is_Error (Status) then
+         Item.Current := Failed;
+      end if;
+   exception
+      when Storage_Error =>
+         Deallocate_History (Kept);
+         Status := E.Make (E.Memory_Allocation_Failed);
+      when others =>
+         Deallocate_History (Kept);
+         Item.Current := Failed;
+         Status := E.Make (E.Internal_Invariant_Violated);
+   end Inkling_Replay;
+
    --------------
    -- Evaluate --
    --------------
@@ -12270,6 +14007,236 @@ package body Model_Runner.Llama is
          Logits.all := [others => 0.0];
       end if;
    end Evaluate;
+
+   function Loop_Device_Attention_Runs (Item : Session) return Natural is (Item.Inkling_Device_Runs);
+
+   function Selected_Head_Available (Item : Session; Source : Model'Class) return Boolean is
+     (Item.Current not in Closed | Failed and then Item.Owner /= null
+      and then Item.Owner.Settings.Kind = Inkling2_Loop and then Source.Settings.Kind = Inkling2_Loop
+      and then Source.Output.Base = Item.Owner.Output.Base and then Source.Output.Offset = Item.Owner.Output.Offset
+      and then Model_Runner.Backend."=" (Source.Able.Kind, Model_Runner.Backend.Backend_CPU)
+      and then (for some Role of Item.Arithmetic => Role) and then not Source.Output.Interleaved
+      and then Source.Runtime_Pairs = null and then Item.Seen = null);
+
+   procedure Evaluate_Selected
+     (Item : in out Session; Source : Model'Class; Token : Token_Id;
+      Selection : Model_Runner.Shares.Member_Rows; Logits : T.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null; Status : out E.Error_Info) is
+   begin
+      Status := E.Make (E.Tensor_Invalid_Shape);
+      if not Selected_Head_Available (Item, Source) or else Selection'Length not in 1 .. 256
+        or else Logits = null or else Logits.all'Length /= Source.Settings.Vocabulary
+      then return; end if;
+      for I in Selection'Range loop
+         if Selection (I) >= Source.Settings.Vocabulary
+           or else (I > Selection'First and then Selection (I) <= Selection (I - 1))
+         then return; end if;
+      end loop;
+      Item.Inkling_Head_Selection := Selection'Unrestricted_Access;
+      Evaluate_Token (Item, Source, Token, Logits, Logits.all'Length, Cancel, Status);
+      Item.Inkling_Head_Selection := null;
+   exception
+      when others => Item.Inkling_Head_Selection := null; raise;
+   end Evaluate_Selected;
+
+   procedure Evaluate_Greedy
+     (Item : in out Session; Source : Model'Class; Token : Token_Id;
+      Logits : T.Real_Array_Access; Winner : out Token_Id;
+      Forbidden : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null; Status : out E.Error_Info)
+   is
+      Best : Real := Real'First;
+   begin
+      Winner := Model_Runner.Tokenizer.No_Token;
+      Status := E.Make (E.Tensor_Invalid_Shape);
+      if not Selected_Head_Available (Item, Source) or else Logits = null
+        or else Logits.all'Length /= Source.Settings.Vocabulary
+        or else Forbidden >= Token_Id (Source.Settings.Vocabulary)
+        or else (Source.Settings.Vocabulary = 1 and then Forbidden = 0)
+      then return; end if;
+      Item.Inkling_Greedy_Head := True;
+      Item.Inkling_Greedy_Forbid := Forbidden;
+      Item.Inkling_Greedy_Result := Model_Runner.Tokenizer.No_Token;
+      Evaluate_Token (Item, Source, Token, Logits, Logits.all'Length, Cancel, Status);
+      Item.Inkling_Greedy_Head := False;
+      if E.Is_Error (Status) then return; end if;
+      Winner := Item.Inkling_Greedy_Result;
+      if Winner = Model_Runner.Tokenizer.No_Token then
+         --  Unsupported output formats retain the ordinary projection.
+         for I in Logits.all'Range loop
+            if Token_Id (I - Logits.all'First) /= Forbidden
+              and then (Winner = Model_Runner.Tokenizer.No_Token or else Logits (I) > Best)
+            then Best := Logits (I); Winner := Token_Id (I - Logits.all'First); end if;
+         end loop;
+      end if;
+   exception
+      when others => Item.Inkling_Greedy_Head := False; raise;
+   end Evaluate_Greedy;
+
+   procedure Evaluate_Greedy_Batch
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array; Logits : out Real_Array;
+      Every : T.Real_Array_Access; Winners : in out Model_Runner.Tokenizer.Token_Array;
+      Forbidden : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null; Status : out E.Error_Info)
+   is
+      Vocab : constant Element_Count := Element_Count (Source.Settings.Vocabulary);
+   begin
+      Winners := [others => Model_Runner.Tokenizer.No_Token];
+      Status := E.Make (E.Tensor_Invalid_Shape);
+      if not Selected_Head_Available (Item, Source) or else Every = null or else Tokens'Length = 0
+        or else Winners'Length /= Tokens'Length or else Logits'Length /= Vocab
+        or else Element_Count (Tokens'Length) > Element_Count'Last / Element_Count'Max (1, Vocab)
+        or else Every.all'Length < Element_Count (Tokens'Length) * Vocab
+        or else Forbidden >= Token_Id (Vocab) or else (Vocab = 1 and then Forbidden = 0)
+      then return; end if;
+      Item.Inkling_Greedy_Head := True; Item.Inkling_Greedy_Forbid := Forbidden;
+      Item.Inkling_Greedy_Rows := Winners'Unrestricted_Access;
+      Evaluate_Batch (Item, Source, Tokens, Logits, Every => Every, Cancel => Cancel, Status => Status);
+      Item.Inkling_Greedy_Head := False; Item.Inkling_Greedy_Rows := null;
+      if E.Is_Error (Status) then Winners := [others => Model_Runner.Tokenizer.No_Token]; return; end if;
+      for Row in Winners'Range loop
+         if Winners (Row) = Model_Runner.Tokenizer.No_Token then
+            declare
+               Base : constant Element_Count := Every.all'First + Element_Count (Row - Winners'First) * Vocab;
+               Best : Real := Real'First;
+            begin
+               for I in Element_Count range 0 .. Vocab - 1 loop
+                  if Token_Id (I) /= Forbidden
+                    and then (Winners (Row) = Model_Runner.Tokenizer.No_Token or else Every (Base + I) > Best)
+                  then Winners (Row) := Token_Id (I); Best := Every (Base + I); end if;
+               end loop;
+            end;
+         end if;
+      end loop;
+   exception
+      when others => Item.Inkling_Greedy_Head := False; Item.Inkling_Greedy_Rows := null; raise;
+   end Evaluate_Greedy_Batch;
+
+   procedure Evaluate_Features
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array; Layers : Feature_Layers;
+      Features : T.Real_Array_Access; Logits : out Real_Array;
+      Every : T.Real_Array_Access := null;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out E.Error_Info)
+   is
+      Width : constant Element_Count := Element_Count (Source.Settings.Embedding);
+      Needed : Element_Count;
+      Last_Layer : Natural;
+      procedure Release_Capture is
+      begin
+         Item.Feature_Request := null; Item.Feature_Rows := null; Item.Feature_Start := 0;
+      end Release_Capture;
+   begin
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      if Source.Settings.Kind /= Inkling2_Loop then
+         E.Add_Text (Status, "feature", "logical_target_features"); return;
+      end if;
+      Status := E.Make (E.Lifecycle_Invalid_State);
+      if not Source.Ready or else Item.Current in Closed | Failed or else Item.Feature_Request /= null
+      then return; end if;
+      Status := E.Make (E.Tensor_Shape_Mismatch);
+      if Features = null or else Layers'Length not in 1 .. 16 or else Tokens'Length = 0 or else Width = 0
+        or else Tokens'Length > Batch_Limit (Source)
+        or else Width > Element_Count'Last / Element_Count (Layers'Length) / Element_Count (Tokens'Length)
+      then return; end if;
+      Needed := Width * Element_Count (Layers'Length) * Element_Count (Tokens'Length);
+      if Features.all'Length < Needed or else Features = Every
+        or else (Logits'Length > 0 and then Features (Features.all'First)'Address = Logits (Logits'First)'Address)
+      then return; end if;
+      Last_Layer := Source.Settings.Layers + (Source.Settings.Inkling.Iterations - 1)
+        * (Source.Settings.Inkling.End_Layer - Source.Settings.Inkling.First_Layer);
+      for Index in Layers'Range loop
+         if Layers (Index) > Last_Layer or else (Index > Layers'First and then Layers (Index - 1) >= Layers (Index))
+         then return; end if;
+      end loop;
+      Item.Feature_Request := Layers'Unrestricted_Access;
+      Item.Feature_Rows := Features; Item.Feature_Start := Item.Committed;
+      Evaluate_Batch (Item, Source, Tokens, Logits, Every => Every, Cancel => Cancel, Status => Status);
+      Release_Capture;
+      if E.Is_Error (Status) then
+         Features.all (Features.all'First .. Features.all'First + Needed - 1) := [others => 0.0];
+      end if;
+   exception
+      when others =>
+         Release_Capture;
+         if Features /= null then Features.all := [others => 0.0]; end if;
+         raise;
+   end Evaluate_Features;
+
+   procedure Evaluate_Feature_Winners
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array; Layers : Feature_Layers;
+      Features : T.Real_Array_Access; Logits : out Real_Array;
+      Winners : in out Model_Runner.Tokenizer.Token_Array;
+      Forbidden : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null; Status : out E.Error_Info)
+   is
+      procedure Release_Request is
+      begin
+         Item.Inkling_Greedy_Head := False; Item.Inkling_Greedy_Rows := null; Item.Compact_Verify := False;
+      end Release_Request;
+   begin
+      Winners := [others => Model_Runner.Tokenizer.No_Token];
+      Status := E.Make (E.Tensor_Invalid_Shape);
+      if not Selected_Head_Available (Item, Source) or else Tokens'Length not in 1 .. 8
+        or else Winners'Length /= Tokens'Length or else Logits'Length /= Source.Settings.Vocabulary
+        or else Forbidden >= Token_Id (Source.Settings.Vocabulary)
+        or else (Source.Settings.Vocabulary = 1 and then Forbidden = 0)
+      then return; end if;
+      Item.Verify_Count := 0;
+      Item.Inkling_Greedy_Head := True; Item.Inkling_Greedy_Forbid := Forbidden;
+      Item.Inkling_Greedy_Rows := Winners'Unrestricted_Access; Item.Compact_Verify := True;
+      Evaluate_Features (Item, Source, Tokens, Layers, Features, Logits, Cancel => Cancel, Status => Status);
+      Release_Request;
+      if E.Is_Error (Status) then
+         Item.Verify_Count := 0; Winners := [others => Model_Runner.Tokenizer.No_Token];
+      else
+         Item.Verify_Count := Tokens'Length;
+      end if;
+   exception
+      when others => Release_Request; Item.Verify_Count := 0; raise;
+   end Evaluate_Feature_Winners;
+
+   procedure Verification_Logits
+     (Item : in out Session; Source : Model'Class; Index : Natural;
+      Logits : T.Real_Array_Access; Status : out E.Error_Info)
+   is
+      H : constant Element_Count := Element_Count (Source.Settings.Embedding);
+   begin
+      Status := E.Make (E.Tensor_Invalid_Shape);
+      if not Selected_Head_Available (Item, Source) or else Index >= Item.Verify_Count
+        or else Item.Verify_Normals = null or else Logits = null
+        or else Logits.all'Length /= Source.Settings.Vocabulary
+      then return; end if;
+      declare
+         Input : Real_Array renames Item.Verify_Normals.all
+           (Element_Count (Index) * H .. (Element_Count (Index) + 1) * H - 1);
+      begin
+         Product (Item, Source.Output, Input'Unrestricted_Access, Logits, Status);
+         if E.Is_Ok (Status) then Finish_Logits (Source, Logits.all, Reference_Arithmetic => True); end if;
+      end;
+   end Verification_Logits;
+
+   procedure Complete_Logits
+     (Item : in out Session; Source : Model'Class; Logits : T.Real_Array_Access; Status : out E.Error_Info) is
+   begin
+      Status := E.Success;
+      if not Item.Inkling_Partial_Row then return; end if;
+      if not Selected_Head_Available (Item, Source) or else Item.Committed = 0
+        or else Logits = null or else Logits.all'Length /= Source.Settings.Vocabulary
+      then Status := E.Make (E.Tensor_Invalid_Shape); return; end if;
+      Product (Item, Source.Output, Item.Normalized, Item.Logit_Row, Status);
+      if E.Is_Error (Status) then return; end if;
+      Finish_Logits (Source, Item.Logit_Row.all, Reference_Arithmetic => True);
+      if not K.All_Finite (Item.Logit_Row.all) then
+         Status := E.Make (E.Tensor_Non_Finite_Value); return;
+      end if;
+      Logits.all := Item.Logit_Row.all;
+      Item.Inkling_Partial_Row := False;
+      Item.Inkling_Last_Row_Valid := True;
+   end Complete_Logits;
 
    --  The fewest positions a batch on the device holds the part's clock
    --  up for: more than a drafted round checks.
@@ -12436,6 +14403,33 @@ package body Model_Runner.Llama is
 
    procedure Mark_Checkpoint (Item : in out Session) is
    begin
+      if Item.Current not in Closed | Failed
+        and then Item.Owner.Settings.Kind = Inkling2_Loop
+        and then Item.Committed > 0 and then Item.Inkling_Last_Row_Valid
+      then
+         declare
+            Conv : constant Element_Count := Item.Conv_State.all'Length;
+            Width : constant Element_Count := Item.Activation.all'Length;
+            Length : constant Element_Count := 2 * Width + Item.Logit_Row.all'Length;
+         begin
+            if Item.Inkling_Rewind_Convs (0) = null then
+               T.Allocate (Conv, Item.Inkling_Rewind_Convs (0));
+            end if;
+            if Item.Inkling_Rewinds (0) = null then
+               T.Allocate (Length, Item.Inkling_Rewinds (0));
+            end if;
+            if Item.Inkling_Rewinds (0) /= null and then Item.Inkling_Rewind_Convs (0) /= null then
+               Item.Inkling_Rewind_Convs (0).all := Item.Conv_State.all;
+               Item.Inkling_Rewinds (0).all (0 .. Width - 1) := Item.Activation.all;
+               Item.Inkling_Rewinds (0).all (Width .. 2 * Width - 1) := Item.Normalized.all;
+               Item.Inkling_Rewinds (0).all (2 * Width .. Length - 1) := Item.Logit_Row.all;
+               Item.Inkling_Rewind_At (0) := Item.Committed;
+               Item.Inkling_Prefix_Held := True;
+               if Item.Inkling_Rewind_Next = 0 then Item.Inkling_Rewind_Next := 1; end if;
+            end if;
+         end;
+         return;
+      end if;
       if Item.Current in Closed | Failed
         or else Item.Delta_State = null or else Item.Conv_State = null
         or else Item.Committed = 0

@@ -413,6 +413,21 @@ package Model_Runner.Platform.Device.Products is
    --  @return True when it is ready to compute.
    function Is_Ready (Item : Engine) return Boolean;
 
+   --  Whether accurate native controller arithmetic has a device pipeline.
+   --  @param Item Engine to inspect.
+   --  @return True when the existing double-precision device path is usable.
+   function Native_Controls (Item : Engine) return Boolean;
+
+   --  Native products reusing the preceding compatible packed activation.
+   --  @param Item Existing product engine.
+   --  @return Reuses recorded since the engine opened.
+   function Reference_Packing_Reuses (Item : Engine) return Natural;
+
+   --  Whether reference SiTU and ordered weighted merges have a native pipeline.
+   --  @param Item Engine to inspect.
+   --  @return True when reference integer products, packing and activation can chain.
+   function Takes_Reference_SiTU (Item : Engine) return Boolean;
+
    --  Select one of the launch policies whose pipelines and buffer geometry
    --  this build already carries. Unsupported values are refused as a
    --  whole, leaving the previous policy in place.
@@ -649,6 +664,18 @@ package Model_Runner.Platform.Device.Products is
    --  @return Rounds_None where the device has no integer walks.
    function Rounds_Walks (Item : Engine) return Walk_Rounding;
 
+   --  Whether the reference integer row pipeline is available on this engine.
+   --  @param Item Open native engine.
+   --  @param Device_Packing Require native reference activation packing on the device too.
+   --  @return True when integer-dot reference products can be dispatched.
+   function Takes_Reference_Integers
+     (Item : Engine; Device_Packing : Boolean := False) return Boolean;
+
+   --  Native reference IQ3_S/IQ3_XXS/IQ4_NL/Q2_0 products, with wide grid folds.
+   --  @param Item Open native engine.
+   --  @return True only after the optional GSQ pipeline was created successfully.
+   function Takes_Reference_GSQ (Item : Engine) return Boolean;
+
    --  Whether a token's attention reads the half-precision copy.
    --
    --  @param Item Engine to ask.
@@ -841,6 +868,7 @@ package Model_Runner.Platform.Device.Products is
    --  @param Exact True keeps the product off the tile kernel: its
    --    activations are read in binary32 by the row kernel, at the row
    --    kernel's cost.
+   --  @param Reference_Integer Use native reference activation packing and quantized integer lanes.
    procedure Add_Product
      (Steps   : in out Sequence;
       Base    : System.Address;
@@ -853,7 +881,8 @@ package Model_Runner.Platform.Device.Products is
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
       At_Vector : Natural := 0;
-      Exact   : Boolean := False);
+      Exact   : Boolean := False;
+      Reference_Integer : Boolean := False);
 
    --  Name a 3x3's nine taps as one product of the activation.
    --
@@ -1966,6 +1995,7 @@ package Model_Runner.Platform.Device.Products is
    --  @param Exact True keeps the product off the tile kernel, as
    --    Add_Product's does: its activations read in binary32, for an
    --    activation no normalization holds within half precision's range.
+   --  @param Reference_Integer Preserve reference packing and native integer lane order when chained.
    procedure Add_Chained_Product
      (Steps     : in out Sequence;
       Base      : System.Address;
@@ -1982,7 +2012,8 @@ package Model_Runner.Platform.Device.Products is
       Region_Rows : Natural := 0;
       Region_At   : Natural := 0;
       Streamed    : Boolean := False;
-      Exact       : Boolean := False);
+      Exact       : Boolean := False;
+      Reference_Integer : Boolean := False);
 
    --  Name a step that combines the two results before it.
    --
@@ -2028,6 +2059,10 @@ package Model_Runner.Platform.Device.Products is
    --    before this one -- the one before, for a unit alone.
    --  @param Other_Step The second arm, named, or zero for the step
    --    before this one. Both named or neither.
+   --  Unit14 is reference SiTU with positive gate/up softcaps in Alpha/Limit.
+   --  Unit15 is an ordered weighted merge: Other + Alpha*First; positive Limit starts from zero.
+   --  @param Payload Caller activation offset of per-token shares for reference unit19.
+   --  @param Payload_Elements Share count, equal to execution token count for unit19.
    procedure Add_Combination
      (Steps : in out Sequence;
       Unit  : Natural;
@@ -2036,7 +2071,8 @@ package Model_Runner.Platform.Device.Products is
       Alpha : Model_Runner.Numerics.Real := 0.0;
       Limit : Model_Runner.Numerics.Real := 0.0;
       From_Step  : Natural := 0;
-      Other_Step : Natural := 0);
+      Other_Step : Natural := 0;
+      Payload : Natural := 0; Payload_Elements : Natural := 0);
 
    --  Name a residual join for a sequence to perform.
    --
@@ -2063,6 +2099,17 @@ package Model_Runner.Platform.Device.Products is
    --    two. Only a half-precision product of one position on the wave
    --    kernel adds both; any other is refused when the sequence runs, so
    --    a caller asks it only of such a product.
+   --  @param Unit Two adds the arms. Eleven multiplies the caller's arm
+   --    by the other arm's logistic using the native binary32 polynomial.
+   --    Twelve applies native gain/forget controls to value/message payloads;
+   --    thirteen applies a causal short convolution using tap/history payloads.
+   --    Fourteen applies reference SiTU, with gate/up softcaps in Alpha/Limit.
+   --    Sixteen applies the reference sigmoid gate, seventeen the reference fused
+   --    convolution, and eighteen adds the final residual without contraction.
+   --  @param Payload Offset of additional caller data for native units.
+   --  @param Payload_Elements Elements available at Payload, validated at Run.
+   --  @param Alpha Output scale for the three-tap convolution unit.
+   --  @param Limit Tap count, three or four, for the convolution unit.
    procedure Add_Join
      (Steps         : in out Sequence;
       Added         : out Boolean;
@@ -2070,7 +2117,12 @@ package Model_Runner.Platform.Device.Products is
       From_Vector   : Natural := 0;
       Residual_Step : Natural := 0;
       Kept          : Boolean := True;
-      Bias_Too      : Boolean := False);
+      Bias_Too      : Boolean := False;
+      Unit          : Natural := 2;
+      Payload       : Natural := 0;
+      Payload_Elements : Natural := 0;
+      Alpha         : Model_Runner.Numerics.Real := 0.0;
+      Limit         : Model_Runner.Numerics.Real := 0.0);
 
    --  How a model pairs the components a rotation turns.
    type Rotary_Pairing is (Interleaved, Split);
@@ -2432,6 +2484,8 @@ package Model_Runner.Platform.Device.Products is
    --    in its own heads of a row KV_Width wide, and Last is the position.
    --    Causal, no window, slopes, cap, sinks, packing or pages, a group of
    --    one; Run refuses it where the token kernel cannot take it.
+   --  @param At_Vector Query offset in the caller activation for an unchained step.
+   --  @param Relative_At Validated Q4T relative-attention metadata, as Attend_Packed takes it.
    procedure Add_Attention
      (Steps      : in out Sequence;
       Heads      : Natural;
@@ -2457,7 +2511,8 @@ package Model_Runner.Platform.Device.Products is
       Sinks_At   : Natural := 0;
       Pages_At   : Natural := 0;
       Page_Shift : Natural := 0;
-      Rows_As_Heads : Boolean := False);
+      Rows_As_Heads : Boolean := False;
+      At_Vector : Natural := 0; Relative_At : Natural := 0);
 
    --  Where a caller's rows begin, one for each answer a sequence keeps.
    type Address_List is array (Positive range <>) of System.Address;
@@ -2871,6 +2926,11 @@ package Model_Runner.Platform.Device.Products is
    --  @param K_Codec Meaning of the key codes. The default preserves the
    --    legacy four/eight/E4M3 call surface.
    --  @param V_Codec Meaning of the value codes.
+   --  @param Relative_At Optional cache metadata: four uint32 words (relative
+   --    width, extent, cache origin, absolute table offset), followed by
+   --    Positions*Heads coefficient rows then Positions*Heads sink values.
+   --    Zero preserves ordinary packed attention. Sinks join with score zero
+   --    while learned sinks are subtracted from position scores.
    procedure Attend_Packed
      (Item       : in out Engine;
       K_Bits     : Positive;
@@ -2899,7 +2959,8 @@ package Model_Runner.Platform.Device.Products is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       K_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
-      V_Codec    : Cache_Codec := Inferred_From_Bits_Cache);
+      V_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
+      Relative_At : Natural := 0);
 
    --  Whether the packed attention kernel was made.
    --
@@ -3841,6 +3902,7 @@ private
    end record;
 
    type Engine is limited record
+      Reference_Packing_Reused : Natural := 0;
       --  Authority over the package-wide Vulkan and worker state. Only the
       --  Engine that owns the slot may operate or release that state.
       Owns_Slot : Boolean := False;
@@ -3880,6 +3942,7 @@ private
       --  three storage buffers and a block of six words -- so it shares the
       --  pipeline layout and needs only its own module and pipeline.
       Blender    : System.Address := System.Null_Address;
+      Native_Blender : System.Address := System.Null_Address;
 
       --  The third kernel: one position attending to everything the cache
       --  holds. It shares the layout too -- three storage buffers, with the
@@ -4112,6 +4175,7 @@ private
       Layout     : System.Address := System.Null_Address;
       Pipeline   : System.Address := System.Null_Address;
       Blend_Line : System.Address := System.Null_Address;
+      Native_Blend_Line : System.Address := System.Null_Address;
       Attend_Line : System.Address := System.Null_Address;
       Matrix_Line : System.Address := System.Null_Address;
       Halve_Line  : System.Address := System.Null_Address;
@@ -4219,6 +4283,14 @@ private
       Dots_Lines6      : Many_Array := [others => System.Null_Address];
       Glu_Dots_Shader  : System.Address := System.Null_Address;
       Glu_Dots_Lines   : Many_Array := [others => System.Null_Address];
+      Reference_Shader : System.Address := System.Null_Address;
+      Reference_Line : System.Address := System.Null_Address;
+      Reference_GSQ_Shader : System.Address := System.Null_Address;
+      Reference_GSQ_Line : System.Address := System.Null_Address;
+      Reference_Round_Shader : System.Address := System.Null_Address;
+      Reference_Round_Line : System.Address := System.Null_Address;
+      Reference_Activation_Shader : System.Address := System.Null_Address;
+      Reference_Activation_Line : System.Address := System.Null_Address;
       Round_Shader     : System.Address := System.Null_Address;
       Round_Line       : System.Address := System.Null_Address;
       Rounding         : Walk_Rounding := Rounds_None;
@@ -4706,6 +4778,9 @@ private
 
       --  Whether this reads what the product before it wrote, rather than
       --  the activation the caller supplied.
+      --  Independent host-fed product; each group member has its own packed region.
+      Reference_Integer : Boolean := False;
+
       Chained : Boolean := False;
 
       --  Which step's result this reads, where that is not the one before
@@ -4727,6 +4802,9 @@ private
       --  elements. A residual join reads the residual, which travels beside
       --  the queries in one array rather than in a buffer of its own.
       At_Vector : Natural := 0;
+      Relative_At : Natural := 0;
+      Payload : Natural := 0;
+      Payload_Elements : Natural := 0;
 
       --  A slice of the step this one reads, rather than the whole of it.
       --  Where three projections were made by one fused product -- the

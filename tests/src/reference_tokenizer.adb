@@ -192,6 +192,7 @@ package body Reference_Tokenizer is
             elsif Cutting = "gpt-4o" or else Cutting = "llama4"
               or else Cutting = "kanana2" or else Cutting = "talkie"
               or else Cutting = "minimax-m2"
+              or else Cutting = "inkling2"
             then
                Item.Cutting := GPT4o;
             elsif Cutting = "granite-embed-multi-97m" then

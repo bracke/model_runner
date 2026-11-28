@@ -2068,6 +2068,46 @@ package body Model_Runner.Sampling is
    -- Sample --
    ------------
 
+   procedure Sample_Allowed
+     (Item : in out Sampler; Logits : Real_Array;
+      Allowed : Model_Runner.Shares.Member_Rows; Token : out Token_Id; Status : out E.Error_Info)
+   is
+      pragma Suppress (Validity_Check);
+      Best : Real := 0.0;
+   begin
+      Token := Model_Runner.Tokenizer.No_Token;
+      Status := E.Make (E.Sampling_Invalid_Configuration);
+      if not Item.Open_Flag or else not Is_Greedy (Item.Settings) or else Allowed'Length = 0 then return; end if;
+      if Logits'Length /= Item.Vocabulary then Status := E.Make (E.Sampling_Vocabulary_Mismatch); return; end if;
+      for I in Allowed'Range loop
+         if Allowed (I) >= Item.Vocabulary
+           or else (I > Allowed'First and then Allowed (I) <= Allowed (I - 1))
+         then return; end if;
+      end loop;
+      Status := E.Success;
+      for I of Allowed loop
+         declare
+            Value : Real := Logits (Logits'First + Element_Count (I));
+         begin
+            if not N.Is_Finite (Value) then
+               Token := Model_Runner.Tokenizer.No_Token; Status := E.Make (E.Sampling_Non_Finite_Logit);
+               E.Add_Integer (Status, "token", Long_Long_Integer (I)); return;
+            end if;
+            if not Item.Masked (I) and then not Item.Stepped (I) then
+               Value := Adjusted (Item, Logits, Element_Count (I));
+               if not N.Is_Finite (Value) then
+                  Token := Model_Runner.Tokenizer.No_Token; Status := E.Make (E.Sampling_Non_Finite_Logit);
+                  E.Add_Integer (Status, "token", Long_Long_Integer (I)); return;
+               end if;
+               if Token = Model_Runner.Tokenizer.No_Token or else Value > Best then
+                  Token := Token_Id (I); Best := Value;
+               end if;
+            end if;
+         end;
+      end loop;
+      if Token = Model_Runner.Tokenizer.No_Token then Status := E.Make (E.Sampling_No_Candidates); end if;
+   end Sample_Allowed;
+
    procedure Sample
      (Item   : in out Sampler;
       Logits : Real_Array;

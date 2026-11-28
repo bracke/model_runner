@@ -47,6 +47,9 @@ project Model_Runner_Inference is
       --  Keep the engine's deliberately multi-versioned instantiations on
       --  the same targets as the root project. Runtime feature checks guard
       --  every call into these units.
+      for Switches ("model_runner-kernels.adb") use
+        Model_Runner_Build.Reference_Math_Switches;
+
       for Switches ("model_runner-platform-device-products.adb") use
         Model_Runner_Build.Large_Unit_Switches;
 
@@ -65,9 +68,26 @@ project Model_Runner_Inference is
       for Switches ("model_runner-quantization-integers-wide.ads") use
         Model_Runner_Build.X86_64_V3_Switches;
 
+      for Switches ("model_runner-tensors-wide_products.adb") use
+        Model_Runner_Build.X86_64_V4_Switches;
+
       for Switches ("model_runner-quantization-integers-deep.ads") use
         Model_Runner_Build.X86_64_V4_Switches;
+      for Switches ("model_runner-llama.adb") use
+        Model_Runner_Build.Llama_Ada_Switches;
+      for Switches ("model_runner-tensors.adb") use
+        Model_Runner_Build.Tensors_Ada_Switches;
+      for Switches ("model_runner-backend-cpu.adb") use
+        Model_Runner_Build.CPU_Ada_Switches;
+      for Switches ("model_runner-quantization-integers.adb") use
+        Model_Runner_Build.Integers_Ada_Switches;
+      for Switches ("model_runner-quantization-grid_integers.adb") use
+        Model_Runner_Build.Grids_Ada_Switches;
    end Compiler;
+
+   package Linker is
+      for Default_Switches ("Ada") use Model_Runner_Build.Profile_Linker_Switches;
+   end Linker;
 
    package Binder is
       for Switches ("Ada") use ("-Es", "-Wb");

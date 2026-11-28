@@ -1,0 +1,43 @@
+{
+  "reference_revision": "4c7344447cb1727f1e2f982febc99a8f88dcb77f",
+  "context_tokens": 1030,
+  "proposals": [
+    15,
+    7,
+    7,
+    7,
+    1,
+    6,
+    6
+  ],
+  "reference": "pinned GGML CPU backbone/context; independent NumPy Markov recurrence with BF16 matrix inputs rounded to nearest even",
+  "files": {
+    "context.f32": {
+      "bytes": 131840,
+      "sha256": "3da139c71d55923f0ab95f5f61c3bd618151f28ac47218012f2ca63baa6debab"
+    },
+    "raw.f32": {
+      "bytes": 512,
+      "sha256": "c72ec9232cb774644818f7665b8ad0789797f5d2f4f25bd7329c3cb1064fd803"
+    },
+    "hidden.f32": {
+      "bytes": 1024,
+      "sha256": "7997308204e018bf213a05f41baef4bb49e61c976f42d69c5822fc744b49b3c8"
+    },
+    "corrected.f32": {
+      "bytes": 448,
+      "sha256": "f984615ce68821fcfacf93be8aae66dfd8eead6e97567639dcefa631bf8d09b4"
+    },
+    "features.f32": {
+      "bytes": 527360,
+      "sha256": "134cf2bcb4a70d923d1de02bfd21b45c2ec8e68baffce4b49bbb00bc9c72feb9"
+    }
+  },
+  "generated_files": {
+    "tiny-dspark.gguf": {
+      "bytes": 42784,
+      "sha256": "a39e9e9cc52c9a019ad338672983875e13b0818dbe6f5982df9a67f8f8316614"
+    }
+  },
+  "generation": "Tiny_Model.Build_DSpark reconstructs GGUF framing with independent raw tensor payloads from dspark-tiny/weights.bin. Generated GGUF SHA is unchanged."
+}

@@ -165,6 +165,7 @@ layout(push_constant, std430) uniform Shape {
     //  two transformed Q4. The bit widths alone never select a codec.
     uint k_codec;
     uint v_codec;
+    uint relative_at;
 } shape;
 
 //  The widest query head this takes, and the widest value head: four
@@ -360,6 +361,7 @@ uint page_base (uint pos, uint blk, uint tbl) {
 
 //  Its place inside that: the position for a block, its low bits for a page.
 uint page_at (uint pos) {
+    if (shape.relative_at != 0u) { return pos - kvw[shape.relative_at + 2u]; }
     return shape.page_shift == 0u
          ? pos
          : (pos & ((1u << shape.page_shift) - 1u));
@@ -456,7 +458,7 @@ void main () {
     //  query group the same way once in shared memory; the ordinary Q4
     //  key loop below then computes the preserved dot product. Head widths
     //  are held to a multiple of 32 by the host shape check.
-    if (shape.k_codec == TRANSFORMED_FOUR_BIT_CODEC) {
+    if (shape.k_codec == TRANSFORMED_FOUR_BIT_CODEC && shape.relative_at == 0u) {
         uint groups = shape.head_size / BLOCK;
         for (uint task = lane; task < rows * groups; task += LANES) {
             uint r = task / groups;
@@ -520,7 +522,10 @@ void main () {
     float top[ROWS];
     float sum[ROWS];
     for (uint r = 0u; r < ROWS; r++) {
-        if (shape.sinks_at != 0u && slice == 0u && row_live[r]) {
+        if (shape.relative_at != 0u && slice == 0u && row_live[r]) {
+            top[r] = 0.0;
+            sum[r] = 1.0;
+        } else if (shape.sinks_at != 0u && slice == 0u && row_live[r]) {
             top[r] = kvf[shape.sinks_at + head0 + r / shape.queries];
             sum[r] = 1.0;
         } else {
@@ -562,13 +567,43 @@ void main () {
                 }
                 for (uint r = 0u; r < ROWS; r++) {
                     if (r < rows) {
-                        acc[r] += dot (held, qs[r * (QUERY_ROOM / 4u) + i / 4u]);
+                        if (shape.relative_at != 0u) {
+                            vec4 query = qs[r * (QUERY_ROOM / 4u) + i / 4u];
+                            precise float native_sum = acc[r];
+                            for (uint c = 0u; c < 4u; ++c) {
+                                precise float term = held[c] * query[c];
+                                native_sum = native_sum + term;
+                            }
+                            acc[r] = native_sum;
+                        } else {
+                            acc[r] += dot (held, qs[r * (QUERY_ROOM / 4u) + i / 4u]);
+                        }
                     }
                 }
             }
 
             for (uint r = 0u; r < ROWS; r++) {
-                float v = acc[r] * shape.scale;
+                precise float v = acc[r] * shape.scale;
+                if (shape.relative_at != 0u && row_live[r]) {
+                    uint rw = kvw[shape.relative_at];
+                    uint extent = kvw[shape.relative_at + 1u];
+                    uint table_at = kvw[shape.relative_at + 3u];
+                    uint head = head0 + r / shape.queries;
+                    uint slot = slot0 + r % shape.queries;
+                    uint distance = row_asking[r] - min(pos, row_asking[r]);
+                    precise float bias = 0.0;
+                    if (pos <= row_asking[r] && distance < extent) {
+                        uint rel = shape.relative_at + 4u + (slot * shape.heads + head) * rw;
+                        for (uint c = 0u; c < rw; ++c) {
+                            precise float term = kvf[rel + c] * kvf[table_at + distance * rw + c];
+                            bias = bias + term;
+                        }
+                    }
+                    float sink = kvf[shape.relative_at + 4u + shape.positions * shape.heads * rw
+                                    + slot * shape.heads + head];
+                    precise float delta = bias - sink;
+                    v = v + delta;
+                }
                 if (slope[r] > 0.0) {
                     v -= slope[r] * float (abs (int (pos) - int (row_asking[r])));
                 }

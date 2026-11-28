@@ -51,6 +51,55 @@ package body Tests.Sampling_Cases is
    --  or has been closed, and sampling when every candidate has been
    --  forbidden. The last is not exotic -- forbidding tokens is a caller's
    --  own operation, and forbidding all of them is a thing a loop can do.
+   procedure Allowed_Greedy (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Config : S.Configuration := S.Greedy_Configuration;
+      Full, Small : S.Sampler;
+      Status : E.Error_Info;
+      Expected, Actual : Vocab.Token_Id;
+      Allowed : constant Model_Runner.Shares.Member_Rows := [0, 2, 5, 7];
+      Logits : N.Real_Array (11 .. 18);
+   begin
+      Config.Repeat_Penalty := 1.2; Config.Frequency_Penalty := 0.3; Config.Presence_Penalty := 0.5;
+      Config.DRY_Multiplier := 0.7;
+      S.Open (Full, Config, 8, 91, Status); Assert (E.Is_Ok (Status), "full greedy open");
+      S.Open (Small, Config, 8, 91, Status); Assert (E.Is_Ok (Status), "subset greedy open");
+      for I of Vocab.Token_Array'[2, 5, 2, 5] loop S.Record_Token (Full, I); S.Record_Token (Small, I); end loop;
+      S.Bias (Full, 7, 1.75, Status); S.Bias (Small, 7, 1.75, Status);
+      for I in Vocab.Token_Id range 0 .. 7 loop
+         if I not in 0 | 2 | 5 | 7 then S.Forbid (Full, I); end if;
+      end loop;
+      for Trial in 0 .. 63 loop
+         Logits := Fixtures.Sequence (8, Interfaces.Unsigned_64 (Trial + 17), 4.0);
+         if Trial = 0 then Logits := [others => 1.0]; end if;
+         S.Sample (Full, Logits, Expected, Status); Assert (E.Is_Ok (Status), "full adjusted greedy");
+         S.Sample_Allowed (Small, Logits, Allowed, Actual, Status);
+         Assert (E.Is_Ok (Status) and then Actual = Expected, "subset changed greedy adjustments or ties");
+      end loop;
+      S.Forbid_For_Step (Full, 7); S.Forbid_For_Step (Small, 7);
+      S.Sample (Full, Logits, Expected, Status);
+      S.Sample_Allowed (Small, Logits, Allowed, Actual, Status);
+      Assert (E.Is_Ok (Status) and then Actual = Expected, "subset ignored step mask");
+      S.Sample_Allowed (Small, Logits, [2, 2], Actual, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration, "subset accepted duplicate IDs");
+      S.Sample_Allowed (Small, Logits, [8], Actual, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration, "subset accepted out-of-range ID");
+      S.Sample_Allowed (Small, Logits, [], Actual, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration, "subset accepted empty IDs");
+      for I of Allowed loop S.Forbid (Small, Vocab.Token_Id (I)); end loop;
+      S.Sample_Allowed (Small, Logits, Allowed, Actual, Status);
+      Assert (Status.Code = E.Sampling_No_Candidates and then Actual = Vocab.No_Token,
+              "subset ignored permanent masks");
+      S.Close (Full); S.Close (Small);
+      Config.Temperature := 0.5;
+      S.Open (Small, Config, 8, 91, Status);
+      S.Sample_Allowed (Small, Logits, Allowed, Actual, Status);
+      Assert (Status.Code = E.Sampling_Invalid_Configuration, "subset accepted sampled configuration");
+      S.Close (Small);
+   exception
+      when others => S.Close (Full); S.Close (Small); raise;
+   end Allowed_Greedy;
+
    procedure Sampler_Refuses_What_It_Cannot_Sample
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -4039,6 +4088,8 @@ package body Tests.Sampling_Cases is
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      AUnit.Test_Cases.Registration.Register_Routine
+        (T, Allowed_Greedy'Access, "allowed-ID greedy selection preserves penalties, masks, ties and validation");
       Register_Routine
         (T, Ranked_Masking_Draws_As_The_Whole_Mask'Access,
          "a grammar asked only of the best ranked tokens draws what it draws "

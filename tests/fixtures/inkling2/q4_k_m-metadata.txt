@@ -1,0 +1,49 @@
+inkling2_loop.block_count               uint32  24
+inkling2_loop.context_length            uint32  1048576
+inkling2_loop.embedding_length          uint32  2304
+inkling2_loop.feed_forward_length       uint32  1152
+inkling2_loop.attention.head_count      array of int32, 24 items
+inkling2_loop.attention.head_count_kv   array of int32, 24 items
+inkling2_loop.attention.layer_norm_rms_epsilon float32  0.000001
+inkling2_loop.expert_count              uint32  128
+inkling2_loop.expert_used_count         uint32  8
+inkling2_loop.attention.key_length      uint32  128
+inkling2_loop.attention.value_length    uint32  128
+inkling2_loop.vocab_size                uint32  201024
+inkling2_loop.vocab_size_unpadded       uint32  200058
+inkling2_loop.expert_feed_forward_length uint32  1152
+inkling2_loop.attention.key_length_swa  uint32  128
+inkling2_loop.attention.value_length_swa uint32  128
+inkling2_loop.rope.dimension_count      uint32  0
+inkling2_loop.attention.sliding_window  uint32  1024
+inkling2_loop.attention.sliding_window_pattern array of bool, 24 items
+inkling2_loop.shortconv.l_cache         uint32  4
+inkling2_loop.expert_weights_scale      float32  8.000000
+inkling2_loop.activation.situ_beta      float32  4.000000
+inkling2_loop.activation.situ_linear_beta float32  25.000000
+inkling2_loop.attn_res.block_size       uint32  6
+inkling2_loop.final_logit_softcapping   float32  30.000000
+inkling2_loop.attention.relative_length uint32  16
+inkling2_loop.attention.relative_extent uint32  1024
+inkling2_loop.attention.qk_clip         float32  22.627417
+inkling2_loop.attention.relative_clip   float32  8.000000
+inkling2_loop.attention.log_scale_floor uint32  8192
+inkling2_loop.attention.log_scale_alpha float32  0.100000
+inkling2_loop.loop.start                uint32  6
+inkling2_loop.loop.end                  uint32  18
+inkling2_loop.loop.count                uint32  3
+inkling2_loop.loop.gate_rank            uint32  64
+inkling2_loop.loop.varying              bool  false
+tokenizer.ggml.model                    string  gpt2
+tokenizer.ggml.pre                      string  inkling2
+tokenizer.ggml.tokens                   array of string, 200058 items
+tokenizer.ggml.token_type               array of int32, 200058 items
+tokenizer.ggml.merges                   array of string, 424413 items
+tokenizer.ggml.eos_token_id             uint32  200006
+tokenizer.ggml.padding_token_id         uint32  199999
+tokenizer.ggml.eot_token_id             uint32  200006
+tokenizer.ggml.add_bos_token            bool  false
+tokenizer.ggml.add_eos_token            bool  false
+tokenizer.ggml.clean_spaces             bool  false
+general.quantization_version            uint32  2
+general.file_type                       uint32  15

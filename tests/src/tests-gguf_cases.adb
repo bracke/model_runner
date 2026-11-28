@@ -1,3 +1,4 @@
+with Model_Runner.Shares;
 with AUnit.Test_Cases;
 with Ada.Text_IO;
 with Ada.Calendar;
@@ -2501,9 +2502,8 @@ package body Tests.GGUF_Cases is
    is
       pragma Unreferenced (T);
 
-      --  The four sent to the wider compilation, and four that are not, so
-      --  that a dispatcher which sent everything there would be caught by
-      --  the same run.
+      --  Compare selected wide/native paths with retained scalar paths,
+      --  including Q4_K's explicit nibble kernel and Q8_0's span decoder.
       Formats : constant array (1 .. 8) of Model_Runner.GGUF.Tensor_Type :=
         [Model_Runner.GGUF.Type_Q5_0, Model_Runner.GGUF.Type_Q5_1,
          Model_Runner.GGUF.Type_IQ4_NL, Model_Runner.GGUF.Type_IQ4_XS,
@@ -2589,6 +2589,305 @@ package body Tests.GGUF_Cases is
       Q.Use_Wide_Decoders (Wide);
       Assert (Seen = Formats'Length, "a format was not compared");
    end Both_Decoders_Answer_The_Same_Bits;
+
+   --  The Q8 byte path must preserve all finite scale/product bits, not
+   --  merely values close to those the fixture encoder happened to choose.
+   procedure Q8_Unpacking_Preserves_All_Scales
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Blocks : constant N.Element_Count := 8;
+      Offset : constant B.Byte_Count := 7;
+      Data : B.Byte_Array (3 .. 3 + Offset + B.Byte_Count (Blocks) * 34 - 1) := [others => 0];
+      Plain, Vectorized : N.Real_Array (5 .. 5 + Blocks * 32);
+      Ok : Boolean;
+   begin
+      for Block in 0 .. Blocks - 1 loop
+         for Index in N.Element_Count range 0 .. 31 loop
+            Data (Data'First + Offset + B.Byte_Count (Block) * 34 + 2 + B.Byte_Count (Index)) :=
+              B.Byte (Block * 32 + Index);
+         end loop;
+      end loop;
+      for Pattern in Interfaces.Unsigned_32 range 0 .. 65_535 loop
+         for Block in 0 .. Blocks - 1 loop
+            Data (Data'First + Offset + B.Byte_Count (Block) * 34) := B.Byte (Pattern and 255);
+            Data (Data'First + Offset + B.Byte_Count (Block) * 34 + 1) :=
+              B.Byte (Interfaces.Shift_Right (Pattern, 8));
+         end loop;
+         Plain := [others => -0.75];
+         Vectorized := Plain;
+         Q.Use_Wide_Decoders (False);
+         Q.Decode_Blocks (G.Type_Q8_0, Data, Offset, Blocks, Plain, Ok);
+         Assert (Ok, "scalar Q8 unpacking refused a valid block");
+         Q.Use_Wide_Decoders (Wide);
+         Q.Decode_Blocks (G.Type_Q8_0, Data, Offset, Blocks, Vectorized, Ok);
+         Assert (Ok, "vector Q8 unpacking refused a valid block");
+         for Index in Plain'Range loop
+            declare
+               Left : constant Interfaces.Unsigned_32 := N.Bits (Plain (Index));
+               Right : constant Interfaces.Unsigned_32 := N.Bits (Vectorized (Index));
+               Left_NaN : constant Boolean := (Left and 16#7FFF_FFFF#) > 16#7F80_0000#;
+               Right_NaN : constant Boolean := (Right and 16#7FFF_FFFF#) > 16#7F80_0000#;
+            begin
+               if not (Left = Right or else (Left_NaN and Right_NaN)) then
+                  Assert (False, "Q8 unpacking changed scale" & Pattern'Image
+                          & " at element" & Index'Image);
+               end if;
+            end;
+         end loop;
+      end loop;
+      Q.Use_Wide_Decoders (Wide);
+   exception
+      when others =>
+         Q.Use_Wide_Decoders (Wide);
+         raise;
+   end Q8_Unpacking_Preserves_All_Scales;
+
+   procedure Q4_Unpacking_Preserves_Exact_Arithmetic
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Offset : constant B.Byte_Count := 7;
+      Data : B.Byte_Array (3 .. 3 + Offset + 2 * 144 - 1) := [others => 0];
+      Plain, Vectorized : N.Real_Array (5 .. 5 + 2 * 256);
+      Ok : Boolean;
+
+      procedure Prepare
+        (D, Minimum : Interfaces.Unsigned_32;
+         Factor, Lowest : Natural)
+      is
+      begin
+         for Block in B.Byte_Count range 0 .. 1 loop
+            declare
+               Base : constant B.Byte_Count := Data'First + Offset + Block * 144;
+               Scale_Bits : constant Interfaces.Unsigned_32 :=
+                 (if Block = 0 then D else D xor 16#8000#);
+               Minimum_Bits : constant Interfaces.Unsigned_32 :=
+                 (if Block = 0 then Minimum else Minimum xor 16#8000#);
+               Factors, Minima : array (Natural range 0 .. 7) of Natural;
+            begin
+               Data (Base .. Base + 3) :=
+                 B.Byte_Array'[B.Byte (Scale_Bits and 255),
+                               B.Byte (Interfaces.Shift_Right (Scale_Bits, 8)),
+                               B.Byte (Minimum_Bits and 255),
+                               B.Byte (Interfaces.Shift_Right (Minimum_Bits, 8))];
+               for Sub in 0 .. 7 loop
+                  Factors (Sub) := (Factor + Sub * 9) mod 64;
+                  Minima (Sub) := (Lowest + Sub * 11) mod 64;
+               end loop;
+               for Sub in 0 .. 3 loop
+                  Data (Base + 4 + B.Byte_Count (Sub)) := B.Byte
+                    ((Factors (Sub) mod 64) + (Factors (Sub + 4) / 16) * 64);
+                  Data (Base + 8 + B.Byte_Count (Sub)) := B.Byte
+                    ((Minima (Sub) mod 64) + (Minima (Sub + 4) / 16) * 64);
+                  Data (Base + 12 + B.Byte_Count (Sub)) := B.Byte
+                    ((Factors (Sub + 4) mod 16) + (Minima (Sub + 4) mod 16) * 16);
+               end loop;
+               for Index in B.Byte_Count range 0 .. 127 loop
+                  Data (Base + 16 + Index) := B.Byte
+                    ((Index * 73 + B.Byte_Count (Factor) * 17 + Block * 19) mod 256);
+               end loop;
+            end;
+         end loop;
+      end Prepare;
+
+      procedure Compare (Identity : String) is
+      begin
+         Plain := [others => -0.75];
+         Vectorized := Plain;
+         Q.Use_Wide_Decoders (False);
+         Q.Decode_Blocks (G.Type_Q4_K, Data, Offset, 2, Plain, Ok);
+         Assert (Ok, "scalar Q4_K refused valid blocks");
+         Q.Use_Wide_Decoders (Wide);
+         Q.Decode_Blocks (G.Type_Q4_K, Data, Offset, 2, Vectorized, Ok);
+         Assert (Ok, "vector Q4_K refused valid blocks");
+         for Index in Plain'Range loop
+            declare
+               Left : constant Interfaces.Unsigned_32 := N.Bits (Plain (Index));
+               Right : constant Interfaces.Unsigned_32 := N.Bits (Vectorized (Index));
+               Left_NaN : constant Boolean := (Left and 16#7FFF_FFFF#) > 16#7F80_0000#;
+               Right_NaN : constant Boolean := (Right and 16#7FFF_FFFF#) > 16#7F80_0000#;
+            begin
+               if not (Left = Right or else (Left_NaN and Right_NaN)) then
+                  Assert (False, "Q4_K SIMD changed " & Identity & " at element" & Index'Image);
+               end if;
+            end;
+         end loop;
+      end Compare;
+   begin
+      --  Every half encoding occurs as the scale and as the minimum;
+      --  sub-block factors vary and both signs occur in each call.
+      for Pattern in Interfaces.Unsigned_32 range 0 .. 65_535 loop
+         Prepare (Pattern, Pattern xor 16#5A3C#,
+                  Natural (Pattern mod 64), Natural (Interfaces.Shift_Right (Pattern, 6) mod 64));
+         Compare ("half pattern" & Pattern'Image);
+      end loop;
+      --  Every six-bit factor/minimum pair in each of the eight positions.
+      for Factor in 0 .. 63 loop
+         for Minimum in 0 .. 63 loop
+            Prepare (16#3555#, 16#B7FF#, Factor, Minimum);
+            Compare ("factor" & Factor'Image & " minimum" & Minimum'Image);
+            Prepare (16#7BFF#, 16#8001#, Factor, Minimum);
+            Compare ("extreme factor" & Factor'Image & " minimum" & Minimum'Image);
+         end loop;
+      end loop;
+      Q.Use_Wide_Decoders (Wide);
+   exception
+      when others =>
+         Q.Use_Wide_Decoders (Wide);
+         raise;
+   end Q4_Unpacking_Preserves_Exact_Arithmetic;
+
+   --  Both scale signs and every half encoding; shifted source/target
+   --  bounds and a trailing sentinel also cover block addressing.
+   procedure K_Unpacking_Preserves_Exact_Arithmetic
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Formats : constant array (1 .. 2) of G.Tensor_Type := [G.Type_Q5_K, G.Type_Q6_K];
+      Offset : constant B.Byte_Count := 7;
+      Plain, Vectorized : N.Real_Array (5 .. 517);
+      Ok : Boolean;
+   begin
+      for Format of Formats loop
+         declare
+            Stride : constant B.Byte_Count := (if Format = G.Type_Q5_K then 176 else 210);
+            Data : B.Byte_Array (3 .. 3 + Offset + 2 * Stride - 1);
+         begin
+            for Pattern in Interfaces.Unsigned_32 range 0 .. 65_535 loop
+               for Block in B.Byte_Count range 0 .. 1 loop
+                  declare
+                     Base : constant B.Byte_Count := Data'First + Offset + Block * Stride;
+                     D : constant B.Byte_Count := (if Format = G.Type_Q5_K then 0 else 208);
+                     Bits : constant Interfaces.Unsigned_32 :=
+                       (if Block = 0 then Pattern else Pattern xor 16#8000#);
+                     Minimum : constant Interfaces.Unsigned_32 := Bits xor 16#5A3C#;
+                  begin
+                     for Index in B.Byte_Count range 0 .. Stride - 1 loop
+                        Data (Base + Index) := B.Byte
+                          ((Index * 73 + B.Byte_Count (Pattern) * 17 + Block * 19) mod 256);
+                     end loop;
+                     Data (Base + D) := B.Byte (Bits and 255);
+                     Data (Base + D + 1) := B.Byte (Interfaces.Shift_Right (Bits, 8));
+                     if Format = G.Type_Q5_K then
+                        Data (Base + 2) := B.Byte (Minimum and 255);
+                        Data (Base + 3) := B.Byte (Interfaces.Shift_Right (Minimum, 8));
+                     end if;
+                  end;
+               end loop;
+               Plain := [others => -0.75];
+               Vectorized := Plain;
+               Q.Use_Wide_Decoders (False);
+               Q.Decode_Blocks (Format, Data, Offset, 2, Plain, Ok);
+               Assert (Ok, "scalar K unpacking refused valid blocks");
+               Q.Use_Wide_Decoders (Wide);
+               Q.Decode_Blocks (Format, Data, Offset, 2, Vectorized, Ok);
+               Assert (Ok, "vector K unpacking refused valid blocks");
+               for Index in Plain'Range loop
+                  declare
+                     Left : constant Interfaces.Unsigned_32 := N.Bits (Plain (Index));
+                     Right : constant Interfaces.Unsigned_32 := N.Bits (Vectorized (Index));
+                  begin
+                     Assert
+                       (Left = Right or else
+                        ((Left and 16#7FFF_FFFF#) > 16#7F80_0000# and then
+                         (Right and 16#7FFF_FFFF#) > 16#7F80_0000#),
+                        "K SIMD changed " & Format'Image & " scale" & Pattern'Image
+                        & " element" & Index'Image);
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+      Q.Use_Wide_Decoders (Wide);
+   exception
+      when others =>
+         Q.Use_Wide_Decoders (Wide);
+         raise;
+   end K_Unpacking_Preserves_Exact_Arithmetic;
+
+   procedure Unit_Norm_And_Finite_Checks (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package K renames Model_Runner.Kernels;
+      Bad_Bits : constant array (1 .. 5) of Interfaces.Unsigned_32 :=
+        [16#7F80_0000#, 16#FF80_0000#, 16#7FC0_0001#, 16#7F80_0001#, 16#FFC0_0001#];
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+   begin
+      Assert (K.RMS_Scale ([0.0, -2.0, 2.0, 0.0], 2.0) = 0.5,
+              "RMS scale mean or epsilon differs from the analytic value");
+      Assert (K.RMS_Scale ([4.0, -4.0, 4.0, -4.0], 0.0) = 0.25,
+              "RMS scale depends on input signs");
+      for Length in N.Element_Count range 0 .. 129 loop
+         declare
+            Input : N.Real_Array (5 .. 5 + Length - 1);
+            Gains : constant N.Real_Array (9 .. 9 + Length - 1) := [others => 1.0];
+            Expected, Actual : N.Real_Array (11 .. 11 + Length - 1);
+            Scale : N.Real;
+         begin
+            for Index in Input'Range loop
+               Input (Index) := N.Real (Integer (Index mod 17) - 8) * 2.0 ** (Integer (Index mod 9) * 8 - 32);
+            end loop;
+            K.RMS_Norm (Input, Gains, 1.0E-6, Expected, K.Binary32_Stages);
+            K.RMS_Norm (Input, 1.0E-6, Actual);
+            Scale := K.RMS_Scale (Input, 1.0E-6);
+            Assert (Length /= 0 or else Scale = 0.0, "empty RMS scale is not zero");
+            for Index in Actual'Range loop
+               Assert (N.Bits (Actual (Index)) = N.Bits (Expected (Index)), "unit RMS changed binary32 stages");
+               Assert (N.Bits (Input (Input'First + Index - Actual'First) * Scale) = N.Bits (Actual (Index)),
+                       "measured RMS scale differs from normalized unit-gain output");
+            end loop;
+            declare
+               Learned : N.Real_Array (3 .. 3 + Length - 1);
+               In_Place : N.Real_Array (19 .. 19 + Length - 1) := Input;
+               Checked : N.Real_Array (19 .. 19 + Length - 1) := Input;
+               Valid : aliased Boolean := False;
+            begin
+               for Index in Learned'Range loop
+                  Learned (Index) := N.Real (Integer (Index mod 11) - 5) * 0.125;
+               end loop;
+               K.RMS_Norm (Input, Learned, 1.0E-6, Expected, K.Binary32_Stages);
+               K.RMS_Norm_In_Place (In_Place, Learned, 1.0E-6);
+               K.RMS_Norm_In_Place (Checked, Learned, 1.0E-6, Finite => Valid'Access);
+               Assert (Valid, "checked learned RMS refused finite values");
+               for Index in 0 .. Length - 1 loop
+                  Assert (N.Bits (In_Place (19 + Index)) = N.Bits (Expected (11 + Index)),
+                          "in-place learned RMS changed binary32 stages");
+                  Assert (N.Bits (Checked (19 + Index)) = N.Bits (In_Place (19 + Index)),
+                          "fused finite validation changed learned RMS output");
+               end loop;
+               if Length > 0 then
+                  for Bits of Bad_Bits loop
+                     Checked := Input;
+                     Learned (Learned'First) := N.From_Bits (Bits);
+                     K.RMS_Norm_In_Place (Checked, Learned, 1.0E-6, Finite => Valid'Access);
+                     Assert (not Valid, "checked learned RMS accepted a non-finite result");
+                  end loop;
+               end if;
+            end;
+            for Allowed in Boolean loop
+               K.Use_Wide_Lanes (Allowed and Wide);
+               Assert (K.All_Finite (Input), "finite values or an empty vector were refused");
+               for Index in Input'Range loop
+                  declare
+                     Held : constant N.Real := Input (Index);
+                  begin
+                     for Bits of Bad_Bits loop
+                        Input (Index) := N.From_Bits (Bits);
+                        Assert (not K.All_Finite (Input), "nonfinite value escaped a lane or scalar tail");
+                     end loop;
+                     Input (Index) := Held;
+                  end;
+               end loop;
+            end loop;
+         end;
+      end loop;
+      K.Use_Wide_Lanes (Wide);
+   exception
+      when others => K.Use_Wide_Lanes (Wide); raise;
+   end Unit_Norm_And_Finite_Checks;
 
    procedure Decoding_Refuses_What_It_Cannot_Fit
      (T : in out AUnit.Test_Cases.Test_Case'Class)
@@ -2873,6 +3172,267 @@ package body Tests.GGUF_Cases is
    --  The grid formats' integer product against their decoded rows: each
    --  of the seven, every compilation of the product, random blocks, held
    --  to the bound the quantized path is held to everywhere else.
+   --  The GSQ-RCO down formats against actual independent GGML products.
+   procedure Small_Block_Products_Match_Reference
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package QI renames Model_Runner.Quantization.Integers;
+      package G renames Model_Runner.GGUF;
+      use type QI.Byte_Signed;
+      Deep : constant Boolean := Model_Runner.Platform.Byte_Products;
+      Widths : constant array (1 .. 4) of N.Element_Count := [64, 128, 1152, 2304];
+      Formats : constant array (1 .. 2) of G.Tensor_Type := [G.Type_IQ4_NL, G.Type_Q2_0];
+      function Read_Bytes (Name : String) return B.Byte_Array is
+         Raw : constant String := Project_Tools.Files.Read_Raw_File ("fixtures/inkling2/gsq-small-blocks/" & Name);
+         Result : B.Byte_Array (0 .. B.Byte_Count (Raw'Length) - 1);
+      begin
+         for I in Result'Range loop Result (I) := Character'Pos (Raw (Raw'First + Natural (I))); end loop;
+         return Result;
+      end Read_Bytes;
+      function Read_Floats (Name : String) return N.Real_Array is
+         Data : constant B.Byte_Array := Read_Bytes (Name);
+         Result : N.Real_Array (0 .. N.Element_Count (Data'Length / 4) - 1);
+      begin
+         for I in Result'Range loop
+            declare
+               Bits : Interfaces.Unsigned_32 := 0;
+            begin
+               for J in 0 .. 3 loop
+                  Bits := Bits or Interfaces.Shift_Left
+                    (Interfaces.Unsigned_32 (Data (B.Byte_Count (I * 4) + B.Byte_Count (J))), J * 8);
+               end loop;
+               Result (I) := N.From_Bits (Bits);
+            end;
+         end loop;
+         return Result;
+      end Read_Floats;
+      function Image (I : N.Element_Count) return String is
+        (Ada.Strings.Fixed.Trim (I'Image, Ada.Strings.Both));
+   begin
+      if not Deep then return; end if;
+      QI.Use_Deep_Rows (True);
+      for Width of Widths loop
+         declare
+            Columns : constant N.Element_Count := Width;
+            Count : constant N.Element_Count := 9;
+            Rows : constant N.Element_Count := 5;
+            Input : constant N.Real_Array := Read_Floats ("input-" & Image (Columns) & ".f32");
+            Expected_Values : constant B.Byte_Array := Read_Bytes ("values-" & Image (Columns) & ".i8");
+            Expected_Scales : constant N.Real_Array := Read_Floats ("scales-" & Image (Columns) & ".f32");
+            Packed : QI.Signed_Array (0 .. Input'Length - 1);
+            Scale : N.Real_Array (0 .. Input'Length / 32 - 1);
+            Totals : QI.Sum_Array (Scale'Range);
+            Halves : QI.Sum_Array (0 .. Input'Length / 16 - 1);
+            Ok : Boolean;
+         begin
+            QI.Quantize_Vectors (Input, Count, Columns, Packed, Scale, Totals, Halves, Ok,
+                                 Reference_Rounding => True, Half_Scales => True);
+            Assert (Ok, "small-block reference packing declined");
+            for I in Packed'Range loop
+               declare
+                  Byte : constant Integer := Integer (Expected_Values (B.Byte_Count (I)));
+               begin
+                  Assert (Integer (Packed (I)) = (if Byte > 127 then Byte - 256 else Byte),
+                          "small-block Q8_0 quantization differs from independent bytes");
+               end;
+            end loop;
+            for I in Scale'Range loop
+               Assert (N.Bits (Scale (I)) = N.Bits (Expected_Scales (I)), "small-block half scale differs");
+            end loop;
+            for Format of Formats loop
+               declare
+                  Name : constant String := (if Format = G.Type_IQ4_NL then "nl" else "q2");
+                  Per : constant N.Element_Count := N.Element_Count (G.Block_Elements (Format));
+                  Blocks : constant N.Element_Count := Columns / Per;
+                  Row_Bytes : constant B.Byte_Count := B.Byte_Count (Blocks) * 18 + 5;
+                  Stored : constant B.Byte_Array := Read_Bytes (Name & "-" & Image (Columns) & ".bin");
+                  Expected : constant N.Real_Array := Read_Floats (Name & "-" & Image (Columns) & ".f32");
+                  Data : B.Byte_Array (5 .. 5 + 7 + Row_Bytes * B.Byte_Count (Rows) - 1) := [others => 99];
+                  Stride : constant N.Element_Count := Columns + 32;
+                  Values : QI.Signed_Array (11 .. 11 + 32 + Count * Stride - 1) := [others => 0];
+                  Scales : N.Real_Array (7 .. 7 + 1 + Count * Stride / 32 - 1) := [others => 0.0];
+                  Answer : N.Wide_Real_Array (11 .. 12 + Rows * Count) := [others => 0.5];
+               begin
+                  Assert (QI.Has_Integer_Kernel (Format, Reference_Arithmetic => True), "missing small-block kernel");
+                  for R in 0 .. Rows - 1 loop
+                     Data (12 + B.Byte_Count (R) * Row_Bytes .. 12 + B.Byte_Count (R) * Row_Bytes
+                           + B.Byte_Count (Blocks) * 18 - 1) :=
+                       Stored (B.Byte_Count (R * Blocks) * 18 .. B.Byte_Count ((R + 1) * Blocks) * 18 - 1);
+                  end loop;
+                  for V in 0 .. Count - 1 loop
+                     Values (43 + V * Stride .. 43 + V * Stride + Columns - 1) :=
+                       Packed (V * Columns .. (V + 1) * Columns - 1);
+                     Scales (8 + V * Stride / 32 .. 8 + V * Stride / 32 + Columns / 32 - 1) :=
+                       Scale (V * Columns / 32 .. (V + 1) * Columns / 32 - 1);
+                  end loop;
+                  for Taken in N.Element_Count range 1 .. Count loop
+                     if Taken in 1 | 2 | 4 | 7 | 8 | 9 then
+                        Answer := [others => 0.5];
+                        QI.Accumulate_Rows (Format, Data, 7, Row_Bytes, Rows, Blocks, Values, Scales, [], [],
+                                            32, Stride, Taken, Answer (12 .. 12 + Rows * Taken - 1), Ok,
+                                            Reference_Arithmetic => True);
+                        Assert (Ok, "small-block strided product declined");
+                        for R in 0 .. Rows - 1 loop
+                           for V in 0 .. Taken - 1 loop
+                              Assert (Answer (12 + R * Taken + V) = 0.5 + N.Wide_Real (Expected (R * Count + V)),
+                                      "small-block reference fold " & Name & " width" & Columns'Image
+                                      & " row" & R'Image & " vector" & V'Image
+                                      & " got" & Answer (12 + R * Taken + V)'Image
+                                      & " expected" & N.Wide_Real'Image (0.5 + N.Wide_Real (Expected (R * Count + V))));
+                           end loop;
+                        end loop;
+                        Assert (Answer (11) = 0.5 and then Answer (12 + Rows * Taken) = 0.5,
+                                "small-block output guard overwritten");
+                     end if;
+                  end loop;
+                  Answer := [others => 0.5];
+                  QI.Accumulate_Rows (Format, Data (5 .. 12), 7, Row_Bytes, Rows, Blocks, Values, Scales, [], [],
+                                      32, Stride, Count, Answer, Ok, Reference_Arithmetic => True);
+                  Assert (not Ok, "short small-block weights accepted");
+                  QI.Accumulate_Rows (Format, Data, 7, Row_Bytes, Rows, Blocks, Values (11 .. 42), Scales, [], [],
+                                      32, Stride, Count, Answer, Ok, Reference_Arithmetic => True);
+                  Assert (not Ok, "short small-block activations accepted");
+                  QI.Accumulate_Rows (Format, Data, 7, Row_Bytes, Rows, Blocks, Values, Scales (7 .. 7), [], [],
+                                      32, Stride, Count, Answer, Ok, Reference_Arithmetic => True);
+                  Assert (not Ok, "short small-block scales accepted");
+                  QI.Accumulate_Rows (Format, Data, 7, Row_Bytes, Rows, Blocks, Values, Scales, [], [],
+                                      32, Stride, Count, Answer (11 .. 11), Ok, Reference_Arithmetic => True);
+                  Assert (not Ok, "short small-block output accepted");
+                  for Value of Answer loop Assert (Value = 0.5, "declined small-block product wrote output"); end loop;
+                  --  Every nonlinear level against signed byte extrema, zero and
+                  --  unit values; integer sums here are exactly representable.
+                  if Format = G.Type_IQ4_NL then
+                     declare
+                        Levels : constant array (0 .. 15) of Integer :=
+                          [-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113];
+                        Inputs : constant array (1 .. 6) of Integer := [-128, -127, -1, 0, 1, 127];
+                     begin
+                        for Code in Levels'Range loop
+                           Data := [others => 0];
+                           for Row in B.Byte_Count range 0 .. 2 loop
+                              for Block in 0 .. Blocks - 1 loop
+                                 declare
+                                    At_Byte : constant B.Byte_Count := 12 + Row * Row_Bytes + B.Byte_Count (Block) * 18;
+                                    Level : constant Natural := (if Row = 1 then 15 - Code else Code);
+                                 begin
+                                    Data (At_Byte + 1) := (if Row = 1 then 16#38# elsif Row = 2 then 16#40#
+                                                           else 16#3C#);
+                                    for I in B.Byte_Count range 0 .. 15 loop
+                                       Data (At_Byte + 2 + I) := B.Byte (Level * 17);
+                                    end loop;
+                                 end;
+                              end loop;
+                           end loop;
+                           for Input of Inputs loop
+                              Values := [others => QI.Byte_Signed (Input)]; Scales := [others => 1.0];
+                              for Taken in N.Element_Count range 1 .. Count loop
+                                 Answer := [others => 0.5];
+                                 QI.Accumulate_Rows
+                                   (Format, Data, 7, Row_Bytes, 3, Blocks, Values, Scales, [], [],
+                                    32, Stride, Taken, Answer (12 .. 12 + 3 * Taken - 1), Ok,
+                                    Reference_Arithmetic => True);
+                                 Assert (Ok, "IQ4_NL signed extrema declined");
+                                 for Row in N.Element_Count range 0 .. 2 loop
+                                    for V in 0 .. Taken - 1 loop
+                                       Assert (Answer (12 + Row * Taken + V) = 0.5 + N.Wide_Real (Columns)
+                                         * N.Wide_Real (Input * Levels ((if Row = 1 then 15 - Code else Code)))
+                                         * (if Row = 1 then 0.5 elsif Row = 2 then 2.0 else 1.0),
+                                         "IQ4_NL signed extrema differ at code" & Code'Image & Input'Image & Taken'Image);
+                                    end loop;
+                                 end loop;
+                                 Assert (Answer (11) = 0.5 and then Answer (12 + 3 * Taken) = 0.5,
+                                         "IQ4_NL signed extrema output guard");
+                              end loop;
+                           end loop;
+                        end loop;
+                     end;
+                  end if;
+                  --  Signed minimum must not overflow when a negative weight is used.
+                  Data := [others => 0];
+                  for Block in 0 .. Blocks - 1 loop Data (13 + B.Byte_Count (Block) * 18) := 16#3C#; end loop;
+                  Values := [others => -128]; Scales := [others => 1.0]; Answer := [others => 0.0];
+                  for Taken in N.Element_Count range 2 .. Count loop
+                     if Taken in 2 | 7 | 9 then
+                        Answer := [others => 0.0];
+                        QI.Accumulate_Rows (Format, Data, 7, Row_Bytes, 1, Blocks, Values, Scales, [], [],
+                                            32, Stride, Taken, Answer, Ok, Reference_Arithmetic => True);
+                        Assert (Ok, "signed minimum batch declined");
+                        for V in 0 .. Taken - 1 loop
+                           Assert (Answer (11 + V) = N.Wide_Real (Columns * 128
+                             * (if Format = G.Type_IQ4_NL then 127 else 1)), "signed minimum batch overflow");
+                        end loop;
+                     end if;
+                  end loop;
+                  QI.Use_Deep_Rows (False);
+                  Assert (not QI.Has_Integer_Kernel (Format, Reference_Arithmetic => True),
+                          "disabled small-block kernel advertised");
+                  QI.Use_Deep_Rows (True);
+               end;
+            end loop;
+         end;
+      end loop;
+      QI.Use_Deep_Rows (Deep);
+   exception
+      when others => QI.Use_Deep_Rows (Deep); raise;
+   end Small_Block_Products_Match_Reference;
+
+   procedure Independent_Grid_Goldens (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package QI renames Model_Runner.Quantization.Integers;
+      package G renames Model_Runner.GGUF;
+      Formats : constant array (1 .. 7) of G.Tensor_Type :=
+        [G.Type_IQ1_S, G.Type_IQ1_M, G.Type_IQ2_XXS, G.Type_IQ2_XS,
+         G.Type_IQ2_S, G.Type_IQ3_XXS, G.Type_IQ3_S];
+      function Stem (Format : G.Tensor_Type) return String is
+        (case Format is when G.Type_IQ1_S => "iq1_s", when G.Type_IQ1_M => "iq1_m",
+         when G.Type_IQ2_XXS => "iq2_xxs", when G.Type_IQ2_XS => "iq2_xs", when G.Type_IQ2_S => "iq2_s",
+         when G.Type_IQ3_XXS => "iq3_xxs", when others => "iq3_s");
+      function Bytes (Name : String) return B.Byte_Array is
+         Raw : constant String := Project_Tools.Files.Read_Raw_File
+           ("fixtures/inkling2/gsq-grid-direct/" & Name);
+         Result : B.Byte_Array (0 .. B.Byte_Count (Raw'Length) - 1);
+      begin
+         for I in Result'Range loop Result (I) := Character'Pos (Raw (Raw'First + Natural (I))); end loop;
+         return Result;
+      end Bytes;
+      function Floats (Name : String) return N.Real_Array is
+         Raw : constant B.Byte_Array := Bytes (Name);
+         Result : N.Real_Array (0 .. N.Element_Count (Raw'Length / 4) - 1);
+         Good : Boolean;
+      begin
+         for I in Result'Range loop Result (I) := B.Get_F32 (Raw, B.Byte_Count (I) * 4, Good); end loop;
+         return Result;
+      end Floats;
+      Input : constant N.Real_Array := Floats ("input.f32");
+      Values : QI.Signed_Array (0 .. Input'Length - 1);
+      Scales : N.Real_Array (0 .. Input'Length / 32 - 1);
+      Totals : QI.Sum_Array (Scales'Range);
+      Halves : QI.Sum_Array (0 .. Scales'Length * 2 - 1);
+      Good : Boolean;
+   begin
+      if not Model_Runner.Platform.Byte_Products then return; end if;
+      QI.Quantize_Vectors (Input, 9, 2304, Values, Scales, Totals, Halves, Good,
+                          Super => True, Reference_Rounding => True);
+      Assert (Good, "grid reference packing");
+      for Format of Formats loop
+         declare
+            Data : constant B.Byte_Array := Bytes (Stem (Format) & ".bin");
+            Golden : constant N.Real_Array := Floats (Stem (Format) & ".f32");
+            RB : constant B.Byte_Count := 9 * B.Byte_Count (G.Block_Bytes (Format));
+            Sums : N.Wide_Real_Array (0 .. 35) := [others => 0.0];
+         begin
+            QI.Accumulate_Rows (Format, Data, 0, RB, 4, 9, Values, Scales, Totals, Halves,
+                                0, 2304, 9, Sums, Good, Reference_Arithmetic => True);
+            Assert (Good, "old grid row kernel");
+            for I in Golden'Range loop
+               Assert (abs (N.Real (Sums (I)) - Golden (I)) <= 1.0E-5 + 2.0E-5 * abs Golden (I),
+                       "independent GGML grid fixture mismatch");
+            end loop;
+         end;
+      end loop;
+   end Independent_Grid_Goldens;
+
    procedure Grid_Products_Match_Their_Rows
      (T : in out AUnit.Test_Cases.Test_Case'Class)
    is
@@ -3919,7 +4479,8 @@ package body Tests.GGUF_Cases is
          Model_Runner.GGUF.Type_Q6_K, Model_Runner.GGUF.Type_IQ4_NL,
          Model_Runner.GGUF.Type_IQ4_XS];
 
-      Vectors_Used : constant N.Element_Count := 5;
+      Vectors_Used : constant N.Element_Count := 17;
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
    begin
       for Format of Formats loop
          declare
@@ -3935,6 +4496,8 @@ package body Tests.GGUF_Cases is
 
             Data    : B.Byte_Array_Access;
             Inputs  : N.Real_Array (0 .. Vectors_Used * Columns - 1);
+            Shifted : N.Real_Array (17 .. 17 + Vectors_Used * Columns - 1);
+            Portable : N.Wide_Real_Array (7 .. 7 + Vectors_Used - 1) := [others => 0.0];
             Together : N.Wide_Real_Array (0 .. Vectors_Used - 1) :=
               [others => 0.0];
             Alone   : N.Wide_Real_Array (0 .. 0);
@@ -3959,19 +4522,41 @@ package body Tests.GGUF_Cases is
 
             for Index in Inputs'Range loop
                Inputs (Index) :=
-                 N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0;
+                 (N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0)
+                 * 2.0 ** (Integer (Index mod 13) * 8 - 48);
             end loop;
 
-            --  All five vectors in one call.
-            Q.Accumulate_Dot
-              (Format, Data.all, 0, Blocks, Inputs, Inputs'First,
-               Columns, Vectors_Used, Together, Ok);
-            Assert (Ok, "batched dot failed for "
-                    & Model_Runner.GGUF.Type_Name (Format));
+            --  Preserve the four-lane reduction exactly, including across
+            --  span boundaries, tails, unaligned vectors and shifted bounds.
+            --  Mixed exponents make a changed addition order observable.
+            Shifted := Inputs;
+            for Many in 1 .. Vectors_Used loop
+               Portable := [others => -0.25];
+               Together := [others => -0.25];
+               Q.Use_Wide_Decoders (False);
+               Q.Accumulate_Dot
+                 (Format, Data.all, 0, Blocks, Shifted, Shifted'First,
+                  Columns, Many, Portable, Ok);
+               Assert (Ok, "portable dot failed");
+               Q.Use_Wide_Decoders (Wide);
 
-            --  The same five vectors, one call each.
+               --  Every group count and leftover, including several groups.
+               Q.Accumulate_Dot
+                 (Format, Data.all, 0, Blocks, Inputs, Inputs'First,
+                  Columns, Many, Together, Ok);
+               Assert (Ok, "batched dot failed for "
+                       & Model_Runner.GGUF.Type_Name (Format));
+               for Which in 0 .. Many - 1 loop
+                  Assert
+                    (Interfaces."="
+                       (N.Wide_Bits (Portable (Portable'First + Which)), N.Wide_Bits (Together (Which))),
+                     "wide dot changed the original reduction bits for " & Model_Runner.GGUF.Type_Name (Format));
+               end loop;
+            end loop;
+
+            --  The same vectors, one call each, retaining the caller's sum.
             for Which in 0 .. Vectors_Used - 1 loop
-               Alone := [others => 0.0];
+               Alone := [others => -0.25];
                Q.Accumulate_Dot
                  (Format, Data.all, 0, Blocks, Inputs,
                   Inputs'First + Which * Columns, Columns, 1, Alone, Ok);
@@ -3989,7 +4574,337 @@ package body Tests.GGUF_Cases is
             B.Free (Data);
          end;
       end loop;
+   exception
+      when others =>
+         Q.Use_Wide_Decoders (Wide);
+         raise;
    end Batch_Width_Does_Not_Change_Result;
+
+   procedure Batched_Row_Products_Are_Exact (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Tensor renames Model_Runner.Tensors;
+      Formats : constant array (1 .. 9) of G.Tensor_Type :=
+        [G.Type_Q4_K, G.Type_Q5_K, G.Type_Q6_K, G.Type_Q4_0, G.Type_Q5_0, G.Type_Q8_0,
+         G.Type_F32, G.Type_F16, G.Type_BF16];
+      Widths : constant array (1 .. 9) of N.Element_Count :=
+        [32, 64, 256, 257, 1152, 2048, 2049, 2304, 4608];
+      Row_Counts : constant array (1 .. 12) of N.Element_Count :=
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17];
+      Counts : constant array (1 .. 21) of N.Element_Count :=
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 31, 32, 33, 127, 128, 129];
+      Inputs : Tensor.Real_Array_Access := null;
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Data : B.Byte_Array_Access := null;
+      Seed : Interfaces.Unsigned_32 := 16#2481_79AD#;
+      function Next return Interfaces.Unsigned_32 is
+      begin
+         Seed := Seed * 1_664_525 + 1_013_904_223;
+         return Seed;
+      end Next;
+   begin
+      for Format of Formats loop
+         for Columns of Widths loop
+            if Columns mod N.Element_Count (G.Block_Elements (Format)) = 0 then
+               for Rows of Row_Counts loop
+                  declare
+                     Blocks : constant N.Element_Count := Columns / N.Element_Count (G.Block_Elements (Format));
+                     Block_Width : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+                     Item : Tensor.View;
+                     Status : Model_Runner.Errors.Error_Info;
+                     Expected, Actual : N.Real_Array (13 .. 13 + 129 * Rows - 1);
+                  begin
+                     Inputs := new N.Real_Array (11 .. 11 + 129 * Columns - 1);
+                     B.Allocate (7 + B.Byte_Count (Rows * Blocks) * Block_Width, Data);
+                     Assert (Data /= null, "row-pair fixture allocation failed");
+                     for Index in Data.all'Range loop
+                        Data (Index) := B.Byte (Interfaces.Shift_Right (Next, 24) and 255);
+                     end loop;
+                     Make_Finite (Data.all (Data.all'First + 7 .. Data.all'Last), Format, Rows * Blocks);
+                     if Format in G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K then
+                        declare
+                           Scales : constant array (N.Element_Count range 0 .. 11) of Interfaces.Unsigned_16 :=
+                             [0, 16#8000#, 1, 3, 16#03FF#, 16#0400#, 16#3C01#, 16#BC01#,
+                              16#7BFF#, 16#FBFF#, 16#3555#, 16#B555#];
+                        begin
+                           for Block in 0 .. Rows * Blocks - 1 loop
+                              for Field in B.Byte_Count range 0 .. (if Format = G.Type_Q6_K then 0 else 1) loop
+                                 declare
+                                    Bits : constant Interfaces.Unsigned_16 :=
+                                      Scales ((Block + N.Element_Count (Field) * 7) mod Scales'Length);
+                                    At_Byte : constant B.Byte_Count := Data.all'First + 7
+                                      + B.Byte_Count (Block) * B.Byte_Count (G.Block_Bytes (Format))
+                                      + (if Format = G.Type_Q6_K then 208 else Field * 2);
+                                 begin
+                                    Data (At_Byte) := B.Byte (Bits and 255);
+                                    Data (At_Byte + 1) := B.Byte (Interfaces.Shift_Right (Bits, 8));
+                                 end;
+                              end loop;
+                           end loop;
+                        end;
+                     end if;
+                     if Format = G.Type_Q8_0 then
+                        declare
+                           Scales : constant array (N.Element_Count range 0 .. 11) of Interfaces.Unsigned_16 :=
+                             [0, 16#8000#, 1, 3, 16#03FF#, 16#0400#, 16#3C01#, 16#BC01#,
+                              16#7BFF#, 16#FBFF#, 16#3555#, 16#B555#];
+                        begin
+                           for Block in 0 .. Rows * Blocks - 1 loop
+                              Data (Data.all'First + 7 + B.Byte_Count (Block) * 34) :=
+                                B.Byte (Scales (Block mod Scales'Length) and 255);
+                              Data (Data.all'First + 8 + B.Byte_Count (Block) * 34) :=
+                                B.Byte (Interfaces.Shift_Right (Scales (Block mod Scales'Length), 8));
+                           end loop;
+                        end;
+                     end if;
+                     Tensor.Make (Format, Rows, Columns, Data, 7, Item, Status);
+                     Assert (not Model_Runner.Errors.Is_Error (Status), "row-pair view failed");
+                     for Index in Inputs.all'Range loop
+                        Inputs (Index) := (N.Real (Integer (Interfaces.Shift_Right (Next, 26))) - 32.0)
+                          * 2.0 ** (Integer (Index mod 9) * 8 - 32);
+                     end loop;
+                     for Many of Counts loop
+                        if Format not in G.Type_F32 | G.Type_F16 | G.Type_BF16 or else Many in 1 .. 4 then
+                           for First in N.Element_Count range 0 .. N.Element_Count'Min (1, Rows - 1) loop
+                              for Trim in N.Element_Count range 0 .. N.Element_Count'Min (1, Rows - First - 1) loop
+                                 Expected := [others => -0.75];
+                                 Actual := Expected;
+                                 Tensor.Use_Deep_Products (False);
+                                 Tensor.Use_Wide_Halves (False);
+                                 Tensor.Mat_Mul_Range (Item, Inputs.all, Many, Expected, First, Rows - Trim - 1);
+                                 Tensor.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
+                                 Tensor.Use_Wide_Halves (Wide);
+                                 Tensor.Mat_Mul_Range (Item, Inputs.all, Many, Actual, First, Rows - Trim - 1);
+                                 for Index in Expected'Range loop
+                                    Assert
+                                      (N.Bits (Expected (Index)) = N.Bits (Actual (Index)),
+                                       "paired " & G.Type_Name (Format) & " rows changed an output: columns"
+                                       & Columns'Image & " rows" & Rows'Image & " count" & Many'Image);
+                                 end loop;
+                              end loop;
+                           end loop;
+                        end if;
+                     end loop;
+                     if Columns mod 4 = 0 then
+                        declare
+                           Meta : Tensor.Real_Array_Access := null;
+                           Cached : Tensor.View := Item;
+                        begin
+                           if Tensor.Scale_Count (Item) > 0 then
+                              Tensor.Allocate (Tensor.Scale_Count (Item), Meta);
+                              Tensor.Decode_Scales (Item, Meta.all, Status);
+                              Assert (not Model_Runner.Errors.Is_Error (Status), "scale metadata decode failed");
+                              Cached.Scales := Meta;
+                           end if;
+                           for Many in N.Element_Count range 1 .. 17 loop
+                              Expected := [others => -0.75]; Actual := Expected;
+                              Tensor.Use_Deep_Products (False);
+                                 Tensor.Use_Wide_Halves (False);
+                              Tensor.Mat_Mul_Range (Item, Inputs.all, Many, Expected, 0, Rows - 1);
+                              Tensor.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
+                                 Tensor.Use_Wide_Halves (Wide);
+                              Tensor.Mat_Mul_Range (Cached, Inputs.all, Many, Actual, 0, Rows - 1);
+                              for Index in Expected'Range loop
+                                 Assert (N.Bits (Expected (Index)) = N.Bits (Actual (Index)),
+                                         "cached quantization scale metadata changed an output");
+                              end loop;
+                              declare
+                                 Members : Model_Runner.Shares.Member_Rows (4 .. 3 + Natural (Many));
+                              begin
+                                 Expected := [others => -0.75]; Actual := Expected;
+                                 for Index in Members'Range loop
+                                    Members (Index) := (Index * 7 + 3) mod 129;
+                                    declare
+                                       From : constant N.Element_Count := Inputs.all'First
+                                         + N.Element_Count (Members (Index)) * Columns;
+                                       Into : constant N.Element_Count := Expected'First
+                                         + N.Element_Count (Index - Members'First) * Rows;
+                                    begin
+                                       Tensor.Use_Deep_Products (False);
+                                 Tensor.Use_Wide_Halves (False);
+                                       Tensor.Mat_Mul_Range
+                                         (Item, Inputs.all (From .. From + Columns - 1), 1,
+                                          Expected (Into .. Into + Rows - 1), 0, Rows - 1);
+                                    end;
+                                 end loop;
+                                 Tensor.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
+                                 Tensor.Use_Wide_Halves (Wide);
+                                 Tensor.Mat_Mul_Range
+                                   (Cached, Inputs.all, Many, Actual, 0, Rows - 1, Members => Members);
+                                 for Index in Expected'Range loop
+                                    Assert (N.Bits (Expected (Index)) = N.Bits (Actual (Index)),
+                                            "indexed source rows changed order, arithmetic or target tails");
+                                 end loop;
+                                 Members (Members'First) := 129;
+                                 Actual := [others => -0.75];
+                                 Tensor.Mat_Mul_Range
+                                   (Cached, Inputs.all, Many, Actual, 0, Rows - 1, Members => Members);
+                                 Assert ((for all X of Actual => X = -0.75), "invalid indexed row wrote an output");
+                              end;
+                           end loop;
+                           Tensor.Free (Meta);
+                        exception
+                           when others => Tensor.Free (Meta); raise;
+                        end;
+                     end if;
+                     if Format = G.Type_Q4_K and then Rows mod 8 = 0 then
+                        declare
+                           package IL renames Model_Runner.Quantization.Interleave;
+                           Panels : B.Byte_Array_Access := null;
+                           Panel_View : Tensor.View;
+                           Built : Boolean;
+                        begin
+                           B.Allocate (7 + IL.Panel_Bytes (Format, Rows, Blocks), Panels);
+                           IL.Build (Format, Data.all, 7, Panels.all, 7, Rows, Blocks, Built);
+                           Assert (Built, "native float panel build failed");
+                           Tensor.Make_Panels (Format, Rows, Columns, Panels, 7, Panel_View, Status);
+                           Assert (not Model_Runner.Errors.Is_Error (Status), "native float panel view failed");
+                           for Many of Counts loop
+                              Expected := [others => -0.75]; Actual := Expected;
+                              Tensor.Use_Deep_Products (False);
+                              Tensor.Use_Wide_Halves (False);
+                              Tensor.Mat_Mul_Range (Item, Inputs.all, Many, Expected, 0, Rows - 1);
+                              Tensor.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
+                              Tensor.Use_Wide_Halves (Wide);
+                              Tensor.Mat_Mul_Range (Panel_View, Inputs.all, Many, Actual, 0, Rows - 1);
+                              for Index in Expected'Range loop
+                                 Assert (N.Bits (Expected (Index)) = N.Bits (Actual (Index)),
+                                         "native float panel changed accumulation bits or target tails");
+                              end loop;
+                           end loop;
+                           B.Free (Panels);
+                        exception
+                           when others => B.Free (Panels); raise;
+                        end;
+                     end if;
+                     Tensor.Free (Inputs);
+                     B.Free (Data);
+                  end;
+               end loop;
+            end if;
+         end loop;
+      end loop;
+   exception
+      when others =>
+         Tensor.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
+                                 Tensor.Use_Wide_Halves (Wide);
+         Tensor.Free (Inputs);
+         B.Free (Data);
+         raise;
+   end Batched_Row_Products_Are_Exact;
+
+   --  A fused multiply-add is only interchangeable with separate operations
+   --  here because both multiplicands are binary32 values widened to binary64.
+   --  Compare to the scalar reference with the full finite binary32 range,
+   --  cancellation, subnormals and signed zero, across both paired kernels.
+   procedure Paired_Products_Keep_Exact_Extremes
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Tensor renames Model_Runner.Tensors;
+      Formats : constant array (1 .. 4) of G.Tensor_Type :=
+        [G.Type_Q8_0, G.Type_F32, G.Type_F16, G.Type_BF16];
+      Widths : constant array (1 .. 3) of N.Element_Count := [256, 2048, 2304];
+      Counts : constant array (1 .. 10) of N.Element_Count := [1, 4, 5, 6, 7, 8, 9, 12, 13, 16];
+      Patterns : constant array (N.Element_Count range 0 .. 15) of Interfaces.Unsigned_32 :=
+        [16#0000_0000#, 16#8000_0000#, 16#0000_0001#, 16#8000_0001#,
+         16#007F_FFFF#, 16#807F_FFFF#, 16#0080_0000#, 16#8080_0000#,
+         16#3F80_0001#, 16#BF80_0001#, 16#3FFF_FFFF#, 16#BFFF_FFFF#,
+         16#7F7F_FFFF#, 16#FF7F_FFFF#, 16#7148_9123#, 16#F148_9123#];
+      Row_Counts : constant array (1 .. 7) of N.Element_Count := [2, 3, 5, 8, 9, 16, 17];
+      Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+      Data : B.Byte_Array_Access := null;
+      Inputs : Tensor.Real_Array_Access := null;
+   begin
+      for Format of Formats loop
+         for Columns of Widths loop
+            for Rows of Row_Counts loop
+               declare
+                  Blocks : constant N.Element_Count := Columns / N.Element_Count (G.Block_Elements (Format));
+                  Block_Width : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+                  Item : Tensor.View;
+                  Status : Model_Runner.Errors.Error_Info;
+                  Expected, Actual : N.Real_Array (5 .. 5 + 16 * Rows - 1);
+               begin
+                  B.Allocate (7 + B.Byte_Count (Rows * Blocks) * Block_Width, Data);
+                  Assert (Data /= null, "extreme product fixture allocation failed");
+                  Data.all := [others => 0];
+                  for Row in 0 .. Rows - 1 loop
+                     for Block in 0 .. Blocks - 1 loop
+                        declare
+                           At_Byte : constant B.Byte_Count :=
+                             Data.all'First + 7 + B.Byte_Count (Row * Blocks + Block) * Block_Width;
+                        begin
+                           if Format = G.Type_Q8_0 then
+                              --  The smallest half scale bounds outputs even for the
+                              --  largest binary32 activation, without removing its bits.
+                              Data (At_Byte) := 1;
+                              for Index in N.Element_Count range 0 .. 31 loop
+                                 Data (At_Byte + 2 + B.Byte_Count (Index)) :=
+                                   B.Byte ((Index * 73 + Block * 31 + Row * 17) mod 256);
+                              end loop;
+                           else
+                              declare
+                                 Encoded : Interfaces.Unsigned_32 :=
+                                   (case Format is
+                                      when G.Type_F32 => 16#3300_0001#,
+                                      when G.Type_F16 => 3,
+                                      when others => 16#3381#);
+                              begin
+                                 --  Small finite weights keep even the largest
+                                 --  activation's complete output inside binary32.
+                                 if (Row + Block) mod 2 = 1 then
+                                    Encoded := Encoded or
+                                      (if Format = G.Type_F32 then 16#8000_0000# else 16#8000#);
+                                 end if;
+                                 for Byte in B.Byte_Count range 0 .. Block_Width - 1 loop
+                                    Data (At_Byte + Byte) := B.Byte
+                                      (Interfaces.Shift_Right (Encoded, Natural (Byte * 8)) and 255);
+                                 end loop;
+                              end;
+                           end if;
+                        end;
+                     end loop;
+                  end loop;
+                  Tensor.Make (Format, Rows, Columns, Data, 7, Item, Status);
+                  Assert (not Model_Runner.Errors.Is_Error (Status), "extreme product view failed");
+                  Inputs := new N.Real_Array (11 .. 11 + 16 * Columns - 1);
+                  for Shift in N.Element_Count range 0 .. 5 loop
+                     for Index in Inputs.all'Range loop
+                        Inputs (Index) := N.From_Bits
+                          (if Shift = 4 then 0
+                           elsif Shift = 5 then 16#8000_0000#
+                           else Patterns ((Index + (Index - Inputs.all'First) / Columns * 3 + Shift) mod 16));
+                     end loop;
+                     for Many of Counts loop
+                        Expected := [others => -0.75];
+                        Actual := Expected;
+                        Q.Use_Wide_Decoders (False);
+                        Tensor.Use_Wide_Halves (False);
+                        Tensor.Mat_Mul_Range (Item, Inputs.all, Many, Expected, 0, Rows - 1);
+                        Q.Use_Wide_Decoders (Wide);
+                        Tensor.Use_Wide_Halves (Wide);
+                        Tensor.Mat_Mul_Range (Item, Inputs.all, Many, Actual, 0, Rows - 1);
+                        for Index in Expected'Range loop
+                           Assert (N.Bits (Expected (Index)) = N.Bits (Actual (Index)),
+                                   "paired products changed extreme finite inputs at columns"
+                                   & Columns'Image & " count" & Many'Image & " phase" & Shift'Image);
+                        end loop;
+                     end loop;
+                  end loop;
+                  Tensor.Free (Inputs);
+                  B.Free (Data);
+               end;
+            end loop;
+         end loop;
+      end loop;
+   exception
+      when others =>
+         Q.Use_Wide_Decoders (Wide);
+         Tensor.Use_Wide_Halves (Wide);
+         Tensor.Free (Inputs);
+         B.Free (Data);
+         raise;
+   end Paired_Products_Keep_Exact_Extremes;
 
    --  Nothing a model file says can steer the terminal.
    --
@@ -8602,6 +9517,31 @@ package body Tests.GGUF_Cases is
               & Natural'Image (Infinities) & " infinite,"
               & Natural'Image (Not_Numbers) & " not-a-number");
 
+      declare
+         Halves : N.Half_Array (7 .. 65542);
+         Values : N.Real_Array (11 .. 65546);
+      begin
+         for Index in Halves'Range loop Halves (Index) := N.Half (Index - Halves'First); end loop;
+         for Wide in Boolean loop
+            Model_Runner.Kernels.Use_Wide_Lanes (Wide and then Model_Runner.Platform.Wide_Vectors);
+            Model_Runner.Kernels.From_Halves (Halves, Values);
+            for Index in Halves'Range loop
+               Assert (N.Bits (Values (Values'First + Index - Halves'First)) = N.Bits (N.To_Real (Halves (Index))),
+                       "binary16 batch expansion changed an encoding");
+            end loop;
+            for Length in N.Element_Count range 0 .. 17 loop
+               Values := [others => -1.0];
+               Model_Runner.Kernels.From_Halves (Halves (7 .. 6 + Length), Values (11 .. 10 + Length));
+               for Index in N.Element_Count range 0 .. Length - 1 loop
+                  Assert (N.Bits (Values (11 + Index)) = N.Bits (N.To_Real (Halves (7 + Index))),
+                          "binary16 expansion left a short or odd tail unwritten");
+               end loop;
+               Assert (N.Bits (Values (11 + Length)) = N.Bits (-1.0),
+                       "binary16 expansion wrote beyond its output slice");
+            end loop;
+         end loop;
+      end;
+
       --  Equality does not separate the two zeros, so ask for the sign
       --  directly. A widening that dropped it would pass everything above.
       Assert (N.Wide_Bits (N.Wide_Real (N.To_Real (N.Half (16#0000#)))) = 0,
@@ -8660,8 +9600,8 @@ package body Tests.GGUF_Cases is
 
    --  Kernels.To_Halves, eight a step through the conversion instruction,
    --  writes what To_Half writes one at a time, to the bit: across the
-   --  normal range, the subnormals, the values below the smallest
-   --  subnormal that To_Half sends to zero and the instruction would not,
+   --  normal range, the subnormals, rounding boundaries below the smallest
+   --  subnormal,
    --  the overflow past the largest half, the infinities and a NaN -- each
    --  of those last placed among seven ordinary values, so that a block
    --  holding one goes the slow way and the blocks beside it do not.
@@ -8936,6 +9876,52 @@ package body Tests.GGUF_Cases is
          end;
       end loop;
    end Nibble_Lanes_Are_The_Nibble_Loop;
+
+   --  Expected halves follow IEEE nearest-even parity at all 1,024
+   --  subnormal intervals, independently of either conversion implementation.
+   procedure Half_Subnormal_Midpoints (T2 : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T2);
+      use type N.Half;
+      use type N.Half_Array;
+      Values : N.Real_Array (0 .. 6143);
+      Expected, Actual : N.Half_Array (Values'Range);
+   begin
+      for Code in N.Element_Count range 0 .. 1023 loop
+         declare
+            Middle : constant N.Real := N.Real (2 * Code + 1) * 2.0 ** (-25);
+            Raw : constant Interfaces.Unsigned_32 := N.Bits (Middle);
+            Base : constant N.Element_Count := Code * 6;
+            Rounded : constant N.Half := N.Half (if Code mod 2 = 0 then Code else Code + 1);
+         begin
+            Values (Base) := N.From_Bits (Raw - 1);
+            Values (Base + 1) := Middle;
+            Values (Base + 2) := N.From_Bits (Raw + 1);
+            Expected (Base) := N.Half (Code);
+            Expected (Base + 1) := Rounded;
+            Expected (Base + 2) := N.Half (Code + 1);
+            for Offset in N.Element_Count range 0 .. 2 loop
+               Values (Base + 3 + Offset) := -Values (Base + Offset);
+               Expected (Base + 3 + Offset) := Expected (Base + Offset) or 16#8000#;
+            end loop;
+         end;
+      end loop;
+      for Index in Values'Range loop
+         Assert (N.To_Half (Values (Index)) = Expected (Index),
+                 "scalar binary16 midpoint differs from IEEE nearest-even at" & Index'Image);
+      end loop;
+      for Wide in Boolean loop
+         if not Wide or else Model_Runner.Platform.Wide_Vectors then
+            Model_Runner.Kernels.Use_Wide_Lanes (Wide);
+            Model_Runner.Kernels.To_Halves (Values, Actual);
+            Assert (Actual = Expected, "binary16 array conversion differs from IEEE subnormal rounding");
+         end if;
+      end loop;
+      Model_Runner.Kernels.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
+   exception
+      when others =>
+         Model_Runner.Kernels.Use_Wide_Lanes (Model_Runner.Platform.Wide_Vectors);
+         raise;
+   end Half_Subnormal_Midpoints;
 
    procedure Halves_Eight_At_A_Time_Are_To_Half
      (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -10550,6 +11536,11 @@ package body Tests.GGUF_Cases is
       Assert (not QI.Has_Integer_Kernel (G2.Type_Q4_K)
               and then not QI.Has_Integer_Kernel (G2.Type_Q6_K),
               "a k-quant's integer kernel was offered where it would be refused");
+      QI.Use_Wide_Rows (True);
+      Assert (QI.Has_Integer_Kernel (G2.Type_Q4_K, Reference_Arithmetic => True)
+              and then QI.Has_Integer_Kernel (G2.Type_Q5_K, Reference_Arithmetic => True)
+              and then QI.Has_Integer_Kernel (G2.Type_Q6_K, Reference_Arithmetic => True),
+              "qualified256-bit reference K kernels were hidden from packed dispatch");
       QI.Use_Deep_Rows (Deep);
       QI.Use_Wide_Rows (Wide);
 
@@ -10832,6 +11823,18 @@ package body Tests.GGUF_Cases is
          "a run of activations packed in pieces is the run packed whole, "
          & "byte for byte");
       Register_Routine
+        (T, Q4_Unpacking_Preserves_Exact_Arithmetic'Access,
+         "Q4_K vector unpacking preserves finite bits, scale fields and non-finite classification");
+      Register_Routine
+        (T, Unit_Norm_And_Finite_Checks'Access,
+         "unweighted normalization keeps exact stages and finite checks cover every lane and tail");
+      Register_Routine
+        (T, K_Unpacking_Preserves_Exact_Arithmetic'Access,
+         "Q5_K and Q6_K vector unpacking preserves scales, bitplanes and rounding");
+      Register_Routine
+        (T, Q8_Unpacking_Preserves_All_Scales'Access,
+         "Q8 unpacking preserves all finite scale bits, signed bytes and non-finite classification");
+      Register_Routine
         (T, Both_Decoders_Answer_The_Same_Bits'Access,
          "the two compilations of the decoders answer the same bits");
 
@@ -10845,6 +11848,12 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Fused_Dot_Matches_Decoder'Access,
          "the fused dot product agrees with the reference decoder");
+      Register_Routine
+        (T, Small_Block_Products_Match_Reference'Access,
+         "integer products : GSQ small-block rows match independent reference, strides and bounds");
+      Register_Routine
+        (T, Independent_Grid_Goldens'Access,
+         "integer products : independent seven-format grid goldens remain unchanged");
       Register_Routine
         (T, Grid_Products_Match_Their_Rows'Access,
          "integer products : the grid formats' rows, every compilation, as decoded");
@@ -10910,6 +11919,12 @@ package body Tests.GGUF_Cases is
       Register_Routine
         (T, Batch_Width_Does_Not_Change_Result'Access,
          "the number of vectors in a call does not change any of them");
+      Register_Routine
+        (T, Batched_Row_Products_Are_Exact'Access,
+         "batched rows preserve exact reductions, partial ranges and vector remainders");
+      Register_Routine
+        (T, Paired_Products_Keep_Exact_Extremes'Access,
+         "paired products preserve exact finite extremes, cancellation and signed zero");
 
       Register_Routine
         (T, Every_Half_Widens_To_Its_Value'Access,
@@ -10930,6 +11945,8 @@ package body Tests.GGUF_Cases is
         (T, Nibble_Lanes_Are_The_Nibble_Loop'Access,
          "the nibble cache's kernels in wide lanes are their nibble loop: "
          & "the blend to the bit, the dot product to rounding");
+      Register_Routine
+        (T, Half_Subnormal_Midpoints'Access, "binary16 subnormal midpoints round to nearest even");
       Register_Routine
         (T, Halves_Eight_At_A_Time_Are_To_Half'Access,
          "values converted to half precision eight at a time are what "

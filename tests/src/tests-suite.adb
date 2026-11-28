@@ -10,6 +10,8 @@ with Tests.GGUF_Cases;
 with Tests.Grammar_Cases;
 with Tests.Image_Cases;
 with Tests.Inference_Cases;
+with Tests.Execution_Schedule_Cases;
+with Tests.Inkling_Cases;
 with Tests.Platform_Cases;
 with Tests.Accounting_Cases;
 with Tests.Agent_Loop_Cases;
@@ -28,6 +30,8 @@ package body Tests.Suite is
 
    GGUF_Case      : aliased Tests.GGUF_Cases.Case_Type;
    Inference_Case : aliased Tests.Inference_Cases.Case_Type;
+   Execution_Schedule_Case : aliased Tests.Execution_Schedule_Cases.Case_Type;
+   Inkling_Case : aliased Tests.Inkling_Cases.Case_Type;
    Sampling_Case  : aliased Tests.Sampling_Cases.Case_Type;
    Accounting_Case : aliased Tests.Accounting_Cases.Case_Type;
    CLI_Case       : aliased Tests.CLI_Cases.Case_Type;
@@ -58,6 +62,8 @@ package body Tests.Suite is
    begin
       AUnit.Test_Suites.Add_Test (Result'Access, GGUF_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Inference_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Inkling_Case'Access);
+      AUnit.Test_Suites.Add_Test (Result'Access, Execution_Schedule_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Sampling_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, CLI_Case'Access);
       AUnit.Test_Suites.Add_Test (Result'Access, Code_Health_Case'Access);

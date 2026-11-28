@@ -165,6 +165,25 @@ begin
       Item.Low_Shader := Made;
    end;
 
+   --  Native reference integer products use the existing descriptor layout
+   --  and bounded rounded-activation buffer; no extra runtime or weight copy.
+   if Has_Integer_Dot (On) then
+      declare
+         Create : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Words : aliased constant Model_Runner.Shaders.Word_Array :=
+           Model_Runner.Shaders.Super.Row_Product_Super_Reference;
+         Request : aliased Shader_Create_Info;
+      begin
+         if Create /= null then
+            Request.Size := Interfaces.C.size_t (Words'Length * 4);
+            Request.Code := Words'Address;
+            if Create (Item.Logical, Request'Address, Null_Handle, Made'Access) = 0 then
+               Item.Reference_Shader := Made;
+            end if;
+         end if;
+      end;
+   end if;
+
    --  The super-block row product's module, made only where the device
    --  offers a subgroup to reduce across and the setting of its width to
    --  thirty-two. A refusal leaves Wave_Shader null and the engine binds
@@ -1894,6 +1913,11 @@ begin
          Line (Group_Size, 1, Item.Round_Line);
       end if;
 
+      if Item.Reference_Shader /= Null_Handle then
+         Request.Stage.Module := Item.Reference_Shader;
+         Line (Group_Size, 1, Item.Reference_Line);
+      end if;
+
       Request.Stage.Module := Item.Shader;
 
       if Item.Low_Pipeline = Null_Handle then
@@ -3407,6 +3431,106 @@ begin
 
       Item.Fence_Two := Made;
    end;
+
+   --  Turn_Line already proves that the device's enabled Float64 path can
+   --  build a pipeline. Keep this optional, as the existing rotation is.
+   if Item.Turn_Line /= Null_Handle then
+      declare
+         Make_Shader : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Make_Line : constant Create_Pipelines_Call := To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+         Words : aliased constant Model_Runner.Shaders.Word_Array := Model_Runner.Shaders.Combine_Native;
+         Shader : aliased Shader_Create_Info;
+         Request : aliased Compute_Pipeline_Info;
+         Name : C.Strings.chars_ptr := C.Strings.New_String ("main");
+      begin
+         Shader.Size := Interfaces.C.size_t (Words'Length * 4);
+         Shader.Code := Words'Address;
+         if Make_Shader /= null and then Make_Line /= null
+           and then Make_Shader (Item.Logical, Shader'Address, Null_Handle, Made'Access) = 0
+         then
+            Item.Native_Blender := Made;
+            Request.Stage.Module := Made;
+            Request.Stage.Name := Name;
+            Request.Layout := Item.Layout;
+            if Make_Line (Item.Logical, Null_Handle, 1, Request'Address, Null_Handle, Made'Access) = 0 then
+               Item.Native_Blend_Line := Made;
+            end if;
+         end if;
+         C.Strings.Free (Name);
+      end;
+   end if;
+
+   --  Reference packing uses the same optional Float64 capability as the
+   --  existing native control pipeline. A refusal keeps host packing.
+   if Item.Turn_Line /= Null_Handle and then Item.Reference_Line /= Null_Handle then
+      declare
+         Make_Shader : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Make_Line : constant Create_Pipelines_Call := To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+         Words : aliased constant Model_Runner.Shaders.Word_Array := Model_Runner.Shaders.Round_Reference;
+         Shader : aliased Shader_Create_Info;
+         Request : aliased Compute_Pipeline_Info;
+         Name : C.Strings.chars_ptr := C.Strings.New_String ("main");
+      begin
+         Shader.Size := Interfaces.C.size_t (Words'Length * 4); Shader.Code := Words'Address;
+         if Make_Shader /= null and then Make_Line /= null
+           and then Make_Shader (Item.Logical, Shader'Address, Null_Handle, Made'Access) = 0
+         then
+            Item.Reference_Round_Shader := Made;
+            Request.Stage.Module := Made; Request.Stage.Name := Name; Request.Layout := Item.Layout;
+            if Make_Line (Item.Logical, Null_Handle, 1, Request'Address, Null_Handle, Made'Access) = 0 then
+               Item.Reference_Round_Line := Made;
+            end if;
+         end if;
+         C.Strings.Free (Name);
+      end;
+   end if;
+
+   if Item.Turn_Line /= Null_Handle and then Item.Reference_Round_Line /= Null_Handle then
+      declare
+         Make_Shader : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Make_Line : constant Create_Pipelines_Call := To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+         Words : aliased constant Model_Runner.Shaders.Word_Array := Model_Runner.Shaders.Reference_Activation;
+         Shader : aliased Shader_Create_Info;
+         Request : aliased Compute_Pipeline_Info;
+         Name : C.Strings.chars_ptr := C.Strings.New_String ("main");
+      begin
+         Shader.Size := Interfaces.C.size_t (Words'Length * 4); Shader.Code := Words'Address;
+         if Make_Shader /= null and then Make_Line /= null
+           and then Make_Shader (Item.Logical, Shader'Address, Null_Handle, Made'Access) = 0
+         then
+            Item.Reference_Activation_Shader := Made;
+            Request.Stage.Module := Made; Request.Stage.Name := Name; Request.Layout := Item.Layout;
+            if Make_Line (Item.Logical, Null_Handle, 1, Request'Address, Null_Handle, Made'Access) = 0 then
+               Item.Reference_Activation_Line := Made;
+            end if;
+         end if;
+         C.Strings.Free (Name);
+      end;
+   end if;
+
+   --  Turn_Line proves enabled Float64 support for the ordered grid fold.
+   if Item.Turn_Line /= Null_Handle and then Item.Reference_Round_Line /= Null_Handle then
+      declare
+         Make_Shader : constant Create_Call := To_Create (Point ("vkCreateShaderModule"));
+         Make_Line : constant Create_Pipelines_Call := To_Create_Pipelines (Point ("vkCreateComputePipelines"));
+         Words : aliased constant Model_Runner.Shaders.Word_Array := Model_Runner.Shaders.Row_Product_GSQ_Reference;
+         Shader : aliased Shader_Create_Info;
+         Request : aliased Compute_Pipeline_Info;
+         Name : C.Strings.chars_ptr := C.Strings.New_String ("main");
+      begin
+         Shader.Size := Interfaces.C.size_t (Words'Length * 4); Shader.Code := Words'Address;
+         if Make_Shader /= null and then Make_Line /= null
+           and then Make_Shader (Item.Logical, Shader'Address, Null_Handle, Made'Access) = 0
+         then
+            Item.Reference_GSQ_Shader := Made;
+            Request.Stage.Module := Made; Request.Stage.Name := Name; Request.Layout := Item.Layout;
+            if Make_Line (Item.Logical, Null_Handle, 1, Request'Address, Null_Handle, Made'Access) = 0 then
+               Item.Reference_GSQ_Line := Made;
+            end if;
+         end if;
+         C.Strings.Free (Name);
+      end;
+   end if;
 
    Item.Slice := Slice;
    Item.Patience := Patience;

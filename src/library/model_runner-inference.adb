@@ -175,6 +175,8 @@ package body Model_Runner.Inference is
       Item.Bounds := Model_Runner.Limits.Default_Session_Limits;
       Item.Path := Null_Unbounded_String;
       Item.Canonical_Path := Null_Unbounded_String;
+      Item.Reuse_Prefix := False;
+      Item.Last_Reused := 0;
       Item.Opened := False;
    end Close;
 
@@ -389,6 +391,7 @@ package body Model_Runner.Inference is
       Schema : Prepared_Schema;
       Status : E.Error_Info;
    begin
+      Item.Last_Reused := 0;
       Prepare (Schema, Answer_Schema, Status);
       if E.Is_Error (Status) then
          Outcome :=
@@ -412,6 +415,7 @@ package body Model_Runner.Inference is
       Request      : G.Request;
       Generated    : G.Result;
    begin
+      Item.Last_Reused := 0;
       Outcome :=
         (State  => Completion_Failed,
          Reason => G.Runtime_Error,
@@ -434,7 +438,10 @@ package body Model_Runner.Inference is
       Request.Sampling := Options.Sampling;
       Request.Add_Beginning := Options.Add_Beginning;
 
-      L.Reset (Item.Context);
+      Request.Reuse_Committed_Prefix := Item.Reuse_Prefix;
+      if not Item.Reuse_Prefix then
+         L.Reset (Item.Context);
+      end if;
       G.Generate
         (Source => Item.Engine, Session => Item.Context, Prompt => Prompt,
          Item => Request, Stop_Set => Stop,
@@ -443,6 +450,7 @@ package body Model_Runner.Inference is
          Seeds => null, Cancel => Options.Cancel, Bounds => Item.Bounds,
          Outcome => Generated);
 
+      Item.Last_Reused := Generated.Reused_Tokens;
       Outcome.Text := Sink.Content;
       Outcome.Reason := Generated.Reason;
       Outcome.Error := Generated.Error;
@@ -460,6 +468,15 @@ package body Model_Runner.Inference is
          Outcome.State := Completion_Ready;
       end if;
    end Complete;
+
+   procedure Reuse_Prompt_Prefix (Item : in out Session; Enabled : Boolean := True) is
+   begin
+      Item.Reuse_Prefix := Enabled;
+      Item.Last_Reused := 0;
+   end Reuse_Prompt_Prefix;
+
+   function Reused_Prompt_Tokens (Item : Session) return Natural is
+     (Item.Last_Reused);
 
    function Is_Open (Item : Session) return Boolean is (Item.Opened);
 

@@ -25,7 +25,7 @@ package body Model_Runner.CLI.Checkpoint is
    --  The first line of a file this writes, then its version: none at all
    --  is a file written before there was one, version 0, the same records.
    Header  : constant String := "model_runner-conversation ";
-   Version : constant := 1;
+   Version : constant := 2;
 
    function Image_Of (Value : Natural) return String
    is (T.Image (Long_Long_Integer (Value)));
@@ -119,10 +119,13 @@ package body Model_Runner.CLI.Checkpoint is
                LP (Role);
                LP (Conv.Content_At (Messages, I));
             end if;
+            LP (Conv.Name_At (Messages, I));
+            LP (Conv.Tool_Call_Id_At (Messages, I));
             LP (T.Image (Long_Long_Integer (Calls)));
             for C in 1 .. Calls loop
                LP (Conv.Call_Name (Messages, I, C));
                LP (Conv.Call_Arguments (Messages, I, C));
+               LP (Conv.Call_Id (Messages, I, C));
             end loop;
          end;
       end loop;
@@ -256,6 +259,7 @@ package body Model_Runner.CLI.Checkpoint is
             Said := E.Success;
             declare
                Pos : Natural := 1;
+               File_Version : Natural := 0;
 
                --  What the turn before was: a tool's answer follows a call
                --  or another tool's answer, and nothing else.
@@ -323,6 +327,7 @@ package body Model_Runner.CLI.Checkpoint is
                         Refuse;
                         return;
                      end if;
+                     File_Version := Number;
                      Pos := Pos + 1;
                   end;
                end if;
@@ -336,14 +341,18 @@ package body Model_Runner.CLI.Checkpoint is
                      exit Read_Messages;
                   end if;
                   declare
-                     Ok_R, Ok_C, Ok_N : Boolean;
+                     Ok_R, Ok_C, Ok_N, Ok_Name, Ok_Id : Boolean := True;
                      Role    : constant String := Field (Ok_R);
                      Content : constant String := Field (Ok_C);
+                     Sender_Name : constant String :=
+                       (if File_Version >= 2 then Field (Ok_Name) else "");
+                     Tool_Id : constant String :=
+                       (if File_Version >= 2 then Field (Ok_Id) else "");
                      Count_S : constant String :=
                        (if Ok_R and then Ok_C then Field (Ok_N) else "");
                      Calls   : Natural := 0;
                   begin
-                     exit Read_Messages when not (Ok_R and then Ok_C and then Ok_N);
+                     exit Read_Messages when not (Ok_R and then Ok_C and then Ok_N and then Ok_Name and then Ok_Id);
                      begin
                         Calls := Natural'Value (Count_S);
                      exception
@@ -362,7 +371,10 @@ package body Model_Runner.CLI.Checkpoint is
                         Refuse;
                         exit Read_Messages;
                      end if;
-                     if not Model_Runner.UTF8.Is_Valid (Content) then
+                     if not Model_Runner.UTF8.Is_Valid (Content)
+                       or else not Model_Runner.UTF8.Is_Valid (Sender_Name)
+                       or else not Model_Runner.UTF8.Is_Valid (Tool_Id)
+                     then
                         Refuse (E.IO_Invalid_UTF8);
                         exit Read_Messages;
                      end if;
@@ -383,20 +395,22 @@ package body Model_Runner.CLI.Checkpoint is
                         end if;
                         for C in 1 .. Calls loop
                            declare
-                              Ok_Nm, Ok_Ar : Boolean;
+                              Ok_Nm, Ok_Ar, Ok_Cid : Boolean := True;
                               Nm : constant String := Field (Ok_Nm);
                               Ar : constant String := Field (Ok_Ar);
+                              Cid : constant String := (if File_Version >= 2 then Field (Ok_Cid) else "");
                            begin
                               exit Read_Messages when not
-                                (Ok_Nm and then Ok_Ar);
+                                (Ok_Nm and then Ok_Ar and then Ok_Cid);
                               if not (Model_Runner.UTF8.Is_Valid (Nm)
-                                      and then Model_Runner.UTF8.Is_Valid (Ar))
+                                      and then Model_Runner.UTF8.Is_Valid (Ar)
+                                      and then Model_Runner.UTF8.Is_Valid (Cid))
                               then
                                  Refuse (E.IO_Invalid_UTF8);
                                  exit Read_Messages;
                               end if;
                               if E.Is_Ok (Said) then
-                                 Conv.Append_Call (Into, Nm, Ar, Said);
+                                 Conv.Append_Call (Into, Nm, Ar, Said, Id => Cid);
                               end if;
                            end;
                         end loop;
@@ -419,6 +433,13 @@ package body Model_Runner.CLI.Checkpoint is
                            Content, Said);
                      end if;
 
+                     if E.Is_Ok (Said) then
+                        if Content'Length > 0 or else Calls > 0 or else Role'Length = 2 then
+                           Conv.Identify_Last (Into, Sender_Name, Tool_Id, Said);
+                        elsif Sender_Name /= "" or else Tool_Id /= "" then
+                           Refuse;
+                        end if;
+                     end if;
                      if E.Is_Error (Said) then
                         exit Read_Messages;
                      end if;

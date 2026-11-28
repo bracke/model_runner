@@ -1,5 +1,6 @@
 with System;
 with Model_Runner.Bytes;
+with Model_Runner.Shares;
 with Model_Runner.Errors;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
@@ -39,6 +40,11 @@ package Model_Runner.Tensors is
    subtype Element_Count is Model_Runner.Numerics.Element_Count;
    subtype Real_Array is Model_Runner.Numerics.Real_Array;
 
+   --  Heap storage for activations, caches and borrowed immutable scale tables.
+   --  Kept here so the numeric package remains free of allocation.
+   type Real_Array_Access is access Real_Array
+     with Storage_Pool => Model_Runner.Zeroed_Storage.Arrays;
+
    --  A read-only matrix view.
    --
    --  Data is the buffer the elements live in; Offset is the byte position of
@@ -58,6 +64,12 @@ package Model_Runner.Tensors is
       Rows    : Element_Count := 0;
       Columns : Element_Count := 0;
       Role    : Weight_Role := Role_Other;
+
+      --  Use the reference block encoding for byte activations: a half
+      --  scale for Q8_0 and signed-maximum Q8_K super-block packing.
+      --  The default preserves existing native arithmetic. This selects
+      --  a numerical representation, without invoking another runtime.
+      Reference_Activations : Boolean := False;
 
       --  Where the buffer begins and how much of it there is, rather than an
       --  access to it. An access to an unconstrained array carries its
@@ -85,16 +97,13 @@ package Model_Runner.Tensors is
       --  Make cannot set it, because a view is made from a file's bytes and
       --  a file never holds this order.
       Interleaved : Boolean := False;
+
+      --  Optional immutable row/block scale table. The view never frees it;
+      --  its session owner must keep it alive through all submitted work.
+      Scales : Real_Array_Access := null;
    end record;
 
    Empty_View : constant View := (others => <>);
-
-   --  Heap storage for activation and cache buffers.
-   --
-   --  Declared here rather than in Model_Runner.Numerics so that the numeric
-   --  package stays free of allocation.
-   type Real_Array_Access is access Real_Array
-     with Storage_Pool => Model_Runner.Zeroed_Storage.Arrays;
 
    --  Several matrices, and somewhere to put what each produces.
    --
@@ -340,6 +349,32 @@ package Model_Runner.Tensors is
       Target : in out Real_Array;
       Status : out Model_Runner.Errors.Error_Info);
 
+   --  Count the immutable scale table for row-major Q4_K/Q5_K/Q6_K weights.
+   --  @param Item Physical tensor view; unsupported layouts return zero.
+   --  @return Sixteen Real values per 256-element block, or zero.
+   function Scale_Count (Item : View) return Element_Count;
+
+   --  Count raw header scales for reference integer products; weights stay quantized.
+   --  @param Item Physical tensor; unsupported formats return zero.
+   --  @return Six aligned words per Q4_K/Q5_K block, five per Q6_K block.
+   --    Header Reals are followed by sixteen opaque coefficient bytes.
+   function Reference_Scale_Count (Item : View) return Element_Count;
+
+   --  Decode immutable header scales for the existing bounded session cache.
+   --  @param Item Physical tensor in native or panel layout.
+   --  @param Into Receives Reference_Scale_Count values in row/block order.
+   --  @param Status Success or a structured shape/data failure.
+   procedure Decode_Reference_Scales
+     (Item : View; Into : out Real_Array; Status : out Model_Runner.Errors.Error_Info);
+
+
+   --  Decode only block scale metadata without decoding any weight rows.
+   --  @param Item Physical tensor view.
+   --  @param Into Receives Scale_Count elements in row/block order.
+   --  @param Status Success or a structured shape/data refusal.
+   procedure Decode_Scales
+     (Item : View; Into : out Real_Array; Status : out Model_Runner.Errors.Error_Info);
+
    --  Matrix product against several input vectors at once, over a range of
    --  rows.
    --
@@ -361,13 +396,17 @@ package Model_Runner.Tensors is
    --    Rows; vector K starts at Target'First + K * Rows.
    --  @param First First row to compute, zero based.
    --  @param Last Last row to compute, zero based.
+   --  @param Members Optional source-row indices, in output order. Empty
+   --    selects the ordinary contiguous input layout; indices are checked
+   --    before computation and never change the weight or reduction order.
    procedure Mat_Mul_Range
      (Item    : View;
       Vectors : Real_Array;
       Count   : Element_Count;
       Target  : in out Real_Array;
       First   : Element_Count;
-      Last    : Element_Count);
+      Last    : Element_Count;
+      Members : Model_Runner.Shares.Member_Rows := []);
 
    --  Mat_Mul_Range for a matrix of floats -- binary16, bfloat16 or
    --  binary32 -- in binary32 by the vector instructions: eight elements
@@ -394,6 +433,16 @@ package Model_Runner.Tensors is
       First   : Element_Count;
       Last    : Element_Count;
       Handled : out Boolean);
+
+   --  Enable pair-of-row floating-point products after validating AVX-512
+   --  and the operating system's extended register state.
+   --  @param Allowed True only on a validated supporting processor.
+   procedure Use_Deep_Products (Allowed : Boolean);
+
+   --  Configure the independently guarded BF16 pair-dot capability as well.
+   --  @param Allowed True only with validated deep-vector CPU and OS support.
+   --  @param Brain True only with independently validated AVX-512 BF16 support.
+   procedure Use_Deep_Products (Allowed : Boolean; Brain : Boolean);
 
    --  Whether the processor widens halves and fuses multiply-adds (the
    --  x86-64-v3 set), said once by the backend that knows.
@@ -435,8 +484,11 @@ package Model_Runner.Tensors is
    --  @param First First row to compute, zero based.
    --  @param Last Last row to compute, zero based.
    --  @param Handled True when every row in the range was computed here.
+   --  @param Result_Members Optional distinct destination-vector indices; reference integer path only.
    procedure Mat_Mul_Range_Packed
      (Item    : View;
+
+
       Values  : Model_Runner.Quantization.Integers.Signed_Array;
       Scales  : Real_Array;
       Totals  : Model_Runner.Quantization.Integers.Sum_Array;
@@ -445,6 +497,26 @@ package Model_Runner.Tensors is
       Target  : in out Real_Array;
       First   : Element_Count;
       Last    : Element_Count;
-      Handled : out Boolean);
+      Handled : out Boolean;
+      Result_Members : Model_Runner.Shares.Member_Rows := []);
+
+   --  Two same-shape native reference matrices against one packed batch.
+   --  @param Left First quantized matrix.
+   --  @param Right Same-format partner matrix.
+   --  @param Values Packed activation bytes.
+   --  @param Scales Activation scales.
+   --  @param Totals Activation block totals.
+   --  @param Halves Activation half-block totals.
+   --  @param Count Number of activation vectors.
+   --  @param A First vector-major output; must not alias B.
+   --  @param B Second vector-major output.
+   --  @param Input_Members Optional source indices into the packed batch; no gathering is required.
+   --  @param Handled False before output writes for an unsupported pair.
+   procedure Mat_Mul_Packed_Pair
+     (Left, Right : View; Values : Model_Runner.Quantization.Integers.Signed_Array;
+      Scales : Real_Array; Totals, Halves : Model_Runner.Quantization.Integers.Sum_Array;
+      Count : Element_Count; A, B : Real_Array_Access; Handled : out Boolean;
+      Input_Members : Model_Runner.Shares.Member_Rows := []);
+
 
 end Model_Runner.Tensors;

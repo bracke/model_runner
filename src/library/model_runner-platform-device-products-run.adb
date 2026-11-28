@@ -16,6 +16,7 @@ procedure Run
    Hold       : Boolean := False)
 is
    use type System.Storage_Elements.Integer_Address;
+   use type Model_Runner.Numerics.Real;
 
    Ignored : constant Boolean := Set_Asking (Item);
    Narrowed_Run : constant Boolean := Set_Narrow (Item, Steps);
@@ -94,6 +95,11 @@ is
                + Model_Runner.Numerics.Element_Count
                    (Steps.Items (Index).Columns)
                  * Model_Runner.Numerics.Element_Count (Count));
+         end if;
+         if Steps.Items (Index).Payload_Elements > 0 then
+            Most := Model_Runner.Numerics.Element_Count'Max
+              (Most, Model_Runner.Numerics.Element_Count (Steps.Items (Index).Payload)
+                     + Model_Runner.Numerics.Element_Count (Steps.Items (Index).Payload_Elements));
          end if;
          if Steps.Items (Index).At_Vector > 0 then
             --  What a step reads from the activation is its COLUMNS,
@@ -301,6 +307,7 @@ is
    --  bound -- a packed block's bases and widths are on words already.
    function Packed_Token_Line (Which : Positive) return Address
    is (if Steps.Items (Which).Attends
+         and then Steps.Items (Which).Relative_At = 0
          and then Count in 1 .. Token_Positions_Most
          and then Steps.Items (Which).Packed.K_Bits /= 0
          and then not Item.Plain_Packing
@@ -820,6 +827,61 @@ is
                                    Count, Steps.Items (Which).Columns)
                         /= Null_Handle));
 
+   function Reference_Region (Which : Positive) return Interfaces.Unsigned_64 is
+     ((Interfaces.Unsigned_64 (Natural'Max (Count, 8))
+       * Interfaces.Unsigned_64 (Steps.Items (Which).Columns) * 9 / 8 + 63) / 64 * 64);
+
+   function Reference_Offset (Which : Positive) return Interfaces.Unsigned_64 is
+      Offset : Interfaces.Unsigned_64 := 0;
+   begin
+      --  Device packing is issued immediately before the product that
+      --  consumes it. One region is live; host-prepacked sequences still
+      --  retain a distinct region per input until their products run.
+      if Item.Reference_Round_Line /= Null_Handle then return 0; end if;
+      for Index in 1 .. Which - 1 loop Offset := Offset + Reference_Region (Index); end loop;
+      return Offset;
+   end Reference_Offset;
+
+   function Same_Reference_Input (Left, Right : Positive) return Boolean is
+      A : Step renames Steps.Items (Left);
+      B : Step renames Steps.Items (Right);
+   begin
+      return A.Reference_Integer and then B.Reference_Integer and then A.Columns = B.Columns
+        and then (A.Packing in Packed_Q8_0 | Packed_Q5_0 | Packed_IQ4_NL | Packed_Q2_0)
+               = (B.Packing in Packed_Q8_0 | Packed_Q5_0 | Packed_IQ4_NL | Packed_Q2_0)
+        and then Reads_From (Left) = Reads_From (Right)
+        and then A.At_Vector = B.At_Vector;
+   end Same_Reference_Input;
+
+   function Reference_Dotted (Which : Positive) return Boolean is
+     (Steps.Items (Which).Reference_Integer
+      and then Item.Reference_Line /= Null_Handle
+      and then not Carry_In and then not Carry_Out
+      and then (for all Index in 1 .. Steps.Held => Steps.Items (Index).Reference_Integer
+        or else (Steps.Items (Index).Blends and then Steps.Items (Index).Unit in 14 .. 19)
+        or else (Steps.Items (Index).Attends and then Steps.Items (Index).Relative_At /= 0))
+      and then (not Steps.Items (Which).Chained or else Item.Reference_Round_Line /= Null_Handle)
+      and then not Steps.Items (Which).Glu and then not Steps.Items (Which).Joins
+      and then Steps.Items (Which).Gathers = 0 and then not Steps.Items (Which).Listed
+      and then Count <= 128 and then Steps.Items (Which).Columns > 0
+      and then (Steps.Items (Which).Packing in Packed_Q4_K | Packed_Q5_K | Packed_Q6_K
+                  | Packed_Q8_0 | Packed_Q5_0
+        or else (Item.Reference_GSQ_Line /= Null_Handle and then Steps.Items (Which).Packing in
+                   Packed_IQ3_S | Packed_IQ3_XXS | Packed_IQ4_NL | Packed_Q2_0))
+      and then Steps.Items (Which).Columns mod
+        (if Steps.Items (Which).Packing in Packed_Q8_0 | Packed_Q5_0 | Packed_IQ4_NL then 32
+         elsif Steps.Items (Which).Packing = Packed_Q2_0 then 64 else 256) = 0
+      --  Native bytes are fetched through uint words. Refuse a final partial
+      --  word rather than read past an unpadded weight descriptor.
+      and then (if Steps.Items (Which).Packing in Packed_Q6_K | Packed_Q8_0 | Packed_Q5_0
+                      | Packed_IQ4_NL | Packed_Q2_0 | Packed_IQ3_S | Packed_IQ3_XXS then
+        ((Steps.Items (Which).Columns /
+          (if Steps.Items (Which).Packing in Packed_Q6_K | Packed_IQ3_S | Packed_IQ3_XXS then 256
+           elsif Steps.Items (Which).Packing = Packed_Q2_0 then 64 else 32)) mod 2 = 0
+         or else Steps.Items (Which).Rows mod 2 = 0) else True)
+      and then (if Item.Reference_Round_Line /= Null_Handle then Reference_Region (Which) <= Round_Bytes
+                else Reference_Offset (Steps.Held) + Reference_Region (Steps.Held) <= Round_Bytes));
+
    --  Whether a walk reads a normalization's answer whole, a position
    --  a row of its width.
    function Reads_Normed (Which, Norm : Positive) return Boolean
@@ -966,6 +1028,13 @@ is
    end Release_All;
 begin
    Ok := False;
+   for Index in 1 .. Steps.Held loop
+      if Steps.Items (Index).Reference_Integer and then not Reference_Dotted (Index) then
+         Item.Refused := Shape_Refused;
+         Cancelled := False;
+         return;
+      end if;
+   end loop;
    Cancelled := False;
 
    --  Until the shapes are through, a refusal is a shape's; the
@@ -1284,13 +1353,16 @@ begin
                return;
             end if;
 
+            if not Relative_Fits (Item, This.Packed.K_Codec, This.Packed.V_Codec,
+                                  This.Relative_At, This.Heads, Count, This.First)
+            then Item.Refused := Packed_Refused; return; end if;
             if This.Rows = 0
-              or else (not This.Chained
-                       and then Model_Runner.Numerics.Element_Count
-                                  (This.Columns)
-                                * Model_Runner.Numerics.Element_Count
-                                    (Count)
-                                > Vectors'Length)
+              or else (not This.Chained and then
+                       (This.At_Vector > Vectors'Length
+                        or else Model_Runner.Numerics.Element_Count (This.Columns)
+                          * Model_Runner.Numerics.Element_Count (Count)
+                            > Model_Runner.Numerics.Element_Count (Vectors'Length)
+                              - Model_Runner.Numerics.Element_Count (This.At_Vector)))
             then
                return;
             end if;
@@ -1514,7 +1586,14 @@ begin
                --  The seventh unit's second arm is one number a block
                --  of the first; every other unit's is as wide as the
                --  first.
-               if This.Rows = 0
+               if (This.Unit in 14 .. 19 and then not Takes_Reference_SiTU (Item))
+                 or else (This.Unit = 19 and then This.Payload_Elements /= Count)
+                 or else (This.Unit = 12 and then (This.Payload_Elements /= 2 * This.Rows * Count
+                                            or else Item.Native_Blend_Line = Null_Handle))
+                 or else (This.Unit in 13 | 17 and then
+                           (This.Limit not in 3.0 | 4.0
+                            or else This.Payload_Elements /= Natural (2.0 * This.Limit - 1.0) * This.Rows))
+                 or else This.Rows = 0
                  or else Arm not in 1 .. Index - 1
                  or else Other > Index - 1
                  or else (if This.Unit = 7
@@ -1991,7 +2070,7 @@ begin
    --  any walk rounds; it is one size whatever the model.
    if Item.Round_Buffer = Null_Handle
      and then (for some Index in 1 .. Steps.Held =>
-                 Dotted (Index) or else Splits (Index))
+                 Dotted (Index) or else Reference_Dotted (Index) or else Splits (Index))
    then
       Take (Item, Round_Room, Item.Round_Buffer, Item.Round_Memory,
             Good);
@@ -2132,6 +2211,71 @@ begin
    if not Good then
       Release_All;
       return;
+   end if;
+
+   if Steps.Held > 0 and then Reference_Dotted (1) and then Item.Reference_Round_Line /= Null_Handle then
+      for Index in 1 .. Steps.Held loop
+         if Reference_Dotted (Index) and then not Steps.Items (Index).Chained then
+         declare
+            package N renames Model_Runner.Numerics;
+            This : Step renames Steps.Items (Index);
+            First : constant N.Element_Count := N.Element_Count (This.At_Vector);
+            Elements : constant N.Element_Count := N.Element_Count (Count) * N.Element_Count (This.Columns);
+         begin
+            if Interfaces.Unsigned_64 (First) + Interfaces.Unsigned_64 (Elements)
+              > Interfaces.Unsigned_64 (Vectors'Length)
+            then Release_All; return; end if;
+            for Value of Vectors (Vectors'First + First .. Vectors'First + First + Elements - 1) loop
+               if not N.Is_Finite (Value) then Release_All; return; end if;
+            end loop;
+         end;
+         end if;
+      end loop;
+   end if;
+
+   if Steps.Held > 0 and then Reference_Dotted (1) and then Item.Reference_Round_Line = Null_Handle then
+      declare
+         package QI renames Model_Runner.Quantization.Integers;
+         package N renames Model_Runner.Numerics;
+         use System.Storage_Elements;
+         Where : Address := Null_Handle;
+      begin
+         Map_Memory (Item, Item.Round_Memory, Round_Room, Where, Good);
+         if Good then
+            for Index in 1 .. Steps.Held loop
+               declare
+                  This : Step renames Steps.Items (Index);
+                  Elements : constant N.Element_Count := N.Element_Count (Count) * N.Element_Count (This.Columns);
+                  Blocks : constant N.Element_Count := Elements / 32;
+                  Source : constant N.Element_Count := N.Element_Count (This.At_Vector);
+                  Base : constant Address := To_Address
+                    (To_Integer (Where) + Integer_Address (Reference_Offset (Index)));
+                  Values : QI.Signed_Array (0 .. Elements - 1) with Import, Address => Base;
+                  Scales : N.Real_Array (0 .. Blocks - 1) with Import,
+                    Address => To_Address (To_Integer (Base)
+                      + Integer_Address (Natural'Max (Count, 8)) * Integer_Address (This.Columns));
+                  Totals : QI.Sum_Array (0 .. Blocks - 1);
+                  Halves : QI.Sum_Array (0 .. Blocks * 2 - 1);
+               begin
+                  if Interfaces.Unsigned_64 (Source) + Interfaces.Unsigned_64 (Elements)
+                    > Interfaces.Unsigned_64 (Vectors'Length)
+                  then Good := False; exit; end if;
+                  QI.Quantize_Vectors
+                    (Vectors (Vectors'First + Source .. Vectors'First + Source + Elements - 1),
+                     N.Element_Count (Count), N.Element_Count (This.Columns), Values, Scales, Totals, Halves,
+                     Good, Super => This.Packing in Packed_Q4_K | Packed_Q5_K | Packed_Q6_K
+                       | Packed_IQ3_S | Packed_IQ3_XXS,
+                     Reference_Rounding => True,
+                     Half_Scales => This.Packing in Packed_Q8_0 | Packed_Q5_0 | Packed_IQ4_NL | Packed_Q2_0);
+                  exit when not Good;
+               end;
+            end loop;
+         end if;
+         Unmap_Standing (Item, Item.Round_Memory, Where);
+         if not Good then Release_All; return; end if;
+      exception
+         when others => Unmap_Standing (Item, Item.Round_Memory, Where); raise;
+      end;
    end if;
 
    --  One set per product, each pointed at its own matrix and its own
@@ -2596,7 +2740,16 @@ begin
                Offset => Places (Index).At_Byte,
                Extent => Places (Index).Bytes);
             Told (4) := Half_Descriptor (Item);
-            Told (5) := Told (3);
+            Told (5) :=
+              (if Steps.Items (Index).Payload_Elements = 0 then Told (3)
+               elsif Carry_In then
+                 (Buffer => Item.Result_Buffer,
+                  Offset => Origin + Interfaces.Unsigned_64 (Steps.Items (Index).Payload) * 4,
+                  Extent => Interfaces.Unsigned_64 (Steps.Items (Index).Payload_Elements) * 4)
+               else
+                 (Buffer => Item.Vector_Buffer,
+                  Offset => Interfaces.Unsigned_64 (Steps.Items (Index).Payload) * 4,
+                  Extent => Interfaces.Unsigned_64 (Steps.Items (Index).Payload_Elements) * 4));
 
             Told (6) := Copy_Descriptor (Item);
 
@@ -2716,7 +2869,7 @@ begin
          end loop;
 
          Update (Item.Logical,
-                 (if Dotted (Index) or else Splits (Index) then 7 else 6),
+                 (if Dotted (Index) or else Reference_Dotted (Index) or else Splits (Index) then 7 else 6),
                  Notes'Address, 0, Null_Handle);
 
          --  And a split step's walk's set: the same, but the lists where
@@ -2754,6 +2907,7 @@ begin
       --  the next rounding may not overwrite until it has; not known at
       --  the start, where the sequence before may still be reading.
       Rounded_At : Natural := Natural'Last;
+      Reference_Packed_At : Natural := 0;
 
       --  And the last that read the normalizations' region, which the
       --  next normalization to round may not overwrite until it has.
@@ -2779,7 +2933,8 @@ begin
         Item.Timing and then Item.Queries /= Null_Handle;
       Reset_Queries : Reset_Queries_Call := null;
       Write_Stamp   : Write_Stamp_Call := null;
-      --  Looked up only when something chains. Resolving an entry point
+      --  Looked up when something chains or reference packing feeds a product.
+      --  Resolving an entry point
       --  is not free, and a sequence of products that share an activation
       --  -- which is every sequence the engine names today -- would
       --  otherwise pay for a barrier it never records.
@@ -2945,10 +3100,13 @@ begin
       --  with one -- a lone attention step was neither, as no step of a
       --  model's is.
       for Index in 1 .. Steps.Held loop
-         Chains := Chains or else Steps.Items (Index).Chained or else Steps.Items (Index).Attends;
+         Chains := Chains or else Steps.Items (Index).Chained
+           or else Steps.Items (Index).Attends or else Steps.Items (Index).Blends;
       end loop;
 
-      if Chains then
+      if Chains or else (Item.Reference_Round_Line /= Null_Handle
+        and then (for some Index in 1 .. Steps.Held => Reference_Dotted (Index)))
+      then
          Barrier := To_Barrier (Point ("vkCmdPipelineBarrier"));
          if Barrier = null then
             Release_All;
@@ -3468,7 +3626,7 @@ begin
                      K_Codec => C.unsigned
                        (Cache_Codec'Pos (This.Packed.K_Codec)),
                      V_Codec => C.unsigned
-                       (Cache_Codec'Pos (This.Packed.V_Codec)));
+                       (Cache_Codec'Pos (This.Packed.V_Codec)), Relative_At => C.unsigned (This.Relative_At));
 
                   --  The workgroups across the heads and down the
                   --  positions: the walk's a group, or the part of one
@@ -3486,7 +3644,7 @@ begin
                   --  depth, as the exact kernel's -- and so never past
                   --  the records Mine gave the step room for.
                   Slices : constant Natural :=
-                    (if Barrier = null then 1
+                    (if Barrier = null or else This.Relative_At /= 0 then 1
                      else Natural'Min
                             (Packed_Slices
                                (Item, Across * Down,
@@ -4726,7 +4884,9 @@ begin
                --  step rather than once, because a sequence may go back
                --  and forth between the two.
                Bind_Pipeline
-                 (Item.Buffer, Bind_Point_Compute, Item.Blend_Line);
+                 (Item.Buffer, Bind_Point_Compute,
+                  (if This.Unit in 14 .. 19 then Item.Reference_Activation_Line
+                   elsif This.Unit = 12 then Item.Native_Blend_Line else Item.Blend_Line));
 
                declare
                   --  Every value both arms hold, not one position's
@@ -5106,6 +5266,56 @@ begin
                             C.unsigned (Count), 1);
                end;
 
+               goto Next_Dispatch;
+            end if;
+
+            if Reference_Dotted (Index) then
+               declare
+                  Shape : aliased Shape_Constants :=
+                    (Rows => C.unsigned (This.Rows), Columns => C.unsigned (This.Columns),
+                     Count => C.unsigned (Count), First => C.unsigned (Reference_Offset (Index) / 4),
+                     Packing => C.unsigned (Weight_Packing'Pos (This.Packing)),
+                     Base => C.unsigned (Places (Index).Base),
+                     Table => C.unsigned (Reference_Offset (Index) / 4
+                       + Interfaces.Unsigned_64 (Natural'Max (Count, 8))
+                         * Interfaces.Unsigned_64 (This.Columns) / 4), others => <>);
+               begin
+                  if Item.Reference_Round_Line /= Null_Handle
+                    and then not (Reference_Packed_At + 1 = Index
+                      and then Reference_Packed_At > 0 and then Same_Reference_Input (Reference_Packed_At, Index))
+                  then
+                     if Index > 1 then
+                        --  The preceding product must finish reading the
+                        --  shared packed region before the packer reuses it.
+                        declare
+                           use type C.unsigned;
+                           Reuse : aliased Memory_Barrier :=
+                             (Wrote => Access_Shader_Read + Access_Shader_Write,
+                              Reads => Access_Shader_Read + Access_Shader_Write, others => <>);
+                        begin
+                           Barrier (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute, 0,
+                                    1, Reuse'Address, 0, Null_Handle, 0, Null_Handle);
+                        end;
+                     end if;
+                     Bind_Pipeline (Item.Buffer, Bind_Point_Compute, Item.Reference_Round_Line);
+                     Push (Item.Buffer, Item.Layout, Stage_Compute, 0, Product_Bytes, Shape'Address);
+                     Dispatch (Item.Buffer, C.unsigned ((Count * This.Columns /
+                       (if This.Packing in Packed_Q8_0 | Packed_Q5_0 | Packed_IQ4_NL | Packed_Q2_0
+                        then 32 else 256) + 63) / 64), 1, 1);
+                     Barrier (Item.Buffer, Pipeline_Stage_Compute, Pipeline_Stage_Compute, 0,
+                              1, Wall'Address, 0, Null_Handle, 0, Null_Handle);
+                  end if;
+                  if Item.Reference_Round_Line /= Null_Handle
+                    and then Reference_Packed_At + 1 = Index and then Reference_Packed_At > 0
+                    and then Same_Reference_Input (Reference_Packed_At, Index)
+                  then Item.Reference_Packing_Reused := Item.Reference_Packing_Reused + 1; end if;
+                  Reference_Packed_At := Index;
+                  Bind_Pipeline (Item.Buffer, Bind_Point_Compute,
+                    (if This.Packing in Packed_IQ3_S | Packed_IQ3_XXS | Packed_IQ4_NL | Packed_Q2_0
+                     then Item.Reference_GSQ_Line else Item.Reference_Line));
+                  Push (Item.Buffer, Item.Layout, Stage_Compute, 0, Product_Bytes, Shape'Address);
+                  Dispatch (Item.Buffer, C.unsigned ((This.Rows + 7) / 8), C.unsigned (Count), 1);
+               end;
                goto Next_Dispatch;
             end if;
 

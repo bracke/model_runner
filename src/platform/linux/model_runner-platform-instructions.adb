@@ -15,6 +15,9 @@ package body Model_Runner.Platform.Instructions is
    function Byte_Products return Boolean is
      (Model_Runner.Platform.X86_Features.Byte_Products);
 
+   function Brain_Products return Boolean is
+     (Model_Runner.Platform.X86_Features.Brain_Products);
+
    ----------------------
    -- Low_Power_Waits --
    ----------------------

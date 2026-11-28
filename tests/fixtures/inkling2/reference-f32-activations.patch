@@ -1,0 +1,167 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -6,6 +6,7 @@
+ #include "traits.h"
+ #include "ggml-cpu-impl.h"
+ #include "ggml-impl.h"
++#include "../ggml-quants.h"
+ #include "quants.h"
+ #include "ggml-threading.h"
+ #include "unary-ops.h"
+@@ -424,7 +425,44 @@
+     },
+ };
+ 
++// Test-only precision contract: retain GGUF weight decoding and the model
++// graph, but avoid the CPU backend's implicit Q8 activation conversion.
++// No model_runner inference code links or calls this reference binary.
++#define INKLING_FLOAT_DOT(NAME, DECODE) \
++    static void inkling_float_dot_##NAME(int n, float * s, size_t bs, const void * vx, size_t bx, \
++                                         const void * vy, size_t by, int nrc) { \
++        GGML_ASSERT(nrc == 1); \
++        GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); \
++        float * weights = alloca((size_t)n * sizeof(float)); \
++        DECODE(vx, weights, n); \
++        const float * values = vy; \
++        double sum = 0.0; \
++        for (int j = 0; j < n; ++j) { sum += (double)weights[j] * (double)values[j]; } \
++        *s = (float)sum; \
++    } \
++    static const struct ggml_type_traits_cpu inkling_traits_##NAME = { \
++        .vec_dot = inkling_float_dot_##NAME, .vec_dot_type = GGML_TYPE_F32, .nrows = 1 \
++    };
++
++INKLING_FLOAT_DOT(q8_0, dequantize_row_q8_0)
++INKLING_FLOAT_DOT(q5_0, dequantize_row_q5_0)
++INKLING_FLOAT_DOT(q4_k, dequantize_row_q4_K)
++INKLING_FLOAT_DOT(q5_k, dequantize_row_q5_K)
++INKLING_FLOAT_DOT(q6_k, dequantize_row_q6_K)
++
+ const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
++    const char * floating = getenv("INKLING_F32_ACTIVATIONS");
++    if (floating) {
++        GGML_ASSERT(strcmp(floating, "1") == 0);
++        switch (type) {
++            case GGML_TYPE_Q8_0: return &inkling_traits_q8_0;
++            case GGML_TYPE_Q5_0: return &inkling_traits_q5_0;
++            case GGML_TYPE_Q4_K: return &inkling_traits_q4_k;
++            case GGML_TYPE_Q5_K: return &inkling_traits_q5_k;
++            case GGML_TYPE_Q6_K: return &inkling_traits_q6_k;
++            default: break;
++        }
++    }
+     return &type_traits_cpu[type];
+ }
+ 
+@@ -1188,8 +1226,8 @@
+ 
+     const bool src1_cont = ggml_is_contiguous(src1);
+ 
+-    ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
+-    enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
++    ggml_vec_dot_t const vec_dot      = ggml_get_type_traits_cpu(type)->vec_dot;
++    enum ggml_type const vec_dot_type = ggml_get_type_traits_cpu(type)->vec_dot_type;
+ 
+     // broadcast factors
+     const int64_t r2 = ne12 / ne02;
+@@ -1275,7 +1313,7 @@
+     }
+ 
+     // If tiled is supported, it will execute the full op here and we return
+-    if (ggml_compute_forward_mul_mat_tiled(params, dst)) {
++    if (!getenv("INKLING_F32_ACTIVATIONS") && ggml_compute_forward_mul_mat_tiled(params, dst)) {
+         return;
+     }
+ 
+@@ -1284,9 +1322,9 @@
+     const int ith = params->ith;
+     const int nth = params->nth;
+ 
+-    enum ggml_type    const vec_dot_type     = type_traits_cpu[src0->type].vec_dot_type;
+-    ggml_from_float_t const from_float       = type_traits_cpu[vec_dot_type].from_float;
+-    int64_t           const vec_dot_num_rows = type_traits_cpu[src0->type].nrows;
++    enum ggml_type    const vec_dot_type     = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
++    ggml_from_float_t const from_float       = ggml_get_type_traits_cpu(vec_dot_type)->from_float;
++    int64_t           const vec_dot_num_rows = ggml_get_type_traits_cpu(src0->type)->nrows;
+ 
+     // TODO: a more efficient F16 x F16 path can be used here if ggml_prec_get_src(dst, 1) allows converting src1 to F16
+     //       the code needs to be refactored to enable this (src1 is currently converted based on vec_dot_type alone)
+@@ -1512,8 +1550,8 @@
+ 
+     const enum ggml_type type = src0->type;
+ 
+-    ggml_vec_dot_t const vec_dot      = type_traits_cpu[type].vec_dot;
+-    enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
++    ggml_vec_dot_t const vec_dot      = ggml_get_type_traits_cpu(type)->vec_dot;
++    enum ggml_type const vec_dot_type = ggml_get_type_traits_cpu(type)->vec_dot_type;
+ 
+     const int64_t blck_0 = 16;
+     const int64_t blck_1 = 16;
+@@ -1580,8 +1618,8 @@
+ 
+     const bool src1_cont = ggml_is_contiguous(src1);
+ 
+-    enum ggml_type    const vec_dot_type = type_traits_cpu[type].vec_dot_type;
+-    ggml_from_float_t const from_float   = type_traits_cpu[vec_dot_type].from_float;
++    enum ggml_type    const vec_dot_type = ggml_get_type_traits_cpu(type)->vec_dot_type;
++    ggml_from_float_t const from_float   = ggml_get_type_traits_cpu(vec_dot_type)->from_float;
+ 
+     // TODO: a more efficient F16 x F16 path can be used here if ggml_prec_get_src(dst, 1) allows converting src1 to F16
+     //       the code needs to be refactored to enable this (src1 is currently converted based on vec_dot_type alone)
+@@ -1696,7 +1734,7 @@
+         }
+ 
+         // tiled takes over if profitable for this expert (see tiled.h)
+-        if (ggml_compute_forward_mul_mat_id_tiled(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0), tiled_scratch)) {
++        if (!getenv("INKLING_F32_ACTIVATIONS") && ggml_compute_forward_mul_mat_id_tiled(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0), tiled_scratch)) {
+             continue;
+         }
+ 
+@@ -2894,7 +2932,7 @@
+                     } break;
+                 case GGML_OP_MUL_MAT:
+                     {
+-                        const enum ggml_type vec_dot_type = type_traits_cpu[node->src[0]->type].vec_dot_type;
++                        const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(node->src[0]->type)->vec_dot_type;
+                         if (node->src[1]->type != vec_dot_type) {
+                             cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                         }
+@@ -2908,7 +2946,7 @@
+                         const struct ggml_tensor * src0 = node->src[0];
+                         const struct ggml_tensor * src1 = node->src[1];
+                         const struct ggml_tensor * ids = node->src[2];
+-                        const enum ggml_type vec_dot_type = type_traits_cpu[src0->type].vec_dot_type;
++                        const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
+                         const int n_as = src0->ne[2];
+                         // src1
+                         if (src1->type != vec_dot_type) {
+--- a/src/models/inkling2.cpp
++++ b/src/models/inkling2.cpp
+@@ -395,6 +395,7 @@
+         cb(cur, "loop_ffn_input", il);
+     }
+     cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "ffn_normed", il);
+ 
+     cur = build_moe_ffn(cur,
+             layer.ffn_gate_inp,
+--- a/examples/eval-callback/eval-callback.cpp
++++ b/examples/eval-callback/eval-callback.cpp
+@@ -54,13 +54,16 @@
+     common_params params;
+ 
+     common_init();
++    if (std::getenv("INKLING_F32_ACTIVATIONS")) {
++        LOG_INF("fixture precision: F32 activations; F64 quantized-weight dot accumulation\n");
++    }
+ 
+     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+         return 1;
+     }
+ 
+     common_debug_cb_user_data cb_data(params,
+-            {"^(Qcur|Kcur|Vcur|Rcur|attn_out|ffn_inp|ffn_out|l_out|loop_messages|loop_input_[0-2]|loop_ffn_input)-[0-9]+$",
++            {"^(Qcur|Kcur|Vcur|Rcur|attn_out|ffn_inp|ffn_out|l_out|loop_messages|loop_input_[0-2]|loop_ffn_input|ffn_normed|ffn_moe_gate_up|ffn_moe_gate|ffn_moe_up|ffn_moe_situ|ffn_moe_down)-[0-9]+$",
+              "^ffn_moe_(logits|probs|probs_biased|topk|weights|weights_norm|weights_scaled)-[0-9]+$",
+              "^result_(norm|output)$"}, true);
+ 

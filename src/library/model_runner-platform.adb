@@ -988,6 +988,13 @@ package body Model_Runner.Platform is
          return False;
    end Byte_Products;
 
+   function Brain_Products return Boolean is
+   begin
+      return Model_Runner.Platform.Instructions.Brain_Products;
+   exception
+      when others => return False;
+   end Brain_Products;
+
    ---------------------
    -- Low_Power_Waits --
    ---------------------

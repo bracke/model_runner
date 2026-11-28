@@ -27,7 +27,8 @@ procedure Attend_Packed
    Causal     : Boolean := True;
    Max_Bias   : Model_Runner.Numerics.Real := 0.0;
    K_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
-   V_Codec    : Cache_Codec := Inferred_From_Bits_Cache)
+   V_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
+   Relative_At : Natural := 0)
 is
    Ignored : constant Boolean := Set_Asking (Item);
 
@@ -78,6 +79,10 @@ begin
                  * Model_Runner.Numerics.Element_Count (Heads)
                  * Model_Runner.Numerics.Element_Count (Value_Size)
    then
+      return;
+   end if;
+
+   if not Relative_Fits (Item, Held_K_Codec, Held_V_Codec, Relative_At, Heads, Positions, First) then
       return;
    end if;
 
@@ -213,7 +218,7 @@ begin
          Page_Shift     => 0,
          First_Position => 0,
          K_Codec => C.unsigned (Cache_Codec'Pos (Held_K_Codec)),
-         V_Codec => C.unsigned (Cache_Codec'Pos (Held_V_Codec)));
+         V_Codec => C.unsigned (Cache_Codec'Pos (Held_V_Codec)), Relative_At => C.unsigned (Relative_At));
    begin
       if Reset_Buffer = null or else Start = null or else Stop = null
         or else Bind_Pipeline = null or else Bind_Sets = null

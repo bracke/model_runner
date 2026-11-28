@@ -1,3 +1,4 @@
+with Model_Runner.Platform.Affinity;
 private with Ada.Finalization;
 private with Ada.Synchronous_Task_Control;
 private with System.Atomic_Counters;
@@ -71,6 +72,16 @@ package Model_Runner.Backend.CPU is
    --  @param Workers Number of workers the pool was opened with.
    --  @return Capability record.
    function Describe (Workers : Worker_Count := 1) return Capabilities;
+
+   --  Whether host vector instructions are available to native execution.
+   --  Model interpreters ask the backend rather than access the host.
+   --
+   --  @return True when the host and operating system support wide vectors.
+   function Wide_Vectors return Boolean;
+
+   --  Whether the host supports the deepest native vector kernels.
+   --  @return True when byte products and their vector instruction set are available.
+   function Byte_Products return Boolean;
 
    --  A pool of reusable worker tasks.
    type Pool (Workers : Worker_Count) is tagged limited private;
@@ -225,13 +236,16 @@ package Model_Runner.Backend.CPU is
    --  @param Roles The roles whose products quantize their activations:
    --    the asking session's own, or the process's default where it names
    --    none.
+   --  @param Count Contiguous input vectors; defaults to one. Each target
+   --    receives Count rows of outputs, preserving ordinary batched math.
    procedure Dispatch_Group
      (Item    : Pool_Reference;
       Weights : Model_Runner.Tensors.View_Group;
       Vector  : Model_Runner.Tensors.Real_Array_Access;
       Into    : Model_Runner.Tensors.Target_Group;
       Status  : out Model_Runner.Errors.Error_Info;
-      Roles   : Role_Set := Integer_Activation_Roles);
+      Roles   : Role_Set := Integer_Activation_Roles;
+      Count   : Model_Runner.Numerics.Element_Count := 1);
 
    --  Matrix product against several input vectors at once.
    --
@@ -366,9 +380,37 @@ package Model_Runner.Backend.CPU is
    --  and the caller multiplies the rows as they are.
    type Packed_Rows is limited private;
 
+   --  Synchronous model activation over one native 32-coordinate packing block.
+   --  @param Gate Gate block, replaced with activated values.
+   --  @param Up Matching up-projection block.
+   type Packed_Activation is access procedure
+     (Gate : in out Model_Runner.Tensors.Real_Array; Up : Model_Runner.Tensors.Real_Array);
+
+   --  Activation producer that measures the finite peak during its existing pass.
+   --  @param Gate Replaced with activated values.
+   --  @param Up Matching up-projection values.
+   --  @param Peak Receives the largest magnitude, or negative for a nonfinite result.
+   type Measured_Packed_Activation is access procedure
+     (Gate : in out Model_Runner.Tensors.Real_Array; Up : Model_Runner.Tensors.Real_Array;
+      Peak : out Model_Runner.Numerics.Real);
+
+   --  Synchronous whole-run producer with one finite peak per 32 values.
+   --  @param Gate Replaced with activated values.
+   --  @param Up Matching up-projection values.
+   --  @param Peaks Receives each block's maximum magnitude; negative rejects the run.
+   type Block_Peak_Activation is access procedure
+     (Gate : in out Model_Runner.Tensors.Real_Array; Up : Model_Runner.Tensors.Real_Array;
+      Peaks : out Model_Runner.Numerics.Real_Array);
+
+   --  Produce one complete native activation block without a batch-sized temporary.
+   --  @param First Offset in the untransformed input, counting from zero.
+   --  @param Into Complete 32- or 256-element block to quantize immediately.
+   type Packed_Input_Transform is access procedure
+     (First : Element_Count; Into : out Model_Runner.Numerics.Real_Array);
+
    --  Quantize Count rows of Columns.
    --
-   --  @param Item Receives the packed rows; anything it held is released.
+   --  @param Item Receives the packed rows; sufficient storage is reused.
    --  @param Vectors Count runs of Columns values.
    --  @param Count How many.
    --  @param Columns How wide.
@@ -379,6 +421,14 @@ package Model_Runner.Backend.CPU is
    --  @param Roles The roles whose products quantize their activations:
    --    the asking session's own, or the process's default where it names
    --    none.
+   --  @param Reference_Arithmetic Use nearest-even reference activation packing.
+   --  @param Half_Scales Round Q8_0/Q5_0 activation scales to binary16.
+   --  @param Activate Optional activation, fused with non-super-block packing.
+   --  @param Up Matching activation input when Activate is present.
+   --  @param Measure Optional producer that also supplies the peak; exclusive with Activate.
+   --  @param Produce Optional whole-run reference producer; exclusive with other producers.
+   --  @param Transform Optional reference-only block producer, exclusive of activation callbacks.
+   --  @param Team Existing pool for independent transformed rows; null retains serial preparation.
    procedure Pack
      (Item    : in out Packed_Rows;
       Vectors : Model_Runner.Tensors.Real_Array_Access;
@@ -386,7 +436,15 @@ package Model_Runner.Backend.CPU is
       Columns : Element_Count;
       Super   : Boolean;
       Ok      : out Boolean;
-      Roles   : Role_Set := Integer_Activation_Roles);
+      Roles   : Role_Set := Integer_Activation_Roles;
+      Reference_Arithmetic : Boolean := False;
+      Half_Scales : Boolean := False;
+      Activate : Packed_Activation := null;
+      Up : Model_Runner.Tensors.Real_Array_Access := null;
+      Measure : Measured_Packed_Activation := null;
+      Produce : Block_Peak_Activation := null;
+      Transform : Packed_Input_Transform := null;
+      Team : Pool_Reference := null);
 
    --  Give the packed rows back.
    --
@@ -426,14 +484,38 @@ package Model_Runner.Backend.CPU is
    --    count, the first at Target'First.
    --  @param Ok False where the format cannot read packed rows; Target is
    --    then untouched and the caller multiplies the rows as they are.
+   --  @param Result_Members Optional distinct destination slots for reference integer products.
+   --  @param First_Row First output row to compute; other rows remain untouched.
+   --  @param Last_Row Last output row, inclusive; the default takes the full matrix.
    procedure Multiply_Packed_Whole
      (Weight : Model_Runner.Tensors.View;
       Rows   : Packed_Rows;
       Target : in out Model_Runner.Tensors.Real_Array;
-      Ok     : out Boolean);
+      Ok     : out Boolean;
+      Result_Members : Model_Runner.Shares.Member_Rows := [];
+      First_Row : Element_Count := 0; Last_Row : Element_Count := Element_Count'Last);
+
+   --  Compute paired expert arms from one gathering of already packed rows.
+   --  @param Left First physical matrix.
+   --  @param Right Second physical matrix with the same packing contract.
+   --  @param Rows Source packed batch.
+   --  @param Members Selected source rows in their requested order.
+   --  @param A First output room.
+   --  @param B Second output room.
+   --  @param Scratch Reusable gathering workspace, released with Unpack.
+   --  @param Ok True when both products complete; False before either for incompatible inputs.
+   procedure Multiply_Packed_Pair
+     (Left, Right : Model_Runner.Tensors.View; Rows : Packed_Rows;
+      Members : Model_Runner.Shares.Member_Rows;
+      A, B : Model_Runner.Tensors.Real_Array_Access;
+      Scratch : in out Packed_Rows; Ok : out Boolean);
 
    subtype Task_Item is Model_Runner.Shares.Work;
    subtype Task_Item_Access is Model_Runner.Shares.Work_Access;
+
+   --  Independent work for the submitting thread while pool shares run.
+   --  @param Status Structured failure, retained after all workers settle.
+   type Concurrent_Work is access procedure (Status : out Model_Runner.Errors.Error_Info);
 
    --  Cut Items into shares and run Work over each of them.
    --
@@ -459,12 +541,16 @@ package Model_Runner.Backend.CPU is
    --  @param Work What to do with a share of them.
    --  @param Status Success, or the pool refusing.
    --  @param Cost Elements the whole job touches, or zero for unsaid.
+   --  @param Alongside Optional caller work; all started shares settle even when it fails.
+   --  @param Team_Size Bounded share count; zero follows the preceding product.
    procedure Dispatch_Shares
      (Item   : Pool_Reference;
       Items  : Element_Count;
       Work   : Task_Item_Access;
       Status : out Model_Runner.Errors.Error_Info;
-      Cost   : Element_Count := 0);
+      Cost   : Element_Count := 0;
+      Alongside : Concurrent_Work := null;
+      Team_Size : Natural := 0);
 
    --  The pool as something that can be handed to a package that must not
    --  know what a pool is.
@@ -495,6 +581,8 @@ private
      access Model_Runner.Quantization.Integers.Sum_Array;
 
    type Packed_Rows is limited record
+      Reference_Arithmetic : Boolean := False;
+      Half_Scales : Boolean := False;
       Count   : Element_Count := 0;
       Columns : Element_Count := 0;
       Super   : Boolean := False;
@@ -704,7 +792,8 @@ private
       entry Start
         (Index  : Worker_Count;
          Owner  : Coordinator_Access;
-         Waking : Wake_Access);
+         Waking : Wake_Access;
+         Processor : Integer);
    end Worker;
 
    type Worker_Array is array (Worker_Count range <>) of Worker;
@@ -748,6 +837,7 @@ private
       --  same thing as which workers are awake. Work that is not a matrix
       --  product follows it rather than asking for the whole pool: see
       --  Dispatch_Shares.
+      Cores : Model_Runner.Platform.Affinity.Core_List (0 .. Workers) := [others => -1];
       Latest  : Share_Count := Workers + 1;
       Team    : Worker_Array (1 .. Workers);
       State   : Pool_State := Fresh;

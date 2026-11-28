@@ -1,0 +1,1659 @@
+{
+  "schema": "model_runner.inkling2_dspark_depth_mix.v1",
+  "status": "Investigation complete: DSpark pairing structurally compatible but native execution remains unsupported. Correct fusion trial measured slower and rejected. Previous selected engine restored with exact source/code/constants identity and final repository audit passed. No speed gain retained.",
+  "selection": {
+    "weights": "Q4_K_M",
+    "kv_cache": "Q4T",
+    "activations": "int8",
+    "backend": "cpu",
+    "integer_width": 512,
+    "repack": "none",
+    "default_activation_profile": "F32 unchanged",
+    "no_expanded_model_weights": true
+  },
+  "selected_measurement": {
+    "status": "passed",
+    "started_at": "2026-11-27T15:23:42.793242+00:00",
+    "protocol": "One warmup and one measured pass;2048prompt tokens,16output,batch128,8threads,context2176,Q4_K_M weights,Q4T KV,integer activations,row-major weights,4-token context lookup. Existing limits unchanged.",
+    "comparison_profile_note": "Earlier Q4T result used F32 activations; independently qualified integer arithmetic can generate a different greedy token sequence. No output-equality claim across arithmetic profiles.",
+    "baseline": "artifacts/inkling2/obj/dispatch-eight/measurement-v2/evidence.json",
+    "binary_sha256": "8ea045c92582006706ce128eb5be62f482b5f62d9ed82bc4410cae3e3a302d75",
+    "cases": 1,
+    "candidate_change": "Batched greedy verification, tiled complete-logit output, route-aware chunks/team size, once-per-visit metadata priority, bounded elastic metadata shares and exact repeated routing descriptors. GPU packing/aggregation changes inactive in CPU timing. Bundled candidate: no individual attribution.",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-plans-eight-2048-v1",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/plans-eight/measurement-v1/cpu-int8-q4t.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/plans-eight/measurement-v1/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "4",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-lookup"
+    ],
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "prefill_seconds": 78.183,
+    "decode_seconds": 1.559,
+    "prefill_tok_s": 26.194952866991542,
+    "decode_tok_s": 10.262989095574087,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 8,
+    "accepted": 8,
+    "previous_integer_prefill_tok_s": 26.20366697800581,
+    "previous_integer_decode_tok_s": 10.062893081761006,
+    "same_digest_as_previous_integer_profile": true,
+    "same_digest_as_previous_f32_profile": true,
+    "previous_f32_prefill_tok_s": 16.71509255329568,
+    "previous_f32_decode_tok_s": 4.9658597144630665,
+    "finished_at": "2026-11-27T15:26:25.496663+00:00"
+  },
+  "candidate_measurement": {
+    "status": "passed",
+    "started_at": "2026-11-27T16:10:45.623623+00:00",
+    "protocol": "One warmup and one measured pass;2048prompt tokens,16output,batch128,8threads,context2176,Q4_K_M weights,Q4T KV,integer activations,row-major weights,4-token context lookup. Existing limits unchanged.",
+    "comparison_profile_note": "Both current and preceding candidates use Q4_K_M weights, Q4T KV and the explicit int8 profile. Exact output digest equality is required.",
+    "baseline": "artifacts/inkling2/obj/plans-eight/measurement-v1/evidence.json",
+    "binary_sha256": "b4be577c4853fee500bd9fe92c6ae0a5add21d3528031f487778f96a0abcfee1",
+    "cases": 1,
+    "candidate_change": "Fuse the reference depth-bank weighted sum across candidates in registers; remove intermediate output stores and bulk zeroing. Projection, normalization, softmax and candidate accumulation order unchanged. DSpark is compatibility-audited but not executed in this measurement.",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-depth-mix-2048-v1",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/measurement-v1/cpu-int8-q4t.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/measurement-v1/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "4",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-lookup"
+    ],
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "prefill_seconds": 78.345,
+    "decode_seconds": 1.607,
+    "prefill_tok_s": 26.140787542280936,
+    "decode_tok_s": 9.956440572495334,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 8,
+    "accepted": 8,
+    "previous_integer_prefill_tok_s": 26.194952866991542,
+    "previous_integer_decode_tok_s": 10.262989095574087,
+    "same_digest_as_previous_integer_profile": true,
+    "same_digest_as_previous_f32_profile": true,
+    "previous_f32_prefill_tok_s": 16.71509255329568,
+    "previous_f32_decode_tok_s": 4.9658597144630665,
+    "finished_at": "2026-11-27T16:13:28.096841+00:00"
+  },
+  "candidate_prefill_change_percent": -0.20677771395748445,
+  "candidate_decode_change_percent": -2.986932171748602,
+  "performance_interpretation": "Correct fused reduction candidate measured 26.14 tok/s prefill and 9.96 tok/s decode versus selected 26.19/10.26; changes -0.21%/-2.99% in one measured pass. Candidate rejected and preceding engine restored. No speed gain retained and no unchanged benchmark repeated.",
+  "items": [
+    {
+      "id": 1,
+      "title": "Native DSpark compatibility audit",
+      "status": "audit complete: metadata and tokenizer compatible; native executor unavailable",
+      "evidence": "artifacts/inkling2/obj/dspark-depth-mix/dspark-compatibility.json"
+    },
+    {
+      "id": 2,
+      "title": "Further residual depth-mix fusion",
+      "status": "rejected for selection after correct but slower trial; prior engine source restored",
+      "evidence": "artifacts/inkling2/obj/dspark-depth-mix/fusion-selection.json"
+    }
+  ],
+  "dspark_compatibility": {
+    "schema": "model_runner.inkling2_dspark_compatibility.v1",
+    "status": "structurally compatible target; native DSpark execution unsupported",
+    "audited_at": "2026-11-27T16:06:37.991719+00:00",
+    "repository": "unsloth/Inkling-2-Mini-GGUF",
+    "revision": "8078d149286eec7193795413b9e0643da6d11fa1",
+    "artifact": "Mainline_Support/dspark-Inkling-2-Mini-Q8_0.gguf_file",
+    "model_path": "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf",
+    "file_bytes": 503889952,
+    "sha256": "3da00cf7c31bbe5662b3c0d373ecf782d74d32ef43990acc158ce60c2add72e0",
+    "target_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+    "metadata": {
+      "general.architecture": "dflash",
+      "general.type": "model",
+      "general.sampling.temp": 1.0,
+      "general.name": "Src_B35740",
+      "general.size_label": "368M",
+      "dflash.block_count": 3,
+      "dflash.context_length": 1048576,
+      "dflash.embedding_length": 2304,
+      "dflash.feed_forward_length": 9216,
+      "dflash.attention.head_count": 24,
+      "dflash.attention.head_count_kv": 8,
+      "dflash.attention.key_length": 128,
+      "dflash.attention.value_length": 128,
+      "dflash.rope.dimension_count": 128,
+      "dflash.rope.freq_base": 1000000.0,
+      "dflash.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+      "dflash.attention.sliding_window": 1025,
+      "dflash.attention.sliding_window_pattern": [
+        true,
+        false,
+        true
+      ],
+      "dflash.final_logit_softcapping": 30.0,
+      "dflash.block_size": 8,
+      "dflash.target_layers": [
+        5,
+        23,
+        41,
+        48
+      ],
+      "dflash.sample_from_anchor": false,
+      "dflash.has_confidence_head": false,
+      "dflash.has_markov_context": true,
+      "general.quantization_version": 2,
+      "general.file_type": 7
+    },
+    "tokenizer_fingerprints": {
+      "tokenizer.ggml.model": {
+        "length": 4,
+        "sha256": "7c2bf9af9cf78e18f0a9d8524d62d12ce43c085082aeb386eba76851a982fc72"
+      },
+      "tokenizer.ggml.pre": {
+        "length": 8,
+        "sha256": "83be41a15ac9d20689a4f3045e2d0cce5d2dc8addfb35ade8aa2a665d9ee74d1"
+      },
+      "tokenizer.ggml.tokens": {
+        "length": 200058,
+        "sha256": "5461399b561769bbf493b7842c50debf7f91b39d8345dc360e5e664749c51afd"
+      },
+      "tokenizer.ggml.token_type": {
+        "length": 200058,
+        "sha256": "34aeff1900ba87f1cfcb873917ee4acc745ed28722bf3bacb7f456362ce2b239"
+      },
+      "tokenizer.ggml.merges": {
+        "length": 424413,
+        "sha256": "ceed7e32c70b68dbe9f09592542cfd82fb5fb3caeb8dad3b4977be46ec521eb5"
+      },
+      "tokenizer.ggml.eos_token_id": {
+        "length": null,
+        "sha256": "bc36cf3d4feac69d771a5e7126e23732f433404fe0836cc1c47c65ee9b22d828"
+      },
+      "tokenizer.ggml.padding_token_id": {
+        "length": null,
+        "sha256": "6d0494137e3681eaa923f9909c98aa042a03e413bee025e9c0a85e1c4f09e168"
+      },
+      "tokenizer.ggml.eot_token_id": {
+        "length": null,
+        "sha256": "bc36cf3d4feac69d771a5e7126e23732f433404fe0836cc1c47c65ee9b22d828"
+      },
+      "tokenizer.ggml.add_bos_token": {
+        "length": null,
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      },
+      "tokenizer.ggml.add_eos_token": {
+        "length": null,
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      },
+      "tokenizer.chat_template": {
+        "length": 6868,
+        "sha256": "c6933b6ea5ec8e66de8f0344dee6ea7cdb4d587f69fc6d0351e8a90b0bc781c1"
+      },
+      "tokenizer.ggml.clean_spaces": {
+        "length": null,
+        "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+      },
+      "tokenizer.ggml.mask_token_id": {
+        "length": null,
+        "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+      }
+    },
+    "target_tokenizer_comparison": {
+      "tokenizer.chat_template": {
+        "equal": true,
+        "draft_length": 6868,
+        "target_length": 6868
+      },
+      "tokenizer.ggml.add_bos_token": {
+        "equal": true,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.add_eos_token": {
+        "equal": true,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.clean_spaces": {
+        "equal": true,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.eos_token_id": {
+        "equal": true,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.eot_token_id": {
+        "equal": true,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.mask_token_id": {
+        "equal": false,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.merges": {
+        "equal": true,
+        "draft_length": 424413,
+        "target_length": 424413
+      },
+      "tokenizer.ggml.model": {
+        "equal": true,
+        "draft_length": 4,
+        "target_length": 4
+      },
+      "tokenizer.ggml.padding_token_id": {
+        "equal": true,
+        "draft_length": null,
+        "target_length": null
+      },
+      "tokenizer.ggml.pre": {
+        "equal": true,
+        "draft_length": 8,
+        "target_length": 8
+      },
+      "tokenizer.ggml.token_type": {
+        "equal": true,
+        "draft_length": 200058,
+        "target_length": 200058
+      },
+      "tokenizer.ggml.tokens": {
+        "equal": true,
+        "draft_length": 200058,
+        "target_length": 200058
+      }
+    },
+    "tensors": [
+      {
+        "name": "joint_proj.bias",
+        "dims": [
+          768
+        ],
+        "type": 0,
+        "offset": 0
+      },
+      {
+        "name": "joint_proj.weight",
+        "dims": [
+          5120,
+          768
+        ],
+        "type": 30,
+        "offset": 3072
+      },
+      {
+        "name": "markov_ctx_mix.weight",
+        "dims": [
+          4
+        ],
+        "type": 0,
+        "offset": 7867392
+      },
+      {
+        "name": "markov_ctx_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 7867424
+      },
+      {
+        "name": "markov_w1.weight",
+        "dims": [
+          256,
+          200058
+        ],
+        "type": 30,
+        "offset": 7876640
+      },
+      {
+        "name": "markov_w2.bias",
+        "dims": [
+          200058
+        ],
+        "type": 0,
+        "offset": 110306336
+      },
+      {
+        "name": "markov_w2.weight",
+        "dims": [
+          256,
+          200058
+        ],
+        "type": 30,
+        "offset": 111106592
+      },
+      {
+        "name": "mask_embd.weight",
+        "dims": [
+          2304,
+          7
+        ],
+        "type": 0,
+        "offset": 213536288
+      },
+      {
+        "name": "output_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 213600800
+      },
+      {
+        "name": "token_embd_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 213610016
+      },
+      {
+        "name": "blk.0.attn_k.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 213619232
+      },
+      {
+        "name": "blk.0.attn_k_ctx.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 216125984
+      },
+      {
+        "name": "blk.0.attn_k_ctx_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 218632736
+      },
+      {
+        "name": "blk.0.attn_k_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 218633248
+      },
+      {
+        "name": "blk.0.attn_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 218633760
+      },
+      {
+        "name": "blk.0.attn_output.weight",
+        "dims": [
+          3072,
+          2304
+        ],
+        "type": 8,
+        "offset": 218642976
+      },
+      {
+        "name": "blk.0.attn_q.weight",
+        "dims": [
+          2304,
+          3072
+        ],
+        "type": 8,
+        "offset": 226163232
+      },
+      {
+        "name": "blk.0.attn_q_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 233683488
+      },
+      {
+        "name": "blk.0.attn_v.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 233684000
+      },
+      {
+        "name": "blk.0.attn_v_ctx.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 236190752
+      },
+      {
+        "name": "blk.0.ctx_mix.weight",
+        "dims": [
+          4
+        ],
+        "type": 0,
+        "offset": 238697504
+      },
+      {
+        "name": "blk.0.ctx_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 238697536
+      },
+      {
+        "name": "blk.0.ffn_down.weight",
+        "dims": [
+          9216,
+          2304
+        ],
+        "type": 8,
+        "offset": 238706752
+      },
+      {
+        "name": "blk.0.ffn_gate.weight",
+        "dims": [
+          2304,
+          9216
+        ],
+        "type": 8,
+        "offset": 261267520
+      },
+      {
+        "name": "blk.0.ffn_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 283828288
+      },
+      {
+        "name": "blk.0.ffn_up.weight",
+        "dims": [
+          2304,
+          9216
+        ],
+        "type": 8,
+        "offset": 283837504
+      },
+      {
+        "name": "blk.1.attn_k.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 306398272
+      },
+      {
+        "name": "blk.1.attn_k_ctx.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 308905024
+      },
+      {
+        "name": "blk.1.attn_k_ctx_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 311411776
+      },
+      {
+        "name": "blk.1.attn_k_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 311412288
+      },
+      {
+        "name": "blk.1.attn_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 311412800
+      },
+      {
+        "name": "blk.1.attn_output.weight",
+        "dims": [
+          3072,
+          2304
+        ],
+        "type": 8,
+        "offset": 311422016
+      },
+      {
+        "name": "blk.1.attn_q.weight",
+        "dims": [
+          2304,
+          3072
+        ],
+        "type": 8,
+        "offset": 318942272
+      },
+      {
+        "name": "blk.1.attn_q_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 326462528
+      },
+      {
+        "name": "blk.1.attn_v.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 326463040
+      },
+      {
+        "name": "blk.1.attn_v_ctx.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 328969792
+      },
+      {
+        "name": "blk.1.ctx_mix.weight",
+        "dims": [
+          4
+        ],
+        "type": 0,
+        "offset": 331476544
+      },
+      {
+        "name": "blk.1.ctx_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 331476576
+      },
+      {
+        "name": "blk.1.ffn_down.weight",
+        "dims": [
+          9216,
+          2304
+        ],
+        "type": 8,
+        "offset": 331485792
+      },
+      {
+        "name": "blk.1.ffn_gate.weight",
+        "dims": [
+          2304,
+          9216
+        ],
+        "type": 8,
+        "offset": 354046560
+      },
+      {
+        "name": "blk.1.ffn_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 376607328
+      },
+      {
+        "name": "blk.1.ffn_up.weight",
+        "dims": [
+          2304,
+          9216
+        ],
+        "type": 8,
+        "offset": 376616544
+      },
+      {
+        "name": "blk.2.attn_k.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 399177312
+      },
+      {
+        "name": "blk.2.attn_k_ctx.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 401684064
+      },
+      {
+        "name": "blk.2.attn_k_ctx_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 404190816
+      },
+      {
+        "name": "blk.2.attn_k_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 404191328
+      },
+      {
+        "name": "blk.2.attn_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 404191840
+      },
+      {
+        "name": "blk.2.attn_output.weight",
+        "dims": [
+          3072,
+          2304
+        ],
+        "type": 8,
+        "offset": 404201056
+      },
+      {
+        "name": "blk.2.attn_q.weight",
+        "dims": [
+          2304,
+          3072
+        ],
+        "type": 8,
+        "offset": 411721312
+      },
+      {
+        "name": "blk.2.attn_q_norm.weight",
+        "dims": [
+          128
+        ],
+        "type": 0,
+        "offset": 419241568
+      },
+      {
+        "name": "blk.2.attn_v.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 419242080
+      },
+      {
+        "name": "blk.2.attn_v_ctx.weight",
+        "dims": [
+          2304,
+          1024
+        ],
+        "type": 8,
+        "offset": 421748832
+      },
+      {
+        "name": "blk.2.ctx_mix.weight",
+        "dims": [
+          4
+        ],
+        "type": 0,
+        "offset": 424255584
+      },
+      {
+        "name": "blk.2.ctx_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 424255616
+      },
+      {
+        "name": "blk.2.ffn_down.weight",
+        "dims": [
+          9216,
+          2304
+        ],
+        "type": 8,
+        "offset": 424264832
+      },
+      {
+        "name": "blk.2.ffn_gate.weight",
+        "dims": [
+          2304,
+          9216
+        ],
+        "type": 8,
+        "offset": 446825600
+      },
+      {
+        "name": "blk.2.ffn_norm.weight",
+        "dims": [
+          2304
+        ],
+        "type": 0,
+        "offset": 469386368
+      },
+      {
+        "name": "blk.2.ffn_up.weight",
+        "dims": [
+          2304,
+          9216
+        ],
+        "type": 8,
+        "offset": 469395584
+      }
+    ],
+    "ctx_mix_payloads": {
+      "markov_ctx_mix.weight": {
+        "values": [
+          0.20208103954792023,
+          0.0150445019826293,
+          0.7478950023651123,
+          0.03497951477766037
+        ],
+        "sum_binary64": 1.0000000586733222
+      },
+      "blk.0.ctx_mix.weight": {
+        "values": [
+          0.09255659580230713,
+          0.11319444328546524,
+          0.687924861907959,
+          0.10632412135601044
+        ],
+        "sum_binary64": 1.0000000223517418
+      },
+      "blk.1.ctx_mix.weight": {
+        "values": [
+          0.32945480942726135,
+          0.22248528897762299,
+          0.34797361493110657,
+          0.10008630901575089
+        ],
+        "sum_binary64": 1.0000000223517418
+      },
+      "blk.2.ctx_mix.weight": {
+        "values": [
+          0.1805448979139328,
+          0.05953739210963249,
+          0.2879469692707062,
+          0.47197073698043823
+        ],
+        "sum_binary64": 0.9999999962747097
+      }
+    },
+    "primary_reference_revision": "4c7344447cb1727f1e2f982febc99a8f88dcb77f",
+    "reference_files": {
+      "dspark.cpp": "ce7648ad8d3adc44c5967df25dbd2c20e52af6f1a99e497b37b7ff3aee27e26c",
+      "dflash.cpp": "9f26474dd5b04cd12e235372c151f75bc791e55044d01dd2a580833f1bd890a0",
+      "speculative.cpp": "2aa4b3b954c9658b276a3e4476b167fc8643bfb49e45e36b251cf333ed681e8e",
+      "inkling2.cpp": "925c61ac87e23fa58ef5e45863ce4db583d2b4ecb5206f01d952d59dde792267",
+      "inkling2-loop.cpp": "b5983c6ef955b54d35187933fb0295988997385a12d608c762eb67d06b473772"
+    },
+    "logical_feature_taps": [
+      {
+        "logical": 5,
+        "physical": 5,
+        "visit": 1,
+        "stage": "layer input"
+      },
+      {
+        "logical": 23,
+        "physical": 11,
+        "visit": 2,
+        "stage": "layer input"
+      },
+      {
+        "logical": 41,
+        "physical": 17,
+        "visit": 3,
+        "stage": "layer input"
+      },
+      {
+        "logical": 48,
+        "stage": "final depth mix followed by output normalization"
+      }
+    ],
+    "runtime_rejection": "MR-ARCH-0002; dflash unsupported; native inspect exit4",
+    "execution_not_implemented": [
+      "selective logical target feature capture without disabling fast paths",
+      "drafter adapter for per-layer context KV injection and noncausal block queries",
+      "shared target embedding/output ownership and unpadded vocabulary",
+      "Markov context input, recurrent head, and post-bias softcap",
+      "generation integration, transactional acceptance/rollback/reset, independent numerical qualification"
+    ]
+  },
+  "dspark_native_execution": "Unsupported. This delivery audits compatibility; it does not implement the native drafter adapter or enable DSpark generation. No DSpark throughput claimed.",
+  "candidate_validation": {
+    "status": "passed",
+    "started_at": "2026-11-27T16:08:55.090776+00:00",
+    "binary_sha256": "b4be577c4853fee500bd9fe92c6ae0a5add21d3528031f487778f96a0abcfee1",
+    "cases": [
+      {
+        "name": "native-units",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-native-units",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling",
+          "--timed"
+        ],
+        "environment": {},
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/native-units.log",
+        "sha256": "e7a40f09833236da47ce1c311e1a244309b965a6ef5a43b769af1053cf1e47e6"
+      },
+      {
+        "name": "gpu-chain",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-gpu-chain",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional native Vulkan resident integer mixture",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_REFERENCE_GPU": "1"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/gpu-chain.log",
+        "sha256": "a4709b000fb0dbd7d433695b535bac624453f7ee60ecfa27690088ea878c2d32"
+      },
+      {
+        "name": "sampler",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-sampler",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "sampling",
+          "--timed"
+        ],
+        "environment": {},
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/sampler.log",
+        "sha256": "14ef2b35fb7453b22ddc1e2b9d149d9a035f9b01a74394c68537278f893d4e94"
+      },
+      {
+        "name": "prefix-int8",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-prefix-int8",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_REPACK": "none",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_ARITH": "int8",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-int8-prefix"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/prefix-int8.log",
+        "sha256": "21be10c6102f3550d150cdd6bdc0ef2d9aa996f45dd477d09321deb8cb0f8848"
+      },
+      {
+        "name": "q4t-cpu",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-q4t-cpu",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional Q4T",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_Q4T_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "int8",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/q4t-cpu.log",
+        "sha256": "401c89480542c5fedc98599c1a012278aadb72cd6e7afe41d43f1007761432aa"
+      },
+      {
+        "name": "gpu-reference-products",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-gpu-reference-products",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional native Vulkan reference integer",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_REFERENCE_GPU": "1"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/gpu-reference-products.log",
+        "sha256": "924b29a50d2b45e5537722b5c0df038fbd08904dacc6d5f658c20f977aeb9702"
+      },
+      {
+        "name": "gpu-situ",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-gpu-situ",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional native Vulkan reference SiTU",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_REFERENCE_GPU": "1"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/gpu-situ.log",
+        "sha256": "04af08c8a08d415aa6d7003978e36b4cfbb163a622df3e77035c801c50eac888"
+      },
+      {
+        "name": "gpu-relative-equation",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-gpu-relative-equation",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional native Vulkan Q4T",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_REFERENCE_GPU": "1"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/gpu-relative-equation.log",
+        "sha256": "c3a7368dcf85f20a445468efb03cb63cdc33d47168998c83b75cbb3551131678"
+      },
+      {
+        "name": "q4t-resident-chain",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-q4t-resident-chain",
+          "-p",
+          "MemoryMax=24G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional Q4T",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_Q4T_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "int8",
+          "MODEL_RUNNER_INKLING_BACKEND": "hybrid",
+          "MODEL_RUNNER_INKLING_CHAIN_GPU": "1"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/q4t-resident-chain.log",
+        "sha256": "baca2c4ed5ac9d11282d488076321efa13149e4faff460b3b63d4a335c10d2ce"
+      },
+      {
+        "name": "backend-shares",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-backend-shares",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "cpu backend : work shared across the pool",
+          "--timed"
+        ],
+        "environment": {},
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/backend-shares.log",
+        "sha256": "32c7cce5d19e26490874112795472f4cda5ceeac783c09c70df9baa04796da6c"
+      },
+      {
+        "name": "q4t-256",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-q4t-256",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional Q4T",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_Q4T_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "int8",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_INTEGER_WIDTH": "256"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/q4t-256.log",
+        "sha256": "c8edaaf5474d99240ac4ee30f3aafdeeac9700f1233464c34a9270838f5221a7"
+      },
+      {
+        "name": "prefix256-int8",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-dspark-depth-mix-qual1-prefix256-int8",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_REPACK": "none",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_ARITH": "int8",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-int8-prefix",
+          "MODEL_RUNNER_INKLING_INTEGER_WIDTH": "256"
+        },
+        "status": "passed",
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/qualification-v1/prefix256-int8.log",
+        "sha256": "0aba742b856febdfd9a17981638f37398efa60a59bc1c7e9d0dbe168d7bb6907"
+      }
+    ],
+    "finished_at": "2026-11-27T16:09:59.691542+00:00"
+  },
+  "candidate_regressions": {
+    "status": "passed",
+    "binary_sha256": "b4be577c4853fee500bd9fe92c6ae0a5add21d3528031f487778f96a0abcfee1",
+    "cases": [
+      {
+        "filter": "gguf container",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "test",
+          "--only",
+          "gguf container",
+          "--timed"
+        ],
+        "returncode": 0,
+        "count": 86,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/regressions-v1/0.log",
+        "sha256": "5e81a5e36d44d1e61c8f589368380ece1ea152b39c390f54641282e5b4ebc988"
+      },
+      {
+        "filter": "llama inference : a mixture",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "test",
+          "--only",
+          "llama inference : a mixture",
+          "--timed"
+        ],
+        "returncode": 0,
+        "count": 4,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/regressions-v1/1.log",
+        "sha256": "aa1cf740585311b9bd6aac04bc75523fd1f3bad905358b103451f7777808ce17"
+      },
+      {
+        "filter": "llama inference : a batch's mixture",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "test",
+          "--only",
+          "llama inference : a batch's mixture",
+          "--timed"
+        ],
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/regressions-v1/2.log",
+        "sha256": "5b47f806bead6225234761a93762086605482f683b49d3837a9ab84dcaa21dbe"
+      },
+      {
+        "filter": "llama inference : a sigmoid-gated mixture",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "test",
+          "--only",
+          "llama inference : a sigmoid-gated mixture",
+          "--timed"
+        ],
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/regressions-v1/3.log",
+        "sha256": "c4127bc409dd2a67688a67dd086d2c29f79b66b1bcd145b0353511fa5742e901"
+      },
+      {
+        "filter": "cpu backend : the packed attention kernel",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "test",
+          "--only",
+          "cpu backend : the packed attention kernel",
+          "--timed"
+        ],
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/regressions-v1/4.log",
+        "sha256": "33536b6c360837f1955b24acdd55ba063a69c860088364bf5b88bb418c5f207c"
+      },
+      {
+        "filter": "cpu backend : rows packed into",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "test",
+          "--only",
+          "cpu backend : rows packed into",
+          "--timed"
+        ],
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/dspark-depth-mix/regressions-v1/5.log",
+        "sha256": "b95609a3e5f85d5126a43ecc6868bc16079ff9839b21279269ccdbc8c2850dae"
+      }
+    ],
+    "finished_at": "2026-11-27T16:10:34.017109+00:00"
+  },
+  "rejected_candidate": {
+    "decision": "Rejected for selection: correct but slower in the single complete-model sample. Restore prior selected engine; do not repeat its unchanged benchmark.",
+    "decided_at": "2026-11-27T16:16:54.974484+00:00",
+    "candidate_measurement": "artifacts/inkling2/obj/dspark-depth-mix/measurement-v1/evidence.json",
+    "restored_source_files": [
+      "src/library/model_runner-llama-inkling_evaluate.adb",
+      "src/library/model_runner-llama.adb",
+      "src/library/model_runner-llama.ads",
+      "tests/src/model_runner-llama-adapter_testing.adb",
+      "tests/src/model_runner-llama-adapter_testing.ads",
+      "tests/src/tests-inkling_cases.adb"
+    ],
+    "source_manifest_before": "artifacts/inkling2/obj/dspark-depth-mix/before/source-sha256.json",
+    "prototype_source_archive": "artifacts/inkling2/obj/dspark-depth-mix/rejected-fusion/changed-source.tar",
+    "prototype_patch": "artifacts/inkling2/obj/dspark-depth-mix/rejected-fusion/candidate.patch",
+    "binary_sha256": {
+      "artifacts/inkling2/obj/dspark-depth-mix/rejected-fusion/model_runner": "f669a6967aa02c1d7c31f9ecc180ab620447f2d1b38cc028308cf8614b5bb875",
+      "artifacts/inkling2/obj/dspark-depth-mix/rejected-fusion/tests": "b4be577c4853fee500bd9fe92c6ae0a5add21d3528031f487778f96a0abcfee1",
+      "artifacts/inkling2/obj/dspark-depth-mix/rejected-fusion/no_adapter_probe": "3311387cb9da7fcc13838733e865e4215eb42c052811b85fe8261e59ea432190"
+    }
+  },
+  "restored_engine_integrity": {
+    "status": "passed: all selected source files and nonempty complete code/constant sections match the preceding selected engine",
+    "source_identity": "Every production/build/test source equals the selected before manifest. Only documentation and one compatibility metadata fixture are added.",
+    "compiler_and_dependencies": "Unchanged existing Alire/GNAT projects and profiles; no build flags or dependencies changed.",
+    "before_source_manifest": "artifacts/inkling2/obj/dspark-depth-mix/before/source-sha256.json",
+    "binaries": {
+      "model_runner": {
+        "before_sha256": "a1def6e6616683d29e9784ca78d8992abcd59f90bc7339e057acef03beb62cd0",
+        "after_sha256": "42312735f6f4a26f85c8e8082d128bd68f5895ef3cc7857f80ffab4b57c871aa",
+        "nonempty_code_and_constants": {
+          ".text": {
+            "bytes": 50985915,
+            "sha256": "6e1e1a14dab3ad9fb17f9373a5d3d4c73bd29fc2d19695e92e807b4d81cdb0a4"
+          },
+          ".rodata": {
+            "bytes": 15291624,
+            "sha256": "8da81aeb444cccff232adb6db3f54b2e489c5671f4b0b828a57d7185d24eee99"
+          }
+        },
+        "exact_code_and_constants_equal": true
+      },
+      "tests": {
+        "before_sha256": "5fc7a10f04113dd8840a5c37b7a41107fd7660778aef34d997e4f1316c299e73",
+        "after_sha256": "616d00e78fa6ec5a9cc6123afc66b97243c13986a244d7c916f591dd3cb9c0bd",
+        "nonempty_code_and_constants": {
+          ".text": {
+            "bytes": 64730619,
+            "sha256": "0046d028fbe95de628cc03a5c091331ff3b4deaf471e5c7a3ff7bb0322b097f0"
+          },
+          ".rodata": {
+            "bytes": 16685200,
+            "sha256": "286e716147755835930b32ba9fb1935bf25edfc8d33d7a2facc9db4c7ba2a3f2"
+          }
+        },
+        "exact_code_and_constants_equal": true
+      },
+      "no_adapter_probe": {
+        "before_sha256": "732170597143bbfb44001dc2aca0c37b33460a930d410f5976c43cfe6429942e",
+        "after_sha256": "8c5ea975538f77c5d28b67cbb831dccdd2ccabf95b63a22d04861466f35d1b98",
+        "nonempty_code_and_constants": {
+          ".text": {
+            "bytes": 50939195,
+            "sha256": "5b79cd45832beb66c22bdc11a09d3b5967a36aaffdb3a8f91f8aad102d58aac6"
+          },
+          ".rodata": {
+            "bytes": 15284008,
+            "sha256": "768a9ea172705026b7ce957189ab4085a0ddfe77dec7bb91311ce7aa3bde98ab"
+          }
+        },
+        "exact_code_and_constants_equal": true
+      }
+    },
+    "selected_measurement_reused": true,
+    "no_unchanged_model_or_regression_timing_repeated": true
+  },
+  "restored_native_smoke_log": "artifacts/inkling2/obj/dspark-depth-mix/restored-native-units.log",
+  "selected_reference_and_shared_engine_evidence": "docs/inkling2-plans-eight-evidence.json",
+  "shared_engine_requalification": "Prior selected campaign reused only after exact source and full nonempty code/constant identity verified. It is not qualification of the rejected candidate.",
+  "source_manifest": "artifacts/inkling2/obj/dspark-depth-mix/restored-final/source-sha256.json",
+  "source_archive": "artifacts/inkling2/obj/dspark-depth-mix/restored-final/source.tar",
+  "binary_sha256": {
+    "bin/model_runner": "42312735f6f4a26f85c8e8082d128bd68f5895ef3cc7857f80ffab4b57c871aa",
+    "tests/bin/tests": "616d00e78fa6ec5a9cc6123afc66b97243c13986a244d7c916f591dd3cb9c0bd",
+    "tests/bin/no_adapter_probe": "8c5ea975538f77c5d28b67cbb831dccdd2ccabf95b63a22d04861466f35d1b98"
+  },
+  "independent_fixture_integrity": {
+    "unchanged_files": 163,
+    "sha256": {
+      "tests/fixtures/inkling2/REFERENCE-LICENSE.txt": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "tests/fixtures/inkling2/benchmarks/cpu-decode128-depth512.json": "88fd30a4b5943f590f38adca7e60af00c0651c5f2fed7e254d87e914ce36f801",
+      "tests/fixtures/inkling2/benchmarks/cpu-decode128-depth512.time": "859540521bf8609f82693502fb56d953250c82079d3ad6483b1f12c222f9c38e",
+      "tests/fixtures/inkling2/benchmarks/cpu-pp512.json": "6176c61d429b7cbe7a1db143478d6c13478263faec9061f8197bea407b5e1cb1",
+      "tests/fixtures/inkling2/benchmarks/cpu-pp512.time": "7d0df74931e396228cced388fafc256d55e78718ccc00dbf31f8b21fcb1ebd4c",
+      "tests/fixtures/inkling2/chat-template-cases.json": "19ac91f1f24c4f09ba710058fe4a55e1a051ee90bd79333543c474ad4e60a5b3",
+      "tests/fixtures/inkling2/chat_template.jinja": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc",
+      "tests/fixtures/inkling2/config.json": "a7a349601f0984c4abf999c480ef775d8567d21f5f84b4e8a3e035b44f288dc2",
+      "tests/fixtures/inkling2/f32-dot-reference.bin": "bc9c85ac8ac4c05636c3a28dca0a6dc54f90dedc70663b2e19eae0e8ece20d17",
+      "tests/fixtures/inkling2/f32-dot-reference.json": "4e754eba5251823af9b28738070e22582cc1c463acb775434788c0c5a349ad1f",
+      "tests/fixtures/inkling2/generation_config.json": "a08737c07a65a8fdf69f7cf086576210e5aad4b241437090b26d7b0c4f7905f7",
+      "tests/fixtures/inkling2/greedy-f32-16.json": "1b627fced5d89a4ee0f9f2c57e2d6ce8e5a98d6a7ee15abf2da28b4c2b7c6b3e",
+      "tests/fixtures/inkling2/hf_quant_config.json": "7c656207d3ce37879c7be209a036b0dde43bf01f78159bff06880b868ed57143",
+      "tests/fixtures/inkling2/precision-profiles.md": "013edb070d51924efc1cd492135857a7b7088cbb0161d5c89cec0252349f1535",
+      "tests/fixtures/inkling2/processor_config.json": "d7350adce18c8be4b607f261c8f0f7eabbf720bb7aaf648a43d4f8372bbacc2d",
+      "tests/fixtures/inkling2/q4_k_m-architecture-metadata.json": "86f30cceaddc46d151496e27797f8efcb3d44e2c3bb81591376bc39d400160e8",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/attention.f32": "7081fbefceb005f1acb7fa2289e676adfcf8a3c979ee24d8b0f67410f654c7c4",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/expert-ids.i32": "14b5d59062535be6da9cdae4715f71a2551576b1de0ead6f5c48762b6a9dfa3e",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/feed-forward.f32": "791086081787b137de304d9ba5652a47ce7da14765c4990fd8f8fd5f43534b0f",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/final-norm.f32": "c34043785c61b76a4a96df93632b88e774982feae4859864c774a628c3fe3624",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/layers.f32": "f50d4fbf822c90a12d0ea4a151236b20b620de228743046fb70de8060f863fb5",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/logits.f32": "a8007dca8feacd889ec72cc4e6f7889990f6e63913da7259bee5f43e1ef974f0",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/loop-controls.f32": "fc3f490300d99b8218a4730223e9a9bd477f698945ab3cc3c2c6ff1652eab52a",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/loop-messages.f32": "be58b72bb4d33fcc34ec6f929635c694cc9b2f3306580bc46832c885d9901982",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/manifest.json": "2b43fab7761e7d0e1515c414d575bfb63a48de04b0bd8f11b162b22d9cd6e317",
+      "tests/fixtures/inkling2/q4_k_m-cpu-hello/routing.f32": "3fb04b0c14fdb6cad3260047a35b414fd2a4a95d49d248b011a7f863bfa5a1c1",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/decode-expert-ids.i32": "324ef986c71ff5403cedb9c46635430ddb9566093e109f9b06d03c75e1bdbefd",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/decode-final-norm.f32": "2f3e1c2ba1ecc4502a56dab152ff23119e686617cbee4829b1f2eaaee243ad65",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/decode-layers.f32": "6c40503a56beee9aacc741e033434f62a61149c922ac8331e85e5f563aac18dd",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/decode-logits.f32": "191558da91c3751ad6a2ef880320f2b150c1a516cad69dc42c81ae63ac56ab1a",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/decode-router-biased-probs.f32": "c20da9f039f8bb17354256365657787b52efaeaa2d01c9d999d943a9886df4ae",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/decode-router-logits.f32": "fa460763a0e0b2a821aaeab5874b70b7ac7d3c6ad0c4d3002e0d041f2f6b0dfe",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/manifest.json": "1a520bce9768c66df5df6ffb9dcfe446abf6484c911ae754fb316e63f39b6c1b",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/microbatch-one-expert-ids.i32": "324ef986c71ff5403cedb9c46635430ddb9566093e109f9b06d03c75e1bdbefd",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/microbatch-one-final-norm.f32": "2f3e1c2ba1ecc4502a56dab152ff23119e686617cbee4829b1f2eaaee243ad65",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/microbatch-one-layers.f32": "6c40503a56beee9aacc741e033434f62a61149c922ac8331e85e5f563aac18dd",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/microbatch-one-logits.f32": "191558da91c3751ad6a2ef880320f2b150c1a516cad69dc42c81ae63ac56ab1a",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/microbatch-one-router-biased-probs.f32": "c20da9f039f8bb17354256365657787b52efaeaa2d01c9d999d943a9886df4ae",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/microbatch-one-router-logits.f32": "fa460763a0e0b2a821aaeab5874b70b7ac7d3c6ad0c4d3002e0d041f2f6b0dfe",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-decode-expert-ids.i32": "459abafbade520315f94c17649fcb68ead63bd84703a69677c7fc0c304a03e00",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-decode-final-norm.f32": "e06542fc959458e5c177b6d51119557cdaa32f95d200bee7f2f6be065f4a82cb",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-decode-layers.f32": "e022af39d11687becf09b184a2b5afe11b1e90e85801a254c7efdc5aa8d7672f",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-decode-logits.f32": "60515a41f5370ba398ff09333baa6d3d7dfc4bf2e241fa08b61430adda320c84",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-decode-router-biased-probs.f32": "fd4d5b0f3fec42872b9b4c60d23c59c7b4dbc896cb3547a76786399a7bea7364",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-decode-router-logits.f32": "63175ce88bebf4458fddfe9c3ac5339d6f1afad737ee9219750f756926dbcfb9",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-prefill-expert-ids.i32": "459abafbade520315f94c17649fcb68ead63bd84703a69677c7fc0c304a03e00",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-prefill-final-norm.f32": "e06542fc959458e5c177b6d51119557cdaa32f95d200bee7f2f6be065f4a82cb",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-prefill-layers.f32": "e022af39d11687becf09b184a2b5afe11b1e90e85801a254c7efdc5aa8d7672f",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-prefill-logits.f32": "60515a41f5370ba398ff09333baa6d3d7dfc4bf2e241fa08b61430adda320c84",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-prefill-router-biased-probs.f32": "fd4d5b0f3fec42872b9b4c60d23c59c7b4dbc896cb3547a76786399a7bea7364",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/no-llamafile-prefill-router-logits.f32": "63175ce88bebf4458fddfe9c3ac5339d6f1afad737ee9219750f756926dbcfb9",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/prefill-expert-ids.i32": "f6446dc0be6c5bed9edf68721d8c8ff8ac60c63dcd366fd6e7d85e6eff4afb4b",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/prefill-final-norm.f32": "ec91a42dc5e76982284b5b1f62135bf2c68bed224854e2861dd40f794bd87b31",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/prefill-layers.f32": "b156aa9e8b0981a9744cf1d89810568ddab7b5780fb3054a85c552121b13d2a5",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/prefill-logits.f32": "e78b670b280de787fc3b2f3a32ba13f10b01d7d3903ea6f1a986265478ff2f6f",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/prefill-router-biased-probs.f32": "4ebdb12910f9faef49b169cd0f855f4ea034591ee4c3a8f2ac3a3503bac543ab",
+      "tests/fixtures/inkling2/q4_k_m-cpu-prefix/prefill-router-logits.f32": "9a2b56dc49340918e0044caff1ed0df1f75383edd704629cc8f6040dba1d459b",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/attention.f32": "4c9ef1c40f609dd6a65bc4bf63de4f79cb46fc4d985c1236d19dab7fb089ed08",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/expert-ids.i32": "5712bf4f5e5a1b8b821df93a1f4d369a33426bc6cc8cdd40f587eb741aa63dd1",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/feed-forward.f32": "c2f880ba52c5bc8e5cb66c57281d1c193d859cfed03b49b6a1613e2b1a03380c",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/final-norm.f32": "faa6bb40dd0135d0d1aaa4bd0ca11d3967b4bb2db1f94b19e372cacc13474443",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/layers.f32": "35c78711889703403e63a878fc054cf346ce36eea9ed1118562b729a4a32e1c3",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/logits.f32": "7994de0409c4c12f40105055158d319e3a7d10b8f85acf7680dd1019c4f1c80b",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/loop-controls.f32": "d99916f6ecc5d4425ecf2283e6eec4967d0e9b3de2560c22106e39134cc9b243",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/loop-messages.f32": "d2f355dbd558656c5adf1dd12df9c3cee24b43a8cc0b5166fc606239fac9e19c",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/manifest.json": "646b59ab5643fb36518d5d51533bffdf5a0b316bbd43aa1482eb0cffd9db4242",
+      "tests/fixtures/inkling2/q4_k_m-f16-dot-half-prefix/routing.f32": "5b231e32c69b70bfe95f11395fb4f41f007c6541679bbe263d9ba2edaf33b7f7",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/attention.f32": "ee0d4038c02b975859271531c5bf2bc6f2127f23fd1e68c58e99ede13431ff00",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/expert-ids.i32": "5712bf4f5e5a1b8b821df93a1f4d369a33426bc6cc8cdd40f587eb741aa63dd1",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/feed-forward.f32": "2a3f67b90b3b1fabde333cd32d4db790edf459b86ce4fe4586f521bae8e38c4a",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/final-norm.f32": "bf9d278640630dafba41c4f28ba54f4f6652deb4a3ed8840828c40f4b5423e68",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/layers.f32": "0a433775194fa2b69d8ed6110fbfc7e7d93f254946ef3665b9ac6afe3533158d",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/logits.f32": "37f169ec4b06c03de462f03520fd84a9c1696f7fe69a5e30a760265c5281f365",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/loop-controls.f32": "a435c64c7c92e66a3c01b8a603262655a2981458749f972d7691f214ce6dd50b",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/loop-messages.f32": "608c1f776526905214433f372c4d267ed97daf4dbc20230d34a582cabe3a5b0b",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/manifest.json": "e63ba0f616c5eaf509538169235abd3b1720255a512a703c05810f2da93cb0a0",
+      "tests/fixtures/inkling2/q4_k_m-f32-half-prefix/routing.f32": "a306767a69e6312326ea1aef2474a524a55d2c8a1a7e8a475e05e0fdf6d2972d",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/attention.f32": "24ff4952fab92dbf07c9025c2f2511223764b9a9523002b03e162868a09a20a5",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/expert-ids.i32": "4623508767a948c632e873e17a1c890675fd3cb8fe06c226eed24e5c26609d1b",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/feed-forward.f32": "c98373a90fc4dbb5b2620999dc480e0a4d138c6f9a6deb59c2b08d7fb2689d52",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/final-norm.f32": "4dbbec5e50bc3ab78e65545dc3c0fbb98052f62d5ba16cf621acd232c1b11c1e",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/layers.f32": "0455e4da8fafc9094fa18a79773bf04e6955e91f895a187e7b3eb37a72a0f28b",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/logits.f32": "57f85be8bfa816f74074607310456a55f26bb856dcabfa7fc914e60863e3f642",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/loop-controls.f32": "aa62909d29fd35f5e4454bd012bcc44df8b51dad1fb4503be3151302b81ddeca",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/loop-messages.f32": "9f2d564891bdf741ac37128877ed1a0cbf7a0693270441f3419b77861c5338fd",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/manifest.json": "29dda694e7fc315fb5feea4439ff3ef03af8203c4650451bf61447bf9e80ee3e",
+      "tests/fixtures/inkling2/q4_k_m-f32-hello/routing.f32": "65ae9223de212db9caf5acfcd7578a77122ead5afadf68a78af1433b6cc05f0f",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/attention.f32": "661cbd5e0d8067984550e2bc512414960227a6694202fad1ce8f18a1dd130643",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/expert-ids.i32": "5712bf4f5e5a1b8b821df93a1f4d369a33426bc6cc8cdd40f587eb741aa63dd1",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/feed-forward.f32": "5c08b652ce6040fe10a4c28a5eac44e93e94c60473b56f4bde2fdcc9cb06d6d1",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/final-norm.f32": "aba1a16e058bfa901a307c1019b214cfff235c9033dab8394f922b026ded440a",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/layers.f32": "0b0de51acdd02e6364324623f77f676a65aee706fb557607d6e384045e025f36",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/logits.f32": "61c57612df668a747cf6f596c802a5961273b2a7c0741c45bb66847908f6f4d4",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/loop-controls.f32": "4622a8f458cd41586115ba64e6ab36f00bbaf75715ad3c274568ed1f704ace2c",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/loop-messages.f32": "5fd84eafa35343c747c03b0112b44b9841df43931934468d7892871f9e147d83",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/manifest.json": "845e6e432dd33658eec49592acacf2478e6fab2fb2b49fa372f73433675c92f9",
+      "tests/fixtures/inkling2/q4_k_m-f32-prefix/routing.f32": "e6d4c1eed31557a54df514fd94b8226e3305cd2fd636c4ddb26d6cacdd53f28f",
+      "tests/fixtures/inkling2/q4_k_m-imatrix.pointer": "276bca39a78d34c62ae27f19388c5f3fefcbfce06554b2983a4b21dddfd6671a",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/attention.f32": "2471f5639dc0e79ec3ae07eaa08374cabce36e1c593be81ab44cb99caf3bc2f7",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/expert-ids.i32": "19c6b65bc43fd9f9b9ba3a135810497a68ed9d86c518f7fb692d9ad244da52a1",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/feed-forward.f32": "926b075f2409db6ace10bb36a1d643dd9cf4d1a5dbb863bff61368328eb9188d",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/final-norm.f32": "e06542fc959458e5c177b6d51119557cdaa32f95d200bee7f2f6be065f4a82cb",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/layers.f32": "66f42ddfe8bd20d1feb75d26bf8a30728403528fd479fa9643cdd98dd0593b12",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/logits.f32": "60515a41f5370ba398ff09333baa6d3d7dfc4bf2e241fa08b61430adda320c84",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/loop-controls.f32": "37d96edb19b8962aff1f169d82911e9dc847e695b62018aa1727163a2832cc9d",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/loop-messages.f32": "bc6885904fdc4b715b56052b35de01342995e3f0d1c13e43054c060a470d7322",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/manifest.json": "77ddfd0aadeec8a6cd9599f8d2ee3af5dc93368b536d32cd3551845dc12561d8",
+      "tests/fixtures/inkling2/q4_k_m-int8-prefix/routing.f32": "2d1b629273248ec6b154452376d01a56d5d2efc52e9e3daea19865e17a3ca9de",
+      "tests/fixtures/inkling2/q4_k_m-layout.json": "119aa40844b99d0e7a4e4b871c0798e414f577fa076047665029af71cd728ec7",
+      "tests/fixtures/inkling2/q4_k_m-metadata.txt": "6b11eb5f86f2311ee96322ae90490d233580dde0c593d2d7cc49e21acff6d88a",
+      "tests/fixtures/inkling2/q4_k_m-tensors.tsv": "d7386c4d9290d68238cee3ba0d6ccdec666b539f768cbf598ee3f6bc9094f861",
+      "tests/fixtures/inkling2/q4_k_m.gguf.pointer": "b8b513af6dc311376519980ac88aa81a135e4165c9a4b2e607968bb3cd71ed8b",
+      "tests/fixtures/inkling2/q4k-dot-reference-activations.bin": "50b8040bae97b480534a78ad4afdb2b51033200a92c909f8b174be9560bf2360",
+      "tests/fixtures/inkling2/q4k-dot-reference-output.bin": "d7ea89312b9ff57bfd0092d408c571713181c06502b25bbbc7f474b7694c65b9",
+      "tests/fixtures/inkling2/q4k-dot-reference-weights.bin": "1069708cb08e3ad844a32a6f88926cf3b9fe8a53317c21d70b3b839c54330e10",
+      "tests/fixtures/inkling2/q4k-dot-reference.json": "4efb1cee289f020f6631f82a97fe438730d028915592c39b369cfca0190ff7fb",
+      "tests/fixtures/inkling2/q50-dot-reference-activations.bin": "337e216b8bcd686b79ed1d1d5864a37eee1d6a30d6ce78272375ff8f5d9f7f67",
+      "tests/fixtures/inkling2/q50-dot-reference-output.bin": "6b930e80a2e8dcb7f5b1ee90e95508042dbc1f95cf77d9c9bfd9132d017d210e",
+      "tests/fixtures/inkling2/q50-dot-reference-weights.bin": "328ac2542a429cd02ab621ff290079ee750efe4c30773228b5c1b0af3d6c6213",
+      "tests/fixtures/inkling2/q50-dot-reference.json": "8eaa76adfac27dc5fe715fa5041563e212adf6528bd46013f858bdf6e24b34cb",
+      "tests/fixtures/inkling2/q5k-dot-reference-activations.bin": "50b8040bae97b480534a78ad4afdb2b51033200a92c909f8b174be9560bf2360",
+      "tests/fixtures/inkling2/q5k-dot-reference-output.bin": "557ffba2c637bdbeedc4cf292956d887d9819c286c4f7ab5456e4aa1b681ccb0",
+      "tests/fixtures/inkling2/q5k-dot-reference-weights.bin": "8e84de8d6e63e508cc958a9b01c45471ba3d1e6d48a7ff57c218a7fd0ccdcd71",
+      "tests/fixtures/inkling2/q5k-dot-reference.json": "76924937a0a4d2fe4550d4642cfc4567f1c0b79a08875e2937c5c85b3088336f",
+      "tests/fixtures/inkling2/q6k-dot-reference-activations.bin": "50b8040bae97b480534a78ad4afdb2b51033200a92c909f8b174be9560bf2360",
+      "tests/fixtures/inkling2/q6k-dot-reference-output.bin": "de6767accc7842cd3206abbc8af3211e6630fe7daccc99adc5f591176431c5d4",
+      "tests/fixtures/inkling2/q6k-dot-reference-weights.bin": "73cb58c956fd43f0b4e980a38afa4cc0b4d59914b90d08c321ba2cb0dae52d3a",
+      "tests/fixtures/inkling2/q6k-dot-reference.json": "5d710c35450308f7acbe0b8ec68b0475a6d3e548c6103faa44a19b5fec7f1080",
+      "tests/fixtures/inkling2/q8-attention-input.f32": "686d362d1f3c639413ccfc1416efbf499e675f700f3f6e8a7d3543a3428dbcb9",
+      "tests/fixtures/inkling2/q8-attention-reference.bin": "07535204bd6d7ccea9c26f26ab80fe6bdf2f364a893167f4e02dbacb2026433c",
+      "tests/fixtures/inkling2/q8-attention-reference.json": "15b67a356ba49cc926999ccb4866627c8a5b1b0f15b1d585fe51e8e635f21421",
+      "tests/fixtures/inkling2/q8-dot-reference.bin": "a77c3cb4e03d44712a0f66f1e7b21d079d11bb03d3c3d81cc63f8d23644df283",
+      "tests/fixtures/inkling2/q8-dot-reference.json": "5c8c8d4891b0708ed0f11d37a25ee1acd6ab14c6107751b7965096aefa70d50c",
+      "tests/fixtures/inkling2/q8-reference.bin": "337e216b8bcd686b79ed1d1d5864a37eee1d6a30d6ce78272375ff8f5d9f7f67",
+      "tests/fixtures/inkling2/q8k-input.f32": "9a04784bdc34dbfc6fb6d93f88c69f7aaa15487ca5806b743c5d62c56c01d631",
+      "tests/fixtures/inkling2/q8k-reference.bin": "50b8040bae97b480534a78ad4afdb2b51033200a92c909f8b174be9560bf2360",
+      "tests/fixtures/inkling2/reference-capture.patch": "2e97e9a28cb74168ad34e8894e4beb741bde8ccfd2e629cb575c0528a4b20462",
+      "tests/fixtures/inkling2/reference-f16-attention.patch": "2862937c9f0e9e2e64dafd790190c5e709f88a2ab744783d259479be7190fab4",
+      "tests/fixtures/inkling2/reference-f32-activations.patch": "b8ee09197f166fc2204d02f3ade6f932456e8b28d6ea6e2930e17b3776904e02",
+      "tests/fixtures/inkling2/reference-integer-fixture-producers.patch": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f",
+      "tests/fixtures/inkling2/reference-last-token-capture.patch": "215c72eb6c6d50a3051eb68beb62d2b02396e4651afae1f3ac02600b13c0d27c",
+      "tests/fixtures/inkling2/reference-sigmoid-generator.patch": "0239d29b9517906a04c4b9f6d811b2e5cd56f4665a10c405ea0ef03f97413e3e",
+      "tests/fixtures/inkling2/reference-sigmoid-native.f32": "25b3345863ec58bb354d3c2bf8e4ae5d54a398fe5c32b6f790094f15841729d5",
+      "tests/fixtures/inkling2/reference-sigmoid.json": "4e79d3fe2e3487dc52e820354f4294afaaf4c68c2afae04a4310b17686c3e404",
+      "tests/fixtures/inkling2/reference-situ-generator.patch": "050dc6d1ccbfc56290162cd1d49bf32eb52a4b7f1aaa4198066e98db342e195c",
+      "tests/fixtures/inkling2/reference-situ-input.f32": "aaa85718df23bd5472eee0dd5098d18c44d9c59da21547b5b3cf6d355eb0d7be",
+      "tests/fixtures/inkling2/reference-situ-native.f32": "bc59604693c739e03b4c0b1c71744ea7b4c0fccdb7df8196c6513f30e7f5d53c",
+      "tests/fixtures/inkling2/reference-situ-output.f32": "b89d597ba5c39e1944199ff83d28f239e1796f8d45966183b4b7d560d2b1cec1",
+      "tests/fixtures/inkling2/reference-situ.json": "0c0073293ed661082374a87b78ee40827b06dd02da0dd66c296f56d05fdb4dcb",
+      "tests/fixtures/inkling2/schedule.txt": "001d5c7f03d19f353774ef9cdb99319f3b671327bdc1cc612728c605ace58a18",
+      "tests/fixtures/inkling2/tiny-f32.tsv": "e26a99bac26b6223ddf329a25c638e66f785bb95c9993508eb9bb5ec9c548fe8",
+      "tests/fixtures/inkling2/tiny-long-prefix-f32.tsv": "29d3305a05fca76fe9bbc62c50e6a18dff1a1534a0c93725108a7208bbcdd3f6",
+      "tests/fixtures/inkling2/tiny-long-prefix-provenance.json": "80146f8b700367bac06868b5ee28fbe4da4e24fec765eb126e68cebbd4e6a7e6",
+      "tests/fixtures/inkling2/tiny-prefix-f32.tsv": "94468e4c57a2f56f81258bb553eba2f992e14a741925572813dd2e3cbedc6df2",
+      "tests/fixtures/inkling2/tiny-q8.tsv": "7b03fcdab823eab54866913d367f23f292aeaa86473e016f509f29f6b6b9b986",
+      "tests/fixtures/inkling2/tiny-reference.md": "b028c80eb99c4a54ae352fe883eeac09c377d8162d8936172a1e75f5f5fd07f8",
+      "tests/fixtures/inkling2/tiny-zero-controls-provenance.json": "a10636812be0cc1dcee7b4ff856cac285316b50d03d01c3ce810ea555e7d75c7",
+      "tests/fixtures/inkling2/tiny-zero-controls.tsv": "7ef0e9aba8c66242ebba61187e07b6d564a9c6eee6ec98dc077b54ffe28a340b",
+      "tests/fixtures/inkling2/tokenizer-ada.expect": "0d0cba78efa5fda819ca106cc0f5602273a0496a9689400aacbb6cc4638fb4b8",
+      "tests/fixtures/inkling2/tokenizer-plain.expect": "3e6461c6b6c91e6bcbc28d01ab7df7fbd00d61cba398708125a6edee2f79d97e",
+      "tests/fixtures/inkling2/tokenizer-special.expect": "71a998bbe73aa89d0c22a6374f620084c8cdf37968a6b74d61dfc63b588c104c",
+      "tests/fixtures/inkling2/tokenizer-utf8.expect": "ce3d7df6468b906309750f13463a7cfe208b3f5095768cd5d5d2f4fd41d036f4",
+      "tests/fixtures/inkling2/tokenizer_config.json": "bf09342d285139fd37ce10c70878af1d52cb390e9901e10248654293a80ee636"
+    }
+  },
+  "new_compatibility_fixture": "tests/fixtures/inkling2/dspark-q8_0-metadata.json",
+  "existing_instruction_integrity": {
+    "unchanged": true,
+    "literal_count": 18118,
+    "sha256": "5f831ffcff2ed3cd814a35bafbf6d4ab1d070fff85590616bac96741dda77bba"
+  },
+  "builds": [
+    "artifacts/inkling2/obj/dspark-depth-mix/build-probe-v1.log",
+    "artifacts/inkling2/obj/dspark-depth-mix/build-release-v1.log",
+    "artifacts/inkling2/obj/dspark-depth-mix/build-restored-probe-v1.log",
+    "artifacts/inkling2/obj/dspark-depth-mix/build-restored-release-v1.log",
+    "artifacts/inkling2/obj/dspark-depth-mix/build-restored-tests-v1.log",
+    "artifacts/inkling2/obj/dspark-depth-mix/build-tests-v1.log",
+    "artifacts/inkling2/obj/dspark-depth-mix/build-tests-v2.log"
+  ],
+  "repository_check": {
+    "command": [
+      "./bin/tests",
+      "check",
+      "..",
+      "--repository"
+    ],
+    "returncode": 0,
+    "log": "artifacts/inkling2/obj/dspark-depth-mix/repository-check-v1.log",
+    "sha256": "eca8aab416771fc309d8dc5d1d4919f7d3a1180f3ccf27be45a057b54e689b6f",
+    "summaries": [
+      "checks 31944, failures 0"
+    ],
+    "timing_qualification": "unqualified under existing host-load exclusion",
+    "timing_lines": [
+      "took: repository checks 232.512527000 s, 217.430000000 s of it the machine's",
+      "note: repository checks cost 217.430000000 s against a bound of 195.000000000 s, at a load of 1.48000000000000E+00; too busy for that to say anything about the stage, so it is not counted against it"
+    ]
+  },
+  "finished_at": "2026-11-27T16:26:19.726903+00:00",
+  "runtime_dependency_check": "No GGML,llama or Python runtime library linked",
+  "final_source_integrity": "passed",
+  "final_binary_integrity": "passed"
+}

@@ -541,7 +541,10 @@ package body Model_Runner.Tokenizer is
                elsif Cutting = "gpt-4o" or else Cutting = "llama4"
                  or else Cutting = "kanana2" or else Cutting = "talkie"
                  or else Cutting = "minimax-m2"
+                 or else Cutting = "inkling2"
                then
+                  --  Inkling 2 uses this same expression and has no implicit
+                  --  beginning marker. Its explicit metadata is read below.
                   Item.Cutting := Rule_GPT4o;
                elsif Cutting = "granite-embed-multi-97m" then
                   --  GPT-4o's expression with the marks named beside the

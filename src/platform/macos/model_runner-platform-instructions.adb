@@ -15,6 +15,9 @@ package body Model_Runner.Platform.Instructions is
    function Byte_Products return Boolean is
      (Model_Runner.Platform.X86_Features.Byte_Products);
 
+   function Brain_Products return Boolean is
+     (Model_Runner.Platform.X86_Features.Brain_Products);
+
    --  Not asked here: the pause spin, which every x86-64 has.
    function Low_Power_Waits return Boolean is (False);
 

@@ -56,6 +56,15 @@ package Model_Runner.Cache_Codecs.Transformed_Four_Bit is
       Target : out Real_Array;
       Valid  : out Boolean);
 
+   --  Rotate independent full-group rows in place, four rows per workspace.
+   --  Each row retains the scalar transform's binary64 butterfly order.
+   --  @param Rows Contiguous input rows, replaced by rotated rows.
+   --  @param Width Coordinates per row; a positive multiple of Group_Size.
+   --  @param Count Number of rows.
+   --  @param Valid False for malformed shapes or nonfinite input; contents then unspecified.
+   procedure Rotate_Rows
+     (Rows : in out Real_Array; Width, Count : Element_Count; Valid : out Boolean);
+
    --  Return a decoded key from the stored basis to the model's basis.
    --  This is the inverse of Rotate_Key and lets a session reuse its
    --  established byte/scale layout when snapshots or shifts need a row.

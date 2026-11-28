@@ -197,7 +197,7 @@ package Model_Runner.Llama is
       Qwen35, Qwen35_MoE, Granite, Olmo2, Glm4, Starcoder2, Granite_MoE,
       Stablelm, Gptneox, Internlm2, Baichuan, Mpt, Chatglm, Command_R, Mamba,
       Mamba2, Rwkv6, Jamba, Deepseek2, Mellum, Qwen3_VL, Lfm3, Qwen2_VL,
-      Gemma4);
+      Gemma4, Inkling2_Loop, DFlash);
 
    --  Whether an architecture mixes linear attention -- a gated delta
    --  rule over a recurrent state -- into its stack, one full attention
@@ -365,7 +365,9 @@ package Model_Runner.Llama is
          when Qwen3_VL   => "qwen3vl",
          when Lfm3       => "lfm3",
          when Qwen2_VL   => "qwen2vl",
-         when Gemma4     => "gemma4");
+         when Gemma4     => "gemma4",
+         when Inkling2_Loop => "inkling2_loop",
+         when DFlash => "dflash");
 
    --  How a file says the states of a text should be reduced to one vector.
    --
@@ -391,12 +393,34 @@ package Model_Runner.Llama is
    --  A count a layer, nought where the layer takes the model's.
    type Layer_Counts is array (0 .. Max_Block_Count - 1) of Natural;
 
+   --  Architecture-specific parameters of the fixed looped text decoder.
+   --  Layer ownership remains Configuration.Layers; Runtime_Layers counts
+   --  independently cached visits. The loop end is exclusive.
+   type Inkling_Configuration is record
+      First_Layer, End_Layer, Iterations, Runtime_Layers : Natural := 0;
+      Block_Size, Gate_Rank, Relative_Width, Relative_Extent : Natural := 0;
+      Convolution_Length, Padded_Vocabulary, Log_Scale_Floor : Natural := 0;
+      QK_Clip, Relative_Clip, Log_Scale_Alpha : Real := 0.0;
+      Gate_Softcap, Up_Softcap : Real := 0.0;
+   end record;
+
+   --  Parameters of the feature-conditioned Inkling DSpark drafter. The
+   --  four taps identify target logical inputs; the final tap is normalized.
+   type DSpark_Layer_Ids is array (Positive range 1 .. 4) of Natural;
+   type DSpark_Configuration is record
+      Target_Layers : DSpark_Layer_Ids := [5, 23, 41, 48];
+      Block_Size : Natural := 0;
+      Markov_Rank : Natural := 0;
+   end record;
+
    --
    --  Every field is read from metadata through a typed accessor and range
    --  checked; the derived fields are checked for exact divisibility so that
    --  no later computation has to round.
    type Configuration is record
       Kind            : Architecture := Llama;
+      Inkling         : Inkling_Configuration;
+      DSpark          : DSpark_Configuration;
       Pairing         : Model_Runner.Kernels.Rotary_Pairing :=
         Model_Runner.Kernels.Interleaved;
       Context_Length  : Natural := 0;
@@ -1453,6 +1477,9 @@ package Model_Runner.Llama is
    --  @param Expert_Cache Bytes explicitly reserved from a split mixture's
    --    matrix room for individually retained experts. Zero, the default,
    --    preserves the existing whole-layer placement.
+   --  @param Target Prepared target whose embedding and output views a
+   --    DSpark model borrows. It and its byte source must outlive the
+   --    drafter; Close refuses to release a target while it is borrowed.
    procedure Prepare
      (Item     : in out Model;
       Source   : Model_Runner.GGUF.Containers.Container;
@@ -1473,7 +1500,8 @@ package Model_Runner.Llama is
       Cache    : Cache_Precision := Exact;
       Paged    : Boolean := True;
       Beside   : Interfaces.Unsigned_64 := 0;
-      Expert_Cache : Interfaces.Unsigned_64 := 0);
+      Expert_Cache : Interfaces.Unsigned_64 := 0;
+      Target : access Model'Class := null);
 
    --  What a device's room is for a dense model's matrices, as Prepare
    --  counts it: the device's heaps -- or the host's budget for them,
@@ -1799,6 +1827,13 @@ package Model_Runner.Llama is
       Evictions    : Interfaces.Unsigned_64 := 0;
       Admissions   : Interfaces.Unsigned_64 := 0;
       Device_Runs  : Interfaces.Unsigned_64 := 0;
+      --  Exact repeated routing assignments whose scheduling descriptors were reused.
+      --  Multi-token, fully resident mixtures reduced in route order on the device.
+      Batched_Device_Aggregations : Interfaces.Unsigned_64 := 0;
+      --  Host coefficient metadata remains bounded separately from device weights.
+      Metadata_Bytes, Largest_Metadata_Layer : Interfaces.Unsigned_64 := 0;
+      Work_Plan_Hits : Interfaces.Unsigned_64 := 0;
+      Work_Plan_Misses : Interfaces.Unsigned_64 := 0;
       Resident_Bytes : Interfaces.Unsigned_64 := 0;
       Reserve_Bytes  : Interfaces.Unsigned_64 := 0;
    end record;
@@ -2177,6 +2212,21 @@ package Model_Runner.Llama is
       Values  : Real_Array;
       Rows    : Element_Count) is null;
 
+   --  One architecture activation after its operation has completed.
+   --  Physical identifies shared weights; Logical and Visit identify execution.
+   --  The callback borrows Values only until it returns.
+   --
+   --  @param Item Observer receiving the activation.
+   --  @param Which Reference operation name.
+   --  @param Physical Stored layer, or zero for the final projection.
+   --  @param Logical Execution step, including repeated visits.
+   --  @param Visit One-based visit to the stored layer.
+   --  @param Position Zero-based token position.
+   --  @param Values Completed activation, with no retained ownership.
+   procedure Note_State
+     (Item : in out Watcher; Which : String; Physical, Logical : Natural;
+      Visit : Positive; Position : Natural; Values : Real_Array) is null;
+
    type Watcher_Access is access all Watcher'Class;
 
    --  Have a session report every product to a watcher.
@@ -2277,6 +2327,192 @@ package Model_Runner.Llama is
       Token  : Token_Id;
       Logits : Model_Runner.Tensors.Real_Array_Access;
       Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Successful native device attention calls in a looped decoder session.
+   --  Other architectures report zero. Reset and Close clear the counter.
+   --  @param Item Session to inspect.
+   --  @return Number of completed device attention submissions.
+   function Loop_Device_Attention_Runs (Item : Session) return Natural;
+
+   --  Whether selected vocabulary projection is supported for this session.
+   --  Currently requires native CPU Inkling integer arithmetic, row-major
+   --  output weights, and no adapter or tensor observer.
+   --  @param Item Session to inspect.
+   --  @param Source Prepared model owning the session.
+   --  @return True when Evaluate_Selected may be used.
+   function Selected_Head_Available (Item : Session; Source : Model'Class) return Boolean;
+
+   --  Evaluate a token while projecting only an explicitly allowed vocabulary.
+   --  Selection must contain 1..256 strictly increasing vocabulary IDs.
+   --  Unselected logits are Real'First and must be masked by the caller.
+   --  Sparse rows are excluded from full-row rewind checkpoints; rewind may
+   --  reconstruct from an earlier boundary. Complete_Logits restores a full
+   --  distribution without evaluating the token again.
+   --  @param Item Session to advance.
+   --  @param Source Prepared model owning the session.
+   --  @param Token Token to evaluate.
+   --  @param Selection Sorted unique allowed token IDs.
+   --  @param Logits Vocabulary-sized destination; only selected rows are meaningful.
+   --  @param Cancel Cancellation token, or null.
+   --  @param Status Success or the ordinary evaluation diagnostic; unsupported
+   --    sessions and malformed selections return Tensor_Invalid_Shape before execution.
+   procedure Evaluate_Selected
+     (Item : in out Session; Source : Model'Class; Token : Token_Id;
+      Selection : Model_Runner.Shares.Member_Rows; Logits : Model_Runner.Tensors.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Evaluate with fused projection, softcap and lowest-ID greedy reduction.
+   --  Full logits are retained; the caller must apply no additional penalties,
+   --  masks or biases when using Winner. One forbidden ID supports BOS masking.
+   --  @param Item Session to advance under the ordinary transaction contract.
+   --  @param Source Prepared native CPU Inkling model, without runtime adapters.
+   --  @param Token Input token to evaluate.
+   --  @param Logits Receives the complete finished vocabulary row.
+   --  @param Winner Lowest-ID maximum after softcap, or No_Token on failure.
+   --  @param Forbidden Optional vocabulary ID to omit from the reduction.
+   --  @param Cancel Existing cooperative cancellation token.
+   --  @param Status Ordinary evaluation result; malformed requests fail before execution.
+   procedure Evaluate_Greedy
+     (Item : in out Session; Source : Model'Class; Token : Token_Id;
+      Logits : Model_Runner.Tensors.Real_Array_Access; Winner : out Token_Id;
+      Forbidden : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Evaluate greedy verification rows while retaining complete logits.
+   --  Use winners only without other masks, penalties or sampling biases.
+   --  @param Item Existing decoder session.
+   --  @param Source Prepared native CPU integer Inkling model.
+   --  @param Tokens Tokens to evaluate in their original order.
+   --  @param Logits Complete final vocabulary row.
+   --  @param Every Complete vocabulary rows for every evaluated token.
+   --  @param Winners Lowest-ID maximum for each row, excluding Forbidden.
+   --  @param Forbidden One excluded token, or No_Token.
+   --  @param Cancel Existing cooperative cancellation token.
+   --  @param Status Structured shape, cancellation or evaluation result.
+   procedure Evaluate_Greedy_Batch
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array; Logits : out Real_Array;
+      Every : Model_Runner.Tensors.Real_Array_Access;
+      Winners : in out Model_Runner.Tokenizer.Token_Array;
+      Forbidden : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Logical layer inputs to expose to a native feature-conditioned drafter.
+   --  The final logical index denotes the normalized output-head input.
+   type Feature_Layers is array (Positive range <>) of Natural;
+
+   --  Evaluate tokens and capture selected logical inputs without a tensor watcher.
+   --  Features are token-major, then Layers order, then embedding channel. The
+   --  caller owns the buffers, which must not overlap Logits or Every. Only a
+   --  successful call publishes usable features; an evaluation error clears its
+   --  requested extent. Capture-shape refusals leave buffers and state untouched.
+   --  @param Item Existing target session, advanced transactionally.
+   --  @param Source Prepared fixed-loop Inkling target.
+   --  @param Tokens Consecutive input tokens within the ordinary batch limit.
+   --  @param Layers Strictly increasing logical indices, at most sixteen.
+   --  @param Features Caller-owned room for Tokens * Layers * Embedding values.
+   --  @param Logits Final vocabulary row, as for Evaluate_Batch.
+   --  @param Every Optional complete vocabulary rows for verification.
+   --  @param Cancel Existing cooperative cancellation token.
+   --  @param Status Existing shape, architecture, lifecycle or evaluation result.
+   procedure Evaluate_Features
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array; Layers : Feature_Layers;
+      Features : Model_Runner.Tensors.Real_Array_Access; Logits : out Real_Array;
+      Every : Model_Runner.Tensors.Real_Array_Access := null;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Capture the same feature taps while returning only greedy token IDs
+   --  and the final complete logit row. At most eight tokens; normal model
+   --  sampling/observer/adapter restrictions are checked by the caller.
+   --  @param Item Existing session, advanced transactionally.
+   --  @param Source Prepared native fixed-loop target.
+   --  @param Tokens One through eight consecutive target inputs.
+   --  @param Layers Required strictly increasing logical feature taps.
+   --  @param Features Caller-owned feature rows, as for Evaluate_Features.
+   --  @param Logits Complete final distribution.
+   --  @param Winners One greedy ID per token, cleared on error.
+   --  @param Forbidden Token excluded from greedy selection, normally BOS.
+   --  @param Cancel Existing cooperative cancellation token.
+   --  @param Status Shape, capability, lifecycle or evaluation result.
+   procedure Evaluate_Feature_Winners
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array; Layers : Feature_Layers;
+      Features : Model_Runner.Tensors.Real_Array_Access; Logits : out Real_Array;
+      Winners : in out Model_Runner.Tokenizer.Token_Array;
+      Forbidden : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Project one normalized row retained by the latest successful compact
+   --  verification. Call before rewind or another evaluation invalidates it.
+   --  @param Item Session retaining at most eight normalized rows.
+   --  @param Source The same prepared target.
+   --  @param Index Zero-based row in the last compact batch.
+   --  @param Logits Complete vocabulary-sized result.
+   --  @param Status Existing lifecycle/shape/product result.
+   procedure Verification_Logits
+     (Item : in out Session; Source : Model'Class; Index : Natural;
+      Logits : Model_Runner.Tensors.Real_Array_Access; Status : out Model_Runner.Errors.Error_Info);
+
+   --  Logical target inputs required by the prepared DSpark adapter.
+   --  @param Source Prepared DSpark model.
+   --  @return Its ordered four target taps; empty for other architectures.
+   function Draft_Feature_Layers (Source : Model'Class) return Feature_Layers;
+
+   --  Borrow the session's bounded target-feature workspace. The caller
+   --  must not free or retain it past Close, or use it concurrently.
+   --  @param Item DSpark session owning the storage.
+   --  @return Room for up to 512 token-major rows, or null for other sessions.
+   function Draft_Feature_Room (Item : Session) return Tensors.Real_Array_Access;
+
+   --  Commit target-derived context keys, values and Markov features.
+   --  No prefix state becomes visible unless every layer succeeds.
+   --  @param Item DSpark session to append to.
+   --  @param Source Its prepared drafter model.
+   --  @param Tokens Accepted target tokens, at most 512.
+   --  @param Features Token-major four-tap rows, then embedding channels.
+   --  @param Cancel Optional cancellation request.
+   --  @param Status Success, or a structured refusal with the prefix intact.
+   procedure Inject_Draft_Context
+     (Item : in out Session; Source : Model'Class;
+      Tokens : Model_Runner.Tokenizer.Token_Array;
+      Features : Model_Runner.Tensors.Real_Array_Access;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  Run one DSpark block and its recurrent Markov correction, greedily.
+   --  The anchor is the target's already sampled next token. Proposals
+   --  never commit context; the target verifier accepts and injects them.
+   --  @param Item DSpark session holding the accepted target prefix.
+   --  @param Source Its prepared drafter model.
+   --  @param Anchor Target's assured next token.
+   --  @param Tokens Receives one to seven proposed continuations.
+   --  @param Every Optional corrected logits, token-major, for diagnostics.
+   --  @param Cancel Optional cancellation request.
+   --  @param Status Success, or failure without changing committed context.
+   procedure Propose_Draft_Block
+     (Item : in out Session; Source : Model'Class;
+      Anchor : Model_Runner.Tokenizer.Token_Id;
+      Tokens : out Model_Runner.Tokenizer.Token_Array;
+      Every : Model_Runner.Tensors.Real_Array_Access := null;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Status : out Model_Runner.Errors.Error_Info);
+
+
+   --  Materialize the current full distribution after selected projection.
+   --  No token or cache position is added. A non-sparse session is unchanged.
+   --  @param Item Session holding a successfully committed sparse row.
+   --  @param Source Prepared model owning the session.
+   --  @param Logits Receives the vocabulary distribution when a sparse row existed.
+   --  @param Status Success or a projection/lifecycle diagnostic.
+   procedure Complete_Logits
+     (Item : in out Session; Source : Model'Class; Logits : Model_Runner.Tensors.Real_Array_Access;
       Status : out Model_Runner.Errors.Error_Info);
 
    --  Where a given row stands in its picture, for a model whose
@@ -2659,7 +2895,10 @@ package Model_Runner.Llama is
    --  the answer as it was generated. It costs a copy of every linear
    --  layer's state: on the device, into the slot Hold_Checkpoints gives
    --  the session there, or read back to the host where it has none.
-   --  Nothing for an architecture without linear layers.
+   --  Inkling retains the same boundary in one existing rewind slot,
+   --  while the other three rotate. Restoration still requires reachable
+   --  KV history; otherwise Rewind reconstructs the prefix.
+   --  Nothing for other architectures without linear layers.
    --
    --  @param Item Open session.
    procedure Mark_Checkpoint (Item : in out Session);
@@ -2992,6 +3231,65 @@ package Model_Runner.Llama is
 
 private
 
+   --  Physical Inkling tensors. Scalar tables stay in mapped storage;
+   --  projections use the same backend products as the other architectures.
+   type Inkling_Weight_Role is
+     (Inkling_Attention_Norm, Inkling_Query, Inkling_Key, Inkling_Value,
+      Inkling_Attention_Out, Inkling_Attention_Gate, Inkling_Query_Clip,
+      Inkling_Sink, Inkling_Relative, Inkling_Relative_Bias, Inkling_Relative_Clip,
+      Inkling_Key_Conv, Inkling_Value_Conv, Inkling_Attention_Conv, Inkling_Feed_Conv,
+      Inkling_Query_Norm, Inkling_Key_Norm, Inkling_Value_Norm,
+      Inkling_Key_Dynamic, Inkling_Value_Dynamic, Inkling_Attention_Depth,
+      Inkling_Feed_Depth, Inkling_Feed_Norm, Inkling_Router, Inkling_Selection_Bias,
+      Inkling_Fused_Experts, Inkling_Down_Experts, Inkling_Message_Query,
+      Inkling_Q_Down, Inkling_Q_Gain, Inkling_Q_Forget,
+      Inkling_K_Down, Inkling_K_Gain, Inkling_K_Forget,
+      Inkling_V_Down, Inkling_V_Gain, Inkling_V_Forget,
+      Inkling_FFN_Down, Inkling_FFN_Gain, Inkling_FFN_Forget);
+   type Inkling_Weight_Views is array (Inkling_Weight_Role) of aliased Model_Runner.Tensors.View;
+   type Inkling_Decoded_Array is array (Natural range <>) of Model_Runner.Tensors.Real_Array_Access;
+   type Inkling_Decoded_Access is access Inkling_Decoded_Array;
+   type Inkling_Scale_Totals is array (Natural range <>) of Interfaces.Unsigned_64;
+   type Inkling_Scale_Totals_Access is access Inkling_Scale_Totals;
+   --  Scalar contracts shared with the independent test-crate probes.
+   function Reference_Attention_Exp (Value : Real) return Real;
+   procedure Draft_Rotate
+     (Values : in out Real_Array; Heads, Width : Element_Count; Position : Natural; Base : Wide_Real);
+   --  Lane-wise reference arithmetic; tails use the scalar contract.
+   procedure Draft_Exp (Values : in out Real_Array; Subtract : Real := 0.0);
+   procedure Draft_Activate (Gate : in out Real_Array; Up : Real_Array);
+   procedure Draft_Vector_Exp (Values : in out Real_Array; Subtract : Real := 0.0);
+   pragma Machine_Attribute (Draft_Vector_Exp, "target", "avx512f,avx512bw,avx512vl,avx2,fma");
+   pragma No_Inline (Draft_Vector_Exp);
+   procedure Draft_Vector_Activate (Gate : in out Real_Array; Up : Real_Array);
+   pragma Machine_Attribute (Draft_Vector_Activate, "target", "avx512f,avx512bw,avx512vl,avx2,fma");
+   pragma No_Inline (Draft_Vector_Activate);
+   procedure Draft_Rotation (Width : Element_Count; Position : Natural; Base : Wide_Real;
+                             Table : out Real_Array);
+   procedure Draft_Apply_Rotation (Values : in out Real_Array; Heads, Width : Element_Count;
+                                   Table : Real_Array);
+   --  The anchor is context, not a proposed output. Observers retain all rows.
+   procedure Draft_Project_Proposals
+     (Item : Session; Weight : Model_Runner.Tensors.View;
+      Input : Model_Runner.Tensors.Real_Array_Access; Count : Element_Count;
+      Output : Model_Runner.Tensors.Real_Array_Access; Status : out Model_Runner.Errors.Error_Info);
+   procedure Draft_Product_Add
+     (Item : in out Session; Weight : Model_Runner.Tensors.View;
+      Input : Model_Runner.Tensors.Real_Array_Access; Count : Element_Count;
+      Residual, Room : Model_Runner.Tensors.Real_Array_Access;
+      Status : out Model_Runner.Errors.Error_Info);
+   --  Native DSpark GQA primitives, each preserving the existing reference fold.
+   procedure Draft_Dots (Queries, Key : Real_Array; Width, Many : Element_Count; Result : out Real_Array);
+   pragma Machine_Attribute (Draft_Dots, "target", "avx512f,avx512bw,avx512vl,avx2,fma");
+   pragma No_Inline (Draft_Dots);
+   procedure Draft_Values (Value, Gains : Real_Array; Into : in out Real_Array;
+                           Stride, Many : Element_Count);
+   pragma No_Inline (Draft_Values);
+
+   type Expert_Packed_Array is array (Natural range <>) of Model_Runner.Backend.CPU.Packed_Rows;
+   type Inkling_Boundaries is array (Natural range 0 .. 3) of Natural;
+
+
    --  Shared native projection routes, qualified by the test-crate child against an independent oracle.
    procedure Product
      (Item : Session; Weight : Model_Runner.Tensors.View;
@@ -3025,6 +3323,7 @@ private
    type Expert_Array_Access is access Expert_Array;
 
    type Layer is record
+      Inkling_Weights : Inkling_Weight_Views;
       --  Stable index in the model's layer array, used to keep equally
       --  numbered experts in different layers distinct.
       Number : Natural := 0;
@@ -3392,6 +3691,13 @@ private
       Expert_Scale_Rows : Model_Runner.Tensors.Real_Array_Access := null;
    end record;
 
+   --  Original storage slices for one expert, with the prepared per-expert
+   --  role and activation contract retained independently of CPU panels.
+   procedure Device_Expert_Views
+     (Current : Layer; Which : Natural; Feed, Width : Element_Count;
+      Gate, Up, Down : out Model_Runner.Tensors.View;
+      Status : out Model_Runner.Errors.Error_Info);
+
    type Layer_Array is array (Natural range <>) of Layer;
 
    --  Room for the block past the stack's re-encoded matrices.
@@ -3442,9 +3748,25 @@ private
    type Runtime_Pair_Access is access Runtime_Pair_List;
    Runtime_Tile : constant Model_Runner.Numerics.Element_Count := 8;
 
+   type DSpark_Layer is record
+      Mix, Norm, Key_Norm : Model_Runner.Tensors.Real_Array_Access := null;
+      Key, Value : Model_Runner.Tensors.View;
+   end record;
+   type DSpark_Layers is array (Natural range 0 .. 2) of DSpark_Layer;
+   type DSpark_Weights is record
+      Contexts : DSpark_Layers;
+      Mask, Markov_W1, Markov_W2, Joint : Model_Runner.Tensors.View;
+      Context_Mix, Context_Norm, Markov_Bias, Joint_Bias :
+        Model_Runner.Tensors.Real_Array_Access := null;
+   end record;
+   type DSpark_Weights_Access is access DSpark_Weights;
+
    type Model is limited new Ada.Finalization.Limited_Controlled with record
       Ready       : Boolean := False;
       Sessions    : Natural := 0;
+      Borrowers   : Natural := 0;
+      DSpark_Target : access Model'Class := null;
+      DSpark_Views : DSpark_Weights_Access := null;
       Settings    : Configuration;
       --  The model's weights, and where in the file they begin.
       --
@@ -3523,6 +3845,7 @@ private
       --  never runs: a draft of the token after the next, when asked.
       Next        : Layer_Array_Access := null;
       Embeddings  : aliased Model_Runner.Tensors.View;
+      Inkling_Output_Query : aliased Model_Runner.Tensors.View;
 
       --  One row a position, added to the token's row before the first
       --  layer. GPT2 learns where a token is instead of rotating for it, so
@@ -3715,12 +4038,31 @@ private
    --  the picks a position makes, or by the positions gathered for one
    --  expert, and both are as long as a batch is wide.
    type Choice_List is array (Natural range <>) of Natural;
+   --  Stable descending expert IDs for exactly 128 finite scores and eight
+   --  choices. Equal scores retain the lower ID, including signed zeros.
+   procedure Pick_Eight_Of_128 (Scores : Real_Array; Result : out Choice_List);
+
    type Choice_Access is access Choice_List;
+
+   --  CPU scheduling descriptors only; never cached routing or activations.
+   type Inkling_Route_Plan is record
+      Count, Filled, Active_Count, Chunks, Widest : Natural := 0;
+      Choices, Listed, Starts, Counts, Active : Choice_Access := null;
+      Chunk_Expert, Chunk_Start, Chunk_Count, Ordering : Choice_Access := null;
+   end record;
+   type Inkling_Route_Plans is array (Natural range <>) of Inkling_Route_Plan;
+   type Inkling_Route_Plans_Access is access Inkling_Route_Plans;
+
 
    --  How many slots of a ring are told apart in what they hold.
    Ring_Most : constant := 64;
    Lost_Record : constant Natural := Natural'Last;
    type Slot_Records is array (0 .. Ring_Most - 1) of Natural;
+
+   type Head_Winners_Access is access all Model_Runner.Tokenizer.Token_Array;
+   type Head_Selection_Access is access constant Model_Runner.Shares.Member_Rows;
+
+   type Feature_Layer_Access is access constant Feature_Layers;
 
    type Session is limited new Ada.Finalization.Limited_Controlled with record
       --  See Skipped.
@@ -3912,6 +4254,51 @@ private
       Marks      : Rope_Marks_Access := null;
       Marked     : Natural := 0;
       Activation : Model_Runner.Tensors.Real_Array_Access := null;
+      --  Exclusive per-invocation slots; pooled jobs complete before reuse.
+      --  Shared batch packing is separate from worker and output-head slots.
+      Mixture_Super, Mixture_Plain : Model_Runner.Backend.CPU.Packed_Rows;
+      Verify_Normals : Model_Runner.Tensors.Real_Array_Access := null;
+      Verify_Count : Natural := 0;
+      Compact_Verify : Boolean := False;
+      Expert_Packed : Expert_Packed_Array (0 .. 2 * (Model_Runner.Backend.CPU.Max_Workers + 1) - 1);
+      Expert_Work : Inkling_Decoded_Array (0 .. 4 * (Model_Runner.Backend.CPU.Max_Workers + 1) - 1) := [others => null];
+      Inkling_Conv_Backup : Model_Runner.Tensors.Real_Array_Access := null;
+      Inkling_Workspace : Model_Runner.Tensors.Real_Array_Access := null;
+      Inkling_Arena : Model_Runner.Tensors.Real_Array_Access := null;
+      Inkling_Head_Rows : Model_Runner.Tensors.Real_Array_Access := null;
+      Inkling_Decoded : Inkling_Decoded_Access := null;
+      Inkling_Scale_Data : Inkling_Decoded_Access := null;
+      Inkling_Scale_Priorities : Inkling_Scale_Totals_Access := null;
+      Inkling_Scale_Bytes : Interfaces.Unsigned_64 := 0;
+      Inkling_Layer_Scale_Bytes : Inkling_Scale_Totals_Access := null;
+      Inkling_Device_Runs : Natural := 0;
+      Inkling_Device_Extra : Model_Runner.Numerics.Element_Count := 0;
+      Inkling_Device_Base : Model_Runner.Numerics.Element_Count := Model_Runner.Numerics.Element_Count'Last;
+      Inkling_Device_Marks : Cell_Counts_Access := null;
+
+      Inkling_Head_Selection : Head_Selection_Access := null;
+      Inkling_Plans : Inkling_Route_Plans_Access := null;
+      Inkling_Plan_Slot : Natural := 0;
+      Draft_Residual_Packed : Model_Runner.Backend.CPU.Packed_Rows;
+      Draft_Residual_Runs : Interfaces.Unsigned_64 := 0;
+      Inkling_Plan_Hits, Inkling_Plan_Misses : Interfaces.Unsigned_64 := 0;
+      Inkling_Batched_Reductions : Interfaces.Unsigned_64 := 0;
+      Inkling_Greedy_Rows : Head_Winners_Access := null;
+      Inkling_Greedy_Head : Boolean := False;
+      Inkling_Greedy_Forbid : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Inkling_Greedy_Result : Token_Id := Model_Runner.Tokenizer.No_Token;
+      Inkling_Partial_Row : Boolean := False;
+      Inkling_Last_Row_Valid : Boolean := False;
+      Inkling_Check_Valid : Boolean := False;
+      Inkling_Check_At : Natural := 0;
+      Inkling_Check_Rows : Model_Runner.Tensors.Real_Array_Access := null;
+      Inkling_Rewinds : Inkling_Decoded_Array (0 .. 3) := [others => null];
+      Inkling_Rewind_Convs : Inkling_Decoded_Array (0 .. 3) := [others => null];
+      Inkling_Rewind_At : Inkling_Boundaries := [others => 0];
+      Inkling_Rewind_Next : Natural range 0 .. 3 := 0;
+      --  Slot zero may hold the explicit conversation checkpoint. The
+      --  remaining slots still rotate; no extra state allocation is needed.
+      Inkling_Prefix_Held : Boolean := False;
       Normalized : Model_Runner.Tensors.Real_Array_Access := null;
       Query      : Model_Runner.Tensors.Real_Array_Access := null;
       Key_Row    : Model_Runner.Tensors.Real_Array_Access := null;
@@ -4117,6 +4504,13 @@ private
       At_Rows   : Cell_Counts_Access := null;
 
       --  Something being told what every product was given, or null.
+      --  Borrowed only within Evaluate_Features, never retained across calls.
+      Feature_Request : Feature_Layer_Access := null;
+      Feature_Rows : Model_Runner.Tensors.Real_Array_Access := null;
+      Feature_Start : Natural := 0;
+      Draft_Features, Draft_Work, Draft_Context :
+        Model_Runner.Tensors.Real_Array_Access := null;
+
       Seen      : Watcher_Access := null;
       Origin    : Cell_Counts_Access := null;
 

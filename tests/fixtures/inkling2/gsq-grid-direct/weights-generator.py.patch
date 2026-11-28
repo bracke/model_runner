@@ -1,0 +1,26 @@
+exec(open('/tmp/inkling-next-common.py').read())
+import struct,random,subprocess
+q=r/'tests/fixtures/inkling2/gsq-grid-direct';q.mkdir(exist_ok=True)
+shutil.copy2(r/'tests/fixtures/inkling2/gsq-small-blocks/input-2304.f32',q/'input.f32')
+rng=random.Random(7312906)
+formats=[('iq1_s',50),('iq1_m',56),('iq2_xxs',66),('iq2_xs',74),('iq2_s',82),('iq3_xxs',98),('iq3_s',110)]
+for name,width in formats:
+ data=bytearray(rng.randrange(256)for _ in range(4*9*width))
+ for b in range(36):
+  bits=0x1000+(b%17)*13
+  if name=='iq1_m':
+   for j in range(4):
+    off=b*width+48+j*2;word=struct.unpack_from('<H',data,off)[0];struct.pack_into('<H',data,off,(word&0x0fff)|(((bits>>(4*j))&15)<<12))
+  else:struct.pack_into('<H',data,b*width,bits)
+ (q/(name+'.bin')).write_bytes(data)
+old=Path('/tmp/inkling-six-grid-reference.cpp').read_text();at=old.index('static std::vector');header=old[:old.index('extern "C" void ggml_vec_dot')]
+for name,_ in formats:header+='extern "C" void ggml_vec_dot_'+name+'_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);\n'
+read=old[at:old.index('int main',at)]
+main='''int main(int argc,char**argv){if(argc!=2)return 1;ggml_cpu_init();ggml_init_params ip{1024*1024,nullptr,true};auto*ctx=ggml_init(ip);std::string root=argv[1];auto raw=read(root+"/input.f32");const float*x=(const float*)raw.data();std::vector<block_q8_K> packed(9*9);for(int v=0;v<9;v++)quantize_row_q8_K(x+v*2304,packed.data()+v*9,2304);\n'''
+for name,width in formats:
+ main+='''{auto w=read(root+"/NAME.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_NAME_q8_K(2304,&out[r*9+v],0,w.data()+r*9*WIDTH,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/NAME.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}\n'''.replace('NAME',name).replace('WIDTH',str(width))
+main+='ggml_free(ctx);}\n';cpp=Path('/tmp/inkling-next-reference.cpp');cpp.write_text(header+read+main)
+ref=Path('/tmp/inkling-dspark-native-reference');cmd=['g++','-O2','-std=c++17','-I'+str(ref/'ggml/include'),'-I'+str(ref/'ggml/src'),'-I'+str(ref/'ggml/src/ggml-cpu'),str(cpp),'-L'+str(ref/'build/bin'),'-Wl,-rpath,'+str(ref/'build/bin'),'-lggml-cpu','-lggml-base','-o','/tmp/inkling-next-reference'];subprocess.run(cmd,check=True);subprocess.run(['/tmp/inkling-next-reference',str(q)],check=True)
+shutil.copy2(cpp,q/'reference-generator.cpp.patch');shutil.copy2('/tmp/inkling-next-fixtures.py',q/'weights-generator.py.patch')
+save(q/'provenance.json',{'origin':'Deterministic synthetic blocks, random seed 7312906; no model weight excerpts.','reference_commit':'4c7344447cb1727f1e2f982febc99a8f88dcb77f','shape':{'rows':4,'columns':2304,'vectors':9},'method':'Initialize GGML CPU, quantize_row_q8_K, then seven independent ggml_vec_dot_iq*_q8_K routines. Source generators included; compile reference with the pinned checkout include paths and link build/bin/libggml-cpu and libggml-base.','sha256':{p.name:sha(p)for p in q.iterdir()if p.name!='provenance.json'}})
+print('Independent seven-format synthetic fixtures generated')

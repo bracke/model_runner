@@ -1,0 +1,51 @@
+{
+  "reference": "Original independent GGML CPU implementation at commit29b52d398b294509746ec0a3f28948a3107c0213; original Q6_K weight quantizer, optimized Q8_K activation quantizer and optimized ggml_vec_dot_q6_K_q8_K. ggml_cpu_init called.",
+  "compile": [
+    "cc",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "tests/fixtures/inkling2/quantized-dot-reference.c",
+    "-ldl",
+    "-o",
+    "/tmp/inkling-quantized-dot-reference"
+  ],
+  "run": [
+    "/tmp/inkling-quantized-dot-reference",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0",
+    "q6_K",
+    "tests/fixtures/inkling2/q8k-input.f32",
+    "tests/fixtures/inkling2/q6k-dot-reference"
+  ],
+  "layout": "2weight rows and2vectors of512 coordinates; weights contain2 Q6_K blocks per row; activations2 Q8_K blocks per vector;4 little-endian binary32 results in row-major order.",
+  "sha256": {
+    "tests/fixtures/inkling2/q8k-input.f32": "9a04784bdc34dbfc6fb6d93f88c69f7aaa15487ca5806b743c5d62c56c01d631",
+    "tests/fixtures/inkling2/q6k-dot-reference-weights.bin": "73cb58c956fd43f0b4e980a38afa4cc0b4d59914b90d08c321ba2cb0dae52d3a",
+    "tests/fixtures/inkling2/q6k-dot-reference-activations.bin": "50b8040bae97b480534a78ad4afdb2b51033200a92c909f8b174be9560bf2360",
+    "tests/fixtures/inkling2/q6k-dot-reference-output.bin": "de6767accc7842cd3206abbc8af3211e6630fe7daccc99adc5f591176431c5d4",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0": "b6565a96976188378673ef11ddad6b3893259fc7bc21e0d236c74b44c1da4278",
+    "tests/fixtures/inkling2/reference-integer-fixture-producers.patch": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f"
+  },
+  "external_producer_patch": {
+    "file": "reference-integer-fixture-producers.patch",
+    "sha256": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f",
+    "apply_to": "Independent llama.cpp checkout; patch -p1. Compile the extracted C source outside model_runner."
+  },
+  "original_capture_commands_preserved": true,
+  "reproduce_compile": [
+    "cc",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "/tmp/llama.cpp-inkling-reference/examples/inkling2-fixtures/quantized-dot-reference.c",
+    "-ldl",
+    "-o",
+    "/tmp/inkling-quantized-dot-reference"
+  ],
+  "source_hashes_in_external_patch": {
+    "quantized-dot-reference.c": "9e39ffaf6be8156dc0814e0e9527d1308b63a76ca9650da1aa424acebc7a79a5"
+  },
+  "historical_source_sha256": {
+    "tests/fixtures/inkling2/quantized-dot-reference.c": "9e39ffaf6be8156dc0814e0e9527d1308b63a76ca9650da1aa424acebc7a79a5"
+  }
+}

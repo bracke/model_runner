@@ -115,6 +115,9 @@ package Model_Runner.Draft_Policy is
    --  @param Request What was asked.
    --  @param Draft_Ready A draft model, named or found, is loaded.
    --  @param Auto_Drafted That draft was found, not named.
+   --  @param Feature_Draft A feature-conditioned block drafter: seven slots,
+   --    no automatic lookup or adaptive length. Explicit lookup stays visible
+   --    so unsupported combinations are rejected by generation.
    --  @return The plan: whence proposals come, how many a round, and
    --    whether the round length adapts.
    function Decide
@@ -122,7 +125,8 @@ package Model_Runner.Draft_Policy is
       Session      : Model_Runner.Llama.Session;
       Request      : Asked;
       Draft_Ready  : Boolean;
-      Auto_Drafted : Boolean) return Plan;
+      Auto_Drafted : Boolean;
+      Feature_Draft : Boolean := False) return Plan;
 
    --  Get a model ready for the drafting a plan decided: a draft from the
    --  block past the stack reads a four-bit slice of the head, and on the

@@ -66,6 +66,15 @@ begin
          return;
       end if;
 
+      if Name = "dflash" then
+         Read_DSpark_Configuration (Source, Bounds, Settings, Status);
+         return;
+      end if;
+      if Name = "inkling2_loop" then
+         Read_Inkling_Configuration (Source, Bounds, Settings, Status);
+         return;
+      end if;
+
       --  Matched against the architectures this profile reads. Nothing is
       --  inferred: a file says what it is, and one that says something
       --  else is refused by name rather than read as though it were the
@@ -91,7 +100,7 @@ begin
                     | Nomic_Bert | Jina_Bert_V2 | Qwen35 | Qwen35_MoE
                     | Olmo2 | Starcoder2 | Stablelm | Gptneox | Mpt | Mamba
                     | Mamba2 | Rwkv6 | Jamba | Mellum | Qwen3_VL | Lfm3
-                    | Qwen2_VL | Gemma4 =>
+                    | Qwen2_VL | Gemma4 | Inkling2_Loop | DFlash =>
                    K.Split);
 
             --  What a position may see. Every architecture here

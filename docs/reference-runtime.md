@@ -1,5 +1,20 @@
 # Comparing against a reference runtime
 
+Inkling 2 Mini's native CPU integer profile has independent Hello and cached
+prefix captures: all 834 tensors match exactly on the recorded AVX-512 host,
+with both native and compressed interleaved weights. Q4T CPU and existing F32
+hybrid lifecycle checks also pass. The [source and capture protocol](inkling2-reference.md)
+and [latest conformance evidence](inkling2-projection-eight-evidence.json)
+record provenance, tolerances and hardware limits. These checks use the fixed
+three-loop Q4_K_M checkpoint and do not qualify other checkpoints. The native
+Vulkan reference integer path now matches the five-format operator fixtures
+and both full-checkpoint captures exactly. These comparisons establish
+numerical conformance; its bounded throughput trial supplied no completed
+measurement in the preceding trial. The current private 4 GiB
+profile also passes the full Q4T lifecycle, and grouped native integer
+products pass same-input, separate-input and mixed-format comparisons.
+Existing golden data and tolerance envelopes are unchanged.
+
 ## What this is
 
 A *reference runtime* is a second, already-trusted inference program — for
@@ -818,3 +833,10 @@ differing -- because a handful of windows of the Qwen encoder turn a level
 into rows a third apart, and the two references agree on everything but
 this.
 
+
+
+Inkling DSpark conformance uses separate pinned drafter and canonical target references
+in [the adapter contract](inkling2-dspark-native.md). Independent tiny/window and
+BF16-kernel fixtures accompany full checkpoint context, logits and target-tap
+comparisons. External code generates test data only; inference remains native.
+The LLAMAFILE-on mismatch is retained and no comparison bound is enlarged.

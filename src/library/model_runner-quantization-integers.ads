@@ -3,6 +3,7 @@ with Interfaces;
 with Model_Runner.Bytes;
 with Model_Runner.GGUF;
 with Model_Runner.Numerics;
+with Model_Runner.Shares;
 
 --  Products of quantized weights with activations quantized to a byte.
 --
@@ -31,6 +32,8 @@ with Model_Runner.Numerics;
 --
 --  Task safety: pure functions on caller-supplied buffers, no state.
 package Model_Runner.Quantization.Integers is
+
+   use type Model_Runner.Numerics.Real;
 
    subtype Element_Count is Model_Runner.Numerics.Element_Count;
    subtype Element_Index is Model_Runner.Numerics.Element_Index;
@@ -134,10 +137,13 @@ package Model_Runner.Quantization.Integers is
    --    count from -- and has to, because a matrix in panels has no other
    --    kernel to fall to but the floating-point one.
    --  @return Whether to quantize the activations for it.
+   --  @param Reference_Arithmetic Use the model-defined reference reduction,
+   --    including row-major Q5_0 on a supported vector host.
    function Packs_Vectors
      (Format : Model_Runner.GGUF.Tensor_Type;
       Count  : Element_Count;
-      Interleaved : Boolean := False) return Boolean;
+      Interleaved : Boolean := False;
+      Reference_Arithmetic : Boolean := False) return Boolean;
 
    --  Whether this format's activations are quantized a super-block at a
    --  time rather than a block at a time.
@@ -185,9 +191,11 @@ package Model_Runner.Quantization.Integers is
    --    at a time.
    --  @return True when Accumulate_Rows implements it -- which for a
    --    panel is only where the deepest compilation may be entered.
+   --  @param Reference_Arithmetic Select the reference arithmetic kernels.
    function Has_Integer_Kernel
      (Format      : Model_Runner.GGUF.Tensor_Type;
-      Interleaved : Boolean := False) return Boolean;
+      Interleaved : Boolean := False;
+      Reference_Arithmetic : Boolean := False) return Boolean;
 
    --  Allow the product built for the wider instruction set.
    --
@@ -264,6 +272,10 @@ package Model_Runner.Quantization.Integers is
    --  @param Super Quantize by super-block rather than by block, which
    --    Supers_Vectors decides from the weight format. The width must be a
    --    whole number of super-blocks, and a shape that is not is refused.
+   --  @param Reference_Rounding Use direct reciprocal scaling and ties-to-even
+   --    rounding; use signed maxima for Q8_K super-blocks. Block scales stay
+   --    binary32 unless Half_Scales selects binary16 storage.
+   --  @param Half_Scales Round stored reference scales to binary16.
    procedure Quantize_Vectors
      (Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
@@ -273,7 +285,9 @@ package Model_Runner.Quantization.Integers is
       Totals  : out Sum_Array;
       Halves  : out Sum_Array;
       Ok      : out Boolean;
-      Super   : Boolean := False);
+      Super   : Boolean := False;
+      Reference_Rounding : Boolean := False;
+      Half_Scales : Boolean := False);
 
    --  How many blocks such a run is cut into.
    --
@@ -318,6 +332,8 @@ package Model_Runner.Quantization.Integers is
    --  @param Super Quantize by super-block rather than by block, which
    --    requires First to begin one and Last to end one -- eight blocks to
    --    a super-block -- and is refused otherwise.
+   --  @param Reference_Rounding Use reference block or super-block rounding.
+   --  @param Half_Scales Round stored reference scales to binary16.
    procedure Quantize_Blocks
      (Vectors : Model_Runner.Numerics.Real_Array;
       Count   : Element_Count;
@@ -329,7 +345,9 @@ package Model_Runner.Quantization.Integers is
       Totals  : out Sum_Array;
       Halves  : out Sum_Array;
       Ok      : out Boolean;
-      Super   : Boolean := False);
+      Super   : Boolean := False;
+      Reference_Rounding : Boolean := False;
+      Half_Scales : Boolean := False);
 
    --  How many rows one call of Accumulate_Rows computes at once.
    --
@@ -400,6 +418,9 @@ package Model_Runner.Quantization.Integers is
    --    a time rather than a row at a time, which the pass that writes such
    --    a copy sets and nothing else does. See
    --    Model_Runner.Quantization.Interleave.
+   --  @param Reference_Arithmetic Use the reference binary32 lane reduction
+   --    for supported row-major formats; other formats retain their kernel.
+   --  @param Metadata Optional immutable native header scales in row/block order.
    procedure Accumulate_Rows
      (Format    : Model_Runner.GGUF.Tensor_Type;
       Data      : Model_Runner.Bytes.Byte_Array;
@@ -416,7 +437,77 @@ package Model_Runner.Quantization.Integers is
       Count     : Element_Count;
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok        : out Boolean;
-      Interleaved : Boolean := False);
+      Interleaved : Boolean := False;
+      Reference_Arithmetic : Boolean := False;
+      Metadata : Model_Runner.Numerics.Real_Array := []);
+
+   --  Reference products written directly in vector-major output order.
+   --  An optional same-shape native partner shares each activation read.
+   --  Unsupported profiles or malformed ranges return before output writes.
+   --  @param Format Shared quantization format.
+   --  @param Data Native or interleaved weight bytes.
+   --  @param Offset First weight byte.
+   --  @param Row_Bytes Native row stride.
+   --  @param Rows Number of output rows.
+   --  @param Blocks Quantization blocks per row.
+   --  @param Values Packed activation bytes.
+   --  @param Scales Activation scales.
+   --  @param Totals Activation block totals.
+   --  @param Halves Activation half-block totals.
+   --  @param First First activation coordinate.
+   --  @param Stride Activation vector stride.
+   --  @param Count Number of vectors.
+   --  @param Target Receives completed binary32 products.
+   --  @param Result_First First output row within each vector.
+   --  @param Result_Stride Output vector stride.
+   --  @param Ok True after all products are written.
+   --  @param Interleaved Whether Data uses eight-row panels.
+   --  @param Metadata Optional compact physical weight coefficients.
+   --  @param Partner Optional second native weight matrix.
+   --  @param Partner_Offset First partner byte.
+   --  @param Partner_Metadata Optional partner coefficients.
+   --  @param Partner_Target Receives partner products; must not alias Target.
+   --  @param Result_Members Optional destination vector index for each input; distinct and in range.
+   --  @param Input_Members Optional source vector indices; repeated indices are permitted.
+   procedure Reference_Products
+     (Format : Model_Runner.GGUF.Tensor_Type; Data : Model_Runner.Bytes.Byte_Array;
+      Offset, Row_Bytes : Model_Runner.Bytes.Byte_Count; Rows, Blocks : Element_Count;
+      Values : Signed_Array; Scales : Model_Runner.Numerics.Real_Array; Totals, Halves : Sum_Array;
+      First, Stride, Count : Element_Count; Target : access Model_Runner.Numerics.Real_Array;
+      Result_First, Result_Stride : Element_Count; Ok : out Boolean;
+      Interleaved : Boolean := False; Metadata : Model_Runner.Numerics.Real_Array := [];
+      Partner : Model_Runner.Bytes.Byte_Array := []; Partner_Offset : Model_Runner.Bytes.Byte_Count := 0;
+      Partner_Metadata : Model_Runner.Numerics.Real_Array := [];
+      Partner_Target : access Model_Runner.Numerics.Real_Array := null;
+      Result_Members : Model_Runner.Shares.Member_Rows := [];
+      Input_Members : Model_Runner.Shares.Member_Rows := []);
+
+   --  Decode compact immutable K-block group coefficients without weight expansion.
+   --  @param Format Q4_K, Q5_K or Q6_K.
+   --  @param Data Native block storage.
+   --  @param Offset Position of the block in Data.
+   --  @param Into Sixteen coefficient bytes.
+   --  @param Ok True when both buffers fit.
+   procedure Reference_Coefficients
+     (Format : Model_Runner.GGUF.Tensor_Type; Data : Model_Runner.Bytes.Byte_Array;
+      Offset : Model_Runner.Bytes.Byte_Count; Into : out Model_Runner.Bytes.Byte_Array;
+      Ok : out Boolean);
+
+   --  Pack one transformed block using an optional peak measured while producing it.
+   --  @param Vectors Thirty-two finite activation candidates.
+   --  @param Values Receives their reference bytes.
+   --  @param Scale Receives the stored activation scale.
+   --  @param Earlier First sixteen-byte sum.
+   --  @param Total Complete block sum.
+   --  @param Ok True when shape and values are supported.
+   --  @param Half_Scales Round only the stored scale to binary16.
+   --  @param Known_Peak Nonnegative finite peak already measured by the producer;
+   --    a negative value requests ordinary measurement and finite checking.
+   procedure Pack_Reference_Block
+     (Vectors : Model_Runner.Numerics.Real_Array; Values : out Signed_Array;
+      Scale : out Model_Runner.Numerics.Real; Earlier, Total : out Interfaces.Integer_32;
+      Ok : out Boolean; Half_Scales : Boolean := False;
+      Known_Peak : Model_Runner.Numerics.Real := Model_Runner.Numerics.Real'(-1.0));
 
    --  Rows a call takes at once when the weights are laid out in panels.
    --

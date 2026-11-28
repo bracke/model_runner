@@ -132,7 +132,21 @@ package Model_Runner.Tools is
       DeepSeek_Fenced,  --  DeepSeek R1's: function, the name, a ```json fence
       DeepSeek_Plain,   --  DeepSeek V3.1's: the name, the object
       Harmony_Call,     --  to=functions.name ...<|message|>{"a": 1}, gpt-oss's
-      Gemma4_Call);     --  <|tool_call>call:name{a:1,b:<|"|>x<|"|>}<tool_call|>, Gemma4's
+      Gemma4_Call,      --  Gemma4 call tokens and relaxed object syntax
+      Inkling_Call);    --  message_model / content_invoke_tool_json blocks
+
+   --  Inkling's typed model blocks. A turn ends only at End_Sampling;
+   --  End_Message closes one text, thinking or tool block within that turn.
+   Inkling_Model : constant String := "<|message_model|>";
+   Inkling_Text : constant String := "<|content_text|>";
+   Inkling_Thinking : constant String := "<|content_thinking|>";
+   Inkling_Tool_JSON : constant String := "<|content_invoke_tool_json|>";
+   Inkling_End_Message : constant String := "<|end_message|>";
+   Inkling_End_Sampling : constant String := "<|content_model_end_sampling|>";
+
+   --  @param Reply Complete or partial model reply.
+   --  @return Visible text blocks, without thinking, tool calls or control tokens.
+   function Inkling_Answer (Reply : String) return String;
 
    --  gpt-oss's harmony markers: what names a call's recipient in a
    --  message's header, what opens a message's body, and the channels a

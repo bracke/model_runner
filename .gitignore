@@ -15,6 +15,11 @@
 /tests/bin/
 /tests/alire/
 /tests/config/
+
+# Local V3 project state (authoritative tasks persist here; indexes are derived).
+/.model_runner/
+# Reproducible Inkling campaigns retain local binaries and raw execution logs here.
+/artifacts/inkling2/obj/
 /tests/inference_consumer/obj/
 /tests/inference_consumer/bin/
 /tests/inference_fixture/obj/

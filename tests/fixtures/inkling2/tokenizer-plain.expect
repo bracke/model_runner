@@ -1,0 +1,11 @@
+# Independently captured with llama.cpp b12600, commit
+# 29b52d398b294509746ec0a3f28948a3107c0213, llama-tokenize.
+# Tokenization only: no greedy/logit conformance is implied.
+# Input used --no-escape --ids; special parsing is the reference default.
+# Vocabulary-only load from the pinned 32 MiB header in a sparse inspection file.
+# Initially vocabulary-only; rechecked against the full verified download on 2026-11-24.
+# See README.md and docs/inkling2-reference.md for provenance and warnings.
+runtime llama.cpp b12600 29b52d398b294509746ec0a3f28948a3107c0213
+model Inkling-2-Mini-Q4_K_M.gguf
+prompt The capital of France is
+tokens 371 151451 149879 151194 149884

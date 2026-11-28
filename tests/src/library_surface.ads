@@ -24,23 +24,29 @@
 --  caller there can be, and the fixtures it writes are what most of the
 --  suite runs against.
 --
---  Second opinions. Row_Dot and All_Finite were how the engine multiplied
---  and checked a row before the kernels existed. The kernels are faster and
---  are what runs; these are simple enough to be read at a glance, which is
---  what makes them worth keeping for a test that would otherwise check the
---  kernels against themselves.
+--  Second opinions. Row_Dot provides a simple independent row product for
+--  tests of the optimized kernels. All_Finite is now called by the native
+--  decoder and therefore does not belong in this library-only registry.
 --
 --  State a library caller needs and the command does not ask for. The
 --  command drives the whole pipeline and knows what it did, so it never has
 --  to ask whether the vocabulary loaded or which seed the sampler used.
 --  Somebody embedding the engine has no such vantage: Has_Template,
 --  Unknown_Token, Seed_Used, Is_Closed, String_Count and
---  Is_Normal are how they find out.
+--  Is_Normal are how they find out. Loop_Device_Attention_Runs lets an
+--  embedding client distinguish native loop attention from CPU fallback; the
+--  full-checkpoint AUnit test exercises that diagnostic and cache cleanup.
+--  Reference_Packing_Reuses reports native GPU input-packing reuse to
+--  embedding diagnostics and the speed tool; AUnit exercises both queries.
 --
 --  Adds_End was among them until the embedding command started asking. A
 --  model that reads whole texts is trained with a marker at each end and
 --  its states are what they are because of them, so the command has to ask
 --  what the file wants rather than knowing what it did.
+--
+--  Embedded prompt reuse. Reuse_Prompt_Prefix and Reused_Prompt_Tokens
+--  expose the reusable completion API to library callers; the native CLI
+--  already uses the generation request directly. AUnit exercises both.
 --
 --  Building a diagnostic. Add_Boolean, Find_Parameter and Set_Cause are for
 --  a caller raising its own Error_Info rather than passing one along.

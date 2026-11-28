@@ -1047,6 +1047,11 @@ package Model_Runner.Backend.Device is
    --    distance, or zero for none.
    --  @param K_Codec Meaning of the packed key codes.
    --  @param V_Codec Meaning of the packed value codes.
+   --  @param Relative_At Optional cache metadata: four uint32 words (relative
+   --    width, extent, cache origin, absolute table offset), followed by
+   --    Positions*Heads coefficient rows then Positions*Heads sink values.
+   --    Zero preserves ordinary packed attention. Sinks join with score zero
+   --    while learned sinks are subtracted from position scores.
    procedure Attend_Packed
      (K_Bits     : Positive;
       V_Bits     : Positive;
@@ -1076,7 +1081,8 @@ package Model_Runner.Backend.Device is
       K_Codec    : Model_Runner.Platform.Device.Products.Cache_Codec :=
         Model_Runner.Platform.Device.Products.Scaled_Integer_Cache;
       V_Codec    : Model_Runner.Platform.Device.Products.Cache_Codec :=
-        Model_Runner.Platform.Device.Products.Scaled_Integer_Cache);
+        Model_Runner.Platform.Device.Products.Scaled_Integer_Cache;
+      Relative_At : Natural := 0);
 
    --  And back out of it, which is how the host's copy of the cache is
    --  brought up to date after a batch the device took whole.
@@ -1492,6 +1498,40 @@ package Model_Runner.Backend.Device is
       Status  : out Model_Runner.Errors.Error_Info;
       Cancel  : Model_Runner.Cancellation.Token_Reference := null);
 
+   --  Opaque backend sequence and its kept-output addresses. Architecture
+   --  adapters assemble device work without importing the platform layer.
+   subtype Product_Sequence is Model_Runner.Platform.Device.Products.Sequence;
+   subtype Result_Addresses is Model_Runner.Platform.Device.Products.Address_List;
+
+   --  Start an empty device sequence for the existing product builders.
+   --  @param Steps Receives an empty, bounded sequence.
+   procedure Open_Steps (Steps : out Product_Sequence) with Inline_Always;
+
+   --  Record unkept packed attention through the existing device builder.
+   --  Architecture adapters need no direct platform dependency.
+   --  @param Steps Existing bounded device sequence.
+   --  @param Heads Query head count.
+   --  @param Head_Size Query/key width per head.
+   --  @param Value_Size Value width per head.
+   --  @param Group_Size Query heads sharing one key/value head.
+   --  @param First First visible cached position.
+   --  @param Last Last cached position for the first query.
+   --  @param KV_Width Key elements per cached position.
+   --  @param V_Width Value elements per cached position.
+   --  @param Scale Score multiplier.
+   --  @param Cap Optional score cap; zero disables it.
+   --  @param Added True when the builder accepted the step.
+   --  @param Packed Validated packed key/value storage layout.
+   --  @param Window Sliding window; zero means global attention.
+   --  @param At_Vector Query offset in the shared caller activation.
+   --  @param Relative_At Relative-attention metadata offset in cache elements.
+   procedure Add_Packed_Attention
+     (Steps : in out Product_Sequence;
+      Heads, Head_Size, Value_Size, Group_Size, First, Last, KV_Width, V_Width : Natural;
+      Scale, Cap : Model_Runner.Numerics.Real;
+      Added : out Boolean; Packed : Packed_Cache;
+      Window : Natural := 0; At_Vector : Natural := 0; Relative_At : Natural := 0) with Inline_Always;
+
    --  A product step reading a step before it, added to a sequence the
    --  caller builds with Products' own calls -- the matrix named by its
    --  view, kept on the device by where it lies, as every product here is.
@@ -1582,6 +1622,9 @@ package Model_Runner.Backend.Device is
    --  @param Hold With In_Place, return once handed over: Kept_Answer says
    --    where the answer will be, and the caller waits (Finish_All) before
    --    reading it.
+   --  @param Targets Optional addresses for multiple kept steps, in sequence
+   --    order. Each receives Count times that step's width; Into is unused.
+   --  @param Cancel Cooperative cancellation token for the complete sequence.
    procedure Run_Steps
      (Steps     : Model_Runner.Platform.Device.Products.Sequence;
       Vectors   : Model_Runner.Tensors.Real_Array;
@@ -1592,7 +1635,10 @@ package Model_Runner.Backend.Device is
       Carry_Out : Boolean := False;
       In_Place  : Boolean := False;
       Origin    : Interfaces.Unsigned_64 := 0;
-      Hold      : Boolean := False);
+      Hold      : Boolean := False;
+      Targets   : Model_Runner.Platform.Device.Products.Address_List :=
+                    Model_Runner.Platform.Device.Products.No_Places;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null);
 
    --  Room for a sequence's activation in the device's own mapped memory,
    --  for the caller to write and Run_Steps In_Place to read; see
@@ -2625,6 +2671,76 @@ package Model_Runner.Backend.Device is
       Up_Bias   : Model_Runner.Tensors.Real_Array_Access := null;
       Down_Bias : Model_Runner.Tensors.Real_Array_Access := null);
 
+   --  Packed native input reuse in the existing device engine.
+   --  @return Reuses recorded since device open.
+   function Reference_Packing_Reuses return Natural;
+
+   --  Reference SiTU and native integer chaining capability for the active device.
+   --  @return False when any required pipeline or arithmetic mode is unavailable.
+   function Takes_Reference_Mixture return Boolean;
+
+   --  Execute selected physical expert views, reference SiTU, down packing
+   --  and ordered weighted accumulation in one existing device sequence.
+   --  @param Gates Selected native gate matrices in routing order.
+   --  @param Ups Matching native up matrices.
+   --  @param Downs Matching native down matrices.
+   --  @param Shares Already normalized/scaled route shares in the same order.
+   --  @param Vector One normalized decoder input.
+   --  @param Target Receives only the final weighted result on success.
+   --  @param Gate_Cap Positive gate softcap.
+   --  @param Up_Cap Positive up softcap.
+   --  @param Status Structured capability, shape or execution result.
+   --  @param Cancel Existing cooperative cancellation token.
+   --  @param Count Token rows; shares are expert-major, Count per routed expert.
+   procedure Dispatch_Reference_Mixture
+     (Gates, Ups, Downs : Model_Runner.Tensors.View_Group;
+      Shares : Model_Runner.Numerics.Real_Array;
+      Vector, Target : Model_Runner.Tensors.Real_Array_Access;
+      Gate_Cap, Up_Cap : Model_Runner.Numerics.Real;
+      Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Count : Positive := 1);
+
+   --  Submit up to ten same-shape resident experts together, four steps each.
+   --  @param Gates Physical native gate matrices, one per expert.
+   --  @param Ups Matching up matrices.
+   --  @param Downs Matching down matrices.
+   --  @param Vectors Gathered rows for each expert, Count rows each.
+   --  @param Count Common token-row count, one through 128.
+   --  @param Targets Final down rows; none are committed when validation fails.
+   --  @param Gate_Cap Positive reference SiTU gate softcap.
+   --  @param Up_Cap Positive reference SiTU up softcap.
+   --  @param Status Structured capability, shape, memory or execution result.
+   --  @param Cancel Existing cancellation token; one device owner is retained.
+   procedure Dispatch_Reference_Experts
+     (Gates, Ups, Downs : Model_Runner.Tensors.View_Group;
+      Vectors : Model_Runner.Tensors.Target_Group;
+      Count : Model_Runner.Numerics.Element_Count;
+      Targets : Model_Runner.Tensors.Target_Group;
+      Gate_Cap, Up_Cap : Model_Runner.Numerics.Real;
+      Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  Run one resident native expert over independent token rows in one sequence.
+   --  @param Gate Native gate projection for one physical expert.
+   --  @param Up Native up projection with the same shape.
+   --  @param Down Native down projection.
+   --  @param Vectors Gathered normalized rows in token order.
+   --  @param Count Number of rows, one through 128.
+   --  @param Target Receives only final down-projection rows on success.
+   --  @param Gate_Cap Positive SiTU gate softcap.
+   --  @param Up_Cap Positive SiTU up softcap.
+   --  @param Status Structured shape, capability or execution result.
+   --  @param Cancel Existing cooperative cancellation token.
+   procedure Dispatch_Reference_Expert
+     (Gate, Up, Down : Model_Runner.Tensors.View;
+      Vectors : Model_Runner.Tensors.Real_Array_Access;
+      Count : Model_Runner.Numerics.Element_Count;
+      Target : Model_Runner.Tensors.Real_Array_Access;
+      Gate_Cap, Up_Cap : Model_Runner.Numerics.Real;
+      Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
+
    --  One expert's whole feed-forward over a batch, as one submission:
    --  its gate and up slices over every vector, the unit and the multiply
    --  on the device, and its slice down over what that made. The same
@@ -2793,6 +2909,86 @@ package Model_Runner.Backend.Device is
      (Gates  : Model_Runner.Tensors.View;
       Ups    : Model_Runner.Tensors.View;
       Status : out Model_Runner.Errors.Error_Info);
+
+   --  Append one unkept packed-attention step to an existing gate sequence.
+   --  @param Steps Sequence already containing the raw gate projection.
+   --  @param Query_At Query offset in the shared caller activation.
+   --  @param Added True when one compatible step was recorded.
+   type Attention_Recorder is access procedure
+     (Steps : in out Product_Sequence; Query_At : Natural; Added : out Boolean);
+
+   --  Project a gate, apply the native logistic to it and multiply Value,
+   --  then project the weighted value, in one existing device sequence.
+   --  @param Gate Matrix from Input to the gate width.
+   --  @param Projection Matrix from the weighted value to Into.
+   --  @param Count Number of complete token rows.
+   --  @param Input Complete input rows.
+   --  @param Value Attention row multiplied by the gate.
+   --  @param Raw_Gate Receives the raw projection for mandatory validation.
+   --  @param Into Receives the final projection.
+   --  @param Weighted Optional actual weighted input, for observers.
+   --  @param Done True after successful execution; False for unsupported shapes.
+   --  @param Status Success or a structured runtime failure.
+   --  @param Cancel Cooperative cancellation for the complete sequence.
+   --  @param Conv_Taps Optional three/four-tap channel-major output convolution.
+   --  @param Conv_History Previous raw values per output channel; committed
+   --    only after successful device execution.
+   --  @param Raw_Output Required pre-convolution output when Conv_Taps is given.
+   --  @param Reference_Arithmetic Use exact native integer packing, sigmoid and fused convolution.
+   --  @param Residual Optional final residual, added after convolution in the same sequence.
+   --  @param Attention Optional native packed-attention producer; Value then holds its queries.
+   procedure Gate_And_Project
+     (Gate, Projection : Model_Runner.Tensors.View;
+      Input, Value, Raw_Gate, Into : Model_Runner.Tensors.Real_Array_Access;
+      Weighted : Model_Runner.Tensors.Real_Array_Access;
+      Done : out Boolean;
+      Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Count : Positive := 1;
+      Conv_Taps : Model_Runner.Numerics.Real_Array := [];
+      Conv_History : Model_Runner.Tensors.Real_Array_Access := null;
+      Raw_Output : Model_Runner.Tensors.Real_Array_Access := null;
+      Reference_Arithmetic : Boolean := False;
+      Residual : Model_Runner.Tensors.Real_Array_Access := null;
+      Attention : Attention_Recorder := null);
+
+   --  Project native loop controls and blend their messages in one sequence.
+   --  @param Down Low-rank projection of Joined.
+   --  @param Gain Learned gain projection of the low-rank result.
+   --  @param Forget Learned forget projection of the low-rank result.
+   --  @param Joined Normalized value/message rows.
+   --  @param Value Rows replaced by the gated blend after successful execution.
+   --  @param Message Unnormalized message rows consumed by the blend.
+   --  @param Down_Row Receives the raw low-rank projection for observers/checks.
+   --  @param Gain_Row Receives the raw gain projection for mandatory checks.
+   --  @param Forget_Row Receives the raw forget projection for mandatory checks.
+   --  @param Count Number of token rows.
+   --  @param Done True after the complete sequence executed.
+   --  @param Status Structured execution result.
+   --  @param Cancel Cooperative cancellation token.
+   procedure Control_And_Blend
+     (Down, Gain, Forget : Model_Runner.Tensors.View;
+      Joined, Value, Message, Down_Row, Gain_Row, Forget_Row : Model_Runner.Tensors.Real_Array_Access;
+      Count : Positive; Done : out Boolean; Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
+
+   --  Normalize and project a complete row in the existing device sequence.
+   --  @param Projection Output matrix, whose columns match Input.
+   --  @param Gain Learned normalization gains.
+   --  @param Epsilon Root-mean-square stabilizer.
+   --  @param Input Row before normalization.
+   --  @param Normalized Actual normalized row, returned for session state.
+   --  @param Output Projected output before logit processing.
+   --  @param Done True when the sequence executed.
+   --  @param Status Structured execution result.
+   --  @param Cancel Cooperative cancellation token.
+   procedure Normalize_Output
+     (Projection : Model_Runner.Tensors.View;
+      Gain : Model_Runner.Numerics.Real_Array;
+      Epsilon : Model_Runner.Numerics.Real;
+      Input, Normalized, Output : Model_Runner.Tensors.Real_Array_Access;
+      Done : out Boolean; Status : out Model_Runner.Errors.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null);
 
 private
 

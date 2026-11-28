@@ -1,0 +1,140 @@
+{
+  "status": "independent-template-only-fixtures; no model inference",
+  "reference": {
+    "transformers_commit": "046bdb8cc2cee29d233964bb77fe6fd37cfe4aa3",
+    "source_sha256": "fbef8bf9c9e80e5da62f69932326564d4b4ce2f7382c8023b99c2315a4a2af8b",
+    "factory": "_cached_compile_jinja_template and _compile_jinja_template, unmodified AST nodes",
+    "jinja2": "3.1.6",
+    "markupsafe": "2.1.5",
+    "template_sha256": "53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc"
+  },
+  "cases": [
+    {
+      "name": "default",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "tools": [],
+        "add_generation_prompt": true
+      },
+      "expected": "<|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|><|message_user|><|content_text|>Hello<|end_message|>"
+    },
+    {
+      "name": "no-generation-prompt",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "tools": [],
+        "add_generation_prompt": false
+      },
+      "expected": "<|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|><|message_user|><|content_text|>Hello<|end_message|>"
+    },
+    {
+      "name": "no-reasoning",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "tools": [],
+        "add_generation_prompt": true,
+        "reasoning_effort": "none"
+      },
+      "expected": "<|message_system|><|content_text|>Thinking effort level: 0<|end_message|><|message_user|><|content_text|>Hello<|end_message|>"
+    },
+    {
+      "name": "medium-reasoning",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "tools": [],
+        "add_generation_prompt": true,
+        "reasoning_effort": "medium"
+      },
+      "expected": "<|message_system|><|content_text|>Thinking effort level: 0.7<|end_message|><|message_user|><|content_text|>Hello<|end_message|>"
+    },
+    {
+      "name": "tool-roundtrip",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Read README.md."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": {
+                    "path": "README.md"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": "Example project."
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a file.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "add_generation_prompt": true
+      },
+      "expected": "<|message_system|>tool_declare<|content_xml|>[{\"description\":\"Read a file.\",\"name\":\"read_file\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"type\":\"object\"},\"type\":\"function\"}]<|end_message|><|message_system|><|content_text|>Thinking effort level: 0.9<|end_message|><|message_user|><|content_text|>Read README.md.<|end_message|><|message_model|>read_file<|content_invoke_tool_json|>{\"name\":\"read_file\",\"args\":{\"path\":\"README.md\"}}<|end_message|><|content_model_end_sampling|><|message_tool|>read_file<|content_text|>Example project.<|end_message|>"
+    },
+    {
+      "name": "invalid-effort",
+      "inputs": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "tools": [],
+        "reasoning_effort": "invalid"
+      },
+      "expected_error": "Unknown reasoning_effort: invalid"
+    }
+  ]
+}

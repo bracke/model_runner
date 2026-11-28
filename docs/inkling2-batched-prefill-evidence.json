@@ -1,0 +1,244 @@
+{
+  "schema": "model_runner.inkling2.batched_prefill_evidence.v1",
+  "collected_at": "2026-11-25T14:31:19.780148+00:00",
+  "status": "Complete: native batching, 1029 tests, references, measured contexts and fresh verified V3 task",
+  "model_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+  "native_cli_sha256": "a9c61f4a32a6c4f3f0cf1f65ec2afbffd48a559f2af18ba992a5c64d85c7b59c",
+  "native_tests_sha256": "75ddaa9273f881f9c5a3c3144586ae90368f924a6313784233e83be9d1de5cf2",
+  "source_manifest": "artifacts/inkling2/obj/no-adapter-batched-prefill/source-sha256.json",
+  "source_manifest_sha256": "eb567779f99b4d35cd151756ecb1b832579705c7fd725f59b8684e0cce7cfbad",
+  "implementation": [
+    "One common scalar/batch Inkling evaluator; logical visits outside token rows",
+    "Batched F32 projections and existing grouped expert execution",
+    "Token-ordered causal convolution and attention state",
+    "Per-token prelude, residual and message banks",
+    "Last-row head by default; per-token logits/states when requested",
+    "Atomic token-history commit and convolution/normalized-state restoration",
+    "Bounded native batch replay for rewind; physical weights remain shared"
+  ],
+  "qualification": {
+    "focused_aunit": "15/15, including exact scalar/batch logits and states, integer arithmetic preservation, partitioning, cancellation, CPU/Vulkan and independent long-prefix reference",
+    "full_aunit": "1029/1029; zero failed assertions and unexpected errors",
+    "real_checkpoint": "CPU, private Vulkan and shared-host Vulkan pass 834 tensors /1352826 values after native batched prefill; exact routing; existing F32 tolerances unchanged",
+    "greedy_cpu": "All sixteen independent France-prompt tokens match",
+    "durable_state": "277 original root files restored and hashes verified",
+    "no_adapter_gates": [
+      {
+        "batch": 1,
+        "paired_median_prompt_ratio": 0.9999522314351966,
+        "paired_median_decode_ratio": 1.0000169619628678,
+        "limit": 1.05,
+        "passed": true
+      },
+      {
+        "batch": 2,
+        "paired_median_prompt_ratio": 1.0025830819885522,
+        "paired_median_decode_ratio": 1.0002490069872105,
+        "limit": 1.05,
+        "passed": true
+      }
+    ],
+    "no_adapter_ledger_fingerprint": "882945DE0BA411B7",
+    "premeasurement_source": "31521 checks; only stale no_adapter claim failed, then remeasured/restamped through the ordinary tool; final source gate pending"
+  },
+  "protocol": "docs/inkling2-batched-prefill-protocol.md",
+  "driver_profile": "docs/inkling2-gpu-profile.md",
+  "interruption": {
+    "stage": "Independent external reference preparation, before native timing",
+    "kernel": "Host global OOM event; interrupted attempt preserved",
+    "retained_attempt": "artifacts/inkling2/obj/performance-round2/reference-unbounded-attempt/",
+    "recovery": "CPU-only reference, microbatch8, hard20GiB cgroup cap/no swap; native CPU and V3 caps20GiB, private GPU host cap16GiB plus4GiB device budget",
+    "source_integrity": "869 files and binaries verified unchanged after interruption"
+  },
+  "raw_validation": {
+    "started_at": "2026-11-25T06:00:33.702872+00:00",
+    "stages": [
+      {
+        "label": "focused-final",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T06:00:33.702945+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/focused-final.log",
+        "returncode": 0,
+        "finished_at": "2026-11-25T06:00:39.677063+00:00"
+      },
+      {
+        "label": "q4-cpu",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T06:00:39.677716+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/q4-cpu.log",
+        "returncode": 0,
+        "finished_at": "2026-11-25T06:01:00.041112+00:00"
+      },
+      {
+        "label": "q4-hybrid",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T06:01:00.041519+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/q4-hybrid.log",
+        "returncode": 0,
+        "finished_at": "2026-11-25T06:01:18.464281+00:00"
+      },
+      {
+        "label": "q4-device",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T06:01:18.465192+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/q4-device.log",
+        "returncode": 0,
+        "finished_at": "2026-11-25T06:04:15.140100+00:00"
+      },
+      {
+        "label": "full-suite-wrapper",
+        "command": [
+          "python3",
+          "/tmp/inkling2-batch-full-suite.py"
+        ],
+        "started_at": "2026-11-25T06:04:15.141039+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/full-suite-wrapper.log",
+        "returncode": 0,
+        "finished_at": "2026-11-25T06:11:43.580303+00:00"
+      },
+      {
+        "label": "probe-build",
+        "command": [
+          "alr",
+          "exec",
+          "--",
+          "gprbuild",
+          "-p",
+          "-j0",
+          "-P",
+          "tests.gpr",
+          "no_adapter_probe.adb"
+        ],
+        "started_at": "2026-11-25T06:11:43.580976+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/probe-build.log",
+        "returncode": 0,
+        "finished_at": "2026-11-25T06:11:53.883041+00:00"
+      },
+      {
+        "label": "premeasurement-source",
+        "command": [
+          "./bin/tests",
+          "check",
+          "..",
+          "--repository"
+        ],
+        "started_at": "2026-11-25T06:11:53.883660+00:00",
+        "log": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/premeasurement-source.log",
+        "returncode": 1,
+        "finished_at": "2026-11-25T06:15:33.990209+00:00"
+      }
+    ],
+    "status": "finished",
+    "shared_memory_preflight": {
+      "available_kib": 22572916,
+      "required_kib": 22544384
+    },
+    "finished_at": "2026-11-25T06:15:33.990869+00:00"
+  },
+  "files": [
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/focused-final.log",
+      "sha256": "020e037b8d9924583742cca9002f314436a67de39352dde51f0c8b19f870a258",
+      "bytes": 2217
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/q4-cpu.log",
+      "sha256": "915355f95e781fbcdb1a3ba7915d8f83db8508f24af5da3020f066fd4d4bfbab",
+      "bytes": 380
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/q4-hybrid.log",
+      "sha256": "0bcf00217fb14043d947240582b5d77cd8621c695d25d2ce64733935d931965f",
+      "bytes": 383
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/q4-device.log",
+      "sha256": "21222f5f1e2507fa2c71fe9c741abef66032dfabc11fa71390acd8aa9aa2432c",
+      "bytes": 386
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/full-suite.log",
+      "sha256": "0387c9ba2635198421ad8cf75afea621990045b106ad83a1995bbb86191745be",
+      "bytes": 154555
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/state-restoration.json",
+      "sha256": "287ecbb5c9070342dbe1a979c852bb20a4289272db2f11917659f3620604fe69",
+      "bytes": 27922
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/no-adapter-restamp.log",
+      "sha256": "b67b4e7eb0b0bbc3943c013e98127699c8bc5f6f6c7aeb98cdeea43e6cb9cb2e",
+      "bytes": 56
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/premeasurement-source.log",
+      "sha256": "67272d8d695b632a39346c77194a30e65be72d336e447167e0217eeb17f23f28",
+      "bytes": 793
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/shared-driver-profile.json",
+      "sha256": "fdbdc262eb351a80cf974ee1e81f34e7914f4da14d1c8bc4da6f29030c9bcfb3",
+      "bytes": 2341
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/private-driver-profile.json",
+      "sha256": "e538a6979a50d951d04a17717829d33d7455bba8279bab0de874e58a14d6470d",
+      "bytes": 2316
+    },
+    {
+      "path": "artifacts/inkling2/obj/performance-round2/post-interruption-integrity.json",
+      "sha256": "d68727c7697e9dd7e0b5bf41b80c26fd5d7088db8d85c05214b0df00c035a57d",
+      "bytes": 457
+    }
+  ],
+  "native_benchmark": "docs/inkling2-batched-prefill-benchmark-evidence.json",
+  "fresh_v3": "docs/inkling2-v3-batched-prefill-evidence.json",
+  "short_prefill_median_seconds": 1.788,
+  "short_prefill_observed_reduction_percent": 36.25668449197861,
+  "final_source_gate": {
+    "returncode": 0,
+    "log": "artifacts/inkling2/obj/performance-round2/final-source-gate.log",
+    "sha256": "b53808683c81c8b1a294274d160be4e412a338fe56447bd668fc7526096bc606",
+    "summary": [
+      "checks 31525, failures 0"
+    ]
+  },
+  "final_identity_verification": {
+    "source_files": 869,
+    "source_and_binary_hashes": "passed",
+    "root_durable_store_present": true
+  },
+  "completion_preservation": {
+    "log": "artifacts/inkling2/obj/performance-round2/completion-preservation.json",
+    "checked_at": "2026-11-25T14:32:01.492227+00:00",
+    "original_durable_files": 277,
+    "all_original_hashes_match": true,
+    "git_diff_check_returncode": 0,
+    "no_model_or_test_processes_remaining": true
+  }
+}

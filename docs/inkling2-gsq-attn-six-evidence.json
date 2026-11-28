@@ -1,0 +1,2139 @@
+{
+  "schema": "model_runner.inkling2_gsq_attn_six.v2",
+  "status": "Complete: option3 native five/six-query IQ3_S retained; options1 and4 evaluated and rejected.",
+  "checkpoint": {
+    "status": "complete",
+    "started_at": "2026-11-27T20:13:22.505900+00:00",
+    "repository": "ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF",
+    "filename": "Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+    "destination": "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+    "partial": "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf.part",
+    "revision": "f0da1097633dd7c2f5733e4077cff861be122245",
+    "expected_sha256": "8a3515374c3cd9b65a1677b17e805bb1e32df8e98756e5f0d2fe1837d62aa4cb",
+    "expected_bytes": 11425259648,
+    "method": "Eight concurrent HTTP ranges; validated Content-Range, resumable pieces, final pinned SHA-256.",
+    "piece_directory": "/home/bent/models/.Inkling-2-Mini-GSQ-RCO-IQ3_S.download",
+    "connections": 8,
+    "superseded_method": "Single curl stream; its downloaded prefix retained.",
+    "parallel_started_at": "2026-11-27T20:19:21.896223+00:00",
+    "actual_sha256": "8a3515374c3cd9b65a1677b17e805bb1e32df8e98756e5f0d2fe1837d62aa4cb",
+    "finished_at": "2026-11-27T21:24:36.086187+00:00"
+  },
+  "scope": "Requested options1,3,4: exact Q4T exponential normalization, native five/six-query IQ3_S, pipelined selected-expert loads. Keep IQ3_S/Q4T and selected small-group/expert reduction.",
+  "implementation": [
+    "Native five/six-query IQ3_S kernels decode once for every live query, preserve original integer lanes/FP32 FMAs and chronological binary64 folds, and write mapped outputs directly. Counts1..4 and7/8 remain supported.",
+    "Exact SIMD Q4T exponential normalization passed1,117,782,017 bit comparisons but its combined full-model trial regressed; normalization is not selected.",
+    "Buffered decode pipeline and bounded row prefetch qualified numerically but did not establish consistent component benefits; both are excluded."
+  ],
+  "measurement": {
+    "status": "passed",
+    "started_at": "2026-11-28T16:10:35.333814+00:00",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-attn-six-04-iq3-only-v1",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/measurement/cpu.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/measurement/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2688",
+      "--max-tokens",
+      "512",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+    ],
+    "binary_sha256": "02998b8f66b99cb3ffdb40bac96af5d75863c489092e40dba96db556bec0725a",
+    "protocol": "One warmup and one measured pass. Compressed IQ3_S weights, Q4T, int8, no repack, seven proposals. No concurrent build, test or model job.",
+    "baseline_rates": {
+      "prefill_tok_s": 25.1,
+      "decode_tok_s": 15.7
+    },
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 512,
+    "prefill_tok_s": 25.09,
+    "decode_tok_s": 15.82,
+    "prefill_seconds": 81.641,
+    "decode_seconds": 32.368,
+    "output_digest": "ef944d4b056d2325",
+    "proposed": 448,
+    "accepted": 448,
+    "finished_at": "2026-11-28T16:14:24.244674+00:00",
+    "output_and_acceptance_match": true
+  },
+  "paired_baseline": {
+    "status": "passed",
+    "started_at": "2026-11-28T15:57:49.470162+00:00",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-attn-six-baseline-confirmation",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/03-baseline-confirmation/cpu.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/before/tests/bin/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2688",
+      "--max-tokens",
+      "512",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+    ],
+    "binary_sha256": "3f524fb6c00626a31b7bedf8aae1847c1cbeeacbbe944e7782f579507cb861e6",
+    "source_manifest": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/source-sha256.json",
+    "source_archive": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/source.tar",
+    "validation": {
+      "status": "passed",
+      "binary_sha256": "3f524fb6c00626a31b7bedf8aae1847c1cbeeacbbe944e7782f579507cb861e6",
+      "cases": [
+        {
+          "filter": "native Inkling",
+          "count": 55,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/00.log"
+        },
+        {
+          "filter": "cpu backend : GSQ small-block",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/01.log"
+        },
+        {
+          "filter": "gguf container : integer products : independent seven-format grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/02.log"
+        },
+        {
+          "filter": "gguf container : integer products : the grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/03.log"
+        },
+        {
+          "filter": "gguf container : integer products : GSQ",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/04.log"
+        },
+        {
+          "filter": "gguf container : the integer kernels prove",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/05.log"
+        },
+        {
+          "filter": "cpu backend : a parallel product",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/06.log"
+        },
+        {
+          "filter": "cpu backend : the partition covers",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/07.log"
+        },
+        {
+          "filter": "llama inference : the vectorized exponential",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/08.log"
+        },
+        {
+          "filter": "llama inference : one run of an attention head",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/09.log"
+        },
+        {
+          "filter": "llama inference : the kernels that read a byte context",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/10.log"
+        },
+        {
+          "filter": "llama inference : the kernels that read a half-precision context",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/11.log"
+        },
+        {
+          "filter": "llama inference : the attention dot product",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/12.log"
+        },
+        {
+          "filter": "llama inference : on the device too, a token at a time",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/13.log"
+        },
+        {
+          "filter": "llama inference : a batch's mixture gathered",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/14.log"
+        },
+        {
+          "filter": "llama inference : rarer forms --",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/15.log"
+        }
+      ]
+    },
+    "protocol": "One targeted paired baseline confirmation, one warmup plus one measured 2048/512 pass with the unchanged frozen preceding binary. No concurrent build, test or model work.",
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 512,
+    "prefill_tok_s": 25.1,
+    "decode_tok_s": 15.7,
+    "prefill_seconds": 81.593,
+    "decode_seconds": 32.616,
+    "output_digest": "ef944d4b056d2325",
+    "proposed": 448,
+    "accepted": 448,
+    "finished_at": "2026-11-28T16:01:39.197051+00:00",
+    "output_and_acceptance_match": true
+  },
+  "combined_experiment": {
+    "schema": "model_runner.inkling2_gsq_attn_six.v1",
+    "status": "qualified and measured",
+    "checkpoint": {
+      "status": "complete",
+      "started_at": "2026-11-27T20:13:22.505900+00:00",
+      "repository": "ISTA-DASLab/Inkling-2-Mini-GSQ-RCO-GGUF",
+      "filename": "Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "destination": "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "partial": "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf.part",
+      "revision": "f0da1097633dd7c2f5733e4077cff861be122245",
+      "expected_sha256": "8a3515374c3cd9b65a1677b17e805bb1e32df8e98756e5f0d2fe1837d62aa4cb",
+      "expected_bytes": 11425259648,
+      "method": "Eight concurrent HTTP ranges; validated Content-Range, resumable pieces, final pinned SHA-256.",
+      "piece_directory": "/home/bent/models/.Inkling-2-Mini-GSQ-RCO-IQ3_S.download",
+      "connections": 8,
+      "superseded_method": "Single curl stream; its downloaded prefix retained.",
+      "parallel_started_at": "2026-11-27T20:19:21.896223+00:00",
+      "actual_sha256": "8a3515374c3cd9b65a1677b17e805bb1e32df8e98756e5f0d2fe1837d62aa4cb",
+      "finished_at": "2026-11-27T21:24:36.086187+00:00"
+    },
+    "scope": "Requested options1,3,4: exact Q4T exponential normalization, native five/six-query IQ3_S, pipelined selected-expert loads. Keep IQ3_S/Q4T and selected small-group/expert reduction.",
+    "implementation": [
+      "Q4T probabilities use SIMD binary64 range reduction/polynomial evaluation with a conservative binary32 midpoint guard. Binary32 subtraction/probability rounding and the chronological binary64 denominator sum are preserved. Uncertain lanes and other domains use Numerics.Exp. The existing SiTU scale table is shared without changing its arithmetic.",
+      "Native five/six-query IQ3_S kernels decode each block once, preserve integer lanes/FP32 FMA chains and ordered binary64 folds, and write mapped outputs directly. Existing one-to-four and seven/eight-query support remains.",
+      "Explicit decode pipelining and bounded next-row prefetch were implemented and numerically qualified, then excluded because their hot/cold component comparisons did not establish consistent benefits. No loading experiment remains active."
+    ],
+    "component": {
+      "status": "passed",
+      "normalization": {
+        "scalar_seconds": 0.04185012,
+        "candidate_seconds": 0.035686969,
+        "time_reduction_percent": 14.726722408442317
+      },
+      "direct_iq3": [
+        {
+          "queries": 1,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 16170.3874355742,
+          "seconds": 0.506605054
+        },
+        {
+          "queries": 1,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 16462.0538736428,
+          "seconds": 0.497629279
+        },
+        {
+          "queries": 1,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 15729.0203755289,
+          "seconds": 0.260410369
+        },
+        {
+          "queries": 1,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 16073.2317156365,
+          "seconds": 0.254833631
+        },
+        {
+          "queries": 2,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 30078.5417476482,
+          "seconds": 0.544707258
+        },
+        {
+          "queries": 2,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 30182.5727133114,
+          "seconds": 0.542829803
+        },
+        {
+          "queries": 2,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 29494.3791047417,
+          "seconds": 0.277747837
+        },
+        {
+          "queries": 2,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 27617.3456956241,
+          "seconds": 0.296625175
+        },
+        {
+          "queries": 3,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 48590.1647527673,
+          "seconds": 0.505781368
+        },
+        {
+          "queries": 3,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 67090.7039755553,
+          "seconds": 0.366310063
+        },
+        {
+          "queries": 3,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 56233.951065818,
+          "seconds": 0.218515679
+        },
+        {
+          "queries": 3,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 62879.9836954167,
+          "seconds": 0.195419898
+        },
+        {
+          "queries": 4,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 80358.799292201,
+          "seconds": 0.40777115
+        },
+        {
+          "queries": 4,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 83389.4993472904,
+          "seconds": 0.392951154
+        },
+        {
+          "queries": 4,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 75191.2507636841,
+          "seconds": 0.217897692
+        },
+        {
+          "queries": 4,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 77704.3487069914,
+          "seconds": 0.21085049
+        },
+        {
+          "queries": 5,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 59432.4607723813,
+          "seconds": 0.689185665
+        },
+        {
+          "queries": 5,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 96215.9495577549,
+          "seconds": 0.425709045
+        },
+        {
+          "queries": 5,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 55845.0103759375,
+          "seconds": 0.366729272
+        },
+        {
+          "queries": 5,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 90386.94979802,
+          "seconds": 0.226581382
+        },
+        {
+          "queries": 6,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 65115.3776677001,
+          "seconds": 0.754844735
+        },
+        {
+          "queries": 6,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 96034.322704448,
+          "seconds": 0.511817011
+        },
+        {
+          "queries": 6,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 56399.049307002,
+          "seconds": 0.435752026
+        },
+        {
+          "queries": 6,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 89119.4438685611,
+          "seconds": 0.275764737
+        }
+      ],
+      "decode_pipeline": [
+        {
+          "queries": 1,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 16226.267921952,
+          "seconds": 0.504860393
+        },
+        {
+          "queries": 1,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 16241.594897814,
+          "seconds": 0.504383963
+        },
+        {
+          "queries": 1,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 15609.3909068187,
+          "seconds": 0.262406139
+        },
+        {
+          "queries": 1,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 15624.3217285871,
+          "seconds": 0.26215538
+        },
+        {
+          "queries": 2,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 30220.0266762933,
+          "seconds": 0.542157033
+        },
+        {
+          "queries": 2,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 29091.7530720054,
+          "seconds": 0.563183661
+        },
+        {
+          "queries": 2,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 29240.1855336888,
+          "seconds": 0.280162381
+        },
+        {
+          "queries": 2,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 28448.3595511486,
+          "seconds": 0.287960365
+        },
+        {
+          "queries": 3,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 41176.34049295,
+          "seconds": 0.5968476
+        },
+        {
+          "queries": 3,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 42276.5255308602,
+          "seconds": 0.58131551
+        },
+        {
+          "queries": 3,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 61025.8217147007,
+          "seconds": 0.201357387
+        },
+        {
+          "queries": 3,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 60568.7222615474,
+          "seconds": 0.202876989
+        },
+        {
+          "queries": 4,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 79845.2049822053,
+          "seconds": 0.410394087
+        },
+        {
+          "queries": 4,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 79256.7985894322,
+          "seconds": 0.413440873
+        },
+        {
+          "queries": 4,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 73662.6454328636,
+          "seconds": 0.222419381
+        },
+        {
+          "queries": 4,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 74045.71338478,
+          "seconds": 0.221268717
+        },
+        {
+          "queries": 5,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 59214.5333536897,
+          "seconds": 0.691722077
+        },
+        {
+          "queries": 5,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 91422.9566713619,
+          "seconds": 0.448027514
+        },
+        {
+          "queries": 5,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 55955.5663623386,
+          "seconds": 0.366004695
+        },
+        {
+          "queries": 5,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 84468.6718852963,
+          "seconds": 0.242456754
+        },
+        {
+          "queries": 6,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 63338.1612444693,
+          "seconds": 0.776025054
+        },
+        {
+          "queries": 6,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 88771.6951926679,
+          "seconds": 0.553690001
+        },
+        {
+          "queries": 6,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 58692.690952339,
+          "seconds": 0.418723347
+        },
+        {
+          "queries": 6,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 85804.6523299252,
+          "seconds": 0.286418036
+        }
+      ],
+      "row_prefetch": [
+        {
+          "queries": 1,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 23009.632002731,
+          "seconds": 0.356024816
+        },
+        {
+          "queries": 1,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 23393.0937116568,
+          "seconds": 0.350188825
+        },
+        {
+          "queries": 1,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 20741.5614608014,
+          "seconds": 0.1974779
+        },
+        {
+          "queries": 1,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 22152.8795747184,
+          "seconds": 0.184896956
+        },
+        {
+          "queries": 2,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 40964.3999862025,
+          "seconds": 0.399957036
+        },
+        {
+          "queries": 2,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 41403.4888125228,
+          "seconds": 0.395715445
+        },
+        {
+          "queries": 2,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 39468.2638157424,
+          "seconds": 0.207559168
+        },
+        {
+          "queries": 2,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 39769.4382353244,
+          "seconds": 0.20598732
+        },
+        {
+          "queries": 3,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 55992.6526047554,
+          "seconds": 0.43891473
+        },
+        {
+          "queries": 3,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 58394.5476942387,
+          "seconds": 0.42086121
+        },
+        {
+          "queries": 3,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 53383.7265053334,
+          "seconds": 0.230182507
+        },
+        {
+          "queries": 3,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 55165.081731549,
+          "seconds": 0.222749602
+        },
+        {
+          "queries": 4,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 67765.969191371,
+          "seconds": 0.483546541
+        },
+        {
+          "queries": 4,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 70957.5702011016,
+          "seconds": 0.461797098
+        },
+        {
+          "queries": 4,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 64818.7645544267,
+          "seconds": 0.252766311
+        },
+        {
+          "queries": 4,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 67011.0011253791,
+          "seconds": 0.244497168
+        },
+        {
+          "queries": 5,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 50571.8886719036,
+          "seconds": 0.809936134
+        },
+        {
+          "queries": 5,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 89416.3083055973,
+          "seconds": 0.458081985
+        },
+        {
+          "queries": 5,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 53647.7112965601,
+          "seconds": 0.381749743
+        },
+        {
+          "queries": 5,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 85909.1386190178,
+          "seconds": 0.238391402
+        },
+        {
+          "queries": 6,
+          "fast": false,
+          "cold": false,
+          "projection_tok_s": 67419.1484174779,
+          "seconds": 0.729051036
+        },
+        {
+          "queries": 6,
+          "fast": true,
+          "cold": false,
+          "projection_tok_s": 98150.3423020146,
+          "seconds": 0.500782767
+        },
+        {
+          "queries": 6,
+          "fast": false,
+          "cold": true,
+          "projection_tok_s": 58081.3628621635,
+          "seconds": 0.423130567
+        },
+        {
+          "queries": 6,
+          "fast": true,
+          "cold": true,
+          "projection_tok_s": 84595.7517855724,
+          "seconds": 0.290511042
+        }
+      ],
+      "loading_decision": "Both loading variants qualified numerically but not selected: explicit pipeline generally lost throughput; row prefetch lacked consistent gains relative to its reference controls. No new prefetch or decode pipeline retained.",
+      "exhaustive": {
+        "status": "passed",
+        "binary_sha256": "e34bb49b04dfadafb62f789e001e83f0ad7991e9000216c2b2117a2b973d62f5",
+        "command": [
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/00-pipeline/full-domain/bin/tests",
+          "test",
+          "--only",
+          "native Inkling : wide probability",
+          "--timed"
+        ],
+        "started_at": "2026-11-28T15:34:52.878020+00:00",
+        "domain": "Every negative binary32 from signed zero through -80 inclusive;1117782017 inputs.",
+        "checked": 1117782017,
+        "returncode": 0,
+        "finished_at": "2026-11-28T15:35:14.355672+00:00"
+      },
+      "math_object_pins": {
+        "obj/release/model_runner-kernels.o": "e3f60a4271b27b4a780b629aeb3bc6578936c28ce7f036bef44d96a365fc19c4"
+      },
+      "component_limitations": "One warmed trial per mode on synthetic compressed experts. Hot versus cold uses one versus32 compressed expert copies (36.5MB). Reference-control and native rates vary; component projections are not model-generation rates."
+    },
+    "measurement": {
+      "status": "passed",
+      "started_at": "2026-11-28T15:52:21.682782+00:00",
+      "command": [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "--unit",
+        "inkling-attn-six-02-pgo-v1",
+        "-p",
+        "MemoryMax=20G",
+        "-p",
+        "MemorySwapMax=0",
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/measurement/cpu.time",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/measurement/tests",
+        "speed",
+        "--model",
+        "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+        "--prompt-file",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+        "--backend",
+        "cpu",
+        "--threads",
+        "8",
+        "--batch-size",
+        "128",
+        "--arith",
+        "int8",
+        "--kv-cache",
+        "q4t",
+        "--repack",
+        "none",
+        "--memory-limit",
+        "24G",
+        "--context-size",
+        "2688",
+        "--max-tokens",
+        "512",
+        "--repeat-penalty",
+        "1",
+        "--ignore-eos",
+        "--draft-tokens",
+        "7",
+        "--repeats",
+        "1",
+        "--wait",
+        "5",
+        "--no-cache",
+        "--draft-model",
+        "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+      ],
+      "binary_sha256": "d4740df6318524f61e33acba3490f0065c3175331012411ade6ba755b842144f",
+      "protocol": "One warmup and one measured pass. Compressed IQ3_S weights, Q4T, int8, no repack, seven proposals. No concurrent build, test or model job.",
+      "baseline_rates": {
+        "prefill_tok_s": 25.0,
+        "decode_tok_s": 15.76
+      },
+      "returncode": 0,
+      "prompt_tokens": 2048,
+      "generated_tokens": 512,
+      "prefill_tok_s": 23.87,
+      "decode_tok_s": 15.31,
+      "prefill_seconds": 85.804,
+      "decode_seconds": 33.439,
+      "output_digest": "ef944d4b056d2325",
+      "proposed": 448,
+      "accepted": 448,
+      "finished_at": "2026-11-28T15:56:28.746627+00:00",
+      "output_and_acceptance_match": true
+    },
+    "paired_baseline": {
+      "status": "passed",
+      "started_at": "2026-11-28T15:57:49.470162+00:00",
+      "command": [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "--unit",
+        "inkling-attn-six-baseline-confirmation",
+        "-p",
+        "MemoryMax=20G",
+        "-p",
+        "MemorySwapMax=0",
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/03-baseline-confirmation/cpu.time",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/before/tests/bin/tests",
+        "speed",
+        "--model",
+        "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+        "--prompt-file",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+        "--backend",
+        "cpu",
+        "--threads",
+        "8",
+        "--batch-size",
+        "128",
+        "--arith",
+        "int8",
+        "--kv-cache",
+        "q4t",
+        "--repack",
+        "none",
+        "--memory-limit",
+        "24G",
+        "--context-size",
+        "2688",
+        "--max-tokens",
+        "512",
+        "--repeat-penalty",
+        "1",
+        "--ignore-eos",
+        "--draft-tokens",
+        "7",
+        "--repeats",
+        "1",
+        "--wait",
+        "5",
+        "--no-cache",
+        "--draft-model",
+        "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+      ],
+      "binary_sha256": "3f524fb6c00626a31b7bedf8aae1847c1cbeeacbbe944e7782f579507cb861e6",
+      "source_manifest": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/source-sha256.json",
+      "source_archive": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/source.tar",
+      "validation": {
+        "status": "passed",
+        "binary_sha256": "3f524fb6c00626a31b7bedf8aae1847c1cbeeacbbe944e7782f579507cb861e6",
+        "cases": [
+          {
+            "filter": "native Inkling",
+            "count": 55,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/00.log"
+          },
+          {
+            "filter": "cpu backend : GSQ small-block",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/01.log"
+          },
+          {
+            "filter": "gguf container : integer products : independent seven-format grid",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/02.log"
+          },
+          {
+            "filter": "gguf container : integer products : the grid",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/03.log"
+          },
+          {
+            "filter": "gguf container : integer products : GSQ",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/04.log"
+          },
+          {
+            "filter": "gguf container : the integer kernels prove",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/05.log"
+          },
+          {
+            "filter": "cpu backend : a parallel product",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/06.log"
+          },
+          {
+            "filter": "cpu backend : the partition covers",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/07.log"
+          },
+          {
+            "filter": "llama inference : the vectorized exponential",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/08.log"
+          },
+          {
+            "filter": "llama inference : one run of an attention head",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/09.log"
+          },
+          {
+            "filter": "llama inference : the kernels that read a byte context",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/10.log"
+          },
+          {
+            "filter": "llama inference : the kernels that read a half-precision context",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/11.log"
+          },
+          {
+            "filter": "llama inference : the attention dot product",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/12.log"
+          },
+          {
+            "filter": "llama inference : on the device too, a token at a time",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/13.log"
+          },
+          {
+            "filter": "llama inference : a batch's mixture gathered",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/14.log"
+          },
+          {
+            "filter": "llama inference : rarer forms --",
+            "count": 1,
+            "returncode": 0,
+            "log": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/qualification/15.log"
+          }
+        ]
+      },
+      "protocol": "One targeted paired baseline confirmation, one warmup plus one measured 2048/512 pass with the unchanged frozen preceding binary. No concurrent build, test or model work.",
+      "returncode": 0,
+      "prompt_tokens": 2048,
+      "generated_tokens": 512,
+      "prefill_tok_s": 25.1,
+      "decode_tok_s": 15.7,
+      "prefill_seconds": 81.593,
+      "decode_seconds": 32.616,
+      "output_digest": "ef944d4b056d2325",
+      "proposed": 448,
+      "accepted": 448,
+      "finished_at": "2026-11-28T16:01:39.197051+00:00",
+      "output_and_acceptance_match": true
+    },
+    "prior_selected_measurement": {
+      "status": "passed",
+      "started_at": "2026-11-28T14:52:06.409810+00:00",
+      "command": [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "--unit",
+        "inkling-small-moe-02-pgo-v1",
+        "-p",
+        "MemoryMax=20G",
+        "-p",
+        "MemorySwapMax=0",
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-small-moe/02-pgo/measurement/cpu.time",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-small-moe/02-pgo/measurement/tests",
+        "speed",
+        "--model",
+        "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+        "--prompt-file",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+        "--backend",
+        "cpu",
+        "--threads",
+        "8",
+        "--batch-size",
+        "128",
+        "--arith",
+        "int8",
+        "--kv-cache",
+        "q4t",
+        "--repack",
+        "none",
+        "--memory-limit",
+        "24G",
+        "--context-size",
+        "2688",
+        "--max-tokens",
+        "512",
+        "--repeat-penalty",
+        "1",
+        "--ignore-eos",
+        "--draft-tokens",
+        "7",
+        "--repeats",
+        "1",
+        "--wait",
+        "5",
+        "--no-cache",
+        "--draft-model",
+        "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+      ],
+      "binary_sha256": "3f524fb6c00626a31b7bedf8aae1847c1cbeeacbbe944e7782f579507cb861e6",
+      "protocol": "One warmup and one measured pass. Compressed IQ3_S weights, Q4T, int8, no repack, seven proposals. No concurrent build, test or model job.",
+      "baseline_rates": {
+        "prefill_tok_s": 25.07,
+        "decode_tok_s": 15.73
+      },
+      "returncode": 0,
+      "prompt_tokens": 2048,
+      "generated_tokens": 512,
+      "prefill_tok_s": 25.0,
+      "decode_tok_s": 15.76,
+      "prefill_seconds": 81.932,
+      "decode_seconds": 32.48,
+      "output_digest": "ef944d4b056d2325",
+      "proposed": 448,
+      "accepted": 448,
+      "finished_at": "2026-11-28T14:55:55.581247+00:00",
+      "output_and_acceptance_match": true
+    },
+    "single_trial_change_percent": {
+      "prefill_tok_s": -4.9,
+      "decode_tok_s": -2.484
+    },
+    "validation": {
+      "status": "passed",
+      "binary_sha256": "d4740df6318524f61e33acba3490f0065c3175331012411ade6ba755b842144f",
+      "cases": [
+        {
+          "filter": "native Inkling",
+          "count": 56,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/00.log"
+        },
+        {
+          "filter": "cpu backend : GSQ small-block",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/01.log"
+        },
+        {
+          "filter": "gguf container : integer products : independent seven-format grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/02.log"
+        },
+        {
+          "filter": "gguf container : integer products : the grid",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/03.log"
+        },
+        {
+          "filter": "gguf container : integer products : GSQ",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/04.log"
+        },
+        {
+          "filter": "gguf container : the integer kernels prove",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/05.log"
+        },
+        {
+          "filter": "cpu backend : a parallel product",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/06.log"
+        },
+        {
+          "filter": "cpu backend : the partition covers",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/07.log"
+        },
+        {
+          "filter": "llama inference : the vectorized exponential",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/08.log"
+        },
+        {
+          "filter": "llama inference : one run of an attention head",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/09.log"
+        },
+        {
+          "filter": "llama inference : the kernels that read a byte context",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/10.log"
+        },
+        {
+          "filter": "llama inference : the kernels that read a half-precision context",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/11.log"
+        },
+        {
+          "filter": "llama inference : the attention dot product",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/12.log"
+        },
+        {
+          "filter": "llama inference : on the device too, a token at a time",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/13.log"
+        },
+        {
+          "filter": "llama inference : a batch's mixture gathered",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/14.log"
+        },
+        {
+          "filter": "llama inference : rarer forms --",
+          "count": 1,
+          "returncode": 0,
+          "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/qualification/15.log"
+        }
+      ]
+    },
+    "mathematical_tests": {
+      "probability_exp": "1117782017 negative binary32 inputs from signed zero through -80 match the old Numerics.Exp result bits. Additional shifted maxima, non-finite/clamped values, scalar tails and guards match. Independent C exp oracle and unchanged SiTU fixtures pass. Math object is unchanged after exhaustive qualification.",
+      "iq3": "All counts1..8 match unchanged native Accumulate_Rows bits and independent GGML fixtures with original tolerances. Input/result mappings, invalid data, signed-byte guards and unsupported counts are tested.",
+      "scope": "71 focused native, CPU/Vulkan component and legacy checks; no full release or new full-checkpoint conformance."
+    },
+    "source_manifest": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/source-sha256.json",
+    "source_archive": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/source.tar",
+    "binary_sha256": {
+      "bin/model_runner": "16a5d4f6fd472d52c6200316b2492ca2f47fcb115283fa9244b619ee1b3a3fa8",
+      "tests/bin/tests": "d4740df6318524f61e33acba3490f0065c3175331012411ade6ba755b842144f",
+      "tests/bin/no_adapter_probe": "dc894f6a8a545875eb85afaffc5f3308604affc182139834f251aa5da941e5d8"
+    },
+    "elf_proof": "artifacts/inkling2/obj/gsq-attn-six-pipeline/elf-proof.json",
+    "candidate_patch": "artifacts/inkling2/obj/gsq-attn-six-pipeline/candidate.patch",
+    "pgo": {
+      "selected": true,
+      "environment": {
+        "MODEL_RUNNER_PGO": "use",
+        "MODEL_RUNNER_PGO_DIR": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/pgo-data",
+        "MODEL_RUNNER_PGO_UNITS": "decoder"
+      },
+      "matched_training": {
+        "status": "passed",
+        "started_at": "2026-11-28T15:44:27.166576+00:00",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-attn-six-training",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "/usr/bin/time",
+          "-v",
+          "-o",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/01-training/training.time",
+          "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+          "speed",
+          "--model",
+          "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+          "--prompt-file",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+          "--backend",
+          "cpu",
+          "--threads",
+          "8",
+          "--batch-size",
+          "128",
+          "--arith",
+          "int8",
+          "--kv-cache",
+          "q4t",
+          "--repack",
+          "none",
+          "--memory-limit",
+          "24G",
+          "--context-size",
+          "2176",
+          "--max-tokens",
+          "16",
+          "--repeat-penalty",
+          "1",
+          "--ignore-eos",
+          "--draft-tokens",
+          "7",
+          "--repeats",
+          "1",
+          "--wait",
+          "5",
+          "--no-cache",
+          "--draft-model",
+          "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf",
+          "--turns",
+          "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/training-turns"
+        ],
+        "binary_sha256": "618bcd60f5bb5ab391741add4e8499eeb6346ed1a736517b5cdfa7cb1da06215",
+        "protocol": "Fresh matched decoder/CPU profiles: one actual 2048/16 turn, eight workers, batch128, int8/Q4T, seven DSpark proposals. Existing one-turn mode skips an unnecessary training warmup. Training timings are not speed results.",
+        "finished_at": "2026-11-28T15:49:22.958632+00:00",
+        "prompt_tokens": 2048,
+        "generated_tokens": 16,
+        "output_digest": "4f1d96c1112e7b25",
+        "proposed": 14,
+        "accepted": 14
+      },
+      "profiled_units": [
+        "llama",
+        "backend-cpu"
+      ],
+      "profile_manifest": "artifacts/inkling2/obj/gsq-attn-six-pipeline/profile-sha256.json",
+      "profile_archive": "artifacts/inkling2/obj/gsq-attn-six-pipeline/profiles.tar.gz",
+      "archive_sha256": "1fba624391868bbf8a00ffee2cb85bf44c071cf38169550431e4c6aa25f7b532",
+      "compiled_flags": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/compiled-switches.json",
+      "production_has_gcov_instrumentation": false,
+      "scope": "Fresh matched decoder/CPU profiles from one actual 2048/16 turn, eight workers, batch128, int8/Q4T, seven proposals plus focused fixtures. Training timings excluded from throughput. New math compiled normally."
+    },
+    "protected_kernel_sha256": "c551092b42e47746131552936b7d44ebfcf3a41e832975288a15cbbaa02873a5",
+    "existing_fixture_files_unchanged": 254,
+    "peak_rss_bytes": 4577767424,
+    "memory": "Native IQ3_S weights and Q4T retained. No weight repacking, expanded weights, persistent buffers or new cache. Bounded eight-lane automatic probability workspace; one shared 256-byte scale table replaces the SiTU-local table. Existing model/session/backend ownership retained.",
+    "runtime_dependencies": "Existing native Ada CPU/Vulkan engine; no new runtime dependency or external model executor.",
+    "assembly_proof": "artifacts/inkling2/obj/gsq-attn-six-pipeline/02-pgo/kernel-assembly.txt",
+    "build_warnings": [
+      "/home/bent/.local/share/alire/toolchains/gnat_native_15.2.1_4640d4b3/lib/gcc/x86_64-pc-linux-gnu/15.2.0/adainclude/s-fatgen.ads:41:16: warning: Missing counts for called function _GLOBAL.SZ1_model_runner.llama/1980"
+    ],
+    "limitations": [
+      "One warmup and one measured 2048/512 pass per build; no confidence interval or repeatability claim.",
+      "Full inference includes fresh matched decoder/CPU profiles; their contribution is not separated.",
+      "Component normalization and projection rates do not establish model-generation gains; loading experiments were rejected before full-model measurement.",
+      "Focused CPU/Vulkan component, native and legacy regressions; no full release-gate, full-checkpoint independent conformance, or coding-quality benchmark."
+    ],
+    "finished_at": "2026-11-28T16:03:22.353670+00:00",
+    "selected": false,
+    "decision": "Combined normalization/five-six candidate rejected after23.87/15.31 versus25.10/15.70 tok/s. Isolate option3 using the original matched decoder profiles. Loading experiments also rejected."
+  },
+  "component": {
+    "status": "passed",
+    "normalization": {
+      "scalar_seconds": 0.04185012,
+      "candidate_seconds": 0.035686969,
+      "time_reduction_percent": 14.726722408442317
+    },
+    "direct_iq3": [
+      {
+        "queries": 1,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 16170.3874355742,
+        "seconds": 0.506605054
+      },
+      {
+        "queries": 1,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 16462.0538736428,
+        "seconds": 0.497629279
+      },
+      {
+        "queries": 1,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 15729.0203755289,
+        "seconds": 0.260410369
+      },
+      {
+        "queries": 1,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 16073.2317156365,
+        "seconds": 0.254833631
+      },
+      {
+        "queries": 2,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 30078.5417476482,
+        "seconds": 0.544707258
+      },
+      {
+        "queries": 2,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 30182.5727133114,
+        "seconds": 0.542829803
+      },
+      {
+        "queries": 2,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 29494.3791047417,
+        "seconds": 0.277747837
+      },
+      {
+        "queries": 2,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 27617.3456956241,
+        "seconds": 0.296625175
+      },
+      {
+        "queries": 3,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 48590.1647527673,
+        "seconds": 0.505781368
+      },
+      {
+        "queries": 3,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 67090.7039755553,
+        "seconds": 0.366310063
+      },
+      {
+        "queries": 3,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 56233.951065818,
+        "seconds": 0.218515679
+      },
+      {
+        "queries": 3,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 62879.9836954167,
+        "seconds": 0.195419898
+      },
+      {
+        "queries": 4,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 80358.799292201,
+        "seconds": 0.40777115
+      },
+      {
+        "queries": 4,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 83389.4993472904,
+        "seconds": 0.392951154
+      },
+      {
+        "queries": 4,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 75191.2507636841,
+        "seconds": 0.217897692
+      },
+      {
+        "queries": 4,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 77704.3487069914,
+        "seconds": 0.21085049
+      },
+      {
+        "queries": 5,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 59432.4607723813,
+        "seconds": 0.689185665
+      },
+      {
+        "queries": 5,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 96215.9495577549,
+        "seconds": 0.425709045
+      },
+      {
+        "queries": 5,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 55845.0103759375,
+        "seconds": 0.366729272
+      },
+      {
+        "queries": 5,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 90386.94979802,
+        "seconds": 0.226581382
+      },
+      {
+        "queries": 6,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 65115.3776677001,
+        "seconds": 0.754844735
+      },
+      {
+        "queries": 6,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 96034.322704448,
+        "seconds": 0.511817011
+      },
+      {
+        "queries": 6,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 56399.049307002,
+        "seconds": 0.435752026
+      },
+      {
+        "queries": 6,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 89119.4438685611,
+        "seconds": 0.275764737
+      }
+    ],
+    "decode_pipeline": [
+      {
+        "queries": 1,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 16226.267921952,
+        "seconds": 0.504860393
+      },
+      {
+        "queries": 1,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 16241.594897814,
+        "seconds": 0.504383963
+      },
+      {
+        "queries": 1,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 15609.3909068187,
+        "seconds": 0.262406139
+      },
+      {
+        "queries": 1,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 15624.3217285871,
+        "seconds": 0.26215538
+      },
+      {
+        "queries": 2,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 30220.0266762933,
+        "seconds": 0.542157033
+      },
+      {
+        "queries": 2,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 29091.7530720054,
+        "seconds": 0.563183661
+      },
+      {
+        "queries": 2,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 29240.1855336888,
+        "seconds": 0.280162381
+      },
+      {
+        "queries": 2,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 28448.3595511486,
+        "seconds": 0.287960365
+      },
+      {
+        "queries": 3,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 41176.34049295,
+        "seconds": 0.5968476
+      },
+      {
+        "queries": 3,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 42276.5255308602,
+        "seconds": 0.58131551
+      },
+      {
+        "queries": 3,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 61025.8217147007,
+        "seconds": 0.201357387
+      },
+      {
+        "queries": 3,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 60568.7222615474,
+        "seconds": 0.202876989
+      },
+      {
+        "queries": 4,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 79845.2049822053,
+        "seconds": 0.410394087
+      },
+      {
+        "queries": 4,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 79256.7985894322,
+        "seconds": 0.413440873
+      },
+      {
+        "queries": 4,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 73662.6454328636,
+        "seconds": 0.222419381
+      },
+      {
+        "queries": 4,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 74045.71338478,
+        "seconds": 0.221268717
+      },
+      {
+        "queries": 5,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 59214.5333536897,
+        "seconds": 0.691722077
+      },
+      {
+        "queries": 5,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 91422.9566713619,
+        "seconds": 0.448027514
+      },
+      {
+        "queries": 5,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 55955.5663623386,
+        "seconds": 0.366004695
+      },
+      {
+        "queries": 5,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 84468.6718852963,
+        "seconds": 0.242456754
+      },
+      {
+        "queries": 6,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 63338.1612444693,
+        "seconds": 0.776025054
+      },
+      {
+        "queries": 6,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 88771.6951926679,
+        "seconds": 0.553690001
+      },
+      {
+        "queries": 6,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 58692.690952339,
+        "seconds": 0.418723347
+      },
+      {
+        "queries": 6,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 85804.6523299252,
+        "seconds": 0.286418036
+      }
+    ],
+    "row_prefetch": [
+      {
+        "queries": 1,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 23009.632002731,
+        "seconds": 0.356024816
+      },
+      {
+        "queries": 1,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 23393.0937116568,
+        "seconds": 0.350188825
+      },
+      {
+        "queries": 1,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 20741.5614608014,
+        "seconds": 0.1974779
+      },
+      {
+        "queries": 1,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 22152.8795747184,
+        "seconds": 0.184896956
+      },
+      {
+        "queries": 2,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 40964.3999862025,
+        "seconds": 0.399957036
+      },
+      {
+        "queries": 2,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 41403.4888125228,
+        "seconds": 0.395715445
+      },
+      {
+        "queries": 2,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 39468.2638157424,
+        "seconds": 0.207559168
+      },
+      {
+        "queries": 2,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 39769.4382353244,
+        "seconds": 0.20598732
+      },
+      {
+        "queries": 3,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 55992.6526047554,
+        "seconds": 0.43891473
+      },
+      {
+        "queries": 3,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 58394.5476942387,
+        "seconds": 0.42086121
+      },
+      {
+        "queries": 3,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 53383.7265053334,
+        "seconds": 0.230182507
+      },
+      {
+        "queries": 3,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 55165.081731549,
+        "seconds": 0.222749602
+      },
+      {
+        "queries": 4,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 67765.969191371,
+        "seconds": 0.483546541
+      },
+      {
+        "queries": 4,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 70957.5702011016,
+        "seconds": 0.461797098
+      },
+      {
+        "queries": 4,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 64818.7645544267,
+        "seconds": 0.252766311
+      },
+      {
+        "queries": 4,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 67011.0011253791,
+        "seconds": 0.244497168
+      },
+      {
+        "queries": 5,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 50571.8886719036,
+        "seconds": 0.809936134
+      },
+      {
+        "queries": 5,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 89416.3083055973,
+        "seconds": 0.458081985
+      },
+      {
+        "queries": 5,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 53647.7112965601,
+        "seconds": 0.381749743
+      },
+      {
+        "queries": 5,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 85909.1386190178,
+        "seconds": 0.238391402
+      },
+      {
+        "queries": 6,
+        "fast": false,
+        "cold": false,
+        "projection_tok_s": 67419.1484174779,
+        "seconds": 0.729051036
+      },
+      {
+        "queries": 6,
+        "fast": true,
+        "cold": false,
+        "projection_tok_s": 98150.3423020146,
+        "seconds": 0.500782767
+      },
+      {
+        "queries": 6,
+        "fast": false,
+        "cold": true,
+        "projection_tok_s": 58081.3628621635,
+        "seconds": 0.423130567
+      },
+      {
+        "queries": 6,
+        "fast": true,
+        "cold": true,
+        "projection_tok_s": 84595.7517855724,
+        "seconds": 0.290511042
+      }
+    ],
+    "loading_decision": "Both loading variants qualified numerically but not selected: explicit pipeline generally lost throughput; row prefetch lacked consistent gains relative to its reference controls. No new prefetch or decode pipeline retained.",
+    "exhaustive": {
+      "status": "passed",
+      "binary_sha256": "e34bb49b04dfadafb62f789e001e83f0ad7991e9000216c2b2117a2b973d62f5",
+      "command": [
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-attn-six-pipeline/00-pipeline/full-domain/bin/tests",
+        "test",
+        "--only",
+        "native Inkling : wide probability",
+        "--timed"
+      ],
+      "started_at": "2026-11-28T15:34:52.878020+00:00",
+      "domain": "Every negative binary32 from signed zero through -80 inclusive;1117782017 inputs.",
+      "checked": 1117782017,
+      "returncode": 0,
+      "finished_at": "2026-11-28T15:35:14.355672+00:00"
+    },
+    "math_object_pins": {
+      "obj/release/model_runner-kernels.o": "e3f60a4271b27b4a780b629aeb3bc6578936c28ce7f036bef44d96a365fc19c4"
+    },
+    "component_limitations": "One warmed trial per mode on synthetic compressed experts. Hot versus cold uses one versus32 compressed expert copies (36.5MB). Reference-control and native rates vary; component projections are not model-generation rates."
+  },
+  "validation": {
+    "status": "passed",
+    "binary_sha256": "02998b8f66b99cb3ffdb40bac96af5d75863c489092e40dba96db556bec0725a",
+    "cases": [
+      {
+        "filter": "native Inkling",
+        "count": 55,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/00.log"
+      },
+      {
+        "filter": "cpu backend : GSQ small-block",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/01.log"
+      },
+      {
+        "filter": "gguf container : integer products : independent seven-format grid",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/02.log"
+      },
+      {
+        "filter": "gguf container : integer products : the grid",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/03.log"
+      },
+      {
+        "filter": "gguf container : integer products : GSQ",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/04.log"
+      },
+      {
+        "filter": "gguf container : the integer kernels prove",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/05.log"
+      },
+      {
+        "filter": "cpu backend : a parallel product",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/06.log"
+      },
+      {
+        "filter": "cpu backend : the partition covers",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/07.log"
+      },
+      {
+        "filter": "llama inference : the vectorized exponential",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/08.log"
+      },
+      {
+        "filter": "llama inference : one run of an attention head",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/09.log"
+      },
+      {
+        "filter": "llama inference : the kernels that read a byte context",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/10.log"
+      },
+      {
+        "filter": "llama inference : the kernels that read a half-precision context",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/11.log"
+      },
+      {
+        "filter": "llama inference : the attention dot product",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/12.log"
+      },
+      {
+        "filter": "llama inference : on the device too, a token at a time",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/13.log"
+      },
+      {
+        "filter": "llama inference : a batch's mixture gathered",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/14.log"
+      },
+      {
+        "filter": "llama inference : rarer forms --",
+        "count": 1,
+        "returncode": 0,
+        "log": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/qualification/15.log"
+      }
+    ]
+  },
+  "source_manifest": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/source-sha256.json",
+  "source_archive": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/source.tar",
+  "binary_sha256": {
+    "bin/model_runner": "1d0c8a646380996a28c04e1c10b55abcc15a862cfbb15726f143f3d1556d2e58",
+    "tests/bin/tests": "02998b8f66b99cb3ffdb40bac96af5d75863c489092e40dba96db556bec0725a",
+    "tests/bin/no_adapter_probe": "be2e40760b486b8c9bde91cb7644ddc4afb18a179ee1eda8491d94bd5a043e3a"
+  },
+  "elf_proof": "artifacts/inkling2/obj/gsq-attn-six-pipeline/iq3-only-elf-proof.json",
+  "candidate_patch": "artifacts/inkling2/obj/gsq-attn-six-pipeline/iq3-only.patch",
+  "pgo": {
+    "selected": true,
+    "environment": {
+      "MODEL_RUNNER_PGO": "use",
+      "MODEL_RUNNER_PGO_DIR": "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-small-moe/pgo-data",
+      "MODEL_RUNNER_PGO_UNITS": "decoder"
+    },
+    "matched_training": {
+      "status": "passed",
+      "started_at": "2026-11-28T14:44:50.216717+00:00",
+      "command": [
+        "systemd-run",
+        "--user",
+        "--scope",
+        "--quiet",
+        "--unit",
+        "inkling-small-moe-training",
+        "-p",
+        "MemoryMax=20G",
+        "-p",
+        "MemorySwapMax=0",
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-small-moe/01-training/training.time",
+        "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+        "speed",
+        "--model",
+        "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+        "--prompt-file",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+        "--backend",
+        "cpu",
+        "--threads",
+        "8",
+        "--batch-size",
+        "128",
+        "--arith",
+        "int8",
+        "--kv-cache",
+        "q4t",
+        "--repack",
+        "none",
+        "--memory-limit",
+        "24G",
+        "--context-size",
+        "2176",
+        "--max-tokens",
+        "16",
+        "--repeat-penalty",
+        "1",
+        "--ignore-eos",
+        "--draft-tokens",
+        "7",
+        "--repeats",
+        "1",
+        "--wait",
+        "5",
+        "--no-cache",
+        "--draft-model",
+        "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf",
+        "--turns",
+        "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-small-moe/training-turns"
+      ],
+      "binary_sha256": "e52491400e6d2c2a6d43255518d9b5c34ccf13db27b5adc3ffc302403a566271",
+      "protocol": "Fresh matched decoder/CPU profiles: one actual 2048/16 turn, eight workers, batch128, int8/Q4T, seven DSpark proposals. Existing one-turn mode skips an unnecessary training warmup. Training timings are not speed results.",
+      "finished_at": "2026-11-28T14:49:41.436791+00:00",
+      "prompt_tokens": 2048,
+      "generated_tokens": 16,
+      "output_digest": "4f1d96c1112e7b25",
+      "proposed": 14,
+      "accepted": 14
+    },
+    "profiled_units": [
+      "llama",
+      "backend-cpu"
+    ],
+    "profile_manifest": "artifacts/inkling2/obj/gsq-small-moe/profile-sha256.json",
+    "profile_archive": "artifacts/inkling2/obj/gsq-small-moe/profiles.tar.gz",
+    "archive_sha256": "6c083fb01eba12e5db9ff8929af8ade726ca35fa7a3c34b918f8718952b0839b",
+    "compiled_flags": "artifacts/inkling2/obj/gsq-small-moe/02-pgo/compiled-switches.json",
+    "production_has_gcov_instrumentation": false,
+    "scope": "Fresh matched decoder/CPU profiles from one actual 2048/16 turn, eight workers, batch128, int8/Q4T, seven proposals plus focused fixtures. Training timings excluded from throughput. New math compiled normally.",
+    "reuse_reason": "Profiled decoder/CPU sources and executable code are restored to the original selection; five/six-query code compiles normally. No retraining required.",
+    "unchanged_units": "artifacts/inkling2/obj/gsq-attn-six-pipeline/iq3-only-elf-proof.json",
+    "candidate_compiled_flags": "artifacts/inkling2/obj/gsq-attn-six-pipeline/04-iq3-only/compiled-switches.json"
+  },
+  "protected_kernel_sha256": "c551092b42e47746131552936b7d44ebfcf3a41e832975288a15cbbaa02873a5",
+  "existing_fixture_files_unchanged": 254,
+  "memory": "Original IQ3_S weights, Q4T, math workspaces and shared model/session ownership retained. No repacking, expanded weights, new persistent cache or new runtime dependency. Five/six-query work uses the bounded existing stack address tables.",
+  "single_trial_change_percent": {
+    "prefill_tok_s": -0.04,
+    "decode_tok_s": 0.764
+  },
+  "limitations": [
+    "One warmup and one measured2048/512 pass per configuration. Baseline measured after the combined candidate and before the isolated IQ3 candidate; no repeated baseline or repeatability claim.",
+    "The isolated IQ3 comparison reuses the original matched decoder/CPU profiles and has unchanged decoder/CPU/math executable code.",
+    "Focused70-case native, independent arithmetic, CPU/Vulkan component and legacy coverage; no full release or new full-checkpoint conformance run."
+  ],
+  "finished_at": "2026-11-28T16:14:43.070519+00:00",
+  "selected": true,
+  "decision": "Retain isolated option3 after numerical qualification and its full-model comparison. Options1 and4 remain experimental only. No repeatability claim."
+}

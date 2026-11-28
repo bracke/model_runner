@@ -642,6 +642,11 @@ is
       end if;
    end Feed_Layer_Inputs_Batch;
 begin
+   if Source.Settings.Kind = DFlash then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "dflash.requires_target_features", E.Param_Identifier);
+      return;
+   end if;
    Logits := [others => 0.0];
 
    --  As in Evaluate: where the products can reach it, set on the way in
@@ -785,6 +790,52 @@ begin
    elsif Logits'Length /= Element_Count (Settings.Vocabulary) then
       Status := E.Make (E.Tensor_Shape_Mismatch);
       E.Add_Integer (Status, "output", Long_Long_Integer (Logits'Length));
+      return;
+   end if;
+
+   if Settings.Kind = Inkling2_Loop then
+      if Given.Rows /= null then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "inkling2_loop.given_embeddings");
+         return;
+      end if;
+      if (States /= null and then States.all'Length < Count * Width)
+        or else (Every /= null and then Every.all'Length < Count * Element_Count (Settings.Vocabulary))
+      then
+         Status := E.Make (E.Tensor_Shape_Mismatch);
+         return;
+      end if;
+      T.Allocate (Count * Width, Acts);
+      if Acts = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+      for Which in 0 .. Count - 1 loop
+         T.Dequantize_Row
+           (Source.Embeddings, Element_Count (Tokens (Tokens'First + Natural (Which))),
+            Acts.all (Which * Width .. (Which + 1) * Width - 1), Status);
+         if E.Is_Error (Status) then
+            Release;
+            return;
+         end if;
+         if Embedding_Scale (Source) /= 1.0 then
+            for Value of Acts.all (Which * Width .. (Which + 1) * Width - 1) loop
+               Value := Value * Embedding_Scale (Source);
+            end loop;
+         end if;
+      end loop;
+      Make_Room (Item, Settings, Reserved + Count - 1);
+      Inkling_Evaluate (Item, Source, Item.Logit_Row, Cancel, Status,
+                        Count, Acts, States, Every, Normalized);
+      Release;
+      if E.Is_Error (Status) then
+         return;
+      end if;
+      for Which in 0 .. Count - 1 loop
+         Item.History.all (Item.Committed + Natural (Which)) := Tokens (Tokens'First + Natural (Which));
+      end loop;
+      Item.Committed := Item.Committed + Natural (Count);
+      Logits := Item.Logit_Row.all;
       return;
    end if;
 

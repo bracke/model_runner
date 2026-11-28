@@ -1,3 +1,4 @@
+with Model_Runner.Platform.Affinity;
 with Model_Runner.Tools.Registry;
 with Model_Runner.Agent_Runtime;
 with Model_Runner.Platform.Video;
@@ -87,6 +88,329 @@ package body Tests.Backend_Cases is
       T.Make (G.Type_F32, Rows, Columns, Storage, 0, Weight, Status);
       Assert (E.Is_Ok (Status), "weight view could not be built");
    end Make_Weight;
+
+   procedure Long_Groups_Match_Serial
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Storage : array (5 .. 21) of B.Byte_Array_Access := [others => null];
+      Vector : T.Real_Array_Access;
+      Expected : T.Target_Group (11 .. 27) := [others => null];
+      Targets : T.Target_Group (11 .. 27) := [others => null];
+      Views : T.View_Group (5 .. 21);
+      Status : E.Error_Info;
+      Pool : aliased CPU.Pool (3);
+   begin
+      T.Allocate (Columns * 33, Vector);
+      Vector.all := Fixtures.Sequence (Columns * 33, 99, 1.0);
+      for Index in Targets'Range loop
+         Make_Weight (Storage (Index - 6), Views (Index - 6));
+         Storage (Index - 6).all := Fixtures.Encode_F32
+           (Fixtures.Sequence (Rows * Columns, Interfaces.Unsigned_64 (4321 + Index), 1.0));
+         T.Allocate (Rows * 33, Expected (Index));
+         CPU.Dispatch_Batch (null, Views (Index - 6), Vector, 33, Expected (Index), Status);
+         Assert (E.Is_Ok (Status), "serial grouped reference failed");
+         T.Allocate (Rows * 33 + 1, Targets (Index));
+      end loop;
+      CPU.Open (Pool);
+      for Many in N.Element_Count range 1 .. 33 loop
+      if Many in 1 | 4 | 33 then
+      for Count in 4 .. 17 loop
+         for Target of Targets loop
+            Target.all := [others => -123.0];
+         end loop;
+         CPU.Dispatch_Group
+           (Pool'Unchecked_Access, Views (5 .. 4 + Count), Vector,
+            Targets (11 .. 10 + Count), Status, Count => Many);
+         Assert (E.Is_Ok (Status), "long grouped dispatch failed");
+         for Index in Targets'Range loop
+            for Row in N.Element_Count range 0 .. Rows * 33 loop
+               Assert (Targets (Index) (Row) =
+                 (if Index < 11 + Count and then Row < Rows * Many then Expected (Index) (Row) else -123.0),
+                 "long grouped dispatch changed output bounds or value");
+            end loop;
+         end loop;
+      end loop;
+      end if;
+      end loop;
+      CPU.Close (Pool);
+      for Target of Targets loop
+         T.Free (Target);
+      end loop;
+      T.Free (Vector);
+      for Target of Expected loop
+         T.Free (Target);
+      end loop;
+      for Bytes of Storage loop
+         B.Free (Bytes);
+      end loop;
+   exception
+      when others =>
+         CPU.Close (Pool);
+         for Target of Targets loop
+            T.Free (Target);
+         end loop;
+         T.Free (Vector);
+         for Target of Expected loop
+            T.Free (Target);
+         end loop;
+         for Bytes of Storage loop
+            B.Free (Bytes);
+         end loop;
+         raise;
+   end Long_Groups_Match_Serial;
+
+   procedure Reference_Batch_Groups
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type N.Real_Array;
+      Width : constant N.Element_Count := 256;
+      Max_Count : constant N.Element_Count := 33;
+      Lengths : constant array (1 .. 3) of N.Element_Count := [73, 39, 129];
+      Views : T.View_Group (1 .. 3);
+      Storage : array (1 .. 3) of B.Byte_Array_Access := [others => null];
+      Expected, Into : T.Target_Group (1 .. 3) := [others => null];
+      Input : T.Real_Array_Access := new N.Real_Array (11 .. 11 + Width * Max_Count - 1);
+      Pool : aliased CPU.Pool (8);
+      Status : E.Error_Info;
+   begin
+      Input.all := Fixtures.Sequence (Input'Length, 8123, 0.7);
+      for I in Views'Range loop
+         declare
+            Data : constant B.Byte_Array := Fixtures.Encode_Q8_0
+              (Fixtures.Sequence (Lengths (I) * Width, Interfaces.Unsigned_64 (51 + I), 0.5));
+         begin
+            B.Allocate (Data'Length, Storage (I)); Storage (I).all := Data;
+         end;
+         T.Make (G.Type_Q8_0, Lengths (I), Width, Storage (I), 0, Views (I), Status);
+         Assert (E.Is_Ok (Status), "reference batch group view");
+         Views (I).Reference_Activations := True;
+         Views (I).Role := T.Role_Attention;
+         Expected (I) := new N.Real_Array (7 .. 7 + Lengths (I) * Max_Count);
+         Into (I) := new N.Real_Array (7 .. 7 + Lengths (I) * Max_Count);
+      end loop;
+      for Integer_Mode in Boolean loop
+         declare
+            Roles : constant CPU.Role_Set := (if Integer_Mode then CPU.Every_Role else CPU.No_Role);
+         begin
+            for Count in N.Element_Count range 1 .. Max_Count loop
+               if Count in 1 | 8 | 33 then
+                  for I in Views'Range loop
+                     Expected (I).all := [others => -123.0]; Into (I).all := [others => -123.0];
+                     CPU.Dispatch_Batch (null, Views (I), Input, Count, Expected (I), Status, Roles => Roles);
+                     Assert (E.Is_Ok (Status), "reference serial batch projection");
+                  end loop;
+                  for Many in 2 .. 3 loop
+                     CPU.Dispatch_Group
+                       (Pool'Unchecked_Access, Views (1 .. Many), Input, Into (1 .. Many), Status,
+                        Roles => Roles, Count => Count);
+                     Assert (E.Is_Ok (Status), "reference grouped batch projection");
+                     for I in 1 .. Many loop
+                        Assert (Into (I).all = Expected (I).all,
+                                "reference grouped batch changed arithmetic or output guard");
+                     end loop;
+                  end loop;
+               end if;
+            end loop;
+         end;
+      end loop;
+      CPU.Close (Pool); T.Free (Input);
+      for I in Views'Range loop T.Free (Expected (I)); T.Free (Into (I)); B.Free (Storage (I)); end loop;
+   exception
+      when others =>
+         CPU.Close (Pool); T.Free (Input);
+         for I in Views'Range loop T.Free (Expected (I)); T.Free (Into (I)); B.Free (Storage (I)); end loop;
+         raise;
+   end Reference_Batch_Groups;
+
+   procedure Small_Block_Batch_Groups
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      use type N.Real_Array;
+      Width : constant N.Element_Count := 1152;
+      Max_Count : constant N.Element_Count := 33;
+      Lengths : constant array (1 .. 4) of N.Element_Count := [73, 39, 129, 17];
+      Views : T.View_Group (1 .. 4);
+      Storage : array (1 .. 4) of B.Byte_Array_Access := [others => null];
+      Expected, Into : T.Target_Group (1 .. 4) := [others => null];
+      Input : T.Real_Array_Access := new N.Real_Array (11 .. 11 + Width * Max_Count - 1);
+      Pool : aliased CPU.Pool (8);
+      Status : E.Error_Info;
+   begin
+      Input.all := Fixtures.Sequence (Input'Length, 8123, 0.7);
+      for I in Views'Range loop
+         declare
+            Values : constant N.Real_Array :=
+              Fixtures.Sequence (Lengths (I) * Width, Interfaces.Unsigned_64 (51 + I), 0.5);
+            Data : constant B.Byte_Array :=
+              (case I is when 1 => Fixtures.Encode_IQ4_NL (Values),
+                         when 2 => Fixtures.Encode_Q2_0 (Values),
+                         when 3 => Fixtures.Encode_Q8_0 (Values), when others => Fixtures.Encode_Q4_0 (Values));
+         begin
+            B.Allocate (Data'Length, Storage (I)); Storage (I).all := Data;
+         end;
+         T.Make ((case I is when 1 => G.Type_IQ4_NL, when 2 => G.Type_Q2_0,
+                  when 3 => G.Type_Q8_0, when others => G.Type_Q4_0),
+                 Lengths (I), Width, Storage (I), 0, Views (I), Status);
+         Assert (E.Is_Ok (Status), "reference batch group view");
+         Views (I).Reference_Activations := True;
+         Views (I).Role := T.Role_Attention;
+         Expected (I) := new N.Real_Array (7 .. 7 + Lengths (I) * Max_Count);
+         Into (I) := new N.Real_Array (7 .. 7 + Lengths (I) * Max_Count);
+      end loop;
+      for Integer_Mode in Boolean loop
+         declare
+            Roles : constant CPU.Role_Set := (if Integer_Mode then CPU.Every_Role else CPU.No_Role);
+         begin
+            for Count in N.Element_Count range 1 .. Max_Count loop
+               if Count in 1 | 2 | 8 | 33 then
+                  for I in Views'Range loop
+                     Expected (I).all := [others => -123.0]; Into (I).all := [others => -123.0];
+                     CPU.Dispatch_Batch (null, Views (I), Input, Count, Expected (I), Status, Roles => Roles);
+                     Assert (E.Is_Ok (Status), "reference serial batch projection");
+                  end loop;
+                  for Many in 2 .. 4 loop
+                     CPU.Dispatch_Group
+                       (Pool'Unchecked_Access, Views (1 .. Many), Input, Into (1 .. Many), Status,
+                        Roles => Roles, Count => Count);
+                     Assert (E.Is_Ok (Status), "reference grouped batch projection");
+                     for I in 1 .. Many loop
+                        Assert (Into (I).all = Expected (I).all,
+                                "reference grouped batch changed arithmetic or output guard");
+                     end loop;
+                  end loop;
+               end if;
+            end loop;
+         end;
+      end loop;
+      if CPU.Byte_Products then
+         for Count in N.Element_Count range 1 .. Max_Count loop
+            if Count in 1 | 2 | 7 | 8 | 33 then
+               declare
+                  Packed : CPU.Packed_Rows;
+                  Raw : aliased N.Real_Array (0 .. Count * Width - 1);
+                  Up : aliased N.Real_Array (Raw'Range) := [others => -0.7];
+                  Activated : T.Real_Array_Access := new N.Real_Array (Raw'Range);
+                  Members : Model_Runner.Shares.Member_Rows (0 .. Natural (Count) - 1);
+                  Calls : Natural := 0;
+                  Done : Boolean;
+                  procedure Produce (Gate : in out N.Real_Array; Other : N.Real_Array; Peaks : out N.Real_Array) is
+                  begin
+                     Calls := Calls + 1; Peaks := [others => 0.0];
+                     for J in Gate'Range loop
+                        Gate (J) := Gate (J) * Other (Other'First + J - Gate'First);
+                        declare
+                           P : N.Real renames Peaks (Peaks'First + (J - Gate'First) / 32);
+                        begin P := N.Real'Max (P, abs (Gate (J))); end;
+                     end loop;
+                  end Produce;
+               begin
+                  for J in Raw'Range loop Activated (J) := Input (Input'First + J) * Up (J); end loop;
+                  for V in Members'Range loop Members (V) := 2 * (Natural (Count) - 1 - V) + 1; end loop;
+                  for I in 1 .. 2 loop
+                     CPU.Dispatch_Batch
+                       (null, Views (I), Activated, Count, Expected (I), Status, Roles => CPU.Every_Role);
+                     Assert (E.Is_Ok (Status), "separate small-block activation product");
+                     Raw := Input.all (Input'First .. Input'First + Raw'Length - 1); Calls := 0;
+                     CPU.Pack
+                       (Packed, Raw'Unrestricted_Access, Count, Width, False, Done,
+                        Roles => CPU.Every_Role, Reference_Arithmetic => True, Half_Scales => True,
+                        Produce => Produce'Unrestricted_Access, Up => Up'Unrestricted_Access);
+                     Assert (Done and then Calls = 1 and then Raw = Activated.all,
+                             "fused small-block activation packing");
+                     declare
+                        Scattered : N.Real_Array (9 .. 9 + (2 * Count + 1) * Lengths (I)) := [others => -123.0];
+                        Want : N.Real_Array (Scattered'Range) := [others => -123.0];
+                     begin
+                        for V in Members'Range loop
+                           for R in N.Element_Count range 0 .. Lengths (I) - 1 loop
+                              Want (9 + N.Element_Count (Members (V)) * Lengths (I) + R) :=
+                                Expected (I) (Expected (I)'First + N.Element_Count (V) * Lengths (I) + R);
+                           end loop;
+                        end loop;
+                        CPU.Multiply_Packed_Whole (Views (I), Packed, Scattered, Done, Members);
+                        Assert (Done and then Scattered = Want,
+                                "fused small-block direct destinations differ or overwrite guards");
+                        declare
+                           Saved : constant Natural := Members (0);
+                        begin
+                           Members (0) := Natural (Scattered'Length / Lengths (I));
+                           CPU.Multiply_Packed_Whole (Views (I), Packed, Scattered, Done, Members);
+                           Assert (not Done and then Scattered = Want, "invalid destination wrote small-block output");
+                           Members (0) := Saved;
+                           if Count > 1 then
+                              Members (Members'Last) := Members (0);
+                              CPU.Multiply_Packed_Whole (Views (I), Packed, Scattered, Done, Members);
+                              Assert (not Done and then Scattered = Want,
+                                      "duplicate destination wrote small-block output");
+                              Members (Members'Last) := 1;
+                           end if;
+                        end;
+                     end;
+                  end loop;
+                  CPU.Unpack (Packed); T.Free (Activated);
+               exception
+                  when others => CPU.Unpack (Packed); T.Free (Activated); raise;
+               end;
+            end if;
+         end loop;
+      end if;
+      if CPU.Byte_Products then
+         declare
+            Packed : CPU.Packed_Rows;
+            Done : Boolean;
+         begin
+            CPU.Pack (Packed, Input, Max_Count, Width, False, Done,
+                      Roles => CPU.Every_Role, Reference_Arithmetic => True, Half_Scales => True);
+            Assert (Done, "indexed small-block input packing");
+            for Count in N.Element_Count range 1 .. Max_Count loop
+               if Count in 1 | 2 | 7 | 8 | 33 then
+                  declare
+                     Members : Model_Runner.Shares.Member_Rows (5 .. 5 + Natural (Count) - 1);
+                     Gathered : T.Real_Array_Access := new N.Real_Array (3 .. 3 + Count * Width - 1);
+                  begin
+                     for I in Members'Range loop
+                        Members (I) := (I * 7 + I / 3) mod Natural (Max_Count);
+                        Gathered.all (3 + N.Element_Count (I - Members'First) * Width
+                          .. 3 + N.Element_Count (I - Members'First + 1) * Width - 1) :=
+                          Input.all (Input'First + N.Element_Count (Members (I)) * Width
+                            .. Input'First + (N.Element_Count (Members (I)) + 1) * Width - 1);
+                     end loop;
+                     for I in 1 .. 2 loop
+                        Expected (I).all := [others => -123.0]; Into (I).all := [others => -123.0];
+                        CPU.Dispatch_Batch (null, Views (I), Gathered, Count, Expected (I), Status,
+                                            Roles => CPU.Every_Role);
+                        Assert (E.Is_Ok (Status), "gathered small-block reference");
+                        CPU.Multiply_Packed (Views (I), Packed, Members, Into (I), Done);
+                        Assert (Done and then Into (I).all = Expected (I).all,
+                                "indexed small-block differs from gathered path or changes guards");
+                        Into (I).all := [others => -123.0]; Members (Members'Last) := Natural (Max_Count);
+                        CPU.Multiply_Packed (Views (I), Packed, Members, Into (I), Done);
+                        Assert (not Done and then (for all V of Into (I).all => V = -123.0),
+                                "invalid indexed small-block source wrote output");
+                        Members (Members'Last) := (Members'Last * 7 + Members'Last / 3) mod Natural (Max_Count);
+                     end loop;
+                     T.Free (Gathered);
+                  exception
+                     when others => T.Free (Gathered); raise;
+                  end;
+               end if;
+            end loop;
+            CPU.Unpack (Packed);
+         exception
+            when others => CPU.Unpack (Packed); raise;
+         end;
+      end if;
+      CPU.Close (Pool); T.Free (Input);
+      for I in Views'Range loop T.Free (Expected (I)); T.Free (Into (I)); B.Free (Storage (I)); end loop;
+   exception
+      when others =>
+         CPU.Close (Pool); T.Free (Input);
+         for I in Views'Range loop T.Free (Expected (I)); T.Free (Into (I)); B.Free (Storage (I)); end loop;
+         raise;
+   end Small_Block_Batch_Groups;
 
    --  The partition covers every row exactly once, for every worker count.
    procedure Partition_Covers_Rows (T2 : in out AUnit.Test_Cases.Test_Case'Class)
@@ -1234,7 +1558,22 @@ package body Tests.Backend_Cases is
          5 => (Full with delta AVX512BW => False),
          6 => (Full with delta AVX512VL => False),
          7 => (Full with delta AVX512VNNI => False)];
+      Missing_BF16 : constant Sets :=
+        [1 => (Full with delta OS_ZMM => False),
+         2 => (Full with delta AVX512F => False),
+         3 => (Full with delta AVX512DQ => False),
+         4 => (Full with delta AVX512BW => False),
+         5 => (Full with delta AVX512VL => False),
+         6 => (Full with delta AVX512BF16 => False)];
    begin
+      Assert (X86.Supports_BF16 (Full), "complete BF16 set refused");
+      Assert (not X86.Supports_BF16 (X86.No_Features), "empty BF16 set accepted");
+      for Item of Missing_BF16 loop
+         Assert (not X86.Supports_BF16 (Item), "BF16 accepted incomplete instruction or OS state");
+      end loop;
+      for Item of Missing_V3 loop
+         Assert (not X86.Supports_BF16 (Item), "BF16 accepted an incomplete inherited feature set");
+      end loop;
       Assert (X86.Supports_V3 (Full), "the complete v3 set was refused");
       Assert (X86.Supports_V4_VNNI (Full), "the complete v4/VNNI set was refused");
       Assert (not X86.Supports_V3 (X86.No_Features), "an empty set was accepted as v3");
@@ -3015,6 +3354,8 @@ package body Tests.Backend_Cases is
       Found  : Boolean;
       Ready  : Boolean;
    begin
+      Assert (not Products.Native_Controls (Engine),
+              "an unopened engine advertises native controls");
       Devices.Open (Held, Found);
       if not Found or else Devices.Count (Held) = 0 then
          Devices.Close (Held);
@@ -3031,6 +3372,8 @@ package body Tests.Backend_Cases is
 
       Devices.Close (Held);
       Products.Close (Engine);
+      Assert (not Products.Native_Controls (Engine),
+              "an engine closed out of order retained native controls");
       Devices.Close (Opened);
 
       Devices.Open (Held, Found);
@@ -3039,6 +3382,8 @@ package body Tests.Backend_Cases is
       Products.Open (Engine, Opened, Ready);
       Assert (Ready, "an engine would not open after a device was closed out of order");
       Products.Close (Engine);
+      Assert (not Products.Native_Controls (Engine),
+              "a closed engine retained native controls");
       Devices.Close (Opened);
       Devices.Close (Held);
    end Device_Closed_Out_Of_Order_Does_Not_Abort;
@@ -3511,6 +3856,7 @@ package body Tests.Backend_Cases is
       end loop;
 
       Matrix := (Format => Model_Runner.GGUF.Type_F32,
+                 Reference_Activations => False, Scales => null,
                  Rows => Span, Columns => Span,
                  Base => Weights.all'Address,
                  Span => Model_Runner.Bytes.Byte_Count (Weights.all'Length),
@@ -3620,6 +3966,7 @@ package body Tests.Backend_Cases is
          end;
       end;
       Matrix := (Format => G.Type_F16, Rows => Width, Columns => Width, Base => Weights.all'Address,
+                 Reference_Activations => False, Scales => null,
                  Span => B.Byte_Count (Weights.all'Length), Offset => 0, Interleaved => False,
                  Role => T.Role_Other, Length => B.Byte_Count (Weights.all'Length));
       T.Allocate (Width, Bias);
@@ -3702,6 +4049,7 @@ package body Tests.Backend_Cases is
             Into.all := Encoded;
          end;
          return (Format => G.Type_F16, Rows => Width, Columns => Width, Base => Into.all'Address,
+                 Reference_Activations => False, Scales => null,
                  Span => B.Byte_Count (Into.all'Length), Offset => 0, Interleaved => False,
                  Role => T.Role_Other, Length => B.Byte_Count (Into.all'Length));
       end Matrix;
@@ -3830,6 +4178,7 @@ package body Tests.Backend_Cases is
             Into.all := Encoded;
          end;
          return (Format => G.Type_F16, Rows => Width, Columns => Width, Base => Into.all'Address,
+                 Reference_Activations => False, Scales => null,
                  Span => B.Byte_Count (Into.all'Length), Offset => 0, Interleaved => False,
                  Role => T.Role_Other, Length => B.Byte_Count (Into.all'Length));
       end Matrix;
@@ -3980,6 +4329,7 @@ package body Tests.Backend_Cases is
          end;
       end;
       Stack := (Format => G.Type_Q4_0, Rows => 2 * Feed * Experts, Columns => Width,
+                Reference_Activations => False, Scales => null,
                 Base => Weights.all'Address, Span => B.Byte_Count (Weights.all'Length),
                 Offset => 0, Interleaved => False, Role => T.Role_Other,
                 Length => B.Byte_Count (Weights.all'Length));
@@ -4088,6 +4438,7 @@ package body Tests.Backend_Cases is
          end;
       end;
       Matrix := (Format => G.Type_F16, Rows => Width, Columns => Width, Base => Weights.all'Address,
+                 Reference_Activations => False, Scales => null,
                  Span => B.Byte_Count (Weights.all'Length), Offset => 0, Interleaved => False,
                  Role => T.Role_Other, Length => B.Byte_Count (Weights.all'Length));
 
@@ -4251,6 +4602,7 @@ package body Tests.Backend_Cases is
          Rows : N.Element_Count;
          Cols : N.Element_Count) return T.View is
         (Format => Model_Runner.GGUF.Type_F32,
+         Reference_Activations => False, Scales => null,
          Rows => Rows, Columns => Cols,
          Base => Held.all'Address,
          Span => Model_Runner.Bytes.Byte_Count (Held.all'Length),
@@ -4600,6 +4952,7 @@ package body Tests.Backend_Cases is
 
          Views (Which) :=
            (Format => Model_Runner.GGUF.Type_F32,
+            Reference_Activations => False, Scales => null,
             Rows => Rows (Which), Columns => Width,
             Base => Held (Which).all'Address,
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
@@ -4793,6 +5146,7 @@ package body Tests.Backend_Cases is
 
          Views (Which) :=
            (Format => Model_Runner.GGUF.Type_F32,
+            Reference_Activations => False, Scales => null,
             Rows => Rows (Which), Columns => Cols (Which),
             Base => Held (Which).all'Address,
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
@@ -5474,6 +5828,7 @@ package body Tests.Backend_Cases is
          end loop;
          Views (Which) :=
            (Format => Model_Runner.GGUF.Type_F32,
+            Reference_Activations => False, Scales => null,
             Rows => Rows (Which), Columns => Cols (Which),
             Base => Held (Which).all'Address,
             Span => Model_Runner.Bytes.Byte_Count (Held (Which).all'Length),
@@ -15925,6 +16280,14 @@ package body Tests.Backend_Cases is
          end loop;
       end Run;
 
+      Mode : Natural := 0;
+      Called : Boolean := False;
+      procedure Side (Result : out E.Error_Info) is
+      begin
+         Called := True;
+         if Mode = 2 then raise Constraint_Error; end if;
+         Result := (if Mode = 1 then E.Make (E.Generation_Cancelled) else E.Success);
+      end Side;
       Status : E.Error_Info;
    begin
       --  Serially, which is what a caller with no pool gets.
@@ -15980,6 +16343,34 @@ package body Tests.Backend_Cases is
          CPU.Dispatch_Shares (null, 0, Work'Unchecked_Access, Status);
          Assert (E.Is_Ok (Status), "an empty job was refused");
          Assert (Work.Seen (0) = 0, "an empty job did something");
+      end;
+      declare
+         Team : aliased CPU.Pool (3);
+         Work : aliased Counting;
+      begin
+         for Trial in 0 .. 3 loop
+            Work.Seen := [others => 0]; Called := False; Mode := Trial mod 3;
+            CPU.Dispatch_Shares
+              (Team'Unchecked_Access, Items, Work'Unchecked_Access, Status,
+               Alongside => CPU.Concurrent_Work'(Side'Unrestricted_Access), Team_Size => Natural'Last);
+            Assert (Called, "caller-side work was omitted");
+            Assert ((if Mode = 0 then E.Is_Ok (Status)
+                     elsif Mode = 1 then Status.Code = E.Generation_Cancelled
+                     else Status.Code = E.Backend_Worker_Failed),
+                    "caller-side failure was lost or pool could not be reused");
+            for Index in Work.Seen'Range loop
+               Assert (Work.Seen (Index) <= 1
+                       and then (Mode = 2 or else Work.Seen (Index) = 1),
+                       "overlapped work was duplicated or left unsettled");
+            end loop;
+         end loop;
+         Called := False;
+         CPU.Dispatch_Shares (null, 0, Work'Unchecked_Access, Status,
+                              Alongside => Side'Unrestricted_Access);
+         Assert (Called and then E.Is_Ok (Status), "empty job omitted independent work");
+         CPU.Close (Team);
+      exception
+         when others => CPU.Close (Team); raise;
       end;
    end Shared_Work_Covers_Every_Item;
 
@@ -16516,15 +16907,57 @@ package body Tests.Backend_Cases is
       Dev.Close;
    end Device_Tuning_Is_Exact;
 
+   procedure Worker_Placement_Respects_The_Caller
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package Affinity renames Model_Runner.Platform.Affinity;
+      Before : constant Affinity.Core_List := Affinity.Choose (1);
+      Team : constant Affinity.Core_List := Affinity.Choose (2);
+   begin
+      if Team (0) >= 0 then
+         Assert (Team (1) >= 0 and then Team (0) /= Team (1), "workers share a physical core");
+         declare
+            Placement : Affinity.Binding;
+         begin
+            Affinity.Pin (Placement, Team (1));
+            declare
+               Alone : constant Affinity.Core_List := Affinity.Choose (1);
+               Too_Many : constant Affinity.Core_List := Affinity.Choose (2);
+            begin
+               Assert (Alone (0) = Team (1), "placement escaped the allowed processor");
+               Assert ((for all Cpu of Too_Many => Cpu = -1), "placement ignored the caller's cpuset");
+            end;
+         end;
+         declare
+            After : constant Affinity.Core_List := Affinity.Choose (1);
+         begin
+            Assert (Before (0) = After (0), "caller affinity was not restored");
+         end;
+      end if;
+   end Worker_Placement_Respects_The_Caller;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Worker_Placement_Respects_The_Caller'Access,
+         "worker placement respects the caller cpuset and restores affinity");
       Register_Routine
         (T, Software_Device_Is_Refused_By_Default'Access,
          "a software rasterizer is listed but not opened unless asked");
       Register_Routine
         (T, Device_Closed_Out_Of_Order_Does_Not_Abort'Access,
          "a device closed out of order does not stop the program, and one opened after works");
+      Register_Routine
+        (T, Small_Block_Batch_Groups'Access,
+         "GSQ small-block grouped batches preserve reference scales and outputs");
+      Register_Routine
+        (T, Reference_Batch_Groups'Access,
+         "reference grouped Q8 batches preserve packing, roles, tails and shifted output guards");
+      Register_Routine
+        (T, Long_Groups_Match_Serial'Access,
+         "long expert groups preserve serial results and shifted target bounds");
       Register_Routine
         (T, Partition_Covers_Rows'Access,
          "the partition covers every row exactly once for every worker count");

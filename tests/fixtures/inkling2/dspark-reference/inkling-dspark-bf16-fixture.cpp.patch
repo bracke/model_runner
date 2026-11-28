@@ -1,0 +1,17 @@
+--- /dev/null
++++ inkling-dspark-bf16-fixture.cpp
+@@ -0,0 +1,14 @@
++#include "ggml.h"
++#include "ggml-impl.h"
++#include "vec.h"
++#include <vector>
++#include <cstdio>
++#include <cstdint>
++#include <cstring>
++#include <stdexcept>
++static void put(const char*root,const char*name,const void*p,size_t n){char f[4096];snprintf(f,sizeof(f),"%s/%s",root,name);auto*out=fopen(f,"wb");if(!out)throw std::runtime_error("open");if(fwrite(p,1,n,out)!=n)throw std::runtime_error("write");fclose(out);}
++int main(int argc,char**argv){if(argc!=2)return 1;std::vector<float>x(3*256);std::vector<ggml_bf16_t>w(5*256),v(x.size());std::vector<float>out(15);uint32_t seed=1223;
++for(size_t i=0;i<x.size();i++){seed=seed*1664525u+1013904223u;uint32_t bits=(seed&0x807fffffu)|0x3e000000u;if(i%19==0)bits=(bits&0xffff0000u)|0x8000u;memcpy(&x[i],&bits,4);v[i]=GGML_FP32_TO_BF16(x[i]);}
++for(size_t i=0;i<w.size();i++){seed=seed*1664525u+1013904223u;uint32_t bits=(seed&0x807fffffu)|0x3d000000u;float value;memcpy(&value,&bits,4);w[i]=GGML_FP32_TO_BF16(value);}
++for(int b=0;b<3;b++)for(int r=0;r<5;r++)ggml_vec_dot_bf16(256,&out[b*5+r],0,w.data()+r*256,0,v.data()+b*256,0,1);
++put(argv[1],"input.f32",x.data(),x.size()*4);put(argv[1],"weights.bf16",w.data(),w.size()*2);put(argv[1],"expected.f32",out.data(),out.size()*4);return 0;}

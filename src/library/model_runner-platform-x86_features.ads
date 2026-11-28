@@ -15,4 +15,8 @@ private package Model_Runner.Platform.X86_Features is
    --  @return True only when CPU and operating-system state support it.
    function Byte_Products return Boolean;
 
+   --  Whether native BF16 conversion/dot instructions and their vector state are available.
+   --  @return False on an incomplete CPU or operating-system feature set.
+   function Brain_Products return Boolean;
+
 end Model_Runner.Platform.X86_Features;

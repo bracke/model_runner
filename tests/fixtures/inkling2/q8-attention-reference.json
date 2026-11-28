@@ -1,0 +1,14 @@
+{
+  "reference": "Pinned independent optimized GGML quantize_row_q8_0, ggml_cpu_init called; no native quantized result used as expected data.",
+  "input_provenance": "node_491, layer2 gated attention values, expanded CPU-only reference capture. All834 original captures are byte-identical to canonical q4_k_m-cpu-hello goldens.",
+  "shape": "3072 binary32 inputs,96 Q8_0 blocks of34bytes",
+  "capture": "artifacts/inkling2/obj/integer-native-next/reference-extra-cpu/run.json",
+  "reference_library": "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0",
+  "sha256": {
+    "artifacts/inkling2/obj/integer-native-next/reference-extra-cpu/extra/000466.bin": "686d362d1f3c639413ccfc1416efbf499e675f700f3f6e8a7d3543a3428dbcb9",
+    "tests/fixtures/inkling2/q8-attention-input.f32": "686d362d1f3c639413ccfc1416efbf499e675f700f3f6e8a7d3543a3428dbcb9",
+    "tests/fixtures/inkling2/q8-attention-reference.bin": "07535204bd6d7ccea9c26f26ab80fe6bdf2f364a893167f4e02dbacb2026433c",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0": "b6565a96976188378673ef11ddad6b3893259fc7bc21e0d236c74b44c1da4278"
+  },
+  "generation": "Read the independent little-endian F32 capture into a contiguous C float array; call original quantize_row_q8_0(input,output,3072), writing96*34bytes."
+}

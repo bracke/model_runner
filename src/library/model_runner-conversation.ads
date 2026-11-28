@@ -1,4 +1,5 @@
 private with Ada.Finalization;
+private with Model_Runner.Heap_Buffers;
 
 with Model_Runner.Errors;
 with Model_Runner.Limits;
@@ -119,13 +120,41 @@ package Model_Runner.Conversation is
    --  @param Item History to extend.
    --  @param Named The function the model called.
    --  @param Arguments The arguments, as one line of JSON.
+   --  @param Id Optional protocol call identifier.
    --  @param Status Success, Conversation_Empty when nothing has been
    --    appended for the call to belong to, or Conversation_Too_Long.
    procedure Append_Call
      (Item      : in out History;
       Named     : String;
       Arguments : String;
-      Status    : out Model_Runner.Errors.Error_Info);
+      Status    : out Model_Runner.Errors.Error_Info;
+      Id        : String := "");
+
+   --  Set the last message's optional sender name and originating tool call.
+   --  Both use the existing bounded history pool; failure leaves it unchanged.
+   --  @param Item History whose last message is identified.
+   --  @param Named Optional sender or tool name.
+   --  @param Tool_Call_Id Optional originating call identifier.
+   --  @param Status Success, Conversation_Empty or Conversation_Too_Long.
+   procedure Identify_Last
+     (Item : in out History; Named, Tool_Call_Id : String := "";
+      Status : out Model_Runner.Errors.Error_Info);
+
+   --  @param Item History to inspect.
+   --  @param Index Message position.
+   --  @return Optional sender name, empty when absent or out of range.
+   function Name_At (Item : History; Index : Positive) return String;
+
+   --  @param Item History to inspect.
+   --  @param Index Message position.
+   --  @return Originating call identifier, empty when absent or out of range.
+   function Tool_Call_Id_At (Item : History; Index : Positive) return String;
+
+   --  @param Item History to inspect.
+   --  @param Index Message position.
+   --  @param Call Call position within the message.
+   --  @return Call identifier, empty when absent or out of range.
+   function Call_Id (Item : History; Index, Call : Positive) return String;
 
    --  A reply with the reasoning it opened and never closed closed: what a
    --  turn cut off by its token limit leaves. Committed open, the rest of
@@ -382,6 +411,8 @@ private
       --  Where this message's calls begin in the call table, and how many
       --  it has. They lie together because a call is only ever attached to
       --  the message appended last.
+      Name_Offset, Name_Length : Natural := 0;
+      Tool_Id_Offset, Tool_Id_Length : Natural := 0;
       First_Call : Natural := 0;
       Calls      : Natural := 0;
    end record;
@@ -395,23 +426,33 @@ private
       Name_Length : Natural := 0;
       Args_Offset : Natural := 0;
       Args_Length : Natural := 0;
+      Id_Offset, Id_Length : Natural := 0;
    end record;
 
    type Call_Array is array (1 .. Max_Calls) of Call_Row;
+
+   --  Tool identities enlarge the bounded row tables beyond a safe task
+   --  frame. Their existing heap holder is acquired by Open and released
+   --  by Close; the public history remains small even before it is open.
+   type Row_Tables is record
+      Messages : Message_Array := [others => <>];
+      Calls : Call_Array := [others => <>];
+   end record;
+   package Row_Rooms is new Model_Runner.Heap_Buffers.Holders (Row_Tables);
+   type Row_Room_Access is access Row_Rooms.Holder;
 
    type Storage_Access is access String;
 
    type History is limited new Ada.Finalization.Limited_Controlled with record
       Bounds   : Model_Runner.Limits.Session_Limits :=
         Model_Runner.Limits.Default_Session_Limits;
-      Messages : Message_Array := [others => <>];
+      Rows     : Row_Room_Access := null;
       Used     : Natural := 0;
       Storage  : Storage_Access := null;
       Filled   : Natural := 0;
       --  The furthest the storage has been written, which Filled can fall
       --  back from: what is cleared before the storage is given back.
       Reached  : Natural := 0;
-      Calls     : Call_Array := [others => <>];
       Call_Used : Natural := 0;
    end record;
 

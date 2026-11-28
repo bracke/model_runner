@@ -28,6 +28,7 @@ private package Model_Runner.CLI.Execute.Acquisition is
    --  @param Status A failure, or success.
    --  @param Instead A file to load in place of the command's model -- a
    --         draft -- with the same limits; empty for the command's own.
+   --  @param Target Optional prepared target borrowed by a DSpark draft.
    procedure Load
      (Item      : Opt.Command;
       Screen    : in out Pres.Console;
@@ -38,6 +39,7 @@ private package Model_Runner.CLI.Execute.Acquisition is
       Observer  : Model_Runner.Progress.Observer_Reference;
       Cancel    : Model_Runner.Cancellation.Token_Reference;
       Status    : out E.Error_Info;
-      Instead   : String := "");
+      Instead   : String := "";
+      Target : access L.Model'Class := null);
 
 end Model_Runner.CLI.Execute.Acquisition;

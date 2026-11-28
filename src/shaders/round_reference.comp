@@ -1,0 +1,71 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+// Preserve the existing native packer's signed first-maximum rule,
+// nearest-even bytes, binary32 divisions and half-rounded small-block scales.
+layout(local_size_x = 64) in;
+layout(std430, binding = 1) readonly buffer Vectors { float x[]; };
+layout(std430, binding = 6) writeonly buffer Rounded { uint qw[]; };
+layout(std430, binding = 6) writeonly buffer Scales { float qs[]; };
+layout(push_constant) uniform Shape {
+    uint rows, columns, count, first, format, base, joins, table;
+} shape;
+// Implement the host conversion explicitly instead of relying on device half rounding.
+// Round positive binary32 scales explicitly, including the half subnormal
+// interval, then reconstruct binary32 without a half conversion instruction.
+float half_scale(float scale) {
+    uint raw = floatBitsToUint(scale), mantissa = raw & 0x7fffffu;
+    int exponent = int(raw >> 23u);
+    uint rounded = 0u;
+    if (exponent > 142) return uintBitsToFloat(0x7f800000u);
+    if (exponent >= 113) {
+        rounded = (uint(exponent - 112) << 10u) | (mantissa >> 13u);
+        uint low = mantissa & 0x1fffu;
+        if (low > 0x1000u || (low == 0x1000u && (rounded & 1u) != 0u)) ++rounded;
+    } else if (exponent >= 102) {
+        uint full = mantissa | 0x800000u;
+        uint shift = uint(126 - exponent);
+        rounded = full >> shift;
+        uint low = full & ((1u << shift) - 1u), middle = 1u << (shift - 1u);
+        if (low > middle || (low == middle && (rounded & 1u) != 0u)) ++rounded;
+    }
+    if (rounded >= 0x7c00u) return uintBitsToFloat(0x7f800000u);
+    if (rounded < 1024u) return float(rounded) * 5.9604644775390625e-8;
+    return uintBitsToFloat(((rounded >> 10u) + 112u) << 23u | ((rounded & 1023u) << 13u));
+}
+void main() {
+    bool small = shape.format == 5u || shape.format == 7u || shape.format == 8u || shape.format == 26u;
+    uint per = small ? 32u : 256u;
+    uint block = gl_GlobalInvocationID.x;
+    if (block >= shape.count * shape.columns / per) return;
+    uint at = block * per;
+    float peak = 0.0, largest = 0.0;
+    bool valid_values = true;
+    for (uint j = 0u; j < per; ++j) {
+        float value = x[at + j];
+        valid_values = valid_values && !isnan(value) && !isinf(value);
+        if (abs(value) > peak) { peak = abs(value); largest = value; }
+    }
+    if (!valid_values) {
+        for (uint j = 0u; j < per / 4u; ++j) qw[shape.first + at / 4u + j] = 0u;
+        for (uint j = 0u; j < per / 32u; ++j)
+            qs[shape.table + block * (per / 32u) + j] = uintBitsToFloat(0x7fc00000u);
+        return;
+    }
+    // Widen only the division, then round once to the original binary32.
+    precise float inverse = peak == 0.0 ? 0.0
+        : small ? float(127.0lf / double(peak)) : float(-127.0lf / double(largest));
+    precise float scale = small ? float(double(peak) / 127.0lf)
+        : peak == 0.0 ? 0.0 : float(1.0lf / double(inverse));
+    if (small) scale = half_scale(scale);
+    for (uint j = 0u; j < per / 4u; ++j) {
+        uint word = 0u;
+        for (uint k = 0u; k < 4u; ++k) {
+            precise float value = x[at + j * 4u + k] * inverse;
+            int code = clamp(int(roundEven(value)), -128, 127);
+            word |= (uint(code) & 255u) << (k * 8u);
+        }
+        qw[shape.first + at / 4u + j] = word;
+    }
+    for (uint j = 0u; j < per / 32u; ++j)
+        qs[shape.table + block * (per / 32u) + j] = scale;
+}

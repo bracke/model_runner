@@ -121,8 +121,9 @@ begin
    --  binary32 and a processor session at the default halves was counted
    --  at twice what it took.
    On_Device := Model_Runner.Backend."="
-                  (Source.Able.Kind, Model_Runner.Backend.Backend_Device);
-   Will_Page := Paged and then On_Device
+                  (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
+                  and then Settings.Kind /= Inkling2_Loop;
+   Will_Page := Paged and then On_Device and then Settings.Kind /= Inkling2_Loop
                 and then Cache in Exact | Halved | Eighth | Fourth
                                       | Float_Eighth;
    Host_Cache := (if On_Device and then Cache in Exact | Halved
@@ -215,7 +216,7 @@ begin
    --  opened on a device holds the whole context for every layer, as it
    --  did, and the saving is the processor's for now.
    declare
-      Layers : constant Natural := Settings.Layers;
+      Layers : constant Natural := Runtime_Layers (Settings);
       Room   : Element_Count := 0;
       Keys   : Element_Count := 0;
       Vals   : Element_Count := 0;
@@ -261,9 +262,7 @@ begin
       --  left the device -- qwen3-8b at 32,768 positions read 3.55
       --  tokens a second where paged it reads 13.3.
       if Paged
-        and then Model_Runner.Backend."="
-                   (Source.Able.Kind,
-                    Model_Runner.Backend.Backend_Device)
+        and then On_Device
         and then Cache in Exact | Halved | Eighth | Fourth | Float_Eighth
                               | Transformed_Fourth
       then
@@ -325,9 +324,7 @@ begin
       --  session that later runs on the processor runs exact. The
       --  device is told for the process, so the last session opened
       --  says; every session of a run asks for the same.
-      if Model_Runner.Backend."="
-           (Source.Able.Kind, Model_Runner.Backend.Backend_Device)
-        and then Cache in Exact | Halved
+      if On_Device and then Cache in Exact | Halved
       then
          Model_Runner.Backend.Device.Attend_In_Halves (Cache = Halved);
          --  A paged session asking for halves keeps its host copy in
@@ -443,6 +440,27 @@ begin
       end;
       T.Allocate (Width, Item.Activation);
       T.Allocate (Width, Item.Normalized);
+      if Settings.Kind = Inkling2_Loop then
+         T.Allocate (Inkling_Conv_Room (Settings), Item.Conv_State);
+         T.Allocate (Inkling_Conv_Room (Settings), Item.Inkling_Conv_Backup);
+         T.Allocate (Inkling_Work_Room (Settings), Item.Inkling_Workspace);
+         if Item.Conv_State = null or else Item.Inkling_Conv_Backup = null or else Item.Inkling_Workspace = null then
+            Status := E.Make (E.Memory_Allocation_Failed);
+            Close (Item);
+            return;
+         end if;
+         Item.Inkling_Plans := new Inkling_Route_Plans'(0 .. Settings.Inkling.Runtime_Layers - 1 => <>);
+         Item.Inkling_Decoded := new Inkling_Decoded_Array'
+           (0 .. Settings.Layers * (Inkling_Weight_Role'Pos (Inkling_Weight_Role'Last) + 1) - 1 => null);
+         Item.Inkling_Scale_Data := new Inkling_Decoded_Array'
+           (0 .. Settings.Layers * (Inkling_Weight_Role'Pos (Inkling_Weight_Role'Last) + 1)
+              + Settings.Layers * Settings.Experts * 3 - 1 => null);
+         Item.Inkling_Scale_Priorities := new Inkling_Scale_Totals'
+           (Item.Inkling_Scale_Data.all'Range => 0);
+         Item.Inkling_Layer_Scale_Bytes := new Inkling_Scale_Totals'
+           (0 .. Settings.Layers - 1 => 0);
+         Item.Conv_State.all := [others => 0.0];
+      end if;
 
       --  Room for a normalization taken out of the way. Gemma2 and
       --  Gemma3 normalize what a sublayer produced; Falcon keeps what the
@@ -524,7 +542,7 @@ begin
       Item.Score_Room := Element_Count (Capacity);
       T.Allocate
         (Element_Count (Natural'Max (1, Settings.Heads))
-         * Item.Score_Room, Item.Scores);
+         * Item.Score_Room * (if Settings.Kind = Inkling2_Loop then 8 else 1), Item.Scores);
       T.Allocate (Feed, Item.Gate);
       T.Allocate (Feed, Item.Up);
 
@@ -838,6 +856,16 @@ begin
       end if;
    end;
 
+   if Settings.Kind = DFlash then
+      T.Allocate (Element_Count (Settings.Embedding) * 2048, Item.Draft_Features);
+      T.Allocate (DSpark_Work_Room (Settings, Capacity), Item.Draft_Work);
+      T.Allocate (Element_Count (Settings.Embedding) * Element_Count (Capacity), Item.Draft_Context);
+      if Item.Draft_Features = null or else Item.Draft_Work = null or else Item.Draft_Context = null then
+         Close (Item);
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+   end if;
    Item.Owner := Source'Unchecked_Access;
    if Source.Runtime_Pairs /= null then
       T.Allocate (Runtime_Tile * Source.Runtime_Rank, Item.Adapter_Rank);

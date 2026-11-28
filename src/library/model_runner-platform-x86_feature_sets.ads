@@ -33,6 +33,7 @@ package Model_Runner.Platform.X86_Feature_Sets is
       AVX512BW   : Boolean := False;
       AVX512VL   : Boolean := False;
       AVX512VNNI : Boolean := False;
+      AVX512BF16 : Boolean := False;
    end record;
 
    No_Features : constant Feature_Set := (others => False);
@@ -51,5 +52,10 @@ package Model_Runner.Platform.X86_Feature_Sets is
    --  @param Item Feature and operating-system state to evaluate.
    --  @return True only when every x86-64-v4 and VNNI prerequisite is present.
    function Supports_V4_VNNI (Item : Feature_Set) return Boolean;
+
+   --  Whether native BF16 conversion and pairwise dot products are safe.
+   --  @param Item Architected CPU and operating-system feature set.
+   --  @return True only with inherited v3, ZMM state and every used AVX-512 feature.
+   function Supports_BF16 (Item : Feature_Set) return Boolean;
 
 end Model_Runner.Platform.X86_Feature_Sets;

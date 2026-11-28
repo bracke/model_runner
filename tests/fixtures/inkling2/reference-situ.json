@@ -1,0 +1,20 @@
+{
+  "producer": "Independent C libm fixture generator; no native GPU implementation used",
+  "arithmetic": "Each surrounding stage binary32, contraction disabled; scalar tanhf/expf, gate cap4,up cap25",
+  "libc": "2.39",
+  "machine": "x86_64",
+  "cases": 65536,
+  "input_layout": "All 65536 gate values followed by all 65536 up values, little-endian binary32",
+  "native_case": "32 integer inputs i-16 with endpoints 127,-127; up is reversed; exact Q8 identity/reverse projections",
+  "generator": "tests/fixtures/inkling2/reference-situ-generator.patch",
+  "generator_sha256": "2c64020670b68325633d8b9c92ee0ac07214dfb8d1927679f3a065783c06448a",
+  "files": {
+    "reference-situ-input.f32": "aaa85718df23bd5472eee0dd5098d18c44d9c59da21547b5b3cf6d355eb0d7be",
+    "reference-situ-output.f32": "b89d597ba5c39e1944199ff83d28f239e1796f8d45966183b4b7d560d2b1cec1",
+    "reference-situ-native.f32": "bc59604693c739e03b4c0b1c71744ea7b4c0fccdb7df8196c6513f30e7f5d53c"
+  },
+  "compile_command": "gcc -O2 -ffp-contract=off -fno-builtin /tmp/generate-situ-fixtures.c -lm -o /tmp/generate-situ-fixtures",
+  "generate_command": "/tmp/generate-situ-fixtures reference-situ-input.f32 reference-situ-output.f32 reference-situ-native.f32 /tmp/reference-situ-libc.txt",
+  "generator_patch_sha256": "050dc6d1ccbfc56290162cd1d49bf32eb52a4b7f1aaa4198066e98db342e195c",
+  "extract_command": "patch -d /tmp -p1 < reference-situ-generator.patch"
+}

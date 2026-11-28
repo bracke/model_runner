@@ -1,3 +1,4 @@
+with Model_Runner.GGUF;
 with Model_Runner.Bytes;
 
 --  The tiny executable model used by the inference tests.
@@ -46,6 +47,47 @@ package Tiny_Model is
    --  so writing it again writes the same file, and a run that writes it
    --  needs nothing left behind by an earlier one.
    procedure Write_Suite_Fixture;
+
+   --  Independent small 24-layer, three-visit Inkling fixture. Its dimensions
+   --  are reduced, its vocabulary is padded and its four experts select two.
+   --  Faults alter one contract at a time without malformed GGUF framing.
+   type Inkling_Fault is
+     (Inkling_Valid, Inkling_Missing_Parameter, Inkling_Wrong_Parameter_Type,
+      Inkling_Nonfinite_Parameter, Inkling_Wrong_Loops, Inkling_Variable_Loops,
+      Inkling_Bad_Pattern, Inkling_Heterogeneous_Heads, Inkling_Bad_Vocabulary,
+      Inkling_Missing_Tensor, Inkling_Wrong_Expert_Shape, Inkling_Extra_Tensor,
+      Inkling_Omitted_Optionals, Inkling_Nonfinite_Weight, Inkling_Zero_Controls, Inkling_Alternate_Softcap,
+      Inkling_Aligned_Heads);
+
+   --  @param Result Complete synthetic GGUF bytes; caller frees them.
+   --  @param Fault Single deliberate defect, or the valid/default fixture.
+   --  @param Quantized Widen the synthetic model and encode eligible projections as Q8_0.
+   --  @param Room Declared context capacity.
+   --  @param Uniform_Router Zero router weights to exercise stable resident expert sets.
+   --  @param Down_Format Native quantization for synthetic expert down weights.
+   procedure Build_Inkling
+     (Result : out Model_Runner.Bytes.Byte_Array_Access;
+      Fault : Inkling_Fault := Inkling_Valid;
+      Quantized : Boolean := False;
+      Room : Positive := 32;
+      Uniform_Router : Boolean := False;
+   Down_Format : Model_Runner.GGUF.Tensor_Type := Model_Runner.GGUF.Type_Q8_0);
+
+   --  @param Path Destination for the deterministic synthetic Inkling GGUF.
+   --  @param Quantized Encode the wider byte-quantized fixture.
+   --  @param Room Declared context capacity.
+   --  @param Fault Optional deliberate numerical defect or zero controls.
+   procedure Write_Inkling
+     (Path : String; Quantized : Boolean := False; Room : Positive := 32;
+      Fault : Inkling_Fault := Inkling_Valid);
+
+   --  Build the small DSpark framing around independently generated payloads.
+   --  @param Result Complete synthetic GGUF; caller frees it.
+   procedure Build_DSpark (Result : out Model_Runner.Bytes.Byte_Array_Access);
+
+   --  Write the DSpark model into obj on every call, without an ignored input.
+   --  @return The freshly constructed test model path.
+   function DSpark_Fixture return String;
 
    --  Where that fixture is, for a test to name.
    Suite_Fixture : constant String := "fixtures/tiny-model.gguf";

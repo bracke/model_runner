@@ -36,6 +36,10 @@ private package Model_Runner.Platform.Instructions is
    --  @return True only where the host says so plainly.
    function Byte_Products return Boolean;
 
+   --  Whether native BF16 conversion/dot instructions and their vector state are available.
+   --  @return False on an incomplete CPU or operating-system feature set.
+   function Brain_Products return Boolean;
+
    --  Whether this processor waits on a watched line at low power: AMD's
    --  MONITORX and MWAITX, which an idle worker of a split run sleeps in
    --  between tokens. Executed where they are absent -- any Intel part, an

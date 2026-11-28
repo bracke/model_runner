@@ -15,6 +15,7 @@ package body Model_Runner.Generation is
    package Workers_CPU renames Model_Runner.Backend.CPU;
 
    use type Workers_CPU.Pool_Reference;
+   use type Model_Runner.Numerics.Real;
 
    use type Model_Runner.Bytes.Byte_Array_Access;
    use type Model_Runner.Errors.Error_Code;
@@ -598,6 +599,15 @@ package body Model_Runner.Generation is
       First_Of : Byte_Access := null;
       Spells   : Spell_Access := null;
       Ending   : Spell_Access := null;
+      type Link_Array is array (Natural range <>) of Integer;
+      type Link_Access is access Link_Array;
+      procedure Free is new Ada.Unchecked_Deallocation (Link_Array, Link_Access);
+      First_Link : Link_Access := null;
+      First_Head : array (Character) of Integer := [others => -1];
+      First_Count : array (Character) of Natural := [others => 0];
+      End_Head : Integer := -1;
+      End_Count : Natural := 0;
+
 
       procedure Learn_First_Of is
       begin
@@ -615,6 +625,17 @@ package body Model_Runner.Generation is
                Spells (Index) := Text /= "";
                First_Of (Index) := (if Text = "" then ' ' else Text (Text'First));
             end;
+         end loop;
+         First_Link := new Link_Array (First_Of'Range);
+         for Index in reverse First_Of'Range loop
+            if Ending (Index) then
+               First_Link (Index) := End_Head; End_Head := Index; End_Count := End_Count + 1;
+            elsif Spells (Index) then
+               First_Link (Index) := First_Head (First_Of (Index));
+               First_Head (First_Of (Index)) := Index;
+               First_Count (First_Of (Index)) := First_Count (First_Of (Index)) + 1;
+            else First_Link (Index) := -1;
+            end if;
          end loop;
       end Learn_First_Of;
 
@@ -639,6 +660,48 @@ package body Model_Runner.Generation is
               and then Model_Runner.Grammar.Accepts (Rules.all, Shape, Text);
          end;
       end Screened_Takes;
+      Selected_Rows : Model_Runner.Shares.Member_Rows (0 .. 255);
+      Selected_Count : Natural := 0;
+      Sparse_Active : Boolean := False;
+      Greedy_Cached : Token_Id := Vocab.No_Token;
+
+      procedure Next_Selection is
+         Candidates : Natural := End_Count;
+         Full : Boolean := False;
+         procedure Visit (Head : Integer) is
+            I : Integer := Head;
+         begin
+            while I >= 0 loop
+               if Screened_Takes (Token_Id (I)) then
+                  if Selected_Count = Selected_Rows'Length then Full := True; return; end if;
+                  declare
+                     At_Row : Natural := Selected_Count;
+                  begin
+                     while At_Row > 0 and then Selected_Rows (At_Row - 1) > I loop
+                        Selected_Rows (At_Row) := Selected_Rows (At_Row - 1); At_Row := At_Row - 1;
+                     end loop;
+                     Selected_Rows (At_Row) := I; Selected_Count := Selected_Count + 1;
+                  end;
+               end if;
+               I := First_Link (I);
+            end loop;
+         end Visit;
+      begin
+         Selected_Count := 0;
+         First_Bytes; Learn_First_Of;
+         Candidates := End_Count;
+         for C in Character loop
+            if First_Ok (C) then Candidates := Candidates + First_Count (C); end if;
+         end loop;
+         if Candidates > 4096 then return; end if;
+         Visit (End_Head);
+         for C in Character loop
+            exit when Full;
+            if First_Ok (C) then Visit (First_Head (C)); end if;
+         end loop;
+         if Full then Selected_Count := 0; end if;
+      end Next_Selection;
+
       Logits  : T.Real_Array_Access := null;
       Tokens  : Token_Buffer := null;
 
@@ -669,6 +732,8 @@ package body Model_Runner.Generation is
       --  A model to draft with, where the caller gave one.
       By_Model : constant Boolean :=
         Draft /= null and then Draft_Session /= null;
+      By_DSpark : constant Boolean := By_Model and then L."=" (L.Config (Draft.all).Kind, L.DFlash);
+      By_Ordinary_Model : constant Boolean := By_Model and then not By_DSpark;
 
       --  The model's own block past its stack, where the file carries
       --  one and the caller asked for it and gave no model.
@@ -735,8 +800,9 @@ package body Model_Runner.Generation is
       Largest_Draft : constant Natural :=
         (if Drafting
          then Natural'Min
+                ((if By_DSpark then 7 else L.Max_Batch - 1), Natural'Min
                 (Item.Draft_Tokens + (if Adapting then 2 else 0),
-                 L.Max_Batch - 1)
+                 L.Max_Batch - 1))
          else 0);
 
       --  How many this round proposes: all it may, or where it adapts, by
@@ -996,6 +1062,42 @@ package body Model_Runner.Generation is
       --  at 34.9 tokens a second against 35.6 plain. A reply copying its
       --  context keeps them all and is back at the most in a few rounds.
       Lookup_Length     : Natural := 1;
+      Lookup_Cap : Positive := Positive'Max (Largest_Draft, 1);
+      Cost_Aware_Lookup : constant Boolean :=
+        By_Context and then L."=" (Settings.Kind, L.Inkling2_Loop) and then not Sampled_Draft;
+
+      procedure Note_Lookup_Cost (Length : Natural; Took : Model_Runner.Clocks.Nanoseconds) is
+         Expected, Costs : Lookup.Cost_Array (1 .. Natural'Max (Largest_Draft, 1)) := [others => 0.0];
+         Samples : Lookup.Sample_Array (Expected'Range) := [others => 0];
+      begin
+         if not Cost_Aware_Lookup or else Length = 0 or else Length > Largest_Draft then return; end if;
+         if not Cost_Seen (Length) then
+            Cost_Seen (Length) := True;
+            return;
+         end if;
+         Cost_Ns (Length) := Cost_Ns (Length) + Long_Float (Took);
+         Cost_Rounds (Length) := Cost_Rounds (Length) + 1.0;
+         if Cost_Rounds (Length) > Long_Float (Cost_Window) then
+            Cost_Ns (Length) := Cost_Ns (Length) / 2.0;
+            Cost_Rounds (Length) := Cost_Rounds (Length) / 2.0;
+         end if;
+         for Candidate in 1 .. Natural'Min (Largest_Draft, Most_Proposals) loop
+            if Cost_Rounds (Candidate) >= Long_Float (Cost_Least)
+              and then Outcome.Offered_At (Candidate) >= Offer_Least
+            then
+               Expected (Candidate) := 1.0;
+               for Position in 1 .. Candidate loop
+                  Expected (Candidate) := Expected (Candidate)
+                    + Long_Float (Outcome.Kept_At (Position)) / Long_Float (Outcome.Offered_At (Position));
+               end loop;
+               Costs (Candidate) := Cost_Ns (Candidate) / Cost_Rounds (Candidate);
+               Samples (Candidate) := Natural (Cost_Rounds (Candidate));
+            end if;
+         end loop;
+         Lookup_Cap := Lookup.Verification_Length
+           (Expected, Costs, Samples, Positive'Max (Largest_Draft, 1), Positive'Max (Lookup_Length, 1));
+      end Note_Lookup_Cost;
+
 
       --  What a mixture's check of two positions costs against a plain
       --  step, timed as the run goes, which sets the share a lookup has to
@@ -1119,6 +1221,15 @@ package body Model_Runner.Generation is
       --  with, the rest from the batch's rows -- and reporting the row the
       --  round ended at would answer about the wrong position for every
       --  token but the last.
+      function Plain_Verification return Boolean is
+        (not Sampled_Draft and then Rules = null
+              and then S.Is_Greedy (Item.Sampling) and then Reporter = null and then Capture = null
+              and then Item.Logprobs = 0 and then Item.Context_Shift = 0 and then Item.Bias_Count = 0
+              and then Item.Sampling.Repeat_Penalty = 1.0 and then Item.Sampling.Frequency_Penalty = 0.0
+              and then Item.Sampling.Presence_Penalty = 0.0 and then Item.Sampling.DRY_Multiplier = 0.0
+              and then not By_Next and then L.Selected_Head_Available (Session, Source));
+      Compact_Verification : Boolean := False;
+
       Every  : T.Real_Array_Access := null;
       Opened : T.Real_Array_Access := null;
 
@@ -1176,7 +1287,6 @@ package body Model_Runner.Generation is
       function Below_Floor (Chosen_Token : Vocab.Token_Id) return Boolean;
 
       function Below_Floor (Chosen_Token : Vocab.Token_Id) return Boolean is
-         use type N.Real;
       begin
          if not (Item.Draft_Floor > 0.0)
            or else Sampled_Draft
@@ -1201,7 +1311,14 @@ package body Model_Runner.Generation is
       end Below_Floor;
 
       procedure Cleanup is
+         Completed : E.Error_Info;
       begin
+         if Sparse_Active and then L.State (Session) not in L.Closed | L.Failed then
+            L.Complete_Logits (Session, Source, Logits, Completed);
+            if E.Is_Error (Completed) then
+               Outcome.Reason := Runtime_Error; Outcome.Error := Completed;
+            end if;
+         end if;
          if Capture /= null then
             Model_Runner.Trajectories.Append
               (Capture.all, Model_Runner.Trajectories.Generation_End,
@@ -1211,6 +1328,7 @@ package body Model_Runner.Generation is
                & ",""seed"":" & Model_Runner.Trajectories.Quote (Outcome.Seed'Image)
                & ",""error"":" & Model_Runner.Trajectories.Quote (Outcome.Error.Code'Image) & "}");
          end if;
+         Free (First_Link);
          Free (First_Of);
          Free (Spells);
          Free (Ending);
@@ -1408,6 +1526,18 @@ package body Model_Runner.Generation is
          end if;
       end if;
 
+      if By_DSpark and then
+        (not S.Is_Greedy (Item.Sampling) or else Item.Context_Shift /= 0
+         or else Pictures.Count /= 0 or else Pictures.Rows /= null
+         or else Item.Draft_Tokens = 0 or else Item.Draft_Lookup_First)
+      then
+         Status := E.Make (E.Arch_Unsupported_Feature);
+         E.Add_Text (Status, "feature", "dflash.greedy_text_drafting", E.Param_Identifier);
+         Conclude (Runtime_Error, Status);
+         Cleanup;
+         return;
+      end if;
+
       Validate (Item, Status);
       if E.Is_Error (Status) then
          Conclude (Runtime_Error, Status);
@@ -1499,9 +1629,10 @@ package body Model_Runner.Generation is
             Said := new Vocab.Token_Array (1 .. L.Capacity (Session) + 1);
          end if;
 
+         Compact_Verification := By_DSpark and then Plain_Verification;
          T.Allocate
-           (N.Element_Count (Settings.Vocabulary)
-            * N.Element_Count (Largest_Draft + 1), Every);
+           ((if Compact_Verification then 1 else N.Element_Count (Settings.Vocabulary)
+             * N.Element_Count (Largest_Draft + 1)), Every);
 
          T.Allocate (N.Element_Count (Settings.Vocabulary), Aside);
 
@@ -1557,7 +1688,7 @@ package body Model_Runner.Generation is
          begin
             L.Keep_States (Session, Largest_Draft + 1, Kept);
 
-            if E.Is_Ok (Kept) and then By_Model then
+            if E.Is_Ok (Kept) and then By_Ordinary_Model then
                L.Keep_States (Draft_Session.all, Largest_Draft + 1, Kept);
             end if;
 
@@ -1872,6 +2003,30 @@ package body Model_Runner.Generation is
          end if;
       end;
 
+      if By_DSpark then
+         declare
+            Keep : constant Natural := First_Token - 1;
+            Alike : Boolean := L.Position (Draft_Session.all) >= Keep;
+            Local : E.Error_Info;
+         begin
+            for At_Token in 0 .. Keep - 1 loop
+               exit when not Alike;
+               Alike := L.Committed_Token (Draft_Session.all, At_Token)
+                 = L.Committed_Token (Session, At_Token);
+            end loop;
+            if Alike then
+               L.Rewind (Draft_Session.all, Keep, Local);
+               Alike := E.Is_Ok (Local);
+            end if;
+            if not Alike then
+               L.Reset (Session);
+               L.Reset (Draft_Session.all);
+               First_Token := 1;
+               Outcome.Cache_Event := Rewind_Unavailable;
+            end if;
+         end;
+      end if;
+
       --  Context budget, checked before any evaluation so that an impossible
       --  request costs nothing.
       declare
@@ -1956,12 +2111,12 @@ package body Model_Runner.Generation is
          --  A split mixture's batch is its own longer bound unless the
          --  caller asked for a size of their own.
          Span : constant Natural :=
-           Natural'Max
+           Natural'Min ((if By_DSpark then 512 else Natural'Last), Natural'Max
              (1,
               Natural'Min
                 ((if Item.Batch_Size = L.Max_Batch
                   then L.Batch_Limit (Source) else Item.Batch_Size),
-                 L.Batch_Limit (Source)));
+                 L.Batch_Limit (Source))));
          --  And the draft's, which may evaluate fewer at once than the
          --  model it drafts for.
          Draft_Span : constant Natural :=
@@ -2003,7 +2158,8 @@ package body Model_Runner.Generation is
 
          Margin : constant Natural :=
            (if Item.Reuse_Committed_Prefix
-              and then L.Keeps_States (L.Config (Source).Kind)
+              and then (L.Keeps_States (L.Config (Source).Kind)
+                        or else L."=" (L.Config (Source).Kind, L.Inkling2_Loop))
             then Held_Back else 0);
          Hold_At : constant Natural :=
            (if Margin = 0 then 0
@@ -2049,7 +2205,7 @@ package body Model_Runner.Generation is
                Natural'Min
                  (L.Capacity (Session) - 1,
                   L.Position (Session) + Ahead - 1));
-            if Drafting and then By_Model then
+            if Drafting and then By_Ordinary_Model then
                L.Reserve_Ahead
                  (Draft_Session.all,
                   Natural'Min
@@ -2077,7 +2233,7 @@ package body Model_Runner.Generation is
          --  draft to catch up from a point behind it: a range check.
          --  What the draft holds that agrees is kept, as the target's is,
          --  and the rest of the shared prefix read into it in batches.
-         if Drafting and then By_Model then
+         if Drafting and then By_Ordinary_Model then
             declare
                Holds : constant Natural := L.Position (Draft_Session.all);
                Keep  : Natural := 0;
@@ -2237,7 +2393,24 @@ package body Model_Runner.Generation is
                --  a draft will be asked of it: the block's chain is made
                --  for a drafting run, and a run under a grammar, or asked
                --  for no draft, has no chain to hand the block.
-               if By_Next and then Drafting then
+               if By_DSpark then
+                  L.Evaluate_Features
+                    (Session, Source, Tokens.all (Index .. Last), L.Draft_Feature_Layers (Draft.all),
+                     L.Draft_Feature_Room (Draft_Session.all), Logits.all, Cancel => Cancel, Status => Status);
+                  if E.Is_Ok (Status) then
+                     L.Inject_Draft_Context
+                       (Draft_Session.all, Draft.all, Tokens.all (Index .. Last),
+                        L.Draft_Feature_Room (Draft_Session.all), Cancel, Status);
+                     if E.Is_Error (Status) then
+                        declare
+                           Rewound : E.Error_Info;
+                        begin
+                           L.Rewind (Session, Index - 1, Rewound);
+                           if E.Is_Error (Rewound) then L.Reset (Session); L.Reset (Draft_Session.all); end if;
+                        end;
+                     end if;
+                  end if;
+               elsif By_Next and then Drafting then
                   declare
                      Rows : T.Real_Array_Access := null;
                   begin
@@ -2312,7 +2485,7 @@ package body Model_Runner.Generation is
                --  The same prompt on the draft, so that it is looking at
                --  what the target is looking at. Its logits are thrown away
                --  here; what matters is its context.
-               if Drafting and then By_Model and then Last > Skip and then not Draft_Full then
+               if Drafting and then By_Ordinary_Model and then Last > Skip and then not Draft_Full then
                   declare
                      Local : E.Error_Info;
                      From  : Natural := Natural'Max (Index, Skip + 1);
@@ -2405,6 +2578,10 @@ package body Model_Runner.Generation is
             Count  : Natural := 0;
             Local  : E.Error_Info;
             Guess  : Token_Id;
+            Winners : Vocab.Token_Array (1 .. Largest_Draft + 1) := [others => Vocab.No_Token];
+            Plain_Winners : constant Boolean := Plain_Verification;
+            Compact_Winners : constant Boolean := By_DSpark and then Plain_Winners;
+
 
             --  Speculative sampling's outcome: how many proposals were kept
             --  (the target's own always is), and, when one was rejected, the
@@ -2518,7 +2695,7 @@ package body Model_Runner.Generation is
                   return;
                end if;
 
-               if By_Model then
+               if By_Ordinary_Model then
                   --  The draft's text begins Skip in: what the target
                   --  keeps before Skip the draft never held, and the
                   --  positions shifted out are the same ones of the text.
@@ -2586,7 +2763,28 @@ package body Model_Runner.Generation is
             Count := 1;
             Proposed.all (1) := Guess;
 
-            if By_Next then
+            if By_DSpark then
+               declare
+                  Slots : constant Natural := Natural'Min
+                    ((if Paused then 0 else Round_Draft),
+                     Natural'Min (Natural'Max (1, L.Capacity (Session) - L.Position (Session)) - 1,
+                                  Natural'Max (1, L.Capacity (Draft_Session.all)
+                                                   - L.Position (Draft_Session.all)) - 1));
+               begin
+                  if Slots > 0 then
+                     L.Propose_Draft_Block
+                       (Draft_Session.all, Draft.all, Guess, Proposed.all (2 .. Slots + 1),
+                        Cancel => Cancel, Status => Local);
+                     if E.Is_Error (Local) then
+                        if Local.Code = E.Generation_Cancelled then Conclude (Cancelled);
+                        else Conclude (Runtime_Error, Local); end if;
+                        Failed := True;
+                        return;
+                     end if;
+                     Count := Count + Slots;
+                  end if;
+               end;
+            elsif By_Next then
                --  The block past the stack, once a proposal: given the
                --  token just guessed beside the stack's state at the
                --  position before it, it says what follows; given that
@@ -2677,7 +2875,7 @@ package body Model_Runner.Generation is
                               Proposed.all
                                 (2 .. (if Low then 2
                                        elsif Thrifty
-                                       then 1 + Natural'Min (Lookup_Length, Largest_Draft)
+                                       then 1 + Natural'Min (Lookup_Length, Natural'Min (Lookup_Cap, Largest_Draft))
                                        else Largest_Draft + 1)),
                               Given,
                               Key => (if Low then Lookup_Low_Key else Lookup.Default_Key));
@@ -2689,7 +2887,7 @@ package body Model_Runner.Generation is
 
                From_Context := By_Context or else Count > 1;
 
-               if By_Model and then Count = 1 then
+               if By_Ordinary_Model and then Count = 1 then
                   --  And what the draft would say after it, and after that, and
                   --  so on. Each proposal costs the draft a pass; a draft as
                   --  large as the target would cost exactly what it saves.
@@ -2818,10 +3016,23 @@ package body Model_Runner.Generation is
             --  this case did not exist until proposals came out of a
             --  search, and paying it on prose with nothing to look up would
             --  have made this a loss where it should be a wash.
-            if Count = 1 then
+            if Compact_Winners then
+               L.Evaluate_Feature_Winners
+                 (Session, Source, Proposed.all (1 .. Count), L.Draft_Feature_Layers (Draft.all),
+                  L.Draft_Feature_Room (Draft_Session.all), Logits.all, Winners (1 .. Count),
+                  Vocab.Beginning_Token (Words.all), Cancel, Local);
+            elsif By_DSpark then
+               L.Evaluate_Features
+                 (Session, Source, Proposed.all (1 .. Count), L.Draft_Feature_Layers (Draft.all),
+                  L.Draft_Feature_Room (Draft_Session.all), Logits.all, Every, Cancel, Local);
+            elsif Count = 1 then
                L.Evaluate
                  (Session, Source, Proposed.all (1), Logits,
                   Cancel, Local);
+            elsif Plain_Winners then
+               L.Evaluate_Greedy_Batch
+                 (Session, Source, Proposed.all (1 .. Count), Logits.all, Every, Winners (1 .. Count),
+                  Vocab.Beginning_Token (Words.all), Cancel, Local);
             else
                L.Evaluate_Batch
                  (Session, Source, Proposed.all (1 .. Count), Logits.all,
@@ -2839,11 +3050,17 @@ package body Model_Runner.Generation is
                   Room : Boolean;
                begin
                   Make_Room (Room);
-                  if Room and then Count = 1 then
+                  if Room and then Compact_Winners then
+                     L.Evaluate_Feature_Winners
+                       (Session, Source, Proposed.all (1 .. Count), L.Draft_Feature_Layers (Draft.all),
+                        L.Draft_Feature_Room (Draft_Session.all), Logits.all, Winners (1 .. Count),
+                        Vocab.Beginning_Token (Words.all), Cancel, Local);
+                  elsif Room and then Count = 1 then
                      L.Evaluate
                        (Session, Source, Proposed.all (1), Logits,
                         Cancel, Local);
                   elsif Room then
+                     Winners := [others => Vocab.No_Token];
                      --  With the states asked for as the first pass asked:
                      --  the next block reads them after either.
                      L.Evaluate_Batch
@@ -2930,6 +3147,8 @@ package body Model_Runner.Generation is
                                             + N.Element_Count
                                                 (Settings.Vocabulary) - 1),
                               Wanted, Local);
+                        elsif Plain_Winners and then Winners (Step - 1) /= Vocab.No_Token then
+                           Wanted := Winners (Step - 1); Local := E.Success;
                         else
                            S.Sample
                              (Sampler,
@@ -2997,8 +3216,7 @@ package body Model_Runner.Generation is
                           N.Element_Count (Proposed.all (Step));
                         Wanted : Token_Id;
                         R, P_X, Q_X : N.Real;
-                        use type N.Real;
-                     begin
+                                    begin
                         --  The target's distribution p at this position, and its
                         --  own draw from it -- unused unless every proposal is
                         --  kept, when it is the round's next token.
@@ -3106,6 +3324,13 @@ package body Model_Runner.Generation is
                end if;
             end if;
 
+            if Compact_Winners and then Accepted < Count then
+               L.Verification_Logits (Session, Source, Accepted - 1, Logits, Local);
+               if E.Is_Error (Local) then
+                  Conclude (Runtime_Error, Local); Failed := True; return;
+               end if;
+            end if;
+
             L.Rewind (Session, Before + Accepted, Local);
             if E.Is_Error (Local) then
                Conclude (Runtime_Error, Local);
@@ -3113,7 +3338,25 @@ package body Model_Runner.Generation is
                return;
             end if;
 
-            if By_Model then
+            if By_DSpark then
+               L.Inject_Draft_Context
+                 (Draft_Session.all, Draft.all, Proposed.all (1 .. Accepted),
+                  L.Draft_Feature_Room (Draft_Session.all), Cancel, Local);
+               if E.Is_Error (Local) then
+                  declare
+                     Rewound : E.Error_Info;
+                  begin
+                     L.Rewind (Session, Before, Rewound);
+                     if E.Is_Error (Rewound) then L.Reset (Session); L.Reset (Draft_Session.all); end if;
+                  end;
+                  if Local.Code = E.Generation_Cancelled then Conclude (Cancelled);
+                  else Conclude (Runtime_Error, Local); end if;
+                  Failed := True;
+                  return;
+               end if;
+            end if;
+
+            if By_Ordinary_Model then
                L.Rewind
                  (Draft_Session.all,
                   Natural'Min (L.Position (Draft_Session.all),
@@ -3143,7 +3386,7 @@ package body Model_Runner.Generation is
             --  round to catch up on.
             --  Several at once in one pass where the round was the text's
             --  and the draft read none of it.
-            while By_Model
+            while By_Ordinary_Model
               and then L.Position (Draft_Session.all) + Skip >= Before
               and then L.Position (Draft_Session.all) + Skip
                        < Before + Verified_Count
@@ -3194,7 +3437,7 @@ package body Model_Runner.Generation is
                --  Nothing to read here: the next round begins with the
                --  residual rather than a draw from these.
                null;
-            elsif Count > 1 then
+            elsif Count > 1 and then not Compact_Winners then
                declare
                   Row : constant N.Element_Count :=
                     N.Element_Count (Accepted - 1)
@@ -3389,7 +3632,12 @@ package body Model_Runner.Generation is
                   if Rules /= null and then not Drafting then
                      S.Release_Step_Mask (Sampler);
                      Chosen := False;
-                     if S.Masking_Commutes (Item.Sampling) then
+                     if Sparse_Active then
+                        S.Sample_Allowed
+                          (Sampler, Logits.all, Selected_Rows (0 .. Selected_Count - 1), Token, Status);
+                        if E.Is_Error (Status) then Conclude (Runtime_Error, Status); exit Decode_Loop; end if;
+                        Chosen := True;
+                     elsif S.Masking_Commutes (Item.Sampling) then
                         S.Sample (Sampler, Logits.all, Token, Status, Sharing);
                         if E.Is_Error (Status) then
                            Conclude (Runtime_Error, Status);
@@ -3398,11 +3646,11 @@ package body Model_Runner.Generation is
                         Chosen := Grammar_Takes (Token);
                      end if;
 
-                     if not Chosen then
+                     if not Chosen and then not Sparse_Active then
                         First_Bytes;
                         Learn_First_Of;
                      end if;
-                     if not Chosen and then S.Ranks_First (Item.Sampling) then
+                     if not Chosen and then not Sparse_Active and then S.Ranks_First (Item.Sampling) then
                         --  The chain's first filter is a top-k, so the
                         --  draw is decided by the K best tokens the grammar
                         --  allows and the rest need not be asked: the
@@ -3429,7 +3677,7 @@ package body Model_Runner.Generation is
                               exit Decode_Loop;
                            end if;
                         end;
-                     elsif not Chosen then
+                     elsif not Chosen and then not Sparse_Active then
                         declare
                            Allowed : Natural := 0;
                         begin
@@ -3506,12 +3754,15 @@ package body Model_Runner.Generation is
                            if Thrifty then
                               if Cost_Untimed > 0 then
                                  Cost_Untimed := Cost_Untimed - 1;
-                              elsif Checked = 1 then
+                              else
+                                 Note_Lookup_Cost (Natural'Max (Checked, 1) - 1, Took);
+                                 if Checked = 1 then
                                  Step_Ns := Step_Ns + Took;
                                  Step_Rounds := Step_Rounds + 1;
                               elsif Checked = 2 then
                                  Pair_Ns := Pair_Ns + Took;
                                  Pair_Rounds := Pair_Rounds + 1;
+                                 end if;
                               end if;
                            end if;
                            if Sampled_Draft and then Watched then
@@ -3585,7 +3836,11 @@ package body Model_Runner.Generation is
                      Verified_At := Verified_At + 1;
                      Token := Verified.all (Verified_At);
                   elsif not Chosen then
+                     if Greedy_Cached /= Vocab.No_Token then
+                        Token := Greedy_Cached; Greedy_Cached := Vocab.No_Token; Status := E.Success;
+                     else
                      S.Sample (Sampler, Logits.all, Token, Status, Sharing);
+                     end if;
                      if E.Is_Error (Status) then
                         Conclude (Runtime_Error, Status);
                         exit Decode_Loop;
@@ -3684,8 +3939,29 @@ package body Model_Runner.Generation is
                   if Drafting then
                      Status := E.Success;
                   else
-                     L.Evaluate
-                       (Session, Source, Token, Logits, Cancel, Status);
+                     if Rules /= null and then Item.Constrained_Projection and then S.Is_Greedy (Item.Sampling)
+                       and then Reporter = null and then Capture = null and then Item.Logprobs = 0
+                       and then Item.Context_Shift = 0
+                       and then L.Selected_Head_Available (Session, Source)
+                     then Next_Selection; else Selected_Count := 0; end if;
+                     if Selected_Count > 0 then
+                        L.Evaluate_Selected
+                          (Session, Source, Token, Selected_Rows (0 .. Selected_Count - 1), Logits, Cancel, Status);
+                     elsif Rules = null and then S.Is_Greedy (Item.Sampling)
+                       and then Reporter = null and then Capture = null and then Item.Logprobs = 0
+                       and then Item.Context_Shift = 0 and then Item.Bias_Count = 0
+                       and then Item.Sampling.Repeat_Penalty = 1.0
+                       and then Item.Sampling.Frequency_Penalty = 0.0
+                       and then Item.Sampling.Presence_Penalty = 0.0
+                       and then Item.Sampling.DRY_Multiplier = 0.0
+                       and then L.Selected_Head_Available (Session, Source)
+                     then
+                        L.Evaluate_Greedy (Session, Source, Token, Logits, Greedy_Cached,
+                                           Vocab.Beginning_Token (Words.all), Cancel, Status);
+                     else
+                        L.Evaluate (Session, Source, Token, Logits, Cancel, Status);
+                     end if;
+                     if E.Is_Ok (Status) then Sparse_Active := Selected_Count > 0; end if;
                   end if;
 
                   --  A context that has filled, when the caller asked for the

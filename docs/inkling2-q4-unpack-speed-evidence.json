@@ -1,0 +1,451 @@
+{
+  "schema": "model_runner.inkling2.exact_q4_k_unpacking.v1",
+  "collected_at": "2026-11-25T21:46:06.633644+00:00",
+  "status": "Complete: exact vector Q4_K unpacking, exact/reference checks, one Inkling timing and shared-engine regression passed",
+  "implementation": [
+    "Add an explicit eight-lane Q4_K nibble kernel inside the existing generic decoder, reusing its six-bit scale extraction and sub-block scale/minimum calculation",
+    "Select the kernel only in the wide instance via a private generic formal; the plain instance and hardware fallback keep the original scalar loop",
+    "Unpack low/high nibbles from each group of eight bytes and produce both 32-value sub-blocks using the existing layout and exact binary32 arithmetic",
+    "For finite half scales, the scale*factor*nibble product needs at most 21 significand bits and every nonzero product stays in the normal binary32 exponent range; fused subtraction rounds only the same final subtraction as the scalar path",
+    "Retain compiler contraction-off policy, block bounds checks, target mapping, matrix reductions, physical weights and session state; no additional persistent allocation, runtime or threads"
+  ],
+  "changed_source_files": [
+    "src/library/model_runner-quantization.adb",
+    "src/library/model_runner-quantization-decoders.adb",
+    "src/library/model_runner-quantization-decoders.ads",
+    "src/library/model_runner-quantization-wide.ads",
+    "tests/src/tests-gguf_cases.adb"
+  ],
+  "focused_aunit": {
+    "gguf_and_kernels": "83/83",
+    "native_inkling": "15/15"
+  },
+  "q4_scalar_comparison": {
+    "half_encoding_sweep": 65536,
+    "minimum_half_mapping": "pattern xor 0x5a3c; both signs appear in each two-block call, so every encoding is exercised as scale and minimum",
+    "factor_minimum_sweeps": "All 4096 six-bit factor/minimum pairs in each sub-block position, with two finite scale/minimum configurations including maximum and minimum finite magnitudes",
+    "two_block_comparisons": 73728,
+    "decoded_value_comparisons": 37748736,
+    "comparison": "Exact binary32 bits for finite values, signed zeros and infinity; matching NaN classification without a payload guarantee",
+    "boundaries": "Nonzero input/output array bounds, unaligned source offset, exact final eight-byte load and untouched output sentinel"
+  },
+  "additional_validation": "Existing independent hand-derived Q4_K layout goldens, decoder refusal cases, wide/plain comparisons, exact matrix tests and lifecycle tests retain their existing criteria.",
+  "validation": {
+    "status": "passed",
+    "stages": [
+      {
+        "label": "test-build",
+        "command": [
+          "alr",
+          "-n",
+          "exec",
+          "--",
+          "gprbuild",
+          "-p",
+          "-j4",
+          "-P",
+          "tests.gpr",
+          "tests_main.adb"
+        ],
+        "started_at": "2026-11-25T21:42:19.712305+00:00",
+        "environment": {},
+        "returncode": 0,
+        "finished_at": "2026-11-25T21:42:36.078621+00:00",
+        "log_sha256": "03b7830204d86f5341962a1189f019bb90c5b5911c83a18e2e68bce89389e07d"
+      },
+      {
+        "label": "gguf-kernels",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "gguf container",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T21:42:36.079224+00:00",
+        "environment": {
+          "MR_EXPECT_DEVICE": "1"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T21:42:42.661400+00:00",
+        "log_sha256": "f02f6f565a3c97c1a683966a714aef6ac4e896d506ededa0abe9d920db520d4c"
+      },
+      {
+        "label": "focused",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T21:42:42.662075+00:00",
+        "environment": {
+          "MR_EXPECT_DEVICE": "1"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T21:42:47.138461+00:00",
+        "log_sha256": "0d980c2601e351ee697da08ed3b0889477a97e378dcf29b59d4e4e5de13ee03d"
+      },
+      {
+        "label": "cpu",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-q4-unpack-final-cpu",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T21:42:47.138858+00:00",
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "f32",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_CACHE": "f32",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T21:43:01.691634+00:00",
+        "log_sha256": "945e9057d67c4f98ba04e577fe9927acd4a68852435e99a0c199e47e6544c78f"
+      },
+      {
+        "label": "private-vulkan",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-q4-unpack-final-private-vulkan",
+          "-p",
+          "MemoryMax=16G",
+          "-p",
+          "MemorySwapMax=0",
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T21:43:01.692339+00:00",
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "f32",
+          "MODEL_RUNNER_INKLING_BACKEND": "hybrid",
+          "MODEL_RUNNER_INKLING_CACHE": "f32",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T21:43:17.658921+00:00",
+        "log_sha256": "f7715b6c90f45a40e77bc6ee64f4e96a1a730890a7fcdf7984ec3f8a380a2e49"
+      },
+      {
+        "label": "f16-cache",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-q4-unpack-final-f16-cache",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T21:43:17.659644+00:00",
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "f32",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_CACHE": "f16",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-half-prefix"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T21:43:21.885881+00:00",
+        "log_sha256": "f9a0a9d274e5c5d091dd675bdab01bd83493d6b38fcfc33c15b4b97f5e589995"
+      }
+    ],
+    "scope": "Focused tests and three real-checkpoint profiles; no benchmark campaign or full release-suite claim.",
+    "binary_sha256": {
+      "tests/bin/tests": "543e154c0931f512836a6123a5e0aab8973bb1166df1fc9f80eab46914eea7af",
+      "bin/model_runner": "8a42593ff621cfd36ccc1bec27902e312f87f507459c39c3684a56ed83a1caba"
+    },
+    "source_manifest_sha256": "a7dd0a339cf067e3e9f9f65617e884216975ee4c68654e4c334661b6e10c5414",
+    "finished_at": "2026-11-25T21:43:22.595855+00:00"
+  },
+  "exact_activation_comparison": {
+    "status": "passed",
+    "started_at": "2026-11-25T21:43:23.269506+00:00",
+    "baseline_evidence": "docs/inkling2-q8-unpack-speed-evidence.json",
+    "baseline_binary_sha256": "6075357357f5c38e20501c8b3699425a9c227d2fddb17a89ce74a48ceb0e53a4",
+    "baseline_activation_manifest_sha256": "22772d3206602971db54873015117ad8c112de357df67df83a8d1e6842a0cfb9",
+    "comparison": "Exact original/exact-q4-unpack activation bytes using the existing independent checkpoint observer",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-q4-unpack-exact",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+      "test",
+      "--only",
+      "native Inkling : optional independent",
+      "--timed"
+    ],
+    "binary_sha256": "543e154c0931f512836a6123a5e0aab8973bb1166df1fc9f80eab46914eea7af",
+    "returncode": 0,
+    "log_sha256": "87a5dab6c359dfe603936e3edac2b9e4628fa7f5796607febf6349673a1945c5",
+    "identical_files": 2425,
+    "identical_bytes": 14765544,
+    "manifest_sha256": "22772d3206602971db54873015117ad8c112de357df67df83a8d1e6842a0cfb9",
+    "finished_at": "2026-11-25T21:43:37.220283+00:00"
+  },
+  "single_measurement": {
+    "command": [
+      "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/native-batched-prefill/prompt-512.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "f32",
+      "--kv-cache",
+      "f32",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "640",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "0",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache"
+    ],
+    "model_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+    "measured_passes": 1,
+    "warmup_passes": 1,
+    "os_memory_max_bytes": 21474836480,
+    "os_swap_max_bytes": 0,
+    "comparison_scope": "One sample before and one after; no repeated-run confidence claim.",
+    "status": "passed",
+    "started_at": "2026-11-25T21:43:37.708220+00:00",
+    "prior_prefill_seconds": 29.154,
+    "prior_decode_seconds": 5.403,
+    "binary_sha256": {
+      "tests/bin/tests": "543e154c0931f512836a6123a5e0aab8973bb1166df1fc9f80eab46914eea7af",
+      "bin/model_runner": "8a42593ff621cfd36ccc1bec27902e312f87f507459c39c3684a56ed83a1caba"
+    },
+    "source_manifest_sha256": "a7dd0a339cf067e3e9f9f65617e884216975ee4c68654e4c334661b6e10c5414",
+    "process_command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-q4-unpack-single-speed",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/q4-unpack-speed/single-speed.time",
+      "/home/bent/Projekte/Ada/model_runner/tests/bin/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/native-batched-prefill/prompt-512.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "f32",
+      "--kv-cache",
+      "f32",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "640",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "0",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache"
+    ],
+    "returncode": 0,
+    "process_wall_seconds": 69.49542304128408,
+    "prompt_tokens": 512,
+    "generated_tokens": 16,
+    "wall_seconds": 34.154,
+    "prefill_seconds": 28.752,
+    "decode_seconds": 5.401,
+    "load_seconds": 0.272,
+    "output_digest": "4f1d96c1112e7b25",
+    "reference_output_matched": true,
+    "stderr_sha256": "cd75c5ff45cbc45168a21e2d08fc2c3d9c68e11828905a3118eb45b6b61500ae",
+    "observed_prefill_reduction_percent": 1.3788845441448871,
+    "observed_decode_reduction_percent": 0.0370164723301869,
+    "finished_at": "2026-11-25T21:44:47.204830+00:00"
+  },
+  "baseline_evidence": "docs/inkling2-q8-unpack-speed-evidence.json",
+  "baseline": {
+    "prefill_seconds": 29.154,
+    "decode_seconds": 5.403,
+    "wall_seconds": 34.559
+  },
+  "comparison_limit": "One warmup and one measured pass; no repeated-run confidence or new full-release-suite claim. The original mixed Q4_K_M GGUF and all quantization/scaling metadata remain unchanged.",
+  "observed_prefill_reduction_percent": 1.3788845441448871,
+  "observed_decode_reduction_percent": 0.0370164723301869,
+  "observed_wall_reduction_percent": 1.171908909401298,
+  "shared_engine_regression": {
+    "status": "passed",
+    "protocol": "docs/inkling2-q4-unpack-no-adapter-protocol.json",
+    "evidence": "docs/inkling2-no-adapter-evidence.json",
+    "samples": 28,
+    "gates": [
+      {
+        "batch": 1,
+        "paired_median_prompt_ratio": 0.21530647308451184,
+        "paired_median_decode_ratio": 0.3963686471780936,
+        "limit": 1.05,
+        "pairs": [
+          {
+            "prompt_seconds": 0.22515182509165074,
+            "decode_seconds": 0.4020548461647759
+          },
+          {
+            "prompt_seconds": 0.21530647308451184,
+            "decode_seconds": 0.3979315433394449
+          },
+          {
+            "prompt_seconds": 0.21590726224620327,
+            "decode_seconds": 0.40357197584783105
+          },
+          {
+            "prompt_seconds": 0.2149899463428833,
+            "decode_seconds": 0.3963686471780936
+          },
+          {
+            "prompt_seconds": 0.2148563181787398,
+            "decode_seconds": 0.3943443948127102
+          },
+          {
+            "prompt_seconds": 0.21504429306451214,
+            "decode_seconds": 0.39446683005059857
+          },
+          {
+            "prompt_seconds": 0.21555559919387093,
+            "decode_seconds": 0.3958625468824496
+          }
+        ],
+        "passed": true
+      },
+      {
+        "batch": 2,
+        "paired_median_prompt_ratio": 0.21619052947956052,
+        "paired_median_decode_ratio": 0.39448616161787475,
+        "limit": 1.05,
+        "pairs": [
+          {
+            "prompt_seconds": 0.21664436192939154,
+            "decode_seconds": 0.39111793834335296
+          },
+          {
+            "prompt_seconds": 0.2162632178873337,
+            "decode_seconds": 0.39492193428511835
+          },
+          {
+            "prompt_seconds": 0.215312401696187,
+            "decode_seconds": 0.3921207838658512
+          },
+          {
+            "prompt_seconds": 0.21628790720372926,
+            "decode_seconds": 0.3918273051303184
+          },
+          {
+            "prompt_seconds": 0.21619052947956052,
+            "decode_seconds": 0.3952021002804097
+          },
+          {
+            "prompt_seconds": 0.21543952573123032,
+            "decode_seconds": 0.39448616161787475
+          },
+          {
+            "prompt_seconds": 0.21468958401880664,
+            "decode_seconds": 0.3965664969731366
+          }
+        ],
+        "passed": true
+      }
+    ],
+    "evidence_sha256": "defb0e95c50aa87d58852165557016dd83d899ae13e1e13adfab2180311b3da6",
+    "previous_evidence": "docs/inkling2-no-adapter-before-q4-unpack-evidence.json"
+  },
+  "repository_check": {
+    "command": [
+      "./bin/tests",
+      "check",
+      "..",
+      "--repository"
+    ],
+    "returncode": 0,
+    "log": "artifacts/inkling2/obj/q4-unpack-speed/repository-check.log",
+    "log_sha256": "077c2b4c26591dbcad61d90314bbd4484c3cbb0def98ac3f865354fbb651b89c",
+    "summaries": [
+      "checks 31573, failures 0"
+    ]
+  },
+  "finished_at": "2026-11-25T21:53:17.706472+00:00",
+  "final_source_and_binary_integrity": "passed"
+}

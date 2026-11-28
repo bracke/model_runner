@@ -1,6 +1,8 @@
 with Ada.Unchecked_Conversion;
 with Interfaces;
+with Model_Runner.Platform;
 with System;
+with System.Storage_Elements;
 with System.Machine_Code;
 
 package body Model_Runner.Kernels is
@@ -91,6 +93,101 @@ package body Model_Runner.Kernels is
       end loop;
    end Scale;
 
+   procedure Weighted_Sum (Target : in out Real_Array; Values, Weights : Real_Array) is
+      Width : constant Element_Count := Target'Length;
+      At_Index : Element_Count := 0;
+      procedure Wide (Count : Element_Count);
+      pragma Machine_Attribute (Wide, "target", "avx2");
+      pragma No_Inline (Wide);
+      procedure Wide (Count : Element_Count) is
+         use System.Storage_Elements;
+         type Address_Table is array (0 .. 5) of System.Address;
+         Arguments : aliased Address_Table :=
+           [Target (Target'First)'Address, Values (Values'First)'Address, Weights (Weights'First)'Address,
+            To_Address (Integer_Address (Width * 4)), To_Address (Integer_Address (Weights'Length)),
+            To_Address (Integer_Address (Count * 4))];
+      begin
+         --  Four independent output vectors stay in registers through every
+         --  expert in the original rank order. No intermediate sum or scaled
+         --  expert row is written back; raw expert scratch is not consumed again.
+         System.Machine_Code.Asm
+          ("movq 0(%0), %%rdi" & ASCII.LF &
+           "movq 8(%0), %%rsi" & ASCII.LF &
+           "movq 16(%0), %%r8" & ASCII.LF &
+           "movq 24(%0), %%rcx" & ASCII.LF &
+           "movq 32(%0), %%r9" & ASCII.LF &
+           "movq 40(%0), %%r12" & ASCII.LF &
+           "xorq %%r10, %%r10" & ASCII.LF &
+           "1:" & ASCII.LF &
+           "vxorps %%ymm1, %%ymm1, %%ymm1" & ASCII.LF &
+           "vxorps %%ymm2, %%ymm2, %%ymm2" & ASCII.LF &
+           "vxorps %%ymm3, %%ymm3, %%ymm3" & ASCII.LF &
+           "vxorps %%ymm4, %%ymm4, %%ymm4" & ASCII.LF &
+           "leaq (%%rsi,%%r10), %%rax" & ASCII.LF &
+           "xorq %%rdx, %%rdx" & ASCII.LF &
+           "2:" & ASCII.LF &
+           "vbroadcastss (%%r8,%%rdx,4), %%ymm0" & ASCII.LF &
+           "vmovups 0(%%rax), %%ymm5" & ASCII.LF &
+           "vmovups 32(%%rax), %%ymm6" & ASCII.LF &
+           "vmovups 64(%%rax), %%ymm7" & ASCII.LF &
+           "vmovups 96(%%rax), %%ymm8" & ASCII.LF &
+           "vmulps %%ymm0, %%ymm5, %%ymm5" & ASCII.LF &
+           "vmulps %%ymm0, %%ymm6, %%ymm6" & ASCII.LF &
+           "vmulps %%ymm0, %%ymm7, %%ymm7" & ASCII.LF &
+           "vmulps %%ymm0, %%ymm8, %%ymm8" & ASCII.LF &
+           "vaddps %%ymm5, %%ymm1, %%ymm1" & ASCII.LF &
+           "vaddps %%ymm6, %%ymm2, %%ymm2" & ASCII.LF &
+           "vaddps %%ymm7, %%ymm3, %%ymm3" & ASCII.LF &
+           "vaddps %%ymm8, %%ymm4, %%ymm4" & ASCII.LF &
+           "addq %%rcx, %%rax" & ASCII.LF &
+           "incq %%rdx" & ASCII.LF &
+           "cmpq %%r9, %%rdx" & ASCII.LF &
+           "jne 2b" & ASCII.LF &
+           "vmovups %%ymm1, 0(%%rdi,%%r10)" & ASCII.LF &
+           "vmovups %%ymm2, 32(%%rdi,%%r10)" & ASCII.LF &
+           "vmovups %%ymm3, 64(%%rdi,%%r10)" & ASCII.LF &
+           "vmovups %%ymm4, 96(%%rdi,%%r10)" & ASCII.LF &
+           "addq $128, %%r10" & ASCII.LF &
+           "cmpq %%r12, %%r10" & ASCII.LF &
+           "jne 1b" & ASCII.LF &
+           "vzeroupper",
+           Inputs => System.Address'Asm_Input ("r", Arguments'Address),
+           Clobber => "rax,rcx,rdx,rsi,rdi,r8,r9,r10,r12,"
+             & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,cc,memory", Volatile => True);
+      end Wide;
+   begin
+      if Width = 0 then return; end if;
+      if Values'Length mod Width /= 0 or else Values'Length / Width /= Weights'Length then return; end if;
+      if Weights'Length = 0 then Target := [others => 0.0]; return; end if;
+      if Model_Runner.Platform.Wide_Vectors and then Width >= 32 then
+         At_Index := Width / 32 * 32;
+         Wide (At_Index);
+      end if;
+      declare
+         Scratch : Real_Array (0 .. 31);
+         First : Element_Count := At_Index;
+      begin
+         --  Use the original primitives for short tails and unsupported
+         --  hosts, including their operand order for non-finite payloads.
+         --  Scratch is bounded independently of the model width.
+         while First < Width loop
+            declare
+               Here : constant Element_Count := Element_Count'Min (32, Width - First);
+               Into : Real_Array renames Target (Target'First + First .. Target'First + First + Here - 1);
+            begin
+               Into := [others => 0.0];
+               for Expert in Element_Count range 0 .. Element_Count (Weights'Length) - 1 loop
+                  Scratch (0 .. Here - 1) := Values
+                    (Values'First + Expert * Width + First .. Values'First + Expert * Width + First + Here - 1);
+                  Scale (Scratch (0 .. Here - 1), Weights (Weights'First + Expert));
+                  Add (Into, Scratch (0 .. Here - 1));
+               end loop;
+               First := First + Here;
+            end;
+         end loop;
+      end;
+   end Weighted_Sum;
+
    ---------
    -- Dot --
    ---------
@@ -123,12 +220,73 @@ package body Model_Runner.Kernels is
       Wide_Lanes := Allowed;
    end Use_Wide_Lanes;
 
+   procedure Relative_Scores_Eight
+     (Scores : in out Real_Array; Relative, Table : Real_Array;
+      Distance, Extent : Element_Count; Scale, Sink : Real; Handled : out Boolean)
+   is
+      type Indices is array (Element_Count range 0 .. 7) of Interfaces.Integer_32;
+      Offsets, Masks : Indices := [others => 0];
+      use type Interfaces.Integer_32;
+      Width : constant Element_Count := Relative'Length;
+      Active : Boolean := False;
+   begin
+      Handled := False;
+      if not Wide_Lanes or else Scores'Length /= 8 or else Distance < 7
+        or else Width = 0 or else Extent > Element_Count (Table'Length) / Width
+        or else Extent > Element_Count (Interfaces.Integer_32'Last) / Width
+      then return; end if;
+      for Lane in Offsets'Range loop
+         if Distance - Lane < Extent then
+            Offsets (Lane) := Interfaces.Integer_32 ((Distance - Lane) * Width);
+            Masks (Lane) := -1; Active := True;
+         end if;
+      end loop;
+      if not Active then
+         for Index in Scores'Range loop Scores (Index) := Scores (Index) * Scale + (0.0 - Sink); end loop;
+         Handled := True; return;
+      end if;
+      System.Machine_Code.Asm
+        ("vxorps %%ymm0, %%ymm0, %%ymm0" & ASCII.LF
+         & "vmovdqu (%1), %%ymm1" & ASCII.LF
+         & "vmovdqu (%2), %%ymm2" & ASCII.LF
+         & "movq %3, %%rsi" & ASCII.LF
+         & "movq %4, %%rdi" & ASCII.LF
+         & "movq %5, %%rcx" & ASCII.LF
+         & "1:" & ASCII.LF
+         & "vxorps %%ymm4, %%ymm4, %%ymm4" & ASCII.LF
+         & "vmovaps %%ymm2, %%ymm3" & ASCII.LF
+         & "vgatherdps %%ymm3, (%%rdi,%%ymm1,4), %%ymm4" & ASCII.LF
+         & "vbroadcastss (%%rsi), %%ymm5" & ASCII.LF
+         & "vmulps %%ymm5, %%ymm4, %%ymm4" & ASCII.LF
+         & "vandps %%ymm2, %%ymm4, %%ymm4" & ASCII.LF
+         & "vaddps %%ymm4, %%ymm0, %%ymm0" & ASCII.LF
+         & "addq $4, %%rsi" & ASCII.LF
+         & "addq $4, %%rdi" & ASCII.LF
+         & "decq %%rcx" & ASCII.LF
+         & "jnz 1b" & ASCII.LF
+         & "vbroadcastss %6, %%ymm5" & ASCII.LF
+         & "vbroadcastss %7, %%ymm6" & ASCII.LF
+         & "vsubps %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+         & "vmulps (%0), %%ymm5, %%ymm5" & ASCII.LF
+         & "vaddps %%ymm0, %%ymm5, %%ymm5" & ASCII.LF
+         & "vmovups %%ymm5, (%0)" & ASCII.LF
+         & "vzeroupper",
+         Inputs => [System.Address'Asm_Input ("r", Scores (Scores'First)'Address),
+                    System.Address'Asm_Input ("r", Offsets'Address),
+                    System.Address'Asm_Input ("r", Masks'Address),
+                    System.Address'Asm_Input ("r", Relative (Relative'First)'Address),
+                    System.Address'Asm_Input ("r", Table (Table'First)'Address),
+                    Element_Count'Asm_Input ("r", Width), Real'Asm_Input ("m", Scale), Real'Asm_Input ("m", Sink)],
+         Clobber => "rsi,rdi,rcx,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,cc,memory", Volatile => True);
+      Handled := True;
+   end Relative_Scores_Eight;
+
    --  Values into binary16, eight a step through VCVTPS2PH where every one
    --  of the eight is finite and either zero or at least the smallest
    --  binary16 subnormal -- where the instruction's rounding, to nearest
    --  and ties to even, is To_Half's to the bit -- and through To_Half
-   --  where any is not: a NaN keeps To_Half's payload, and a value below
-   --  two to the minus twenty-four goes to zero as To_Half sends it. A
+   --  where any is not: a NaN keeps To_Half's payload. Finite values,
+   --  including those that round to the smallest subnormal, use the instruction. A
    --  picture's keys and values are ten million a block, converted one at
    --  a time they were a third of its attention.
    procedure To_Halves
@@ -145,9 +303,6 @@ package body Model_Runner.Kernels is
            ("movl $0x7fffffff, %%eax"          & ASCII.LF
             & "vmovd %%eax, %%xmm3"            & ASCII.LF
             & "vbroadcastss %%xmm3, %%ymm3"    & ASCII.LF
-            & "movl $0x33800000, %%eax"        & ASCII.LF
-            & "vmovd %%eax, %%xmm4"            & ASCII.LF
-            & "vbroadcastss %%xmm4, %%ymm4"    & ASCII.LF
             & "movl $0x7f800000, %%eax"        & ASCII.LF
             & "vmovd %%eax, %%xmm5"            & ASCII.LF
             & "vbroadcastss %%xmm5, %%ymm5"    & ASCII.LF
@@ -158,12 +313,7 @@ package body Model_Runner.Kernels is
             & "1:"                             & ASCII.LF
             & "vmovups (%%rsi), %%ymm0"        & ASCII.LF
             & "vandps %%ymm3, %%ymm0, %%ymm1"  & ASCII.LF
-            & "vcmpps $0x1d, %%ymm4, %%ymm1, %%ymm2" & ASCII.LF
-            & "vxorps %%xmm6, %%xmm6, %%xmm6"  & ASCII.LF
-            & "vcmpps $0x00, %%ymm6, %%ymm1, %%ymm6" & ASCII.LF
-            & "vorps %%ymm6, %%ymm2, %%ymm2"   & ASCII.LF
-            & "vcmpps $0x11, %%ymm5, %%ymm1, %%ymm6" & ASCII.LF
-            & "vandps %%ymm6, %%ymm2, %%ymm2"  & ASCII.LF
+            & "vcmpps $0x11, %%ymm5, %%ymm1, %%ymm2" & ASCII.LF
             & "vmovmskps %%ymm2, %%eax"        & ASCII.LF
             & "xorl $0xff, %%eax"              & ASCII.LF
             & "orl %%eax, %0"                  & ASCII.LF
@@ -180,7 +330,7 @@ package body Model_Runner.Kernels is
                Interfaces.Unsigned_64'Asm_Input
                  ("r", Interfaces.Unsigned_64 (Blocks))],
             Clobber  =>
-              "rax,rcx,rsi,rdi,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,cc,memory",
+              "rax,rcx,rsi,rdi,xmm0,xmm1,xmm2,xmm3,xmm5,cc,memory",
             Volatile => True);
       end if;
 
@@ -197,6 +347,53 @@ package body Model_Runner.Kernels is
            N.To_Half (Values (Values'First + Index));
       end loop;
    end To_Halves;
+
+   procedure From_Halves (Halves : Half_Array; Values : out Real_Array) is
+      Whole : constant Element_Count := (if Wide_Lanes then Halves'Length / 8 * 8 else 0);
+      Exceptional : Interfaces.Unsigned_32 := 0;
+   begin
+      if Whole > 0 then
+         System.Machine_Code.Asm
+           ("movl $0x7c007c00, %%eax" & ASCII.LF
+            & "vmovd %%eax, %%xmm3" & ASCII.LF
+            & "vpshufd $0, %%xmm3, %%xmm3" & ASCII.LF
+            & "xorl %0, %0" & ASCII.LF
+            & "movq %1, %%r8" & ASCII.LF
+            & "movq %2, %%r9" & ASCII.LF
+            & "movq %3, %%rcx" & ASCII.LF
+            & "1:" & ASCII.LF
+            & "vmovdqu (%%r8), %%xmm1" & ASCII.LF
+            & "vpand %%xmm3, %%xmm1, %%xmm2" & ASCII.LF
+            & "vpcmpeqw %%xmm3, %%xmm2, %%xmm2" & ASCII.LF
+            & "vpmovmskb %%xmm2, %%eax" & ASCII.LF
+            & "orl %%eax, %0" & ASCII.LF
+            & "vcvtph2ps %%xmm1, %%ymm0" & ASCII.LF
+            & "vmovups %%ymm0, (%%r9)" & ASCII.LF
+            & "addq $16, %%r8" & ASCII.LF
+            & "addq $32, %%r9" & ASCII.LF
+            & "decq %%rcx" & ASCII.LF
+            & "jnz 1b" & ASCII.LF
+            & "vzeroupper",
+            Outputs => Interfaces.Unsigned_32'Asm_Output ("=&r", Exceptional),
+            Inputs => [System.Address'Asm_Input ("r", Halves (Halves'First)'Address),
+                       System.Address'Asm_Input ("r", Values (Values'First)'Address),
+                       Interfaces.Unsigned_64'Asm_Input ("r", Interfaces.Unsigned_64 (Whole / 8))],
+            Clobber => "rax,r8,r9,rcx,ymm0,ymm1,ymm2,ymm3,cc,memory", Volatile => True);
+      end if;
+      --  The common finite vector path needs no per-element repair scan.
+      if Interfaces."/=" (Exceptional, 0) then
+         for Index in Element_Count range 0 .. Whole - 1 loop
+            if Interfaces."="
+              (Interfaces."and" (Interfaces.Unsigned_16 (Halves (Halves'First + Index)), 16#7C00#), 16#7C00#)
+            then
+               Values (Values'First + Index) := N.To_Real (Halves (Halves'First + Index));
+            end if;
+         end loop;
+      end if;
+      for Index in Whole .. Element_Count (Halves'Length) - 1 loop
+         Values (Values'First + Index) := N.To_Real (Halves (Halves'First + Index));
+      end loop;
+   end From_Halves;
 
    function Head_Dot
      (Left     : Real_Array;
@@ -2444,11 +2641,54 @@ package body Model_Runner.Kernels is
    -- RMS_Norm --
    --------------
 
+   function RMS_Scale (Value : Real_Array; Epsilon : Real) return Real is
+      Sum : Wide_Real := 0.0;
+   begin
+      if Value'Length = 0 then return 0.0; end if;
+      for X of Value loop Sum := Sum + Wide_Real (X * X); end loop;
+      declare
+         Mean : constant Real := Real (Sum / Wide_Real (Value'Length));
+      begin
+         return 1.0 / Real (N.Sqrt (Wide_Real (Mean + Epsilon)));
+      end;
+   end RMS_Scale;
+
+   procedure RMS_Norm_In_Place (Value : in out Real_Array; Weight : Real_Array; Epsilon : Real;
+      Finite : access Boolean := null) is
+      Valid : Boolean := True;
+   begin
+      if Finite /= null then Finite.all := True; end if;
+      if Value'Length = 0 or else Value'Length /= Weight'Length then
+         Value := [others => 0.0];
+         return;
+      end if;
+      declare
+         Scale : constant Real := RMS_Scale (Value, Epsilon);
+      begin
+         if Finite = null then
+         for Index in 0 .. Element_Count (Value'Length) - 1 loop
+            Value (Value'First + Index) := Value (Value'First + Index) * Scale * Weight (Weight'First + Index);
+         end loop;
+         else
+            for Index in 0 .. Element_Count (Value'Length) - 1 loop
+               declare
+                  Result : constant Real := Value (Value'First + Index) * Scale * Weight (Weight'First + Index);
+               begin
+                  Value (Value'First + Index) := Result;
+                  Valid := N.Is_Finite (Result) and Valid;
+               end;
+            end loop;
+            Finite.all := Valid;
+         end if;
+      end;
+   end RMS_Norm_In_Place;
+
    procedure RMS_Norm
      (Source  : Real_Array;
       Weight  : Real_Array;
       Epsilon : Real;
-      Target  : out Real_Array)
+      Target  : out Real_Array;
+      Arithmetic : RMS_Arithmetic := Extended_Stages)
    is
       --  The three lengths are proved equal below before either loop reads
       --  them, and every index is the first plus a count under that length.
@@ -2471,6 +2711,22 @@ package body Model_Runner.Kernels is
         or else Source'Length = 0
       then
          Target := [others => 0.0];
+         return;
+      end if;
+
+      if Arithmetic = Binary32_Stages then
+         for Value of Source loop
+            Sum := Sum + Wide_Real (Value * Value);
+         end loop;
+         declare
+            Mean : constant Real := Real (Sum / Wide_Real (Source'Length));
+            Scale : constant Real := 1.0 / Real (N.Sqrt (Wide_Real (Mean + Epsilon)));
+         begin
+            for Index in 0 .. Element_Count (Source'Length) - 1 loop
+               Target (Target'First + Index) := Source (Source'First + Index) * Scale
+                 * Weight (Weight'First + Index);
+            end loop;
+         end;
          return;
       end if;
 
@@ -2527,6 +2783,29 @@ package body Model_Runner.Kernels is
            Real (Wide_Real (Source (Source'First + Index)) * Gain)
            * Weight (Weight'First + Index);
       end loop;
+   end RMS_Norm;
+
+   procedure RMS_Norm (Source : Real_Array; Epsilon : Real; Target : out Real_Array) is
+      Sum : Wide_Real := 0.0;
+   begin
+      if Source'Length = 0 or else Source'Length /= Target'Length then
+         Target := [others => 0.0];
+         return;
+      end if;
+      for Value of Source loop
+         Sum := Sum + Wide_Real (Value * Value);
+      end loop;
+      declare
+         pragma Suppress (Index_Check);
+         pragma Suppress (Range_Check);
+         pragma Suppress (Overflow_Check);
+         Mean : constant Real := Real (Sum / Wide_Real (Source'Length));
+         Scale : constant Real := 1.0 / Real (N.Sqrt (Wide_Real (Mean + Epsilon)));
+      begin
+         for Index in 0 .. Element_Count (Source'Length) - 1 loop
+            Target (Target'First + Index) := Source (Source'First + Index) * Scale;
+         end loop;
+      end;
    end RMS_Norm;
 
    -----------------
@@ -3077,6 +3356,9 @@ package body Model_Runner.Kernels is
    -- Sigmoid --
    -------------
 
+   procedure Reference_SiTU
+     (Gate : in out Real_Array; Up : Real_Array; Gate_Cap, Up_Cap : Real) is separate;
+
    procedure Sigmoid (Target : in out Real_Array) is
       pragma Suppress (Overflow_Check);
       pragma Suppress (Range_Check);
@@ -3594,9 +3876,40 @@ package body Model_Runner.Kernels is
    end Apply_Rotary_Table;
 
    function All_Finite (Item : Real_Array) return Boolean is
+      Whole : constant Element_Count := (if Wide_Lanes then Item'Length / 8 * 8 else 0);
+      Bad : Interfaces.Unsigned_32 := 0;
+      LF : constant Character := ASCII.LF;
+      use type Interfaces.Unsigned_32;
    begin
-      for Value of Item loop
-         if not N.Is_Finite (Value) then
+      if Whole > 0 then
+         --  Compare exponent bits, so even signalling NaNs are classified
+         --  without floating-point arithmetic or a changed exception state.
+         System.Machine_Code.Asm
+           ("vpcmpeqd %%ymm0, %%ymm0, %%ymm0" & LF
+            & "vpsrld $24, %%ymm0, %%ymm0" & LF
+            & "vpslld $23, %%ymm0, %%ymm0" & LF
+            & "xorq %%rcx, %%rcx" & LF
+            & "1:" & LF
+            & "vpand (%1, %%rcx, 4), %%ymm0, %%ymm1" & LF
+            & "vpcmpeqd %%ymm0, %%ymm1, %%ymm1" & LF
+            & "vpmovmskb %%ymm1, %%eax" & LF
+            & "testl %%eax, %%eax" & LF
+            & "jnz 2f" & LF
+            & "addq $8, %%rcx" & LF
+            & "cmpq %2, %%rcx" & LF
+            & "jb 1b" & LF
+            & "2:" & LF
+            & "vzeroupper",
+            Outputs => Interfaces.Unsigned_32'Asm_Output ("=&a", Bad),
+            Inputs => [System.Address'Asm_Input ("r", Item (Item'First)'Address),
+                       Interfaces.Unsigned_64'Asm_Input ("r", Interfaces.Unsigned_64 (Whole))],
+            Clobber => "ymm0, ymm1, rcx, cc, memory", Volatile => True);
+         if Bad /= 0 then
+            return False;
+         end if;
+      end if;
+      for Index in Whole .. Element_Count (Item'Length) - 1 loop
+         if not N.Is_Finite (Item (Item'First + Index)) then
             return False;
          end if;
       end loop;

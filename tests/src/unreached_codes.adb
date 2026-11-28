@@ -16,27 +16,6 @@ package body Unreached_Codes is
          --  it reports the outcome by class rather than by code.
          when E.GGUF_Arithmetic_Overflow
 
-         --  A tensor whose format the architecture cannot use, as opposed to
-         --  one the container rejects. Every format the fixture writer can
-         --  write is one this architecture accepts, so reaching it needs a
-         --  container carrying a format the reader knows and the model does
-         --  not -- which is a fixture nobody has written.
-            | E.Arch_Invalid_Tensor_Format
-
-         --  A worker that failed, which guards a request the command layer
-         --  clamps before it arrives. The clamps are tested; what is not is
-         --  the backend refusing a caller that ignored them, and no caller
-         --  here can.
-         --
-         --  Two others came off this list when a backend arrived that read
-         --  three formats out of fifteen, and both went back on when the
-         --  shader learnt the other twelve. That is the shape of every entry
-         --  here: a code is unreachable until some part of the program can
-         --  be asked to produce it, and it stops being reachable again when
-         --  that part stops being able to. Worth noticing in both
-         --  directions, which is why this list is checked both ways.
-            | E.Backend_Worker_Failed
-
          --  A model in a format the chosen backend cannot read, refused
          --  while it loads. The device was the one backend that read some
          --  formats and not others, and now it reads all fifteen -- so

@@ -29,4 +29,8 @@ package body Model_Runner.Platform.X86_Feature_Sets is
       and then Item.AVX512VL
       and then Item.AVX512VNNI);
 
+   function Supports_BF16 (Item : Feature_Set) return Boolean is
+     (Supports_V3 (Item) and then Item.OS_ZMM and then Item.AVX512F
+      and then Item.AVX512DQ and then Item.AVX512BW and then Item.AVX512VL
+      and then Item.AVX512BF16);
 end Model_Runner.Platform.X86_Feature_Sets;

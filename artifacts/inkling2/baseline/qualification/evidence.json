@@ -1,0 +1,102 @@
+{
+  "status": "passed",
+  "binary_sha256": "e06bf5c4b53ff37cfb3482f82bf7799743794c5be9356004dd47214e536be160",
+  "cases": [
+    {
+      "filter": "native Inkling",
+      "count": 57,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/00.log"
+    },
+    {
+      "filter": "cpu backend : GSQ small-block",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/01.log"
+    },
+    {
+      "filter": "gguf container : integer products : independent seven-format grid",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/02.log"
+    },
+    {
+      "filter": "gguf container : integer products : the grid",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/03.log"
+    },
+    {
+      "filter": "gguf container : integer products : GSQ",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/04.log"
+    },
+    {
+      "filter": "gguf container : the integer kernels prove",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/05.log"
+    },
+    {
+      "filter": "cpu backend : a parallel product",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/06.log"
+    },
+    {
+      "filter": "cpu backend : the partition covers",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/07.log"
+    },
+    {
+      "filter": "llama inference : the vectorized exponential",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/08.log"
+    },
+    {
+      "filter": "llama inference : one run of an attention head",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/09.log"
+    },
+    {
+      "filter": "llama inference : the kernels that read a byte context",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/10.log"
+    },
+    {
+      "filter": "llama inference : the kernels that read a half-precision context",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/11.log"
+    },
+    {
+      "filter": "llama inference : the attention dot product",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/12.log"
+    },
+    {
+      "filter": "llama inference : on the device too, a token at a time",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/13.log"
+    },
+    {
+      "filter": "llama inference : a batch's mixture gathered",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/14.log"
+    },
+    {
+      "filter": "llama inference : rarer forms --",
+      "count": 1,
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/gsq-profiled-next/02-pgo/qualification/15.log"
+    }
+  ]
+}

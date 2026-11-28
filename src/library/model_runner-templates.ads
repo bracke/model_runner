@@ -290,6 +290,9 @@ package Model_Runner.Templates is
    --  arguments as an object with bare keys.
    Gemma4_Shape         : constant String := "gemma4";
 
+   --  Inkling typed content blocks; always use its own shipped template.
+   Inkling_Shape        : constant String := "inkling";
+
    --  The shape a model rendered with a carried format writes tool calls in.
    --
    --  The chat format and the call syntax are one choice: the format tells
@@ -720,7 +723,8 @@ private
       Arg1 : Natural := 0;
       Arg2 : Natural := 0;
       Arg3 : Natural := 0;
-      --  Truncate's leeway; map's first argument to the filter it names.
+      --  Truncate's leeway; map's first argument to the filter it names;
+      --  tojson's optional item/key separator pair.
       Arg4 : Natural := 0;
       --  Format's fifth to eighth, and map's second to fourth to its
       --  filter.

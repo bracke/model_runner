@@ -1,0 +1,82 @@
+Inkling F32 reference:  4952 elements, max  1.96695E-06
+Inkling Q4T independent attention:  1152 rows,  110592 elements, max  2.38419E-07
+Inkling F32 reference:  4952 elements, max  2.41399E-06
+Inkling F32 prefix reference:  4952 elements, max  2.92063E-06
+Inkling Q8 reference:  14000 elements, max  4.76837E-07
+Inkling Q8 reference:  14000 elements, max  4.76837E-07
+Inkling Q8 reference:  14000 elements, max  4.76837E-07
+Inkling Q8 reference:  14000 elements, max  4.76837E-07
+Inkling F32 reference:  4952 elements, max  2.41399E-06
+Inkling F32 prefix reference:  4952 elements, max  2.92063E-06
+Inkling long prefix reference:  4952 elements, max  3.71039E-06
+Reference SiTU: compared 65536 values, mismatches 0
+GSQ Vulkan TYPE_IQ4_NL independent maximum error 0.00000E+00
+GSQ Vulkan TYPE_Q2_0 independent maximum error 0.00000E+00
+GSQ Vulkan TYPE_IQ3_S independent maximum error 5.96046E-08
+GSQ Vulkan TYPE_IQ3_XXS independent maximum error 1.19209E-07
+Uniform full-model batched GPU reductions:  48
+note: optional Inkling checkpoint comparison needs MODEL_RUNNER_INKLING_MODEL
+
+OK native Inkling : parallel convolution preserves batched logical states, rewind and reset (in 0.456197 sec.)
+OK native Inkling : optional profiled IQ4 row-pair component benchmark (in 0.000912 sec.)
+OK native Inkling : optional small IQ3 native expert component comparison (in 0.000395 sec.)
+OK native Inkling : native IQ3 one-to-sixteen-query products preserve independent goldens, maps and guards (in 0.003546 sec.)
+OK native Inkling : seven Q5 vectors preserve independent products, mappings and bounds (in 0.000062 sec.)
+OK native Inkling : optional selected Q5 seven-row head component benchmark (in 0.000265 sec.)
+OK native Inkling : vector drafter exponentials, activation and reused rotary tables are exact (in 0.000193 sec.)
+OK native Inkling : grouped DSpark dots and value FMAs preserve reference bits (in 0.000027 sec.)
+OK native Inkling : compact features, winner rows and retained shared packing preserve lifecycle (in 0.039876 sec.)
+OK native Inkling : stable 8-of-128 router matches scan ordering and ties (in 0.000421 sec.)
+OK native Inkling : prefix reuse and context drafting preserve greedy generation (in 0.116593 sec.)
+OK native Inkling : independent zero-gate three-pass residual reference (in 0.055018 sec.)
+OK native Inkling : nonfinite execution fails without committing a token (in 0.003166 sec.)
+OK native Inkling : Q4T independent attention, batching, snapshots, rewind and eviction (in 0.647907 sec.)
+OK native Inkling : optional Q4T full checkpoint attention and continuation (in 0.000510 sec.)
+OK native Inkling : saved context binds loop, normalization and activation metadata (in 0.006302 sec.)
+OK native Inkling : metadata, padded vocabulary and all tensor roles (in 0.003695 sec.)
+OK native Inkling : malformed metadata, tensors and unsupported variants fail before weights (in 0.018696 sec.)
+OK native Inkling : caller limits include logical visits and padded rows (in 0.005006 sec.)
+OK native Inkling : memory plan covers integer worker scratch (in 0.002040 sec.)
+OK native Inkling : batched prefill states, logits, partitions and atomic cancellation (in 2.971318 sec.)
+OK native Inkling : native execution, prefill, reset, rewind and saved continuation (in 0.024232 sec.)
+OK native Inkling : independent F32 layer, message, controller and logit reference (in 0.107409 sec.)
+OK native Inkling : independent Q8 activation-scale and decoder reference (in 0.075816 sec.)
+OK native Inkling : independent Q8 arithmetic survives rebuilt and mapped row panels (in 0.230354 sec.)
+OK native Inkling : Vulkan pointwise projection sequence executes and returns observer inputs (in 0.079510 sec.)
+OK native Inkling : Vulkan independent F32 decoder and prefix reference (in 0.354427 sec.)
+OK native Inkling : long-context eviction, independent recomputation and rewind (in 2.784941 sec.)
+OK native Inkling : integer tiles, vector tails and cached panels match independent goldens (in 0.000534 sec.)
+OK native Inkling : independent Q6_K binary32 products and bounds (in 0.000033 sec.)
+OK native Inkling : independent Q5_K binary32 products and bounds (in 0.000033 sec.)
+OK native Inkling : independent Q5_0 binary32 products and bounds (in 0.000072 sec.)
+OK native Inkling : independent attention Q8 packing at model width (in 0.000084 sec.)
+OK native Inkling : independent Q4_K binary32 products and bounds (in 0.000032 sec.)
+OK native Inkling : independent F32 integer-profile lane products (in 0.000028 sec.)
+OK native Inkling : independent Q8 binary32 products and bounds (in 0.000015 sec.)
+OK native Inkling : optional native Vulkan reference integer products (in 0.141457 sec.)
+OK native Inkling : fused expert weighting preserves separate rounding, values, bounds and rank order (in 0.001778 sec.)
+OK native Inkling : CPU reference SiTU exact independent arithmetic and tails (in 0.009984 sec.)
+OK native Inkling : optional native Vulkan reference SiTU arithmetic (in 0.047924 sec.)
+OK native Inkling : native Vulkan GSQ products match independent reference (in 0.054150 sec.)
+OK native Inkling : native Vulkan GSQ fused experts preserve reference activation (in 0.043893 sec.)
+OK native Inkling : optional native Vulkan resident integer mixture (in 0.288385 sec.)
+OK native Inkling : batched Q4T rotations preserve scalar butterfly order (in 0.000713 sec.)
+OK native Inkling : long streamed rows retain qualified reference lanes (in 0.015855 sec.)
+OK native Inkling : selected output and constrained generation preserve full lifecycle (in 0.249176 sec.)
+OK native Inkling : optional native Vulkan Q4T relative attention and metadata bounds (in 0.044171 sec.)
+OK native Inkling : SIMD relative bias preserves scalar channel order and bounds (in 0.000025 sec.)
+OK native Inkling : SIMD reference packing preserves ties and signed maxima (in 0.000462 sec.)
+OK native Inkling : independent Q8_K signed scales, ties and block sums (in 0.000578 sec.)
+OK native Inkling : optional full DSpark checkpoint reference (in 0.000001 sec.)
+OK native Inkling : DSpark generation verifies proposals and reuses paired prefixes (in 0.436419 sec.)
+OK native Inkling : DSpark metadata rejects unsupported variants and malformed tensors (in 0.001367 sec.)
+OK native Inkling : native BF16 pair dots preserve reference packing, folds and bounds (in 0.000583 sec.)
+OK native Inkling : native DSpark reference blocks, Markov proposals and lifecycle (in 0.027872 sec.)
+OK native Inkling : logical target features preserve visits, batching and transactionality (in 0.052830 sec.)
+OK native Inkling : optional independent Q4_K_M checkpoint reference (in 0.000510 sec.)
+
+Total Tests Run:   57
+Successful Tests:  57
+Failed Assertions: 0
+Unexpected Errors: 0
+suite: passed

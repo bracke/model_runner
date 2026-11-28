@@ -1,0 +1,14 @@
+{
+  "producer": "Independent scalar expf with binary32 surrounding stages and contraction disabled",
+  "libc": "2.39",
+  "machine": "x86_64",
+  "values": 32,
+  "basis": "i-16, with endpoints127and-127",
+  "generator_patch": "reference-sigmoid-generator.patch",
+  "generator_source_sha256": "7b90b9368435bd31b8a459f0c97351b8eb3e36c74341a06fc80ecf211bd7e992",
+  "generator_patch_sha256": "0239d29b9517906a04c4b9f6d811b2e5cd56f4665a10c405ea0ef03f97413e3e",
+  "output_sha256": "25b3345863ec58bb354d3c2bf8e4ae5d54a398fe5c32b6f790094f15841729d5",
+  "extract": "patch -d /tmp -p1 < reference-sigmoid-generator.patch",
+  "compile": "gcc -O2 -ffp-contract=off -fno-builtin /tmp/reference-sigmoid.c -lm -o /tmp/reference-sigmoid",
+  "generate": "/tmp/reference-sigmoid /tmp/reference-sigmoid-native.f32"
+}

@@ -1,3 +1,4 @@
+with Model_Runner.Bytes;
 with Interfaces;
 with Ada.Unchecked_Deallocation;
 
@@ -256,6 +257,17 @@ package body Model_Runner.Backend.CPU is
    --------------
    -- Describe --
    --------------
+
+   --  These capabilities are stable for the process and every selected
+   --  kernel was already configured once at elaboration. Re-reading CPUID
+   --  in each scalar attention exponential or value accumulation serialized
+   --  the block hundreds of thousands of times.
+   Host_Wide : constant Boolean := Model_Runner.Platform.Wide_Vectors;
+   Host_Bytes : constant Boolean := Model_Runner.Platform.Byte_Products;
+
+   function Wide_Vectors return Boolean is (Host_Wide);
+
+   function Byte_Products return Boolean is (Host_Bytes);
 
    function Describe (Workers : Worker_Count := 1) return Capabilities is
       Result : Capabilities;
@@ -628,6 +640,8 @@ package body Model_Runner.Backend.CPU is
       --  it is, From and To below count super-blocks, because a super-block
       --  is quantized whole or not at all.
       Super   : Boolean;
+      Reference_Rounding : Boolean;
+      Half_Scales : Boolean;
       Ok      : Boolean;
    end record;
 
@@ -668,7 +682,9 @@ package body Model_Runner.Backend.CPU is
          Totals  => Share.Totals.all,
          Halves  => Share.Halves.all,
          Ok      => Done,
-         Super   => Share.Super);
+         Super   => Share.Super,
+         Reference_Rounding => Share.Reference_Rounding,
+         Half_Scales => Share.Half_Scales);
 
       if not Done then
          Share.Ok := False;
@@ -689,12 +705,14 @@ package body Model_Runner.Backend.CPU is
       Blocks   : constant Element_Count :=
         (if Columns = 0 then 0 else Elements / QI.Activation_Block);
       Ok       : Boolean;
+
+
    begin
       if not Roles (Weight.Role)
         or else Vector = null
         or else Count = 0
         or else not QI.Packs_Vectors
-                     (Weight.Format, Count, Weight.Interleaved)
+                     (Weight.Format, Count, Weight.Interleaved, Weight.Reference_Activations)
         or else not QI.Is_Packable (Columns)
         or else Vector.all'Length < Elements
       then
@@ -759,6 +777,10 @@ package body Model_Runner.Backend.CPU is
             Totals  => Item.Totals,
             Halves  => Item.Halves,
             Super   => Super,
+            Reference_Rounding => Weight.Reference_Activations,
+            Half_Scales => Weight.Reference_Activations
+              and then Weight.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0,
             Ok      => True);
 
          Sent : E.Error_Info;
@@ -786,7 +808,11 @@ package body Model_Runner.Backend.CPU is
             Totals  => Item.Totals.all,
             Halves  => Item.Halves.all,
             Ok      => Ok,
-            Super   => Super);
+            Super   => Super,
+            Reference_Rounding => Weight.Reference_Activations,
+            Half_Scales => Weight.Reference_Activations
+              and then Weight.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0);
       end;
 
       return Ok;
@@ -833,7 +859,7 @@ package body Model_Runner.Backend.CPU is
 
       if Roles (Weight.Role)
         and then QI.Packs_Vectors
-                   (Weight.Format, Count, Weight.Interleaved)
+                   (Weight.Format, Count, Weight.Interleaved, Weight.Reference_Activations)
         and then QI.Is_Packable (Columns)
         and then Vector.all'Length >= Elements
       then
@@ -857,7 +883,11 @@ package body Model_Runner.Backend.CPU is
                   Totals.all, Halves.all, Ok,
                   Super =>
                     QI.Supers_Vectors (Weight.Format)
-                    and then Columns mod QI.Activation_Super = 0);
+                    and then Columns mod QI.Activation_Super = 0,
+                  Reference_Rounding => Weight.Reference_Activations,
+            Half_Scales => Weight.Reference_Activations
+              and then Weight.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0);
             end if;
 
             if Ok then
@@ -938,16 +968,20 @@ package body Model_Runner.Backend.CPU is
       Items  : Element_Count;
       Work   : Task_Item_Access;
       Status : out E.Error_Info;
-      Cost   : Element_Count := 0)
+      Cost   : Element_Count := 0;
+      Alongside : Concurrent_Work := null; Team_Size : Natural := 0)
    is
+      Placement : Model_Runner.Platform.Affinity.Binding;
       Job_Of : Job;
       Taken  : Boolean;
       Failed : Boolean;
       Mine   : Boolean := False;
+      Side : E.Error_Info := E.Success;
    begin
       Status := E.Success;
 
       if Work = null or else Items = 0 then
+         if Alongside /= null then Alongside (Status); end if;
          return;
       end if;
 
@@ -961,7 +995,9 @@ package body Model_Runner.Backend.CPU is
       if Item = null
         or else (Cost /= 0 and then Cost < Inline_Floor)
       then
+         if Alongside /= null then Alongside (Side); end if;
          Work.all.Run (0, Items - 1);
+         Status := Side;
          return;
       end if;
 
@@ -970,6 +1006,8 @@ package body Model_Runner.Backend.CPU is
          Status := E.Make (E.Backend_Closed);
          return;
       end if;
+
+      Model_Runner.Platform.Affinity.Pin (Placement, Item.all.Cores (0));
 
       Job_Of :=
         (Weight => <>,
@@ -999,12 +1037,15 @@ package body Model_Runner.Backend.CPU is
          --  round of three alternated. So this follows the products instead
          --  of naming a constant, which is the same question asked of the
          --  thing that actually answers it -- which workers are awake.
-         Team   => Item.Latest,
+         Team   => (if Team_Size > 0 then Share_Count (Natural'Min (Team_Size, Natural (Item.Workers) + 1))
+                     else Item.Latest),
          Values => null,
          Scales => null,
          Totals => null,
          Work   => Work,
          others => <>);
+
+      if Team_Size > 0 then Item.Latest := Job_Of.Team; end if;
 
       Item.Control.Post (Job_Of, Taken);
       if not Taken then
@@ -1022,6 +1063,7 @@ package body Model_Runner.Backend.CPU is
       declare
          First, Last : Element_Count;
       begin
+         if Alongside /= null then Alongside (Side); end if;
          Partition (Items, Job_Of.Team, Job_Of.Team, First, Last);
          if First <= Last then
             Work.all.Run (First, Last);
@@ -1044,6 +1086,8 @@ package body Model_Runner.Backend.CPU is
 
       if Failed or else Mine then
          Status := E.Make (E.Backend_Worker_Failed);
+      else
+         Status := Side;
       end if;
    end Dispatch_Shares;
 
@@ -1201,6 +1245,8 @@ package body Model_Runner.Backend.CPU is
    end Take_Chunks;
 
    task body Worker is
+      Placement : Model_Runner.Platform.Affinity.Binding;
+      Processor : Integer := -1;
       Position : Worker_Count := 1;
       Control  : Coordinator_Access := null;
       Waking   : Wake_Access := null;
@@ -1220,15 +1266,18 @@ package body Model_Runner.Backend.CPU is
          accept Start
            (Index  : Worker_Count;
             Owner  : Coordinator_Access;
-            Waking : Wake_Access)
+            Waking : Wake_Access;
+            Processor : Integer)
          do
             Position := Index;
             Control := Owner;
             Worker.Waking := Waking;
+            Worker.Processor := Processor;
          end Start;
       or
          terminate;
       end select;
+      Model_Runner.Platform.Affinity.Pin (Placement, Processor);
 
       loop
          --  Wait for the next job without a lock. Watch spins on the
@@ -1347,10 +1396,11 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
+      Item.Cores := Model_Runner.Platform.Affinity.Choose (Item.Workers + 1);
       for Index in 1 .. Item.Workers loop
          Item.Team (Index).Start
            (Index, Item.Control'Unchecked_Access,
-            Item.Waking'Unchecked_Access);
+            Item.Waking'Unchecked_Access, Item.Cores (Index));
       end loop;
       Item.State := Opened;
    end Open;
@@ -1475,6 +1525,7 @@ package body Model_Runner.Backend.CPU is
       Status : out E.Error_Info;
       Roles   : Role_Set := Integer_Activation_Roles)
    is
+      Placement : Model_Runner.Platform.Affinity.Binding;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1490,6 +1541,8 @@ package body Model_Runner.Backend.CPU is
          Status := E.Make (E.Backend_Closed);
          return;
       end if;
+
+      Model_Runner.Platform.Affinity.Pin (Placement, Item.Cores (0));
 
       Work :=
         (Weight => Weight,
@@ -1528,6 +1581,10 @@ package body Model_Runner.Backend.CPU is
               (if Model_Runner.Quantization.Integers.Decodes_Dearly (Weight.Format)
                then Quant_Team else Vector_Team));
       end if;
+
+      if Weight.Reference_Activations and then Roles (T.Role_Output)
+        and then T."=" (Weight.Role, T.Role_Output) and then Weight.Rows >= 32_768
+      then Work.Team := Share_Count'Min (Item.Workers + 1, 7); end if;
 
       Item.Latest := Work.Team;
 
@@ -1599,8 +1656,10 @@ package body Model_Runner.Backend.CPU is
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
       Status  : out E.Error_Info;
-      Roles   : Role_Set)
+      Roles   : Role_Set;
+      Count   : Element_Count)
    is
+      Placement : Model_Runner.Platform.Affinity.Binding;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1615,9 +1674,11 @@ package body Model_Runner.Backend.CPU is
          return;
       end if;
 
+      Model_Runner.Platform.Affinity.Pin (Placement, Item.Cores (0));
+
       Work :=
         (Weight => Weights (Weights'First),
-         Count  => 1,
+         Count  => Count,
          Vector => Vector,
          Target => Into (Into'First),
          Rows   => Weights (Weights'First).Rows,
@@ -1641,7 +1702,7 @@ package body Model_Runner.Backend.CPU is
          Work.Rows_Three := Weights (Weights'First + 2).Rows;
       end if;
 
-      if Prepare_Packed (Item, Work.Weight, Vector, 1, Roles) then
+      if Prepare_Packed (Item, Work.Weight, Vector, Count, Roles) then
          Work.Values := Item.Values;
          Work.Scales := Item.Scales;
          Work.Totals := Item.Totals;
@@ -1651,11 +1712,14 @@ package body Model_Runner.Backend.CPU is
          --  same reason: the byte path is answered by the memory -- and
          --  the whole team for a k-quant, for the same reason again. The
          --  group agrees on a format, so the first matrix speaks for it.
-         Work.Team :=
-           Share_Count'Min
-             (Item.Workers + 1,
-              (if Model_Runner.Quantization.Integers.Decodes_Dearly (Work.Weight.Format)
-               then Quant_Team else Vector_Team));
+         --  A batch keeps the full team, just as Mat_Mul does.
+         if Count = 1 then
+            Work.Team :=
+              Share_Count'Min
+                (Item.Workers + 1,
+                 (if Model_Runner.Quantization.Integers.Decodes_Dearly (Work.Weight.Format)
+                  then Quant_Team else Vector_Team));
+         end if;
       end if;
 
       Item.Latest := Work.Team;
@@ -1709,12 +1773,23 @@ package body Model_Runner.Backend.CPU is
       package QI renames Model_Runner.Quantization.Integers;
       use type Model_Runner.GGUF.Tensor_Type;
    begin
+      if Left.Reference_Activations /= Right.Reference_Activations then
+         return False;
+      end if;
       if Left.Format = Right.Format then
          return True;
       end if;
+      if Left.Reference_Activations
+        and then (Left.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                    | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0)
+              /= (Right.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                    | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0)
+      then
+         return False;
+      end if;
 
-      return QI.Packs_Vectors (Left.Format, 1, Left.Interleaved)
-        and then QI.Packs_Vectors (Right.Format, 1, Right.Interleaved)
+      return QI.Packs_Vectors (Left.Format, 1, Left.Interleaved, Left.Reference_Activations)
+        and then QI.Packs_Vectors (Right.Format, 1, Right.Interleaved, Right.Reference_Activations)
         and then QI.Supers_Vectors (Left.Format)
                  = QI.Supers_Vectors (Right.Format);
    end Packs_Alike;
@@ -1729,7 +1804,8 @@ package body Model_Runner.Backend.CPU is
       Vector  : T.Real_Array_Access;
       Into    : T.Target_Group;
       Status  : out E.Error_Info;
-      Roles   : Role_Set := Integer_Activation_Roles)
+      Roles   : Role_Set := Integer_Activation_Roles;
+      Count   : Element_Count := 1)
    is
       --  What may be run as one job: at most three matrices, as many
       --  answers as matrices, and every one of them agreeing on the width
@@ -1742,6 +1818,30 @@ package body Model_Runner.Backend.CPU is
         and then Into'Length = Weights'Length;
    begin
       Status := E.Success;
+
+      --  Reuse the pool's bounded three-matrix job for long expert groups
+      --  instead of waking and settling the pool once for every matrix.
+      if Item /= null and then Weights'Length > 3
+        and then Into'Length = Weights'Length
+      then
+         declare
+            Done : Natural := 0;
+         begin
+            while Done < Weights'Length loop
+               declare
+                  Left : constant Natural := Weights'Length - Done;
+                  Take : constant Natural := (if Left = 4 then 2 else Natural'Min (3, Left));
+               begin
+                  Dispatch_Group
+                    (Item, Weights (Weights'First + Done .. Weights'First + Done + Take - 1),
+                     Vector, Into (Into'First + Done .. Into'First + Done + Take - 1), Status, Roles, Count);
+                  exit when E.Is_Error (Status);
+                  Done := Done + Take;
+               end;
+            end loop;
+         end;
+         return;
+      end if;
 
       if Together then
          for Index in Weights'Range loop
@@ -1760,14 +1860,20 @@ package body Model_Runner.Backend.CPU is
       end if;
 
       if Together then
-         Mat_Vec_Group (Item.all, Weights, Vector, Into, Status, Roles);
+         Mat_Vec_Group (Item.all, Weights, Vector, Into, Status, Roles, Count);
          return;
       end if;
 
       for Index in Weights'Range loop
-         Dispatch
-           (Item, Weights (Index), Vector,
-            Into (Into'First + (Index - Weights'First)), Status, Roles);
+         if Count = 1 then
+            Dispatch
+              (Item, Weights (Index), Vector,
+               Into (Into'First + (Index - Weights'First)), Status, Roles);
+         else
+            Dispatch_Batch
+              (Item, Weights (Index), Vector, Count,
+               Into (Into'First + (Index - Weights'First)), Status, Roles);
+         end if;
          exit when E.Is_Error (Status);
       end loop;
    end Dispatch_Group;
@@ -1807,6 +1913,7 @@ package body Model_Runner.Backend.CPU is
       Status  : out E.Error_Info;
       Roles   : Role_Set := Integer_Activation_Roles)
    is
+      Placement : Model_Runner.Platform.Affinity.Binding;
       Work        : Job;
       Accepted    : Boolean;
       Failed      : Boolean;
@@ -1820,6 +1927,8 @@ package body Model_Runner.Backend.CPU is
          Status := E.Make (E.Backend_Closed);
          return;
       end if;
+
+      Model_Runner.Platform.Affinity.Pin (Placement, Item.Cores (0));
 
       Work :=
         (Weight => Weight,
@@ -1923,6 +2032,23 @@ package body Model_Runner.Backend.CPU is
    -- Pack --
    ----------
 
+   procedure Reserve_Packed (Item : in out Packed_Rows; Elements, Blocks : Element_Count) is
+      package QI renames Model_Runner.Quantization.Integers;
+   begin
+      if Item.Values /= null and then Item.Values.all'Length >= Elements
+        and then Item.Scales /= null and then Item.Scales.all'Length >= Blocks
+        and then Item.Totals /= null and then Item.Totals.all'Length >= Blocks
+        and then Item.Halves /= null and then Item.Halves.all'Length >= Blocks * 2
+      then Item.Count := 0; return; end if;
+      Unpack (Item);
+      Item.Values := new QI.Signed_Array (0 .. Elements - 1);
+      Item.Totals := new QI.Sum_Array (0 .. Blocks - 1);
+      Item.Halves := new QI.Sum_Array (0 .. Blocks * 2 - 1);
+      T.Allocate (Blocks, Item.Scales);
+   exception
+      when others => Unpack (Item); raise;
+   end Reserve_Packed;
+
    procedure Pack
      (Item    : in out Packed_Rows;
       Vectors : T.Real_Array_Access;
@@ -1930,13 +2056,23 @@ package body Model_Runner.Backend.CPU is
       Columns : Element_Count;
       Super   : Boolean;
       Ok      : out Boolean;
-      Roles   : Role_Set := Integer_Activation_Roles)
+      Roles   : Role_Set := Integer_Activation_Roles;
+      Reference_Arithmetic : Boolean := False;
+      Half_Scales : Boolean := False;
+      Activate : Packed_Activation := null;
+      Up : T.Real_Array_Access := null;
+      Measure : Measured_Packed_Activation := null;
+      Produce : Block_Peak_Activation := null;
+      Transform : Packed_Input_Transform := null;
+      Team : Pool_Reference := null)
    is
       package QI renames Model_Runner.Quantization.Integers;
+      use type Model_Runner.Numerics.Real;
+      use type Interfaces.Integer_32;
 
       Elements : constant Element_Count := Count * Columns;
    begin
-      Unpack (Item);
+      Item.Count := 0;
       Ok := False;
 
       --  The rows packed here are read against experts, which are the
@@ -1947,19 +2083,22 @@ package body Model_Runner.Backend.CPU is
         or else not QI.Is_Packable (Columns)
         or else Vectors.all'Length < Elements
         or else (Super and then Columns mod QI.Activation_Super /= 0)
+        or else ((Activate /= null or else Measure /= null or else Produce /= null)
+                 and then (Super or else Up = null or else Up.all'Length < Elements))
+        or else (Transform /= null and then (not Reference_Arithmetic
+          or else Activate /= null or else Measure /= null or else Produce /= null))
+        or else (Activate /= null and then Measure /= null)
+        or else (Produce /= null and then
+          (not Reference_Arithmetic or else Activate /= null or else Measure /= null))
       then
+         Unpack (Item);
          return;
       end if;
 
       declare
          Blocks : constant Element_Count := Elements / QI.Activation_Block;
       begin
-         Item.Values := new QI.Signed_Array (0 .. Elements - 1);
-         Item.Totals := new QI.Sum_Array (0 .. Blocks - 1);
-         Item.Halves :=
-           new QI.Sum_Array
-             (0 .. Blocks * (QI.Activation_Block / QI.Activation_Half) - 1);
-         T.Allocate (Blocks, Item.Scales);
+         Reserve_Packed (Item, Elements, Blocks);
 
          if Item.Values = null or else Item.Totals = null
            or else Item.Halves = null or else Item.Scales = null
@@ -1968,9 +2107,107 @@ package body Model_Runner.Backend.CPU is
             return;
          end if;
 
+         if Produce /= null then
+            Produce (Vectors.all (Vectors.all'First .. Vectors.all'First + Elements - 1),
+                     Up.all (Up.all'First .. Up.all'First + Elements - 1), Item.Scales.all (0 .. Blocks - 1));
+         end if;
+
+         if Transform /= null then
+            declare
+               Unit : constant Element_Count := (if Super then QI.Activation_Super else QI.Activation_Block);
+               type Preparation is limited new Task_Item with record
+                  Valid : Boolean := True with Atomic;
+               end record;
+               overriding procedure Run (Work : in out Preparation; From, To : Element_Count);
+               overriding procedure Run (Work : in out Preparation; From, To : Element_Count) is
+                  Block : Model_Runner.Numerics.Real_Array (0 .. Unit - 1);
+                  Done : Boolean;
+                  Earlier, Total : Interfaces.Integer_32;
+               begin
+                  for Row in From .. To loop
+                     for Group in 0 .. Columns / Unit - 1 loop
+                        declare
+                           First : constant Element_Count := Row * Columns + Group * Unit;
+                        begin
+                           Transform (First, Block);
+                           if Super then
+                              QI.Quantize_Vectors
+                                (Block, 1, Unit, Item.Values.all (First .. First + Unit - 1),
+                                 Item.Scales.all (First / 32 .. (First + Unit) / 32 - 1),
+                                 Item.Totals.all (First / 32 .. (First + Unit) / 32 - 1),
+                                 Item.Halves.all (First / 16 .. (First + Unit) / 16 - 1),
+                                 Done, Super => True, Reference_Rounding => True, Half_Scales => Half_Scales);
+                           else
+                              QI.Pack_Reference_Block
+                                (Block, Item.Values.all (First .. First + 31), Item.Scales (First / 32),
+                                 Earlier, Total, Done, Half_Scales);
+                              Item.Totals (First / 32) := Total;
+                              Item.Halves (First / 16) := Earlier;
+                              Item.Halves (First / 16 + 1) := Total - Earlier;
+                           end if;
+                           if not Done then Work.Valid := False; return; end if;
+                        end;
+                     end loop;
+                  end loop;
+               end Run;
+               Work : aliased Preparation;
+               Sent : E.Error_Info;
+            begin
+               if Team /= null and then Count >= 8 then
+                  Dispatch_Shares (Team, Count, Work'Unchecked_Access, Sent, Cost => Elements * 4);
+                  Ok := E.Is_Ok (Sent) and then Work.Valid;
+               else
+                  Work.Run (0, Count - 1); Ok := Work.Valid;
+               end if;
+            end;
+         elsif Activate = null and then Measure = null and then Produce = null then
          QI.Quantize_Vectors
            (Vectors.all, Count, Columns, Item.Values.all, Item.Scales.all,
-            Item.Totals.all, Item.Halves.all, Ok, Super => Super);
+            Item.Totals.all, Item.Halves.all, Ok, Super => Super,
+            Reference_Rounding => Reference_Arithmetic,
+            Half_Scales => Reference_Arithmetic and then Half_Scales);
+         else
+            for Block in 0 .. Blocks - 1 loop
+               declare
+                  From : constant Element_Count := Block * QI.Activation_Block;
+               begin
+                  declare
+                     Peak : Model_Runner.Numerics.Real := -1.0;
+                     Earlier, Total : Interfaces.Integer_32;
+                  begin
+                     if Produce /= null then
+                        Peak := Item.Scales (Block);
+                        if Peak < 0.0 or else not Model_Runner.Numerics.Is_Finite (Peak) then
+                           Ok := False; Unpack (Item); return;
+                        end if;
+                     elsif Measure /= null then
+                        Measure
+                          (Vectors.all (Vectors.all'First + From .. Vectors.all'First + From + 31),
+                           Up.all (Up.all'First + From .. Up.all'First + From + 31), Peak);
+                        if Peak < 0.0 then Ok := False; Unpack (Item); return; end if;
+                     else
+                        Activate
+                          (Vectors.all (Vectors.all'First + From .. Vectors.all'First + From + 31),
+                           Up.all (Up.all'First + From .. Up.all'First + From + 31));
+                     end if;
+                     if Reference_Arithmetic then
+                        QI.Pack_Reference_Block
+                          (Vectors.all (Vectors.all'First + From .. Vectors.all'First + From + 31),
+                           Item.Values.all (From .. From + 31), Item.Scales (Block), Earlier, Total, Ok,
+                           Half_Scales, Peak);
+                        Item.Totals (Block) := Total;
+                        Item.Halves (Block * 2) := Earlier;
+                        Item.Halves (Block * 2 + 1) := Total - Earlier;
+                     else
+                        QI.Quantize_Blocks
+                          (Vectors.all, Count, Columns, Block, Block, Item.Values.all,
+                           Item.Scales.all, Item.Totals.all, Item.Halves.all, Ok);
+                     end if;
+                  end;
+                  exit when not Ok;
+               end;
+            end loop;
+         end if;
       end;
 
       if not Ok then
@@ -1981,6 +2218,10 @@ package body Model_Runner.Backend.CPU is
       Item.Count := Count;
       Item.Columns := Columns;
       Item.Super := Super;
+      Item.Reference_Arithmetic := Reference_Arithmetic;
+      Item.Half_Scales := Reference_Arithmetic and then Half_Scales;
+   exception
+      when others => Unpack (Item); raise;
    end Pack;
 
    ------------
@@ -2000,6 +2241,8 @@ package body Model_Runner.Backend.CPU is
       T.Free (Item.Scales);
       Item.Count := 0;
       Item.Columns := 0;
+      Item.Reference_Arithmetic := False;
+      Item.Half_Scales := False;
    end Unpack;
 
    ---------------------------
@@ -2010,17 +2253,27 @@ package body Model_Runner.Backend.CPU is
      (Weight : T.View;
       Rows   : Packed_Rows;
       Target : in out T.Real_Array;
-      Ok     : out Boolean)
+      Ok     : out Boolean;
+      Result_Members : Model_Runner.Shares.Member_Rows := [];
+      First_Row : Element_Count := 0; Last_Row : Element_Count := Element_Count'Last)
    is
       package QI renames Model_Runner.Quantization.Integers;
+      High : constant Element_Count :=
+        (if Last_Row = Element_Count'Last then (if Weight.Rows = 0 then 0 else Weight.Rows - 1) else Last_Row);
    begin
       Ok := False;
 
-      if Rows.Count = 0
+      if Weight.Rows = 0 or else First_Row >= Weight.Rows or else High >= Weight.Rows or else High < First_Row
+        or else Rows.Count = 0
+        or else Rows.Reference_Arithmetic /= Weight.Reference_Activations
+        or else (Rows.Reference_Arithmetic
+                 and then Rows.Half_Scales /=
+                   (Weight.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0))
         or else Weight.Columns /= Rows.Columns
         or else Target'Length < Rows.Count * Weight.Rows
         or else not QI.Packs_Vectors
-                      (Weight.Format, Rows.Count, Weight.Interleaved)
+                      (Weight.Format, Rows.Count, Weight.Interleaved, Weight.Reference_Activations)
         or else QI.Supers_Vectors (Weight.Format) /= Rows.Super
       then
          return;
@@ -2028,7 +2281,7 @@ package body Model_Runner.Backend.CPU is
 
       T.Mat_Mul_Range_Packed
         (Weight, Rows.Values.all, Rows.Scales.all, Rows.Totals.all,
-         Rows.Halves.all, Rows.Count, Target, 0, Weight.Rows - 1, Ok);
+         Rows.Halves.all, Rows.Count, Target, First_Row, High, Ok, Result_Members);
 
       if Ok then
          Count_Share (Weight.Format, Handled => True);
@@ -2038,6 +2291,78 @@ package body Model_Runner.Backend.CPU is
    ---------------------
    -- Multiply_Packed --
    ---------------------
+
+   procedure Multiply_Packed_Pair
+     (Left, Right : T.View; Rows : Packed_Rows;
+      Members : Model_Runner.Shares.Member_Rows; A, B : T.Real_Array_Access;
+      Scratch : in out Packed_Rows; Ok : out Boolean)
+   is
+      package QI renames Model_Runner.Quantization.Integers;
+      Count : constant Element_Count := Element_Count (Members'Length);
+      Blocks : constant Element_Count := Rows.Columns / QI.Activation_Block;
+      function Matches (Weight : T.View; Output : T.Real_Array_Access) return Boolean is
+        (Rows.Count > 0 and then Count > 0 and then Output /= null
+         and then Weight.Columns = Rows.Columns and then Output.all'Length >= Count * Weight.Rows
+         and then Weight.Reference_Activations = Rows.Reference_Arithmetic
+         and then (not Rows.Reference_Arithmetic or else Rows.Half_Scales =
+                     (Weight.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0))
+         and then QI.Supers_Vectors (Weight.Format) = Rows.Super
+         and then QI.Packs_Vectors (Weight.Format, Count, Weight.Interleaved, Weight.Reference_Activations));
+   begin
+      Ok := False;
+      if System."=" (Rows'Address, Scratch'Address)
+        or else not Matches (Left, A) or else not Matches (Right, B)
+      then return; end if;
+      for Member of Members loop
+         if Element_Count (Member) >= Rows.Count then return; end if;
+      end loop;
+      if Rows.Reference_Arithmetic and then Count >= 8 then
+         T.Mat_Mul_Packed_Pair
+           (Left, Right, Rows.Values.all, Rows.Scales.all, Rows.Totals.all, Rows.Halves.all,
+            Count, A, B, Ok, Input_Members => Members);
+         if Ok then
+            Count_Share (Left.Format, Handled => True);
+            Count_Share (Right.Format, Handled => True);
+            return;
+         end if;
+      end if;
+      Reserve_Packed (Scratch, Count * Rows.Columns, Count * Blocks);
+      if Scratch.Scales = null then Unpack (Scratch); return; end if;
+      for Index in Members'Range loop
+         declare
+            Row : constant Element_Count := Element_Count (Index - Members'First);
+            From : constant Element_Count := Element_Count (Members (Index));
+         begin
+            Scratch.Values.all (Row * Rows.Columns .. (Row + 1) * Rows.Columns - 1) :=
+              Rows.Values.all (From * Rows.Columns .. (From + 1) * Rows.Columns - 1);
+            Scratch.Scales.all (Row * Blocks .. (Row + 1) * Blocks - 1) :=
+              Rows.Scales.all (From * Blocks .. (From + 1) * Blocks - 1);
+            Scratch.Totals.all (Row * Blocks .. (Row + 1) * Blocks - 1) :=
+              Rows.Totals.all (From * Blocks .. (From + 1) * Blocks - 1);
+            Scratch.Halves.all (Row * Blocks * 2 .. (Row + 1) * Blocks * 2 - 1) :=
+              Rows.Halves.all (From * Blocks * 2 .. (From + 1) * Blocks * 2 - 1);
+         end;
+      end loop;
+      Scratch.Count := Count; Scratch.Columns := Rows.Columns;
+      Scratch.Super := Rows.Super;
+      Scratch.Reference_Arithmetic := Rows.Reference_Arithmetic;
+      Scratch.Half_Scales := Rows.Half_Scales;
+      if Rows.Reference_Arithmetic then
+         T.Mat_Mul_Packed_Pair
+           (Left, Right, Scratch.Values.all, Scratch.Scales.all, Scratch.Totals.all, Scratch.Halves.all,
+            Count, A, B, Ok);
+         if Ok then
+            Count_Share (Left.Format, Handled => True);
+            Count_Share (Right.Format, Handled => True);
+            return;
+         end if;
+      end if;
+      Multiply_Packed_Whole (Left, Scratch, A.all, Ok);
+      if Ok then Multiply_Packed_Whole (Right, Scratch, B.all, Ok); end if;
+   exception
+      when others => Unpack (Scratch); raise;
+   end Multiply_Packed_Pair;
 
    procedure Multiply_Packed
      (Weight  : T.View;
@@ -2069,9 +2394,14 @@ package body Model_Runner.Backend.CPU is
       Ok := False;
 
       if Rows.Count = 0 or else Held = 0 or else Target = null
+        or else Rows.Reference_Arithmetic /= Weight.Reference_Activations
+        or else (Rows.Reference_Arithmetic
+                 and then Rows.Half_Scales /=
+                   (Weight.Format in Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+                | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0))
         or else Weight.Columns /= Columns
         or else Target.all'Length < Held * Weight.Rows
-        or else not QI.Packs_Vectors (Weight.Format, Held, Weight.Interleaved)
+        or else not QI.Packs_Vectors (Weight.Format, Held, Weight.Interleaved, Weight.Reference_Activations)
         or else QI.Supers_Vectors (Weight.Format) /= Rows.Super
       then
          return;
@@ -2082,6 +2412,24 @@ package body Model_Runner.Backend.CPU is
             return;
          end if;
       end loop;
+
+      --  Native indexed products avoid allocating and copying four packed
+      --  tables for each selected expert. Refusal keeps the existing gather.
+      if Weight.Reference_Activations and then T.Is_Present (Weight) and then not Weight.Interleaved then
+         declare
+            Data : Model_Runner.Bytes.Byte_Array (1 .. Weight.Span) with Import, Address => Weight.Base;
+            Per : constant Element_Count := Element_Count (Model_Runner.GGUF.Block_Elements (Weight.Format));
+         begin
+            if Per /= 0 and then Columns mod Per = 0 then
+               QI.Reference_Products
+                 (Weight.Format, Data, Weight.Offset, T.Row_Bytes (Weight), Weight.Rows, Columns / Per,
+                  Rows.Values.all, Rows.Scales.all, Rows.Totals.all, Rows.Halves.all, 0, Columns, Held,
+                  Target, 0, Weight.Rows, Ok,
+                  Metadata => (if Weight.Scales = null then [] else Weight.Scales.all), Input_Members => Members);
+               if Ok then Count_Share (Weight.Format, Handled => True); return; end if;
+            end if;
+         end;
+      end if;
 
       --  An allocator that fails raises rather than answering null, so
       --  the three below are not tested; the one made through Tensors is.
@@ -2143,6 +2491,8 @@ begin
      (Model_Runner.Platform.Byte_Products);
    Model_Runner.Kernels.Use_Wide_Lanes
      (Model_Runner.Platform.Wide_Vectors);
+   Model_Runner.Tensors.Use_Deep_Products
+     (Model_Runner.Platform.Byte_Products, Brain => Model_Runner.Platform.Brain_Products);
    Model_Runner.Tensors.Use_Wide_Halves
      (Model_Runner.Platform.Wide_Vectors);
    Model_Runner.Float_Panels.Use_Kernel

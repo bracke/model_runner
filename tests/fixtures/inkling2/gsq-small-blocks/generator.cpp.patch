@@ -1,0 +1,32 @@
+--- /dev/null
++++ inkling-gsq-small-fixture.cpp
+@@ -0,0 +1,29 @@
++#include "ggml.h"
++#include "ggml-cpu.h"
++#include "ggml-impl.h"
++#include "ggml-common.h"
++#include "quants.h"
++#include <vector>
++#include <cstdio>
++#include <cstdint>
++#include <cstring>
++#include <stdexcept>
++extern "C" void quantize_row_q8_0(const float *,void *,int64_t);
++extern "C" void ggml_vec_dot_iq4_nl_q8_0(int,float*,size_t,const void*,size_t,const void*,size_t,int);
++extern "C" void ggml_vec_dot_q2_0_q8_0(int,float*,size_t,const void*,size_t,const void*,size_t,int);
++static void put(const char*root,const char*name,const void*p,size_t n){char path[4096];snprintf(path,sizeof(path),"%s/%s",root,name);auto*f=fopen(path,"wb");if(!f)throw std::runtime_error("open");if(fwrite(p,1,n,f)!=n)throw std::runtime_error("write");fclose(f);}
++int main(int argc,char**argv){if(argc!=2)return 1;ggml_cpu_init();ggml_init_params init{16*1024*1024,nullptr,true};auto*ctx=ggml_init(init);if(!ctx)return 2;
++ uint32_t seed=91173;auto next=[&](){seed=seed*1664525u+1013904223u;return seed;};
++ for(int width:{64,128,1152,2304}){
++  constexpr int rows=5,count=9;std::vector<float>input(count*width);for(auto&x:input){uint32_t b=(next()&0x807fffff)|0x3e000000;memcpy(&x,&b,4);}for(int i=0;i<width;i++)input[i]=0;
++  std::vector<uint8_t>packed(count*(width/32)*sizeof(block_q8_0));for(int v=0;v<count;v++)quantize_row_q8_0(input.data()+v*width,packed.data()+v*(width/32)*sizeof(block_q8_0),width);
++  std::vector<int8_t>values(count*width);std::vector<float>scales(count*width/32);for(int v=0;v<count;v++)for(int b=0;b<width/32;b++){auto*q=(const block_q8_0*)(packed.data()+(v*width/32+b)*sizeof(block_q8_0));memcpy(values.data()+v*width+b*32,q->qs,32);scales[v*width/32+b]=GGML_FP16_TO_FP32(q->d);}
++  char name[100];snprintf(name,sizeof(name),"input-%d.f32",width);put(argv[1],name,input.data(),input.size()*4);snprintf(name,sizeof(name),"values-%d.i8",width);put(argv[1],name,values.data(),values.size());snprintf(name,sizeof(name),"scales-%d.f32",width);put(argv[1],name,scales.data(),scales.size()*4);
++  for(int kind=0;kind<2;kind++){
++   int blocks=width/(kind?64:32);std::vector<uint8_t>w(rows*blocks*18);for(auto&b:w)b=next()>>24;for(int i=0;i<rows*blocks;i++){uint16_t h=(next()&0x83ff)|0x2c00;memcpy(w.data()+i*18,&h,2);}
++   std::vector<float>expected(rows*count);for(int row=0;row<rows;row++)for(int v=0;v<count;v++)(kind?ggml_vec_dot_q2_0_q8_0:ggml_vec_dot_iq4_nl_q8_0)(width,&expected[row*count+v],0,w.data()+row*blocks*18,0,packed.data()+v*(width/32)*sizeof(block_q8_0),0,1);
++   snprintf(name,sizeof(name),"%s-%d.bin",kind?"q2":"nl",width);put(argv[1],name,w.data(),w.size());snprintf(name,sizeof(name),"%s-%d.f32",kind?"q2":"nl",width);put(argv[1],name,expected.data(),expected.size()*4);
++  }
++ }
++ ggml_free(ctx);
++}

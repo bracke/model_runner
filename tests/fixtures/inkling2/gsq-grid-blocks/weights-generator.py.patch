@@ -1,0 +1,12 @@
++from pathlib import Path
++import struct
++root=Path(__file__).parent
++seed=9117321
++for name,block_bytes in [('iq3s',110),('iq3xxs',98)]:
++ data=bytearray(4*9*block_bytes)
++ for i in range(len(data)):
++  seed=(seed*1664525+1013904223)&0xffffffff
++  data[i]=seed>>24
++ for b in range(4*9):
++  data[b*block_bytes:b*block_bytes+2]=struct.pack('<H',0x1000+(b%17)*13)
++ (root/(name+'.bin')).write_bytes(data)

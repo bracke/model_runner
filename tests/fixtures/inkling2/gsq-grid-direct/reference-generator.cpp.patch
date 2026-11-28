@@ -1,0 +1,27 @@
+#include "ggml.h"
+#include "ggml-cpu.h"
+#include "ggml-impl.h"
+#include "ggml-common.h"
+#include "quants.h"
+#include <vector>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+extern "C" void quantize_row_q8_K(const float*, void*, int64_t);
+extern "C" void ggml_vec_dot_iq1_s_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+extern "C" void ggml_vec_dot_iq1_m_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+extern "C" void ggml_vec_dot_iq2_xxs_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+extern "C" void ggml_vec_dot_iq2_xs_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+extern "C" void ggml_vec_dot_iq2_s_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+extern "C" void ggml_vec_dot_iq3_xxs_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+extern "C" void ggml_vec_dot_iq3_s_q8_K(int,float*,size_t,const void*,size_t,const void*,size_t,int);
+static std::vector<unsigned char> read(const std::string&p){auto*f=fopen(p.c_str(),"rb");if(!f)throw std::runtime_error("read");fseek(f,0,SEEK_END);auto n=ftell(f);rewind(f);std::vector<unsigned char>b(n);if(fread(b.data(),1,n,f)!=(size_t)n)throw std::runtime_error("short read");fclose(f);return b;}
+int main(int argc,char**argv){if(argc!=2)return 1;ggml_cpu_init();ggml_init_params ip{1024*1024,nullptr,true};auto*ctx=ggml_init(ip);std::string root=argv[1];auto raw=read(root+"/input.f32");const float*x=(const float*)raw.data();std::vector<block_q8_K> packed(9*9);for(int v=0;v<9;v++)quantize_row_q8_K(x+v*2304,packed.data()+v*9,2304);
+{auto w=read(root+"/iq1_s.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq1_s_q8_K(2304,&out[r*9+v],0,w.data()+r*9*50,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq1_s.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+{auto w=read(root+"/iq1_m.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq1_m_q8_K(2304,&out[r*9+v],0,w.data()+r*9*56,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq1_m.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+{auto w=read(root+"/iq2_xxs.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq2_xxs_q8_K(2304,&out[r*9+v],0,w.data()+r*9*66,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq2_xxs.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+{auto w=read(root+"/iq2_xs.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq2_xs_q8_K(2304,&out[r*9+v],0,w.data()+r*9*74,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq2_xs.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+{auto w=read(root+"/iq2_s.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq2_s_q8_K(2304,&out[r*9+v],0,w.data()+r*9*82,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq2_s.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+{auto w=read(root+"/iq3_xxs.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq3_xxs_q8_K(2304,&out[r*9+v],0,w.data()+r*9*98,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq3_xxs.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+{auto w=read(root+"/iq3_s.bin");std::vector<float> out(36);for(int r=0;r<4;r++)for(int v=0;v<9;v++)ggml_vec_dot_iq3_s_q8_K(2304,&out[r*9+v],0,w.data()+r*9*110,0,packed.data()+v*9,0,1);auto*f=fopen((root+"/iq3_s.f32").c_str(),"wb");if(!f||fwrite(out.data(),4,out.size(),f)!=out.size())return 2;fclose(f);}
+ggml_free(ctx);}

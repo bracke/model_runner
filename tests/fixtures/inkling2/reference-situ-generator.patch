@@ -1,0 +1,31 @@
+diff --git a/generate-situ-fixtures.c b/generate-situ-fixtures.c
+new file mode 100644
+--- /dev/null
++++ b/generate-situ-fixtures.c
+@@ -0,0 +1,26 @@
++#include <stdio.h>
++#include <stdint.h>
++#include <math.h>
++#include <gnu/libc-version.h>
++#define N 65536
++static float g[N],u[N],y[N];
++static float situ(float a,float b){
++ float gr=1.0f/4.0f,ur=1.0f/25.0f;
++ float sigmoid=a<=-88.72283935546875f?0.0f:1.0f/(1.0f+expf(-a));
++ float gate=4.0f*tanhf(a*gr);gate=gate*sigmoid;
++ float up=25.0f*tanhf(b*ur);return gate*up;
++}
++static void write(const char*p,float*v,int n){FILE*f=fopen(p,"wb");if(!f)__builtin_trap();fwrite(v,4,n,f);fclose(f);}
++int main(int argc,char**argv){if(argc!=5)return 2;uint32_t x=0x91ca734b;
++ for(int i=0;i<N;i++){
++ x^=x<<13;x^=x>>17;x^=x<<5;g[i]=(float)((int)(x%240001)-120000)/1000.0f;
++ x^=x<<13;x^=x>>17;x^=x<<5;u[i]=(float)((int)(x%240001)-120000)/1000.0f;
++ if(i<32768)g[i]=(float)(i-16384)/512.0f;
++ }
++ float edge[]={0.0f,1e-7f,-1e-7f,1e-20f,-1e-20f,1e-38f,-1e-38f,4.0f,-4.0f,88.722831726f,-88.722831726f,-88.722839355f};
++ for(int i=0;i<12;i++){g[i]=edge[i];u[i]=(float)(i+1)/7.0f;}
++ for(int i=0;i<N;i++)y[i]=situ(g[i],u[i]);
++ FILE*in=fopen(argv[1],"wb");if(!in)return 3;fwrite(g,4,N,in);fwrite(u,4,N,in);fclose(in);write(argv[2],y,N);
++ float a[32],b[32],out[32];for(int i=0;i<32;i++)a[i]=(float)(i-16);a[0]=127.0f;a[31]=-127.0f;
++ for(int i=0;i<32;i++){b[i]=a[31-i];out[i]=situ(a[i],b[i]);}write(argv[3],out,32);
++ FILE*meta=fopen(argv[4],"w");fprintf(meta,"%s\n",gnu_get_libc_version());fclose(meta);return 0;}

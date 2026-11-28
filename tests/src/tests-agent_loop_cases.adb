@@ -30,6 +30,7 @@ with Model_Runner.Errors;
 with Model_Runner.Generation;
 with Model_Runner.GGUF.Containers.Reader;
 with Model_Runner.Llama;
+with Model_Runner.Limits;
 with Model_Runner.Stops;
 with Model_Runner.Templates;
 with Model_Runner.Tools.Builtin;
@@ -2336,9 +2337,110 @@ package body Tests.Agent_Loop_Cases is
         "an explicitly uncaptured helper was hidden inside a supposedly complete parent");
    end Capture_Follows_A_Real_Helper;
 
+   procedure Inkling_Uses_Normal_Tool_Dispatch (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Encoded : Model_Runner.Bytes.Byte_Array_Access := null;
+      Template : constant String := Project_Tools.Files.Read_Raw_File ("fixtures/inkling2/chat_template.jinja");
+      Target : constant String := Dir & "/inkling.txt";
+
+      function Invoke (Args : String) return String is
+        (Model_Runner.Tools.Inkling_Model & "write_file" & Model_Runner.Tools.Inkling_Tool_JSON
+         & "{""name"":""write_file"",""args"":" & Args & "}" & Model_Runner.Tools.Inkling_End_Message);
+   begin
+      Tiny_Model.Build_Inkling (Encoded);
+      for Mode in 1 .. 3 loop
+         if Ada.Directories.Exists (Target) then
+            Ada.Directories.Delete_File (Target);
+         end if;
+         declare
+            Under : Harness (Encoded);
+            Session : L.Session;
+            Messages : Conv.History;
+            Offered : Model_Runner.Tools.Definitions;
+            Runner : Model_Runner.Tools.Builtin.Instance;
+            Stop : Model_Runner.Stops.Set;
+            Request : Model_Runner.Generation.Request;
+            Clock : aliased Model_Runner.Clocks.System_Clock;
+            Seeds : aliased Model_Runner.Entropy.Host_Source;
+            Status : E.Error_Info;
+            Replies : aliased Script;
+            Seen : aliased Recorder;
+            Permission : aliased Counter;
+            Ended : Ag.Outcome;
+         begin
+            Model_Runner.GGUF.Containers.Reader.Parse (Under.Parsed, Under.Source, Status => Status);
+            L.Prepare (Under.Ready, Under.Parsed, Under.Source, Status => Status);
+            Assert (E.Is_Ok (Status), "Inkling harness model prepare failed");
+            L.Use_Template (Under.Ready, Template, Model_Runner.Limits.Default_Model_Limits, Status);
+            Assert (E.Is_Ok (Status), "Inkling harness official template compile failed");
+            L.Open (Session, Under.Ready, Status => Status);
+            Assert (E.Is_Ok (Status), "Inkling harness session open failed");
+            Conv.Open (Messages, Status => Status);
+            Conv.Append (Messages, Conv.User_Role, "Write inkling.txt", Status);
+            Model_Runner.Tools.Read
+              (Offered, Model_Runner.Tools.Registry.Offered
+                 ([Model_Runner.Tools.Registry.Write_Files => True, others => False]), Status);
+            Model_Runner.Stops.Open (Stop);
+            Runner.Set_Base (Ada.Directories.Full_Name (Dir));
+            Request.Max_Tokens := 128;
+            Replies.Replies.Append
+              (Invoke (if Mode = 2 then "{""path"":17,""content"":""native tools""}"
+                       else "{""path"":""inkling.txt"",""content"":""native tools""}"));
+            Replies.Replies.Append
+              (Model_Runner.Tools.Inkling_Model & Model_Runner.Tools.Inkling_Text
+               & "status: done" & Model_Runner.Tools.Inkling_End_Message & Model_Runner.Tools.Inkling_End_Sampling);
+            if Mode = 3 then
+               Permission.Halt_At := 1;
+            end if;
+            Ag.Run
+              (Source => Under.Ready, Session => Session, Messages => Messages, Offered => Offered,
+               Executor => Runner, Generation => Request, Stop_Set => Stop, Sink => null,
+               Time => Clock'Unchecked_Access, Seeds => Seeds'Unchecked_Access,
+               Max_Steps => 4, Tool_Syntax => Model_Runner.Tools.Inkling_Call,
+               Watch => Seen'Unchecked_Access, Approve => Permission'Unchecked_Access,
+               Script => Replies'Unchecked_Access, Result => Ended);
+            if Mode = 1 then
+               Assert (Ended.Reason = Ag.Answered and then Ada.Directories.Exists (Target)
+                       and then Project_Tools.Files.Read_Raw_File (Target) = "native tools",
+                       "Inkling's typed call bypassed or failed ordinary native dispatch: " & Ended.Reason'Image);
+               Assert (Permission.Asked = 1 and then Natural (Seen.Results.Length) = 1,
+                       "Inkling did not use the existing permission/result hooks");
+               Assert ((for some Index in 1 .. Conv.Length (Messages) => Conv.Name_At (Messages, Index) = "write_file"),
+                       "the dispatched result lost its official template identity");
+            elsif Mode = 2 then
+               Assert (not Ada.Directories.Exists (Target) and then Natural (Seen.Results.Length) = 1,
+                       "schema-invalid Inkling arguments reached the executor");
+            else
+               Assert (Ended.Reason = Ag.Declined and then not Ada.Directories.Exists (Target),
+                       "Inkling generated output bypassed the ordinary permission gate");
+            end if;
+            Conv.Close (Messages);
+            Model_Runner.Tools.Close (Offered);
+            L.Close (Session);
+            L.Close (Under.Ready, Status);
+            Model_Runner.GGUF.Containers.Close (Under.Parsed);
+         exception
+            when others =>
+               Conv.Close (Messages);
+               Model_Runner.Tools.Close (Offered);
+               L.Close (Session);
+               L.Close (Under.Ready, Status);
+               Model_Runner.GGUF.Containers.Close (Under.Parsed);
+               raise;
+         end;
+      end loop;
+      Model_Runner.Bytes.Free (Encoded);
+   exception
+      when others =>
+         Model_Runner.Bytes.Free (Encoded);
+         raise;
+   end Inkling_Uses_Normal_Tool_Dispatch;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Inkling_Uses_Normal_Tool_Dispatch'Access, "Inkling calls use normal schemas, permissions and results");
       Register_Routine (T, Open_Reader_Keeps_Sampled_Constraints'Access,
         "sampled open-reader replies retain constraints after the first turn");
       Register_Routine (T, Capture_Uses_The_Actual_Agent_Loop'Access,

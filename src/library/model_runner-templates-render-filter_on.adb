@@ -31,19 +31,42 @@ begin
             Ascii   : constant Boolean :=
               Step.Arg2 /= 0
               and then Is_Truthy (Held_Of (Item.Operands.all (Step.Arg2)));
-            Plain   : constant String :=
+            Serialized : constant String :=
               (if Sorting then Keys_Sorted (Untupled (JSON_Text (Value)))
                else Untupled (JSON_Text (Value)));
-            Shaped  : constant String :=
-              (if Step.Arg1 /= 0
-               then Indented_JSON
-                      (Plain,
-                       Natural'Max
-                         (0, Bounded (Number_Of
-                                        (Value_Of (Item.Operands.all (Step.Arg1))))))
-               else Plain);
+            --  ensure_ascii escapes values, not the caller's separators.
+            Plain : constant String := (if Ascii then Ascii_Escaped (Serialized) else Serialized);
+            Separators : constant Held :=
+              (if Step.Arg4 = 0 then Nothing
+               else Held_Of (Item.Operands.all (Step.Arg4)));
+            Custom : constant Boolean := Step.Arg4 /= 0 and then Separators.Kind /= Value_None;
+            Item_Sep : constant Held := Element_At (Separators, 0);
+            Key_Sep : constant Held := Element_At (Separators, 1);
          begin
-            return As_Text (if Ascii then Ascii_Escaped (Shaped) else Shaped);
+            if Custom and then
+              (Length_Of (Separators) /= 2
+               or else Item_Sep.Kind /= Value_Text
+               or else Key_Sep.Kind /= Value_Text)
+            then
+               Refuse (0, 0, E.Template_Unknown_Filter);
+               return Nothing;
+            end if;
+            declare
+               Shaped : constant String :=
+                 (if Step.Arg1 /= 0 or else Custom
+                  then Indented_JSON
+                         (Plain,
+                          (if Step.Arg1 = 0 then 0
+                           else Bounded (Number_Of (Value_Of (Item.Operands.all (Step.Arg1))))),
+                          Pretty => Step.Arg1 /= 0,
+                          Item_Separator =>
+                            (if Custom then Text_Of (Item_Sep)
+                             elsif Step.Arg1 /= 0 then "," else ", "),
+                          Key_Separator => (if Custom then Text_Of (Key_Sep) else ": "))
+                  else Plain);
+            begin
+               return As_Text (Shaped);
+            end;
          end;
 
       when Filter_Params =>

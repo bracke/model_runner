@@ -79,6 +79,9 @@ project Model_Runner is
       --  says so and compiles it again without, a note the repository
       --  check takes for a warning. Asked without at the start, it says
       --  nothing; the code is the same.
+      for Switches ("model_runner-kernels.adb") use
+        Model_Runner_Build.Reference_Math_Switches;
+
       for Switches ("model_runner-platform-device-products.adb") use
         Model_Runner_Build.Large_Unit_Switches;
 
@@ -125,8 +128,21 @@ project Model_Runner is
       --  whole set rather than the one instruction, because a processor
       --  offering the instruction offers the rest and the host question
       --  asks for all of it before this is ever entered.
+      for Switches ("model_runner-tensors-wide_products.adb") use
+        Model_Runner_Build.X86_64_V4_Switches;
+
       for Switches ("model_runner-quantization-integers-deep.ads") use
         Model_Runner_Build.X86_64_V4_Switches;
+      for Switches ("model_runner-llama.adb") use
+        Model_Runner_Build.Llama_Ada_Switches;
+      for Switches ("model_runner-tensors.adb") use
+        Model_Runner_Build.Tensors_Ada_Switches;
+      for Switches ("model_runner-backend-cpu.adb") use
+        Model_Runner_Build.CPU_Ada_Switches;
+      for Switches ("model_runner-quantization-integers.adb") use
+        Model_Runner_Build.Integers_Ada_Switches;
+      for Switches ("model_runner-quantization-grid_integers.adb") use
+        Model_Runner_Build.Grids_Ada_Switches;
    end Compiler;
 
    --  Bytes out as bytes in. Alire's generated switches carry -gnatW8 and the
@@ -135,6 +151,10 @@ project Model_Runner is
    --  text that was already UTF-8 -- a Danish label, a pseudo-locale bracket,
    --  a token the model produced -- came out doubled. -Wb is the compiler
    --  default and leaves the bytes alone.
+   package Linker is
+      for Default_Switches ("Ada") use Model_Runner_Build.Profile_Linker_Switches;
+   end Linker;
+
    package Binder is
       for Switches ("Ada") use ("-Es", "-Wb"); --  Symbolic traceback
    end Binder;

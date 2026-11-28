@@ -7297,6 +7297,7 @@ package body Tests.CLI_Cases is
          Settings : out L.Configuration;
          Status   : out E.Error_Info)
       is
+         use type B.Byte_Count;
          Builder : Fixtures.Builder;
          Image   : B.Byte_Array_Access;
       begin
@@ -7343,7 +7344,13 @@ package body Tests.CLI_Cases is
             Fixtures.Add_U32 (Builder, Named & ".rope.dimension_count", 2);
          end if;
 
-         Fixtures.Build (Builder, Image);
+         if Named = "inkling2_loop" then
+            Tiny_Model.Build_Inkling (Image);
+         elsif Named = "dflash" then
+            Tiny_Model.Build_DSpark (Image);
+         else
+            Fixtures.Build (Builder, Image);
+         end if;
 
          declare
             Held   : aliased constant B.Byte_Array := Image.all;
@@ -7357,6 +7364,7 @@ package body Tests.CLI_Cases is
             end if;
             Containers.Close (Parsed);
          end;
+         B.Free (Image);
       end Configured;
 
       Settings : L.Configuration;
@@ -7374,7 +7382,8 @@ package body Tests.CLI_Cases is
 
          --  Its keys were found under its own name, which is the whole
          --  reason the prefix is not a constant any more.
-         Assert (Settings.Embedding = 8 and then Settings.Layers = 1,
+         Assert (Settings.Embedding = (if Kind = L.DFlash then 32 else 8)
+                 and then Settings.Layers = (if Kind = L.Inkling2_Loop then 24 elsif Kind = L.DFlash then 3 else 1),
                  "the metadata of " & L.Architecture_Name (Kind)
                  & " was not read under its own keys");
       end loop;
@@ -14273,6 +14282,43 @@ package body Tests.CLI_Cases is
    -- The_Speed_Tool_Takes_Runs_Arithmetic --
    ---------------------------------------
 
+   --  A named limit reaches model preparation as well as session creation.
+   procedure The_Speed_Tool_Applies_The_Model_Memory_Limit
+     (T2 : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T2);
+      Model  : constant String := "obj/speed-model-memory.gguf";
+      Prompt : constant String := "obj/speed-model-memory-prompt.txt";
+      Report : Speed_Run.Report;
+      Saved  : constant Model_Runner.Backend.CPU.Role_Set :=
+        Model_Runner.Backend.CPU.Integer_Activation_Roles;
+   begin
+      Tiny_Model.Write (Model, Room => 64);
+      declare
+         Handle : Ada.Text_IO.File_Type;
+      begin
+         Ada.Text_IO.Create (Handle, Ada.Text_IO.Out_File, Prompt);
+         Ada.Text_IO.Put_Line (Handle, "abab");
+         Ada.Text_IO.Close (Handle);
+      end;
+      --  Repacking owns storage, so a mapped source cannot bypass the limit.
+      Speed_Run.Run
+        (Path => Model, Prompt_Path => Prompt, Tokens => 1, Threads => 1,
+         Batch => 1, Repack => Model_Runner.Llama.To_BF16, Repeats => 1,
+         Memory_Limit => 1, No_Cache => True, Result => Report);
+      Model_Runner.Backend.CPU.Use_Integer_Activations (Saved);
+      Assert
+        (not Report.Ran and then Ada.Strings.Fixed.Index
+           (Speed_Run.Summary (Report),
+            "the model would not prepare: MEMORY_LIMIT_EXCEEDED") > 0,
+         "the named memory limit reached only the session: "
+         & Speed_Run.Summary (Report));
+   exception
+      when others =>
+         Model_Runner.Backend.CPU.Use_Integer_Activations (Saved);
+         raise;
+   end The_Speed_Tool_Applies_The_Model_Memory_Limit;
+
    --  `tests speed --device-memory 0` reads the weights where they lie, as
    --  run's does: the tool took a nought as unnamed and measured the
    --  engine's own share, so the README's "read where they lie" row was a
@@ -15658,6 +15704,33 @@ package body Tests.CLI_Cases is
                  "a reply with no markup was held back");
       end;
    end Harmony_Replies_Are_Shown_As_Text;
+
+   procedure Inkling_Streaming_Uses_Typed_Blocks (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Screen : aliased Capture_Sink;
+      Tidy : Model_Runner.Output.Harmony.Filter (Screen'Unchecked_Access);
+      Closed : Boolean;
+      Reply : constant String := Model_Runner.Tools.Inkling_Model & Model_Runner.Tools.Inkling_Thinking
+        & "Reason." & Model_Runner.Tools.Inkling_End_Message
+        & Model_Runner.Tools.Inkling_Model & "read_file" & Model_Runner.Tools.Inkling_Tool_JSON
+        & "{""name"":""read_file"",""args"":{}}" & Model_Runner.Tools.Inkling_End_Message
+        & Model_Runner.Tools.Inkling_Model & Model_Runner.Tools.Inkling_Text
+        & "A < B." & Model_Runner.Tools.Inkling_End_Message & Model_Runner.Tools.Inkling_End_Sampling;
+   begin
+      Tidy.Inkling_Blocks (True);
+      for Hide in Boolean loop
+         for Split in 1 .. Reply'Length loop
+            Screen.Used := 0;
+            Tidy.Answer_Only (Hide);
+            Tidy.Write (Reply (1 .. Split), Closed);
+            Tidy.Write (Reply (Split + 1 .. Reply'Last), Closed);
+            Tidy.Flush (Closed);
+            Assert (Screen.Data (1 .. Screen.Used)
+                    = (if Hide then "A < B." & ASCII.LF else "Reason." & ASCII.LF & "A < B." & ASCII.LF),
+                    "Inkling markers or call arguments leaked at fragment boundary " & Split'Image);
+         end loop;
+      end loop;
+   end Inkling_Streaming_Uses_Typed_Blocks;
 
    --  --hide-reasoning: a harmony reply shown as its final message alone,
    --  and a think block left out -- one the reply opens and one its prompt
@@ -20579,6 +20652,8 @@ package body Tests.CLI_Cases is
       use AUnit.Test_Cases.Registration;
    begin
       Register_Routine
+        (T, Inkling_Streaming_Uses_Typed_Blocks'Access, "Inkling typed blocks stream across every fragment boundary");
+      Register_Routine
         (T, Harness_Screen_Takes_Keys_And_Text_Whole'Access,
          "the harness's screen takes keys and text whole");
       Register_Routine
@@ -20958,6 +21033,9 @@ package body Tests.CLI_Cases is
       Register_Routine
         (T, The_Speed_Tool_Runs_What_It_Publishes'Access,
          "the speed tool runs the command it publishes figures for");
+      Register_Routine
+        (T, The_Speed_Tool_Applies_The_Model_Memory_Limit'Access,
+         "the speed tool applies the model memory limit before preparation");
       Register_Routine
         (T, The_Speed_Tool_Reads_Where_They_Lie_At_Nought'Access,
          "the speed tool reads the weights where they lie at --device-memory 0");

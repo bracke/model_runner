@@ -442,6 +442,20 @@ package Model_Runner.Sampling is
       Taken_Count : out Natural;
       Possible    : access function (Token : Token_Id) return Boolean := null);
 
+   --  Greedy selection from explicitly materialized vocabulary rows. Only
+   --  allowed rows are read; other logits may be absent from the projection.
+   --  Biases, history penalties, masks and lowest-ID ties match Sample.
+   --  @param Item Open greedy sampler; no random state is consumed.
+   --  @param Logits Vocabulary-sized row containing the allowed logits.
+   --  @param Allowed Nonempty, strictly increasing vocabulary IDs.
+   --  @param Token Selected token; No_Token on failure.
+   --  @param Status Ordinary sampling diagnostics; malformed selections or
+   --    non-greedy settings return Sampling_Invalid_Configuration.
+   procedure Sample_Allowed
+     (Item : in out Sampler; Logits : Real_Array;
+      Allowed : Model_Runner.Shares.Member_Rows; Token : out Token_Id;
+      Status : out Model_Runner.Errors.Error_Info);
+
    --  Select one token from a logit vector.
    --
    --  The vector holds raw logits: no softmax has been applied by the

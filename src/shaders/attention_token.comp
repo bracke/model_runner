@@ -98,6 +98,7 @@ layout(push_constant, std430) uniform Shape {
     uint first_position;
     uint k_codec;
     uint v_codec;
+    uint relative_at;
 } shape;
 
 const uint BLOCK = 32u;

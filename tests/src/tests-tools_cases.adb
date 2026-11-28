@@ -5575,9 +5575,44 @@ package body Tests.Tools_Cases is
               "whether top-k comes first was misjudged");
    end More_Helpers_Answer_As_Said;
 
+   procedure Inkling_Blocks_Are_Validated (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Tool renames Model_Runner.Tools;
+      Asked : Tool.Calls;
+      Status : E.Error_Info;
+      Valid : constant String := Tool.Inkling_Model & "read_file" & Tool.Inkling_Tool_JSON
+        & "{""name"":""read_file"",""args"":{""path"":""README.md""}}" & Tool.Inkling_End_Message;
+   begin
+      Tool.Read_Calls (Asked, Valid, Status, Syntax => Tool.Inkling_Call);
+      Assert (E.Is_Ok (Status) and then Tool.Count (Asked) = 1
+              and then Tool.Called (Asked, 1) = "read_file"
+              and then Tool.Arguments (Asked, 1) = "{""path"": ""README.md""}",
+              "Inkling's typed call was not read with its object arguments");
+      Tool.Read_Calls
+        (Asked, Valid & Tool.Inkling_Model & "other" & Tool.Inkling_Tool_JSON
+         & "{""name"":""read_file"",""args"":{}}" & Tool.Inkling_End_Message,
+         Status, Syntax => Tool.Inkling_Call);
+      Assert (E.Is_Error (Status), "mismatched header and body tool identity was accepted");
+      Tool.Read_Calls
+        (Asked, Tool.Inkling_Model & "read_file" & Tool.Inkling_Tool_JSON
+         & "{""name"":""read_file"",""args"":""{}""}" & Tool.Inkling_End_Message,
+         Status, Syntax => Tool.Inkling_Call);
+      Assert (E.Is_Error (Status) and then Tool.Count (Asked) = 0, "string arguments bypassed typed object checks");
+      Tool.Read_Calls (Asked, Valid (1 .. Valid'Last - Tool.Inkling_End_Message'Length),
+                       Status, Syntax => Tool.Inkling_Call);
+      Assert (E.Is_Error (Status) and then Tool.Count (Asked) = 0, "truncated Inkling call was accepted");
+      Assert (Tool.Inkling_Answer
+                (Tool.Inkling_Model & Tool.Inkling_Thinking & "private" & Tool.Inkling_End_Message
+                 & Tool.Inkling_Model & Tool.Inkling_Text & "Visible." & Tool.Inkling_End_Message
+                 & Valid & Tool.Inkling_End_Sampling) = "Visible.",
+              "thinking, call blocks or control tokens escaped into the visible answer");
+      Tool.Close (Asked);
+   end Inkling_Blocks_Are_Validated;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine (T, Inkling_Blocks_Are_Validated'Access, "Inkling typed calls, identity and visible text");
       Register_Routine
         (T, A_Typed_Qwen_Value_Is_Read_Without_Its_Spaces'Access,
          "a Qwen value typed other than a string is read without the spaces "

@@ -26,6 +26,12 @@
 --
 --  Task safety: a call holds no state.
 private generic
+   --  Select the explicit Q4_K nibble kernel only in the instance whose
+   --  caller has established x86-64-v3 support. The default stays scalar.
+   Vector_Q4_K : Boolean := False;
+   --  Select the corresponding explicit kernels in the same guarded instance.
+   Vector_Q5_K : Boolean := False;
+   Vector_Q6_K : Boolean := False;
 package Model_Runner.Quantization.Decoders is
 
    --  Decode one block.

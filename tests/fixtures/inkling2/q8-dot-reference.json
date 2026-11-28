@@ -1,0 +1,49 @@
+{
+  "reference": "Pinned independent llama.cpp commit29b52d398b294509746ec0a3f28948a3107c0213, original optimized ggml_vec_dot_q8_0_q8_0, ggml_cpu_init called before evaluation. No native output used as a golden.",
+  "compiler": "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+  "command": [
+    "cc",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "tests/fixtures/inkling2/q8-dot-reference.c",
+    "-ldl",
+    "-o",
+    "/tmp/inkling-q8-dot-reference"
+  ],
+  "run": [
+    "/tmp/inkling-q8-dot-reference",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0",
+    "tests/fixtures/inkling2/q8-reference.bin",
+    "tests/fixtures/inkling2/q8-dot-reference.bin"
+  ],
+  "layout": "2rows x2vectors;512coordinates per vector; existing32 Q8_0 blocks split into2rows of16blocks; little-endian binary32 results in row-major order.",
+  "sha256": {
+    "tests/fixtures/inkling2/q8-reference.bin": "337e216b8bcd686b79ed1d1d5864a37eee1d6a30d6ce78272375ff8f5d9f7f67",
+    "tests/fixtures/inkling2/q8-dot-reference.bin": "a77c3cb4e03d44712a0f66f1e7b21d079d11bb03d3c3d81cc63f8d23644df283",
+    "/tmp/inkling2-reference-llamafile-off-bin/libggml-cpu.so.1.0.0": "b6565a96976188378673ef11ddad6b3893259fc7bc21e0d236c74b44c1da4278",
+    "tests/fixtures/inkling2/reference-integer-fixture-producers.patch": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f"
+  },
+  "external_producer_patch": {
+    "file": "reference-integer-fixture-producers.patch",
+    "sha256": "d092e0aeae1ab9f4444ecda71e836ad53aab03efb81201a00d68ff5aab17dd8f",
+    "apply_to": "Independent llama.cpp checkout; patch -p1. Compile the extracted C source outside model_runner."
+  },
+  "original_capture_commands_preserved": true,
+  "reproduce_command": [
+    "cc",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "/tmp/llama.cpp-inkling-reference/examples/inkling2-fixtures/q8-dot-reference.c",
+    "-ldl",
+    "-o",
+    "/tmp/inkling-q8-dot-reference"
+  ],
+  "source_hashes_in_external_patch": {
+    "q8-dot-reference.c": "e1e0606f600b381a43271c7e392ff62eebe0d99c5d9e832bafc50e132b06f37c"
+  },
+  "historical_source_sha256": {
+    "tests/fixtures/inkling2/q8-dot-reference.c": "e1e0606f600b381a43271c7e392ff62eebe0d99c5d9e832bafc50e132b06f37c"
+  }
+}

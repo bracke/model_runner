@@ -96,6 +96,12 @@ package Model_Runner.Generation is
       --  Validated sampling configuration.
       Sampling : Model_Runner.Sampling.Configuration;
 
+      --  Permit projecting only grammar-allowed vocabulary rows for a narrow
+      --  greedy constraint when the native model supports it. Other modes
+      --  retain complete projection. Full session logits are restored at exit.
+      Constrained_Projection : Boolean := True;
+
+
       --  Tokens the caller wants nudged, and by how much. Applied before
       --  everything else the sampler does, on the greedy path as well as the
       --  probabilistic one.

@@ -440,7 +440,8 @@ package body Model_Runner.CLI.Execute.Acquisition is
       --  Which file to load, for the caller that wants a second model: the
       --  draft is loaded exactly as the model is, with the same limits and
       --  the same refusals, and differs only in which path it reads.
-      Instead   : String := "")
+      Instead   : String := "";
+      Target : access L.Model'Class := null)
    is
       Bounds : constant Model_Runner.Limits.Model_Limits := Model_Bounds (Item);
       Named  : constant String :=
@@ -530,8 +531,10 @@ package body Model_Runner.CLI.Execute.Acquisition is
          --  bargain --repack f32 already publishes.
          L.Prepare
            (Prepared, Container, Source, Bounds, Cancel, Observer,
-            Item.Backend,
-            (if Item.Repack = L.No_Repack
+            (if Containers.String_Value (Container, "general.architecture") = "dflash"
+             then Model_Runner.Backend.Backend_CPU else Item.Backend),
+            (if Containers.String_Value (Container, "general.architecture") = "dflash" then L.No_Repack
+             elsif Item.Repack = L.No_Repack
                and then not T.Is_Empty (Item.Adapter_Path)
                and then not Item.Adapter_Runtime
              then L.To_F32
@@ -545,6 +548,7 @@ package body Model_Runner.CLI.Execute.Acquisition is
             Fit_Required => not Item.Device_Memory_Set,
             Threads      => Selected_Workers (Item),
             Status       => Status,
+            Target       => Target,
             Stretch      => Asked_Rotation (Item),
             Panel_Cache  => Panel_Path,
             Context      => Item.Context_Size,

@@ -445,6 +445,7 @@ begin
       begin
          Load (Item, Screen, Draft_Source, Draft_Container, Draft_Model,
                True, null, Cancel'Unchecked_Access, Condition,
+               Target => Prepared'Unchecked_Access,
                Instead =>
                  (if Asked then T.To_String (Item.Draft_Path)
                   else T.To_String (Auto_Draft)));
@@ -486,10 +487,14 @@ begin
            and then (Asked or else Numbers_Alike (Draft_Model, Prepared))
          then
             L.Open
-              (Draft_Session, Draft_Model, Item.Context_Size,
+              (Draft_Session, Draft_Model,
+               (if L."=" (L.Config (Draft_Model).Kind, L.DFlash) then L.Capacity (Session) else Item.Context_Size),
                Session_Bounds => Session_Bounds (Item),
-               Workers => Team, Cache => Item.Cache, Status => Condition,
-               Values => Item.Values, Paged => Session_Paging (Item));
+               Workers => Team,
+               Cache => (if L."=" (L.Config (Draft_Model).Kind, L.DFlash) then L.Exact else Item.Cache),
+               Status => Condition,
+               Values => (if L."=" (L.Config (Draft_Model).Kind, L.DFlash)
+                          then L.Same_As_Keys else Item.Values), Paged => Session_Paging (Item));
             if E.Is_Error (Condition) and then Asked then
                Fail (Condition);
                return;
@@ -2239,7 +2244,8 @@ begin
                Plan : constant Model_Runner.Draft_Policy.Plan :=
                  Model_Runner.Draft_Policy.Decide
                    (Prepared, Session, Asked_Drafting (Item),
-                    Draft_Ready => Draft_Ready, Auto_Drafted => Auto_Drafted);
+                    Draft_Ready => Draft_Ready, Auto_Drafted => Auto_Drafted,
+                    Feature_Draft => Draft_Ready and then L."=" (L.Config (Draft_Model).Kind, L.DFlash));
             begin
                Request.Draft_From_Next := Plan.From_Next;
                Request.Draft_Tokens := Plan.Tokens;
@@ -2326,6 +2332,10 @@ begin
             --  text is the model's as it wrote it.
             Unthought.Show_Reasoning (not Item.Hide_Reasoning);
             Sink.Use_Styles (Pres.Styles_Answers (Screen));
+            Tidied.Inkling_Blocks
+              (Model_Runner.Tools."="
+                 (Model_Runner.Templates.Reading_Syntax (L.Template_Format (Prepared)),
+                  Model_Runner.Tools.Inkling_Call));
             Tidied.Answer_Only (Item.Hide_Reasoning);
             Gen.Generate
               (Source   => Prepared,
@@ -2336,10 +2346,8 @@ begin
                Rules    =>
                  (if Rules_Ready then Rules'Unchecked_Access else null),
                Sink     =>
-                 (if Model_Runner.Tools."="
-                       (Model_Runner.Templates.Reading_Syntax
-                          (L.Template_Format (Prepared)),
-                        Model_Runner.Tools.Harmony_Call)
+                 (if Model_Runner.Templates.Reading_Syntax (L.Template_Format (Prepared))
+                      in Model_Runner.Tools.Harmony_Call | Model_Runner.Tools.Inkling_Call
                     and then not Item.Output_Json
                   then Tidied'Unchecked_Access
                   --  For a program: nothing as it comes, the object after.
@@ -2441,10 +2449,8 @@ begin
       --  empty answer.
       if Item.Hide_Reasoning
         and then Outcome.Reason = Gen.Maximum_Tokens
-        and then (if Model_Runner.Tools."="
-                       (Model_Runner.Templates.Reading_Syntax
-                          (L.Template_Format (Prepared)),
-                        Model_Runner.Tools.Harmony_Call)
+        and then (if Model_Runner.Templates.Reading_Syntax (L.Template_Format (Prepared))
+                      in Model_Runner.Tools.Harmony_Call | Model_Runner.Tools.Inkling_Call
                   then Tidied.Showed_Nothing
                   else Unthought.Showed_Nothing)
       then

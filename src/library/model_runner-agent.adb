@@ -54,6 +54,9 @@ package body Model_Runner.Agent is
    begin
       --  A harmony reply's answer is its final channel's message, and a
       --  reply that wrote on none answered nothing.
+      if Ada.Strings.Fixed.Index (Reply, Model_Runner.Tools.Inkling_Model) > 0 then
+         return Model_Runner.Tools.Inkling_Answer (Reply);
+      end if;
       if Close = 0
         and then Ada.Strings.Fixed.Index
                    (Reply, Model_Runner.Tools.Harmony_Channel) > 0
@@ -382,8 +385,7 @@ package body Model_Runner.Agent is
       Unthought : aliased Model_Runner.Output.Reasoning.Filter (Sink);
       Shown  : constant Model_Runner.Output.Sink_Reference :=
         (if Model_Runner.Output."=" (Sink, null) then Sink
-         elsif Model_Runner.Tools."=" (Read_Syntax,
-                                       Model_Runner.Tools.Harmony_Call)
+         elsif Read_Syntax in Model_Runner.Tools.Harmony_Call | Model_Runner.Tools.Inkling_Call
          then Tidied'Unchecked_Access
          elsif Hide_Reasoning then Unthought'Unchecked_Access
          else Sink);
@@ -653,6 +655,9 @@ package body Model_Runner.Agent is
                     or else Ends (Model_Runner.Tools.DeepSeek_Call_End);
                --  A harmony call ends at <|call|>, which ends the generation
                --  and is not in the text: its header says a call was made.
+               when Model_Runner.Tools.Inkling_Call =>
+                  return Ends (Model_Runner.Tools.Inkling_End_Message)
+                    or else Ends (Model_Runner.Tools.Inkling_End_Sampling);
                when Model_Runner.Tools.Harmony_Call =>
                   return Ada.Strings.Fixed.Index (Trimmed, Model_Runner.Tools.Harmony_Recipient) > 0;
                when others => return Ends ("}") or else Ends ("```");
@@ -844,6 +849,7 @@ package body Model_Runner.Agent is
          --  captured parent's family; never hide the opt-out behind success.
          Trace.Open (Evidence, Capture, "{}", Result.Capture_Error);
       end if;
+      Tidied.Inkling_Blocks (Read_Syntax = Model_Runner.Tools.Inkling_Call);
       Tidied.Answer_Only (Hide_Reasoning);
       --  The pace begins with the work's first run.
       if Timing and then Kept.Started = 0 then
@@ -995,12 +1001,15 @@ package body Model_Runner.Agent is
                  --  closed, and what followed the budget was asked for with
                  --  no grammar -- calls the grammar would have shaped came
                  --  out unreadable.
-                 and then Model_Runner.Tools."/=" (Read_Syntax, Model_Runner.Tools.Harmony_Call);
+                 and then Read_Syntax not in Model_Runner.Tools.Harmony_Call | Model_Runner.Tools.Inkling_Call;
                --  A harmony analysis is closed as the model ends one, the
                --  next message begun for it to name its channel.
                Closing  : constant String :=
                  (if Model_Runner.Tools."=" (Read_Syntax, Model_Runner.Tools.Harmony_Call)
-                  then "<|end|><|start|>assistant" else Thought_Closing);
+                  then "<|end|><|start|>assistant"
+                  elsif Read_Syntax = Model_Runner.Tools.Inkling_Call
+                  then Model_Runner.Tools.Inkling_End_Message & Model_Runner.Tools.Inkling_Model
+                  else Thought_Closing);
 
                --  Written in a thought closed going round, ahead of its
                --  closing: the line it came back to, said to lead nowhere.
@@ -2247,6 +2256,9 @@ package body Model_Runner.Agent is
                                          Executor.Kind (Named), Ended);
                            end;
                            Conv.Append (Messages, Conv.Tool_Role, Reply, Status);
+                           if E.Is_Ok (Status) then
+                              Conv.Identify_Last (Messages, Named => Named, Status => Status);
+                           end if;
                            if Trace.Active (Evidence) then
                               Trace.Append (Evidence, Trace.Tool_Result,
                                 "{""id"":" & I (Long_Long_Integer (Invocations + Call))
@@ -2285,6 +2297,10 @@ package body Model_Runner.Agent is
                         Conv.Append
                           (Messages, Conv.Tool_Role,
                            "error: not run -- the run was stopped before this call", Told);
+                        if E.Is_Ok (Told) then
+                           Conv.Identify_Last
+                             (Messages, Named => Conv.Call_Name (Messages, Turn, Call), Status => Told);
+                        end if;
                         exit when E.Is_Error (Told);
                      end;
                   end loop;

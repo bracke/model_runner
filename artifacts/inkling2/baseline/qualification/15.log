@@ -1,0 +1,8 @@
+
+OK llama inference : rarer forms -- Falcon-Mamba's norms, GLM4's sections, Falcon-40B's second norm, a Granite mixture's shared expert, MPT's qk_ln, StableLM-2-12B's head norms, a per-layer key-value count and a Phi3 window -- agree with the independent implementation, and a DeepSeek2 query temperature is refused (in 0.012650 sec.)
+
+Total Tests Run:   1
+Successful Tests:  1
+Failed Assertions: 0
+Unexpected Errors: 0
+suite: passed

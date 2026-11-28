@@ -10,6 +10,11 @@ with Ada.Strings.Fixed;
 with Ada.Calendar.Time_Zones;
 
 with Interfaces;
+with Jsonlib.Documents;
+with Jsonlib.Errors;
+with Jsonlib.Parsers;
+with Jsonlib.Serializers;
+with Project_Tools.Files;
 
 with Model_Runner.CLI.Checkpoint;
 with Model_Runner.Conversation;
@@ -4377,7 +4382,7 @@ package body Tests.Template_Cases is
       Assert (E.Is_Ok (Status), "the conversation would not save");
       declare
          Saved : constant String := Read;
-         Line  : constant String := "model_runner-conversation 1" & ASCII.LF;
+         Line  : constant String := "model_runner-conversation 2" & ASCII.LF;
       begin
          Assert (Saved'Length > Line'Length
                  and then Saved (1 .. Line'Length) = Line,
@@ -4391,7 +4396,7 @@ package body Tests.Template_Cases is
       Assert (Loads ("model_runner-conversation 0" & ASCII.LF & "1 U5 hello1 0")
                 = E.No_Error and then Loaded,
               "a checkpoint of version 0 did not load");
-      Assert (Loads ("model_runner-conversation 2" & ASCII.LF & "1 U5 hello1 0")
+      Assert (Loads ("model_runner-conversation 3" & ASCII.LF & "1 U5 hello1 0")
                 = E.IO_Read_Failed,
               "a checkpoint of a newer form was read");
       Assert (Loads ("1 X5 hello1 0") = E.IO_Read_Failed,
@@ -4616,7 +4621,56 @@ package body Tests.Template_Cases is
         Character'Val (16#C3#) & Character'Val (16#A9#);
       NBSP    : constant String :=
         Character'Val (16#C2#) & Character'Val (16#A0#);
+
+      function Many_Items return String is
+         Result : String (1 .. 129);
+      begin
+         Result (1) := '[';
+         for Index in 1 .. 64 loop
+            Result (2 * Index) := '1';
+            Result (2 * Index + 1) := ',';
+         end loop;
+         Result (Result'Last) := ']';
+         return Result;
+      end Many_Items;
    begin
+      Check ("{% set roles={'user':'U','assistant':'A'} %}"
+             & "{% for message in messages %}"
+             & "{% set header=namespace(text=roles[message.role]) %}"
+             & "{% set rtok=header.text %}"
+             & "{% set rendered %}{{ rtok }}{% endset %}{{ rendered }}"
+             & "{% endfor %}", "U",
+             "an indexed assignment lost a dynamic mapping key");
+      Check ("{% set i=-1 %}{% set last=messages[i] %}"
+             & "{{ last.role }}:{{ last.content }}"
+             & "{% set i=9 %}{% set absent=messages[i] %}"
+             & "{{ absent is none }}", "user:hiTrue",
+             "an indexed assignment lost negative or missing message positions");
+      Check ("{% set values=['a','b'] %}{% set i=-1 %}"
+             & "{% set last=values[i] %}{{ last }}", "b",
+             "an indexed assignment lost a negative list position");
+      Check ("{{ {'b':[2,3], 'a':'x, : y'}|tojson(sort_keys=true, separators=(',', ':')) }}",
+             "{""a"":""x, : y"",""b"":[2,3]}",
+             "tojson's compact separators changed text or left structural spaces");
+      Check ("{% set value={'b':[2,3], 'a':{}} %}"
+             & "{{ value|tojson(indent=2, sort_keys=true, separators=(', ', ':')) }}",
+             "{" & ASCII.LF & "  ""a"":{}, " & ASCII.LF & "  ""b"":["
+             & ASCII.LF & "    2, " & ASCII.LF & "    3" & ASCII.LF & "  ]" & ASCII.LF & "}",
+             "tojson did not combine custom separators and indentation");
+      Check ("{{ [1,2]|tojson(separators=[';',' = ']) }}", "[1;2]",
+             "tojson's explicit separator pair was ignored");
+      Check ("{{ ['" & E_Acute & "','a']|tojson(ensure_ascii=true, separators=('" & E_Acute & "', ':')) }}",
+             "[""" & '\' & "u00e9""" & E_Acute & """a""]",
+             "tojson's ASCII escaping changed an explicit Unicode separator");
+      Check ("{{ [1,2]|tojson(separators=(',',)) }}", "render: TEMPLATE_UNKNOWN_FILTER",
+             "tojson accepted a separator pair with only one element");
+      Check ("{{ [1,2]|tojson(separators=(',', 1)) }}", "render: TEMPLATE_UNKNOWN_FILTER",
+             "tojson accepted a non-text separator");
+      Check ("{{ " & Many_Items & "|length }}", "64",
+             "the separator-budget input did not contain all its items");
+      Check ("{{ [[[[" & Many_Items & "]]]]|tojson(indent=65536, separators=(',', ':'))|length }}",
+             "render: TEMPLATE_VARIABLES_TOO_LARGE",
+             "tojson's formatting expansion exceeded the intermediate-value budget");
       Check ("{% set x=0 %}{% for i in [1,2,3] %}{% set x=x+i %}{{x}}"
              & "{% endfor %}{{x}}", "1230",
              "an assignment in a loop's body carried into the next pass");
@@ -4705,9 +4759,189 @@ package body Tests.Template_Cases is
               Ada.Strings.Unbounded.To_String (Missed));
    end Language_Semantics_Match_Jinja;
 
+   --  Official text, effort and tool cases recorded by independent HF/Jinja execution.
+   procedure Inkling_Text_Template_Matches_Independent_Recordings
+     (T : in out AUnit.Test_Cases.Test_Case'Class)
+   is
+      pragma Unreferenced (T);
+      package J renames Jsonlib.Documents;
+      use type Jsonlib.Errors.Error_Code;
+      Doc : J.Document;
+      Parsed : Jsonlib.Errors.Error_Info;
+      Source : constant String :=
+        Project_Tools.Files.Read_Raw_File ("fixtures/inkling2/chat_template.jinja");
+      Compared : Natural := 0;
+
+      function Optional_Text (Value : J.Node) return String is
+         use type J.Value_Kind;
+      begin
+         return (if J.Is_Present (Value) and then J.Kind (Doc, Value) = J.String_Value
+                 then J.As_String (Doc, Value) else "");
+      end Optional_Text;
+   begin
+      Jsonlib.Parsers.Parse
+        (Project_Tools.Files.Read_Raw_File ("fixtures/inkling2/chat-template-cases.json"), Doc, Parsed);
+      Assert (Parsed.Code = Jsonlib.Errors.No_Error, "invalid independent template recording");
+      declare
+         Cases : constant J.Node := J.Member (Doc, J.Root (Doc), "cases");
+      begin
+         Assert (J.Length (Doc, Cases) = 6, "independent template cases missing");
+         for Index in 1 .. J.Length (Doc, Cases) loop
+            declare
+               One : constant J.Node := J.Element (Doc, Cases, Index);
+               Inputs : constant J.Node := J.Member (Doc, One, "inputs");
+               Level : constant J.Node := J.Member (Doc, Inputs, "reasoning_effort");
+               Prompt : constant J.Node := J.Member (Doc, Inputs, "add_generation_prompt");
+               Failure : constant J.Node := J.Member (Doc, One, "expected_error");
+               Label : constant String := J.As_String (Doc, J.Member (Doc, One, "name"));
+               Tooled : constant Boolean := J.Length (Doc, J.Member (Doc, Inputs, "tools")) /= 0;
+               --  The public profile accepts medium. Inject the other two
+               --  recorded effort strings to test the template's own branches;
+               --  this does not qualify profile support for those settings.
+               Prefix : constant String :=
+                 (if J.Is_Present (Level) and then Label not in "medium-reasoning" | "no-reasoning"
+                  then "{% set reasoning_effort="
+                    & Jsonlib.Serializers.To_String (Doc, Level) & " %}" else "");
+               Item : Tmpl.Compiled;
+               Talk : Conv.History;
+               Defs : aliased Model_Runner.Tools.Definitions;
+               Status : E.Error_Info;
+               Room : String (1 .. 16_384);
+               Used : Natural;
+            begin
+               declare
+                  Messages : constant J.Node := J.Member (Doc, Inputs, "messages");
+               begin
+                  Tmpl.Compile (Item, Prefix & Source, Status => Status);
+                  Assert (E.Is_Ok (Status), Label & ": official template did not compile");
+                  Conv.Open (Talk, Status => Status);
+                  if Tooled then
+                     Model_Runner.Tools.Read
+                       (Defs, Jsonlib.Serializers.To_String (Doc, J.Member (Doc, Inputs, "tools")), Status);
+                     Assert (E.Is_Ok (Status), Label & ": tools did not parse");
+                  end if;
+                  for M in 1 .. J.Length (Doc, Messages) loop
+                     declare
+                        Message : constant J.Node := J.Element (Doc, Messages, M);
+                        Role : constant String := J.As_String (Doc, J.Member (Doc, Message, "role"));
+                        Content : constant String := Optional_Text (J.Member (Doc, Message, "content"));
+                        Calls : constant J.Node := J.Member (Doc, Message, "tool_calls");
+                     begin
+                        if Role = "assistant" and then J.Length (Doc, Calls) > 0 then
+                           Conv.Append_Asking (Talk, Content, Status);
+                           Assert (E.Is_Ok (Status), Label & ": assistant turn failed");
+                           for C in 1 .. J.Length (Doc, Calls) loop
+                              declare
+                                 Call : constant J.Node := J.Element (Doc, Calls, C);
+                                 Fn : constant J.Node := J.Member (Doc, Call, "function");
+                              begin
+                                 Conv.Append_Call
+                                   (Talk, J.As_String (Doc, J.Member (Doc, Fn, "name")),
+                                    Jsonlib.Serializers.To_String (Doc, J.Member (Doc, Fn, "arguments")), Status,
+                                    Id => J.As_String (Doc, J.Member (Doc, Call, "id")));
+                                 Assert (E.Is_Ok (Status), Label & ": call append failed");
+                              end;
+                           end loop;
+                        else
+                           Conv.Append
+                             (Talk, (if Role = "tool" then Conv.Tool_Role else Conv.User_Role), Content, Status);
+                           Assert (E.Is_Ok (Status), Label & ": message append failed");
+                        end if;
+                        Conv.Identify_Last
+                          (Talk, Optional_Text (J.Member (Doc, Message, "name")),
+                           Optional_Text (J.Member (Doc, Message, "tool_call_id")), Status);
+                        Assert (E.Is_Ok (Status), Label & ": message identity failed");
+                     end;
+                  end loop;
+                  Tmpl.Render
+                    (Item, Talk, "", "", J.Is_Present (Prompt) and then J.As_Boolean (Doc, Prompt),
+                     Room, Used, Status,
+                     Effort => (if Label = "medium-reasoning" then Tmpl.Effort_Medium else Tmpl.Effort_Unstated),
+                     Thinking => (if Label = "no-reasoning" then Tmpl.Thinking_Off else Tmpl.Thinking_Unstated),
+                     Tools => (if Tooled then Defs'Access else null));
+                  Conv.Close (Talk);
+                  Tmpl.Close (Item);
+                  if J.Is_Present (Failure) then
+                     Assert (Status.Code = E.Template_Refused and then Used = 0,
+                             Label & ": invalid effort did not refuse atomically");
+                     Assert (E.Text_Of (Status, "construct") = J.As_String (Doc, Failure),
+                             Label & ": refusal differs from the reference");
+                  else
+                     Assert (E.Is_Ok (Status), Label & ": render failed: " & Status.Code'Image
+                             & " " & E.Text_Of (Status, "construct"));
+                     Assert (Room (1 .. Used) = J.As_String (Doc, J.Member (Doc, One, "expected")),
+                             Label & ": bytes differ from the independent recording: " & Room (1 .. Used));
+                  end if;
+                  Model_Runner.Tools.Close (Defs);
+                  Compared := Compared + 1;
+               end;
+            end;
+         end loop;
+      end;
+      Assert (Compared = 6, "independent text/effort/tool cases missing");
+   end Inkling_Text_Template_Matches_Independent_Recordings;
+
+   procedure Tool_Identity_Survives_History_Lifecycle (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Talk, Restored : Conv.History;
+      Status : E.Error_Info;
+      Loaded : Boolean;
+      Dropped : Natural;
+      Path : constant String := "obj/inkling-tool-identity.checkpoint";
+      use type Conv.Role;
+
+      procedure Verify (Source : Conv.History) is
+         Call_At, Reply_At : Natural := 0;
+      begin
+         for Index in 1 .. Conv.Length (Source) loop
+            if Conv.Call_Count (Source, Index) > 0 then
+               Call_At := Index;
+            elsif Conv.Sender_At (Source, Index) = Conv.Tool_Role then
+               Reply_At := Index;
+            end if;
+         end loop;
+         Assert (Call_At > 0 and then Reply_At > Call_At, "tool roundtrip lost during history rebuild");
+         Assert (Conv.Call_Id (Source, Call_At, 1) = "call-identity-1", "assistant call ID lost");
+         Assert (Conv.Name_At (Source, Reply_At) = "read_file"
+                 and then Conv.Tool_Call_Id_At (Source, Reply_At) = "call-identity-1",
+                 "tool result identity lost");
+      end Verify;
+   begin
+      Conv.Open (Talk, Status => Status);
+      Conv.Append (Talk, Conv.User_Role, "Task", Status);
+      Conv.Append (Talk, Conv.Assistant_Role, "Old response", Status);
+      Conv.Append (Talk, Conv.User_Role, "Continue", Status);
+      Conv.Append_Asking (Talk, "", Status);
+      Conv.Append_Call (Talk, "read_file", "{}", Status, Id => "call-identity-1");
+      Conv.Append (Talk, Conv.Tool_Role, "Contents", Status);
+      Conv.Identify_Last (Talk, "read_file", "call-identity-1", Status);
+      Assert (E.Is_Ok (Status), "identified history could not be constructed");
+      Verify (Talk);
+      Conv.Set_System (Talk, "Instructions", Status);
+      Assert (E.Is_Ok (Status), "identified history could not be rebuilt");
+      Verify (Talk);
+      Conv.Compact (Talk, Keep_Recent => 2, Dropped => Dropped);
+      Verify (Talk);
+      Model_Runner.CLI.Checkpoint.Save (Path, Talk, Status);
+      Assert (E.Is_Ok (Status), "identified history could not be saved");
+      Conv.Open (Restored, Status => Status);
+      Model_Runner.CLI.Checkpoint.Load (Path, Restored, Loaded, Status);
+      Assert (E.Is_Ok (Status) and then Loaded, "identified history could not be restored");
+      Verify (Restored);
+      Conv.Close (Talk);
+      Conv.Close (Restored);
+      Ada.Directories.Delete_File (Path);
+   end Tool_Identity_Survives_History_Lifecycle;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Tool_Identity_Survives_History_Lifecycle'Access,
+         "tool names and call IDs survive system replacement, compaction and checkpoints");
+      Register_Routine
+        (T, Inkling_Text_Template_Matches_Independent_Recordings'Access,
+         "Inkling's official template matches six independent text, effort and tool recordings");
       Register_Routine
         (T, Gemma_Renders_Tool_Calls'Access,
          "the gemma format offers tools in the first user turn as Python, "

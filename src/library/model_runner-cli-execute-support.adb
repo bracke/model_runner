@@ -453,16 +453,19 @@ package body Model_Runner.CLI.Execute.Support is
    --  @return Worker tasks the run would use.
    --  The arithmetic a run computes with: what --arith named, or, where
    --  nothing was named, the default -- int8 -- for every family but the
-   --  one measured to want another. Gemma 2 with every product rounded
+   --  ones qualified with another arithmetic. Inkling uses the independently
+   --  verified F32-activation profile; its CPU byte profile is unqualified.
+   --  Gemma 2 with every product rounded
    --  answers three tool tasks of ten where it answers seven unrounded and
    --  eight with its attention left whole, so it takes the mixed mode
    --  unasked; a caller who names an arithmetic gets the one named.
    function Chosen_Arithmetic
      (Item : Opt.Command; Prepared : L.Model) return L.Arithmetic_Mode
-   is (if not Item.Arithmetic_Set
-         and then L."=" (Item.Arithmetic, L.Integer_Activations)
-         and then L."=" (L.Config (Prepared).Kind, L.Gemma2)
-       then L.Mixed_Activations
+   is (if not Item.Arithmetic_Set and then L."=" (Item.Arithmetic, L.Integer_Activations)
+       then (case L.Config (Prepared).Kind is
+               when L.Gemma2 => L.Mixed_Activations,
+               when L.Inkling2_Loop => L.Float_Activations,
+               when others => Item.Arithmetic)
        else Item.Arithmetic);
 
    procedure Use_Arithmetic (Mode : L.Arithmetic_Mode) is

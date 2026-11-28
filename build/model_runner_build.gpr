@@ -10,6 +10,50 @@ abstract project Model_Runner_Build is
      & ("-gnat2022", "-gnata", "-gnatwa", "-gnatw.X", "-g",
         "-fstack-usage", "-gnatyM120");
 
+   --  Profile only CPU engine units. The profile directory must be the
+   --  same for generation and use; ordinary builds do not need profiles.
+   type PGO_Mode_Type is ("off", "generate", "use");
+   PGO_Mode : PGO_Mode_Type := external ("MODEL_RUNNER_PGO", "off");
+   PGO_Directory := external ("MODEL_RUNNER_PGO_DIR", "/tmp/model-runner-pgo");
+   Profiled_Ada_Switches := Common_Ada_Switches;
+   Profile_Linker_Switches := ();
+   case PGO_Mode is
+      when "generate" =>
+         Profiled_Ada_Switches := Common_Ada_Switches
+           & ("-fprofile-generate=" & PGO_Directory, "-fprofile-update=atomic");
+         Profile_Linker_Switches := ("-fprofile-generate=" & PGO_Directory);
+      when "use" =>
+         Profiled_Ada_Switches := Common_Ada_Switches
+           & ("-fprofile-use=" & PGO_Directory, "-Werror=missing-profile");
+      when "off" => null;
+   end case;
+
+   type PGO_Units_Type is ("all", "decoder", "quantization");
+   PGO_Units : PGO_Units_Type := external ("MODEL_RUNNER_PGO_UNITS", "all");
+   Llama_Ada_Switches := Profiled_Ada_Switches;
+   Tensors_Ada_Switches := Profiled_Ada_Switches;
+   CPU_Ada_Switches := Profiled_Ada_Switches;
+   Integers_Ada_Switches := Profiled_Ada_Switches;
+   Grids_Ada_Switches := Profiled_Ada_Switches;
+   case PGO_Mode is
+      when "use" | "generate" =>
+         case PGO_Units is
+            when "decoder" =>
+               Tensors_Ada_Switches := Common_Ada_Switches;
+               Integers_Ada_Switches := Common_Ada_Switches;
+               Grids_Ada_Switches := Common_Ada_Switches;
+            when "quantization" =>
+               Llama_Ada_Switches := Common_Ada_Switches;
+               CPU_Ada_Switches := Common_Ada_Switches;
+            when "all" => null;
+         end case;
+      when others => null;
+   end case;
+
+   --  Scalar-reference stages must round separately even inside a SIMD
+   --  function whose target permits fused multiply-add instructions.
+   Reference_Math_Switches := Common_Ada_Switches & ("-ffp-contract=off");
+
    Large_Unit_Switches :=
      Common_Ada_Switches & ("-fno-var-tracking-assignments");
 

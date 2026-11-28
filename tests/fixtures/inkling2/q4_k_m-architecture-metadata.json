@@ -1,0 +1,264 @@
+{
+  "source": "pinned Q4_K_M header only; no payload inference",
+  "reference_commit": "29b52d398b294509746ec0a3f28948a3107c0213",
+  "method": "official gguf C API, no_alloc=true, null tensor context",
+  "header_bytes": 33554432,
+  "header_sha256": "f5e1c6a488ba6c005b574929e9902d55cc6705562ca1ff1aa67406dc8b30e209",
+  "entries": [
+    {
+      "key": "inkling2_loop.block_count",
+      "type": "uint32",
+      "value": 24
+    },
+    {
+      "key": "inkling2_loop.context_length",
+      "type": "uint32",
+      "value": 1048576
+    },
+    {
+      "key": "inkling2_loop.embedding_length",
+      "type": "uint32",
+      "value": 2304
+    },
+    {
+      "key": "inkling2_loop.feed_forward_length",
+      "type": "uint32",
+      "value": 1152
+    },
+    {
+      "key": "inkling2_loop.attention.head_count",
+      "type": "array<int32>",
+      "value": [
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24,
+        24
+      ]
+    },
+    {
+      "key": "inkling2_loop.attention.head_count_kv",
+      "type": "array<int32>",
+      "value": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ]
+    },
+    {
+      "key": "inkling2_loop.attention.layer_norm_rms_epsilon",
+      "type": "float32",
+      "value": 9.999999974752427e-07
+    },
+    {
+      "key": "inkling2_loop.expert_count",
+      "type": "uint32",
+      "value": 128
+    },
+    {
+      "key": "inkling2_loop.expert_used_count",
+      "type": "uint32",
+      "value": 8
+    },
+    {
+      "key": "inkling2_loop.attention.key_length",
+      "type": "uint32",
+      "value": 128
+    },
+    {
+      "key": "inkling2_loop.attention.value_length",
+      "type": "uint32",
+      "value": 128
+    },
+    {
+      "key": "inkling2_loop.vocab_size",
+      "type": "uint32",
+      "value": 201024
+    },
+    {
+      "key": "inkling2_loop.vocab_size_unpadded",
+      "type": "uint32",
+      "value": 200058
+    },
+    {
+      "key": "inkling2_loop.expert_feed_forward_length",
+      "type": "uint32",
+      "value": 1152
+    },
+    {
+      "key": "inkling2_loop.attention.key_length_swa",
+      "type": "uint32",
+      "value": 128
+    },
+    {
+      "key": "inkling2_loop.attention.value_length_swa",
+      "type": "uint32",
+      "value": 128
+    },
+    {
+      "key": "inkling2_loop.rope.dimension_count",
+      "type": "uint32",
+      "value": 0
+    },
+    {
+      "key": "inkling2_loop.attention.sliding_window",
+      "type": "uint32",
+      "value": 1024
+    },
+    {
+      "key": "inkling2_loop.attention.sliding_window_pattern",
+      "type": "array<bool>",
+      "value": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        false
+      ]
+    },
+    {
+      "key": "inkling2_loop.shortconv.l_cache",
+      "type": "uint32",
+      "value": 4
+    },
+    {
+      "key": "inkling2_loop.expert_weights_scale",
+      "type": "float32",
+      "value": 8.0
+    },
+    {
+      "key": "inkling2_loop.activation.situ_beta",
+      "type": "float32",
+      "value": 4.0
+    },
+    {
+      "key": "inkling2_loop.activation.situ_linear_beta",
+      "type": "float32",
+      "value": 25.0
+    },
+    {
+      "key": "inkling2_loop.attn_res.block_size",
+      "type": "uint32",
+      "value": 6
+    },
+    {
+      "key": "inkling2_loop.final_logit_softcapping",
+      "type": "float32",
+      "value": 30.0
+    },
+    {
+      "key": "inkling2_loop.attention.relative_length",
+      "type": "uint32",
+      "value": 16
+    },
+    {
+      "key": "inkling2_loop.attention.relative_extent",
+      "type": "uint32",
+      "value": 1024
+    },
+    {
+      "key": "inkling2_loop.attention.qk_clip",
+      "type": "float32",
+      "value": 22.627416610717773
+    },
+    {
+      "key": "inkling2_loop.attention.relative_clip",
+      "type": "float32",
+      "value": 8.0
+    },
+    {
+      "key": "inkling2_loop.attention.log_scale_floor",
+      "type": "uint32",
+      "value": 8192
+    },
+    {
+      "key": "inkling2_loop.attention.log_scale_alpha",
+      "type": "float32",
+      "value": 0.10000000149011612
+    },
+    {
+      "key": "inkling2_loop.loop.start",
+      "type": "uint32",
+      "value": 6
+    },
+    {
+      "key": "inkling2_loop.loop.end",
+      "type": "uint32",
+      "value": 18
+    },
+    {
+      "key": "inkling2_loop.loop.count",
+      "type": "uint32",
+      "value": 3
+    },
+    {
+      "key": "inkling2_loop.loop.gate_rank",
+      "type": "uint32",
+      "value": 64
+    },
+    {
+      "key": "inkling2_loop.loop.varying",
+      "type": "bool",
+      "value": false
+    }
+  ]
+}

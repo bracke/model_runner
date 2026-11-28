@@ -150,34 +150,13 @@ begin
             Position := Position + 1;
 
          when Op_Set_Message =>
-            --  Counted from zero in the template and from one here,
-            --  and from wherever the list it names begins. A position
-            --  the conversation does not reach binds nothing, which is
-            --  what a template comparing its role against a name
-            --  expects rather than an error.
-            declare
-               From_List : Slot renames Slots (Step.Target);
-               Wanted : constant Long_Long_Integer :=
-                 Number_Of (Value_Of (Item.Operands.all (Step.Value_At)));
-               At_Message : constant Natural :=
-                 Message_At (From_List.Start, Slot_Last (From_List),
-                             Wanted);
-            begin
-               if From_List.Kind /= Value_List then
-                  --  Not a list of messages: one element of whatever
-                  --  the name holds, a list read out of a schema or
-                  --  the pieces of a cut.
-                  Store (Step.Offset,
-                         Element_At (Held_Of (Step.Target), Wanted));
-               elsif At_Message /= 0 then
-                  Slots (Step.Offset) :=
-                    (Kind => Value_Message, Offset => 0, Length => 0,
-                     Start => At_Message);
-               else
-                  Slots (Step.Offset) := (Kind => Value_None,
-                                          others => <>);
-               end if;
-            end;
+            --  Indexed assignments also select mapping members. Use the
+            --  same lookup as an indexed expression, preserving message
+            --  values and negative positions without converting keys to zero.
+            Store
+              (Step.Offset,
+               Indexed (Held_Of (Step.Target),
+                        Value_Of (Item.Operands.all (Step.Value_At))));
             Position := Position + 1;
 
          when Op_Call_Begin =>

@@ -13,6 +13,8 @@ package body Model_Runner.Conversation is
 
    procedure Free_Storage is
      new Ada.Unchecked_Deallocation (String, Storage_Access);
+   procedure Free_Rows is
+     new Ada.Unchecked_Deallocation (Row_Rooms.Holder, Row_Room_Access);
 
    ----------------
    -- Role_Name --
@@ -43,6 +45,7 @@ package body Model_Runner.Conversation is
    begin
       Close (Item);
       Item.Bounds := Bounds;
+      Item.Rows := new Row_Rooms.Holder;
       Item.Storage :=
         new String (1 .. Natural'Max (Bounds.Max_Rendered_Bytes, 1));
       Item.Filled := 0;
@@ -52,7 +55,7 @@ package body Model_Runner.Conversation is
       Status := E.Success;
    exception
       when Storage_Error =>
-         Item.Storage := null;
+         Close (Item);
          Status := E.Make (E.Memory_Allocation_Failed);
          E.Add_Text (Status, "category", "template_buffers", E.Param_Identifier);
    end Open;
@@ -71,6 +74,7 @@ package body Model_Runner.Conversation is
          Item.Storage.all (1 .. Natural'Min (Item.Reached, Item.Storage.all'Length)) := [others => ' '];
          Free_Storage (Item.Storage);
       end if;
+      Free_Rows (Item.Rows);
       Item.Reached := 0;
       Item.Used := 0;
       Item.Filled := 0;
@@ -168,10 +172,10 @@ package body Model_Runner.Conversation is
       end if;
 
       Item.Used := Item.Used + 1;
-      Item.Messages (Item.Used) :=
+      Item.Rows.Data.Messages (Item.Used) :=
         (Sender => Sender, Offset => Offset, Length => Content'Length,
          Parts_Offset => 0, Parts_Length => 0,
-         First_Call => 0, Calls => 0);
+         First_Call => 0, Calls => 0, others => <>);
    end Add;
 
    ---------------
@@ -503,10 +507,10 @@ package body Model_Runner.Conversation is
          end if;
 
          Item.Used := Item.Used + 1;
-         Item.Messages (Item.Used) :=
+         Item.Rows.Data.Messages (Item.Used) :=
            (Sender => Sender, Offset => Text_At, Length => Text'Length,
             Parts_Offset => Parts_At, Parts_Length => Trimmed'Length,
-            First_Call => 0, Calls => 0);
+            First_Call => 0, Calls => 0, others => <>);
       end;
    end Append_Parts;
 
@@ -517,12 +521,12 @@ package body Model_Runner.Conversation is
    function Parts_At (Item : History; Index : Positive) return String is
    begin
       if Index > Item.Used or else Item.Storage = null
-        or else Item.Messages (Index).Parts_Length = 0
+        or else Item.Rows.Data.Messages (Index).Parts_Length = 0
       then
          return "";
       end if;
       declare
-         Found : Message renames Item.Messages (Index);
+         Found : Message renames Item.Rows.Data.Messages (Index);
       begin
          return Item.Storage.all
            (Found.Parts_Offset + 1 .. Found.Parts_Offset + Found.Parts_Length);
@@ -563,10 +567,11 @@ package body Model_Runner.Conversation is
      (Item      : in out History;
       Named     : String;
       Arguments : String;
-      Status    : out E.Error_Info)
+      Status    : out E.Error_Info;
+      Id        : String := "")
    is
       Before : constant Natural := Item.Filled;
-      Name_At, Args_At : Natural;
+      Name_At, Args_At, Id_At : Natural;
       Ok               : Boolean;
    begin
       Status := E.Success;
@@ -590,6 +595,9 @@ package body Model_Runner.Conversation is
       if Ok then
          Store (Item, Arguments, Args_At, Ok);
       end if;
+      if Ok then
+         Store (Item, Id, Id_At, Ok);
+      end if;
 
       if not Ok then
          --  Nothing half-stored: a call that did not fit leaves the history
@@ -604,12 +612,13 @@ package body Model_Runner.Conversation is
       end if;
 
       Item.Call_Used := Item.Call_Used + 1;
-      Item.Calls (Item.Call_Used) :=
+      Item.Rows.Data.Calls (Item.Call_Used) :=
         (Name_Offset => Name_At, Name_Length => Named'Length,
-         Args_Offset => Args_At, Args_Length => Arguments'Length);
+         Args_Offset => Args_At, Args_Length => Arguments'Length,
+         Id_Offset => Id_At, Id_Length => Id'Length);
 
       declare
-         Held : Message renames Item.Messages (Item.Used);
+         Held : Message renames Item.Rows.Data.Messages (Item.Used);
       begin
          if Held.Calls = 0 then
             Held.First_Call := Item.Call_Used;
@@ -617,6 +626,70 @@ package body Model_Runner.Conversation is
          Held.Calls := Held.Calls + 1;
       end;
    end Append_Call;
+
+   procedure Identify_Last
+     (Item : in out History; Named, Tool_Call_Id : String := ""; Status : out E.Error_Info)
+   is
+      Before : constant Natural := Item.Filled;
+      Name_At, Id_At : Natural;
+      Ok : Boolean;
+   begin
+      Status := E.Success;
+      if Item.Used = 0 then
+         Status := E.Make (E.Conversation_Empty);
+         return;
+      end if;
+      Store (Item, Named, Name_At, Ok);
+      if Ok then
+         Store (Item, Tool_Call_Id, Id_At, Ok);
+      end if;
+      if not Ok then
+         Item.Filled := Before;
+         Status := E.Make (E.Conversation_Too_Long);
+         E.Add_Integer (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Rendered_Bytes), E.Param_Bytes);
+         return;
+      end if;
+      Item.Rows.Data.Messages (Item.Used).Name_Offset := Name_At;
+      Item.Rows.Data.Messages (Item.Used).Name_Length := Named'Length;
+      Item.Rows.Data.Messages (Item.Used).Tool_Id_Offset := Id_At;
+      Item.Rows.Data.Messages (Item.Used).Tool_Id_Length := Tool_Call_Id'Length;
+   end Identify_Last;
+
+   function Name_At (Item : History; Index : Positive) return String is
+   begin
+      if Index > Item.Used or else Item.Storage = null then
+         return "";
+      end if;
+      declare
+         Row : Message renames Item.Rows.Data.Messages (Index);
+      begin
+         return Item.Storage.all (Row.Name_Offset + 1 .. Row.Name_Offset + Row.Name_Length);
+      end;
+   end Name_At;
+
+   function Tool_Call_Id_At (Item : History; Index : Positive) return String is
+   begin
+      if Index > Item.Used or else Item.Storage = null then
+         return "";
+      end if;
+      declare
+         Row : Message renames Item.Rows.Data.Messages (Index);
+      begin
+         return Item.Storage.all (Row.Tool_Id_Offset + 1 .. Row.Tool_Id_Offset + Row.Tool_Id_Length);
+      end;
+   end Tool_Call_Id_At;
+
+   function Call_Id (Item : History; Index, Call : Positive) return String is
+   begin
+      if Index > Item.Used or else Item.Storage = null or else Call > Item.Rows.Data.Messages (Index).Calls then
+         return "";
+      end if;
+      declare
+         Row : Call_Row renames Item.Rows.Data.Calls (Item.Rows.Data.Messages (Index).First_Call + Call - 1);
+      begin
+         return Item.Storage.all (Row.Id_Offset + 1 .. Row.Id_Offset + Row.Id_Length);
+      end;
+   end Call_Id;
 
    -------------------
    -- Append_Reply --
@@ -649,6 +722,8 @@ package body Model_Runner.Conversation is
       Syntax : Model_Runner.Tools.Call_Syntax) return String
    is (if Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Harmony_Call)
        then Model_Runner.Tools.Harmony_Answer (Reply)
+       elsif Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Inkling_Call)
+       then Model_Runner.Tools.Inkling_Answer (Reply)
        else Closed_Reasoning (Reply));
 
    procedure Append_Reply
@@ -968,7 +1043,10 @@ package body Model_Runner.Conversation is
             First := Reply'First;
          end if;
          --  Reasoning its calls ended, closed for the template to keep.
-         Append_Asking (Item, Closed_Reasoning (Without_Lead (First, Last)), Status);
+         Append_Asking
+           (Item, (if Model_Runner.Tools."=" (Syntax, Model_Runner.Tools.Inkling_Call)
+                   then Model_Runner.Tools.Inkling_Answer (Reply)
+                   else Closed_Reasoning (Without_Lead (First, Last))), Status);
 
          for Index in 1 .. Model_Runner.Tools.Count (Asked) loop
             exit when E.Is_Error (Status);
@@ -1026,8 +1104,8 @@ package body Model_Runner.Conversation is
       declare
          Scratch_Copy : Storage_Access :=
            new String'(Item.Storage.all (1 .. Item.Filled));
-         Saved_Copy   : Messages_Access := new Message_Array'(Item.Messages);
-         Asked_Copy   : Calls_Access := new Call_Array'(Item.Calls);
+         Saved_Copy   : Messages_Access := new Message_Array'(Item.Rows.Data.Messages);
+         Asked_Copy   : Calls_Access := new Call_Array'(Item.Rows.Data.Calls);
          Scratch      : String renames Scratch_Copy.all;
          Saved        : Message_Array renames Saved_Copy.all;
          Asked        : Call_Array renames Asked_Copy.all;
@@ -1042,8 +1120,8 @@ package body Model_Runner.Conversation is
             Item.Storage.all (1 .. Scratch'Length) := Scratch;
             Item.Filled := Scratch'Length;
             Item.Used := Count;
-            Item.Messages := Saved;
-            Item.Calls := Asked;
+            Item.Rows.Data.Messages := Saved;
+            Item.Rows.Data.Calls := Asked;
             Item.Call_Used := Calls_Before;
          end Put_Back;
 
@@ -1077,6 +1155,14 @@ package body Model_Runner.Conversation is
                      return;
                   end if;
 
+                  Identify_Last
+                    (Item, Scratch (Row.Name_Offset + 1 .. Row.Name_Offset + Row.Name_Length),
+                     Scratch (Row.Tool_Id_Offset + 1 .. Row.Tool_Id_Offset + Row.Tool_Id_Length), Status);
+                  if E.Is_Error (Status) then
+                     Put_Back;
+                     return;
+                  end if;
+
                   --  Its parts -- a picture -- move with it.
                   if Row.Parts_Length > 0 then
                      declare
@@ -1092,8 +1178,8 @@ package body Model_Runner.Conversation is
                              (Status, "limit", Long_Long_Integer (Item.Bounds.Max_Rendered_Bytes), E.Param_Bytes);
                            return;
                         end if;
-                        Item.Messages (Item.Used).Parts_Offset := Parts_At;
-                        Item.Messages (Item.Used).Parts_Length := Row.Parts_Length;
+                        Item.Rows.Data.Messages (Item.Used).Parts_Offset := Parts_At;
+                        Item.Rows.Data.Messages (Item.Used).Parts_Length := Row.Parts_Length;
                      end;
                   end if;
 
@@ -1107,7 +1193,7 @@ package body Model_Runner.Conversation is
                                     .. From.Name_Offset + From.Name_Length),
                            Scratch (From.Args_Offset + 1
                                     .. From.Args_Offset + From.Args_Length),
-                           Status);
+                           Status, Id => Scratch (From.Id_Offset + 1 .. From.Id_Offset + From.Id_Length));
                         if E.Is_Error (Status) then
                            Put_Back;
                            return;
@@ -1146,7 +1232,7 @@ package body Model_Runner.Conversation is
          --  taking the pool back to where the content began takes both,
          --  which subtracting the content's length alone would not.
          declare
-            Held : Message renames Item.Messages (Item.Used);
+            Held : Message renames Item.Rows.Data.Messages (Item.Used);
          begin
             Item.Filled := Held.Offset;
             if Held.Calls > 0 then
@@ -1170,7 +1256,7 @@ package body Model_Runner.Conversation is
    is
       N : constant Natural := Item.Used;
       Has_Sys : constant Boolean :=
-        N > 0 and then Item.Messages (1).Sender = System_Role;
+        N > 0 and then Item.Rows.Data.Messages (1).Sender = System_Role;
       First_User : Natural := 0;
       Keep       : array (1 .. Max_Messages) of Boolean := [others => False];
 
@@ -1242,7 +1328,7 @@ package body Model_Runner.Conversation is
 
       --  Add the digest line for one dropped message.
       procedure Digest_Message (I : Positive) is
-         Src : Message renames Item.Messages (I);
+         Src : Message renames Item.Rows.Data.Messages (I);
       begin
          case Src.Sender is
             when Assistant_Role =>
@@ -1250,7 +1336,7 @@ package body Model_Runner.Conversation is
                   Add ("- called");
                   for K in 0 .. Src.Calls - 1 loop
                      declare
-                        Row : Call_Row renames Item.Calls (Src.First_Call + K);
+                        Row : Call_Row renames Item.Rows.Data.Calls (Src.First_Call + K);
                      begin
                         Add ((if K = 0 then " " else ", ")
                              & Item.Storage.all
@@ -1287,7 +1373,7 @@ package body Model_Runner.Conversation is
 
       --  The first user turn -- the task -- is kept whatever else goes.
       for I in 1 .. N loop
-         if Item.Messages (I).Sender = User_Role then
+         if Item.Rows.Data.Messages (I).Sender = User_Role then
             First_User := I;
             exit;
          end if;
@@ -1300,7 +1386,7 @@ package body Model_Runner.Conversation is
       --  message is kept: they went with the first compaction, and no digest
       --  line said they had.
       for I in 1 .. N loop
-         if Item.Messages (I).Sender = Developer_Role then
+         if Item.Rows.Data.Messages (I).Sender = Developer_Role then
             Keep (I) := True;
          end if;
       end loop;
@@ -1317,7 +1403,7 @@ package body Model_Runner.Conversation is
          Tail_Start : Natural := Natural'Max (1, N - Keep_Recent + 1);
       begin
          while Tail_Start > 1
-           and then Item.Messages (Tail_Start).Sender in Tool_Role | User_Role
+           and then Item.Rows.Data.Messages (Tail_Start).Sender in Tool_Role | User_Role
            and then Tail_Start > First_User + 1
          loop
             Tail_Start := Tail_Start - 1;
@@ -1335,21 +1421,21 @@ package body Model_Runner.Conversation is
 
       for I in 1 .. N loop
          if Keep (I)
-           and then Item.Messages (I).Sender = Tool_Role
-           and then Item.Messages (I).Length >= Repeat_Least
-           and then Item.Messages (I).Parts_Length = 0
+           and then Item.Rows.Data.Messages (I).Sender = Tool_Role
+           and then Item.Rows.Data.Messages (I).Length >= Repeat_Least
+           and then Item.Rows.Data.Messages (I).Parts_Length = 0
          then
             declare
                Mine : String renames Item.Storage.all
-                 (Item.Messages (I).Offset + 1
-                  .. Item.Messages (I).Offset + Item.Messages (I).Length);
+                 (Item.Rows.Data.Messages (I).Offset + 1
+                  .. Item.Rows.Data.Messages (I).Offset + Item.Rows.Data.Messages (I).Length);
             begin
                for J in I + 1 .. N loop
-                  if Item.Messages (J).Sender = Tool_Role
-                    and then Item.Messages (J).Length = Item.Messages (I).Length
+                  if Item.Rows.Data.Messages (J).Sender = Tool_Role
+                    and then Item.Rows.Data.Messages (J).Length = Item.Rows.Data.Messages (I).Length
                     and then Item.Storage.all
-                               (Item.Messages (J).Offset + 1
-                                .. Item.Messages (J).Offset + Item.Messages (J).Length) = Mine
+                               (Item.Rows.Data.Messages (J).Offset + 1
+                                .. Item.Rows.Data.Messages (J).Offset + Item.Rows.Data.Messages (J).Length) = Mine
                   then
                      Repeated (I) := True;
                      Dropped := Dropped + 1;
@@ -1389,11 +1475,25 @@ package body Model_Runner.Conversation is
          Fill         : Natural := 0;
          Call_Fill    : Natural := 0;
          M            : Natural := 0;
+
+         procedure Copy_Identity (From : Message; Into : in out Message) is
+         begin
+            Into.Name_Offset := Fill;
+            Into.Name_Length := From.Name_Length;
+            New_Storage.all (Fill + 1 .. Fill + From.Name_Length) :=
+              Item.Storage.all (From.Name_Offset + 1 .. From.Name_Offset + From.Name_Length);
+            Fill := Fill + From.Name_Length;
+            Into.Tool_Id_Offset := Fill;
+            Into.Tool_Id_Length := From.Tool_Id_Length;
+            New_Storage.all (Fill + 1 .. Fill + From.Tool_Id_Length) :=
+              Item.Storage.all (From.Tool_Id_Offset + 1 .. From.Tool_Id_Offset + From.Tool_Id_Length);
+            Fill := Fill + From.Tool_Id_Length;
+         end Copy_Identity;
       begin
          for I in 1 .. N loop
             if Keep (I) then
                declare
-                  Src     : Message renames Item.Messages (I);
+                  Src     : Message renames Item.Rows.Data.Messages (I);
                   New_Off : constant Natural := Fill;
                begin
                   if I = First_User and then D_Len > 0 then
@@ -1460,7 +1560,7 @@ package body Model_Runner.Conversation is
                               else Record_Marker & Work_Record);
                            Room_Left : constant Integer :=
                              New_Storage.all'Last - Fill - (Base_Last - Old'First + 1)
-                             - Marker'Length - Kept'Length - Src.Parts_Length;
+                             - Marker'Length - Kept'Length - Src.Parts_Length - Src.Name_Length - Src.Tool_Id_Length;
                            Synopsis  : constant String :=
                              Kept & (if Recorded'Length <= Room_Left then Recorded else "");
                         begin
@@ -1484,7 +1584,7 @@ package body Model_Runner.Conversation is
                         Parts_Offset => 0,
                         Parts_Length => 0,
                         First_Call => 0,
-                        Calls      => 0);
+                        Calls      => 0, others => <>);
                      --  Its parts -- a picture the task was asked about --
                      --  go along with it, as any kept turn's do.
                      if Src.Parts_Length > 0 and then Fill + Src.Parts_Length <= New_Storage.all'Last then
@@ -1494,6 +1594,7 @@ package body Model_Runner.Conversation is
                         New_Messages (M).Parts_Length := Src.Parts_Length;
                         Fill := Fill + Src.Parts_Length;
                      end if;
+                     Copy_Identity (Src, New_Messages (M));
                      goto Next_Message;
                   end if;
 
@@ -1514,7 +1615,7 @@ package body Model_Runner.Conversation is
                      Parts_Length => 0,
                      First_Call =>
                        (if Src.Calls > 0 then Call_Fill + 1 else 0),
-                     Calls      => Src.Calls);
+                     Calls      => Src.Calls, others => <>);
 
                   --  The parts go along with the words.
                   if Src.Parts_Length > 0 then
@@ -1527,12 +1628,13 @@ package body Model_Runner.Conversation is
                      Fill := Fill + Src.Parts_Length;
                   end if;
 
+                  Copy_Identity (Src, New_Messages (M));
                   for K in 0 .. Src.Calls - 1 loop
                      declare
                         Row      : Call_Row renames
-                          Item.Calls (Src.First_Call + K);
+                          Item.Rows.Data.Calls (Src.First_Call + K);
                         Name_Off : constant Natural := Fill;
-                        Args_Off : Natural;
+                        Args_Off, Id_Off : Natural;
                      begin
                         New_Storage.all
                           (Fill + 1 .. Fill + Row.Name_Length) :=
@@ -1547,12 +1649,17 @@ package body Model_Runner.Conversation is
                             (Row.Args_Offset + 1
                              .. Row.Args_Offset + Row.Args_Length);
                         Fill := Fill + Row.Args_Length;
+                        Id_Off := Fill;
+                        New_Storage.all (Fill + 1 .. Fill + Row.Id_Length) :=
+                          Item.Storage.all (Row.Id_Offset + 1 .. Row.Id_Offset + Row.Id_Length);
+                        Fill := Fill + Row.Id_Length;
                         Call_Fill := Call_Fill + 1;
                         New_Calls (Call_Fill) :=
                           (Name_Offset => Name_Off,
                            Name_Length => Row.Name_Length,
                            Args_Offset => Args_Off,
-                           Args_Length => Row.Args_Length);
+                           Args_Length => Row.Args_Length,
+                           Id_Offset => Id_Off, Id_Length => Row.Id_Length);
                      end;
                   end loop;
                end;
@@ -1565,8 +1672,8 @@ package body Model_Runner.Conversation is
          Item.Storage.all (1 .. Natural'Min (Item.Reached, Item.Storage.all'Length)) := [others => ' '];
          Free_Storage (Item.Storage);
          Item.Storage   := New_Storage;
-         Item.Messages  := New_Messages;
-         Item.Calls     := New_Calls;
+         Item.Rows.Data.Messages  := New_Messages;
+         Item.Rows.Data.Calls     := New_Calls;
          Item.Used      := M;
          Item.Filled    := Fill;
          Item.Reached   := Fill;
@@ -1585,7 +1692,7 @@ package body Model_Runner.Conversation is
    ----------------
 
    function Sender_At (Item : History; Index : Positive) return Role
-   is (if Index > Item.Used then User_Role else Item.Messages (Index).Sender);
+   is (if Index > Item.Used then User_Role else Item.Rows.Data.Messages (Index).Sender);
 
    -----------------
    -- Content_At --
@@ -1598,7 +1705,7 @@ package body Model_Runner.Conversation is
       end if;
 
       declare
-         Found : Message renames Item.Messages (Index);
+         Found : Message renames Item.Rows.Data.Messages (Index);
       begin
          if Found.Length = 0 then
             return "";
@@ -1612,15 +1719,15 @@ package body Model_Runner.Conversation is
    -----------------
 
    function Call_Count (Item : History; Index : Positive) return Natural
-   is (if Index > Item.Used then 0 else Item.Messages (Index).Calls);
+   is (if Index > Item.Used then 0 else Item.Rows.Data.Messages (Index).Calls);
 
    --  Where one call of one message lies, or nothing when either position
    --  is out of range. Written once because both readers below ask it.
    function Row_Of
      (Item : History; Index : Positive; Call : Positive) return Natural
-   is (if Index > Item.Used or else Call > Item.Messages (Index).Calls
+   is (if Index > Item.Used or else Call > Item.Rows.Data.Messages (Index).Calls
        then 0
-       else Item.Messages (Index).First_Call + Call - 1);
+       else Item.Rows.Data.Messages (Index).First_Call + Call - 1);
 
    ----------------
    -- Call_Name --
@@ -1636,7 +1743,7 @@ package body Model_Runner.Conversation is
       end if;
 
       declare
-         Found : Call_Row renames Item.Calls (Where);
+         Found : Call_Row renames Item.Rows.Data.Calls (Where);
       begin
          return Item.Storage.all
            (Found.Name_Offset + 1 .. Found.Name_Offset + Found.Name_Length);
@@ -1657,7 +1764,7 @@ package body Model_Runner.Conversation is
       end if;
 
       declare
-         Found : Call_Row renames Item.Calls (Where);
+         Found : Call_Row renames Item.Rows.Data.Calls (Where);
       begin
          return Item.Storage.all
            (Found.Args_Offset + 1 .. Found.Args_Offset + Found.Args_Length);
@@ -1669,6 +1776,6 @@ package body Model_Runner.Conversation is
    -----------------
 
    function Has_System (Item : History) return Boolean
-   is (Item.Used > 0 and then Item.Messages (1).Sender = System_Role);
+   is (Item.Used > 0 and then Item.Rows.Data.Messages (1).Sender = System_Role);
 
 end Model_Runner.Conversation;

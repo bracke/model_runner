@@ -1,0 +1,23 @@
+	Command being timed: "/tmp/inkling2-reference-build/bin/llama-bench -m /home/bent/models/Inkling-2-Mini-Q4_K_M.gguf -p 512 -n 0 -r 5 -t 7 -b 32 -ub 8 -ctk f16 -ctv f16 -ngl 0 -fa off --repack 0 -o json --progress"
+	User time (seconds): 996.90
+	System time (seconds): 3.43
+	Percent of CPU this job got: 680%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:26.94
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 18463524
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 25
+	Minor (reclaiming a frame) page faults: 277536
+	Voluntary context switches: 12642
+	Involuntary context switches: 6030
+	Swaps: 0
+	File system inputs: 4855528
+	File system outputs: 40
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

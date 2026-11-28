@@ -263,6 +263,11 @@ is
 
    Held : Element_Count := 0;
 begin
+   if Source.Settings.Kind = DFlash then
+      Status := E.Make (E.Arch_Unsupported_Feature);
+      E.Add_Text (Status, "feature", "dflash.snapshot", E.Param_Identifier);
+      return;
+   end if;
    --  The block's rows move or are replaced; the device's copy of them
    --  is put right again by the next draft that reads it.
    Item.Next_Device_Upto := 0;
@@ -307,12 +312,12 @@ begin
          Refuse (E.Lifecycle_Cache_Unreadable, "another version");
       end if;
 
-      if not Trouble and then Mark /= Fingerprint (Source) then
+      if not Trouble and then Mark /= Cache_Identity (Source, Item) then
          Refuse (E.Lifecycle_Cache_Mismatched, "another model");
       end if;
 
       if not Trouble
-        and then (Layers /= Interfaces.Unsigned_64 (Settings.Layers)
+        and then (Layers /= Interfaces.Unsigned_64 (Runtime_Layers (Settings))
                   or else KV /= Interfaces.Unsigned_64 (Settings.KV_Heads)
                   or else Wide
                           /= Interfaces.Unsigned_64 (Settings.Head_Size)
@@ -381,7 +386,7 @@ begin
    --  did not cannot be told where these positions belong, and is
    --  refused rather than filled with them.
    if not Trouble then
-      for Layer_Index in 0 .. Settings.Layers - 1 loop
+      for Layer_Index in 0 .. Runtime_Layers (Settings) - 1 loop
          declare
             Begins : constant Interfaces.Unsigned_64 := Get;
             Room   : constant Interfaces.Unsigned_64 := Get;
@@ -417,7 +422,7 @@ begin
    end if;
 
    if not Trouble then
-      for Layer_Index in 0 .. Settings.Layers - 1 loop
+      for Layer_Index in 0 .. Runtime_Layers (Settings) - 1 loop
          Get_Run
            (True, Keys_At (Item, Layer_Index),
             (if Linear (Settings, Layer_Index) then 0
@@ -427,7 +432,7 @@ begin
    end if;
 
    if not Trouble then
-      for Layer_Index in 0 .. Settings.Layers - 1 loop
+      for Layer_Index in 0 .. Runtime_Layers (Settings) - 1 loop
          Get_Run
            (False, Values_At (Item, Layer_Index),
             (if Linear (Settings, Layer_Index) then 0
@@ -490,6 +495,15 @@ begin
    --  What was adopted is the host's, whatever the device held.
    Item.State_On_Device := False;
    Item.Check_At := 0;
+   Item.Inkling_Check_Valid := False;
+   Item.Inkling_Rewind_At := [others => 0];
+   Item.Inkling_Prefix_Held := False;
+   Item.Inkling_Last_Row_Valid := False;
+      Item.Inkling_Partial_Row := False;
+      Item.Inkling_Head_Selection := null;
+   if Settings.Kind = Inkling2_Loop then
+      Item.Inkling_Workspace.all (0 .. Element_Count (Settings.Embedding) - 1) := Item.Activation.all;
+   end if;
 
    --  What each position turns by, where the model has three parts
    --  and the snapshot carries them; a snapshot from before they were

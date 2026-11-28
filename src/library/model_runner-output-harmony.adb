@@ -1,4 +1,5 @@
 with Ada.Strings.Fixed;
+with Model_Runner.Tools;
 
 package body Model_Runner.Output.Harmony is
 
@@ -44,14 +45,19 @@ package body Model_Runner.Output.Harmony is
    --  A marker whole, met in a body.
    procedure Marker (Self : in out Filter; Text : String) is
    begin
-      if Text in "<|end|>" | "<|call|>" | "<|return|>" then
+      if Text in "<|end|>" | "<|call|>" | "<|return|>"
+        or else (Self.Inkling and then Text in Model_Runner.Tools.Inkling_End_Message
+                                             | Model_Runner.Tools.Inkling_End_Sampling)
+      then
          Unstyle (Self);
          Self.Thinking := False;
          if Self.Where = Showing then
             Show (Self, [1 => ASCII.LF]);
          end if;
          Self.Where := In_Header;
-      elsif Text in "<|start|>" | "<|channel|>" then
+      elsif Text in "<|start|>" | "<|channel|>"
+        or else (Self.Inkling and then Text = Model_Runner.Tools.Inkling_Model)
+      then
          --  A header opened without the end of the message before it.
          Unstyle (Self);
          Self.Thinking := False;
@@ -69,6 +75,37 @@ package body Model_Runner.Output.Harmony is
          when In_Header =>
             Self.Used := Self.Used + 1;
             Self.Held (Self.Used) := C;
+            if Self.Inkling then
+               declare
+                  function Ends (Token : String) return Boolean
+                  is (Self.Used >= Token'Length
+                      and then Self.Held (Self.Used - Token'Length + 1 .. Self.Used) = Token);
+               begin
+                  if Ends (Model_Runner.Tools.Inkling_Text)
+                    or else Ends (Model_Runner.Tools.Inkling_Thinking)
+                    or else Ends (Model_Runner.Tools.Inkling_Tool_JSON)
+                  then
+                     Self.Thinking := Ends (Model_Runner.Tools.Inkling_Thinking);
+                     Self.Where :=
+                       (if Ends (Model_Runner.Tools.Inkling_Tool_JSON)
+                           or else (Self.Thinking and then Self.Only_Final)
+                        then Hiding else Showing);
+                     Self.Used := 0;
+                  elsif Ends (Model_Runner.Tools.Inkling_End_Sampling) then
+                     Self.Used := 0;
+                  elsif Self.Used = Self.Held'Length then
+                     --  Grammar-constrained replies may be bare JSON.
+                     if Ada.Strings.Fixed.Index (Self.Held (1 .. Self.Used), "<|") = 0 then
+                        Self.Where := Showing;
+                        Show (Self, Self.Held (1 .. Self.Used));
+                     else
+                        Self.Where := Hiding;
+                     end if;
+                     Self.Used := 0;
+                  end if;
+               end;
+               return;
+            end if;
             if Self.Used >= Message'Length
               and then Self.Held (Self.Used - Message'Length + 1 .. Self.Used)
                        = Message
@@ -143,6 +180,11 @@ package body Model_Runner.Output.Harmony is
       Self.Where := In_Header;
       Self.Used := 0;
    end Answer_Only;
+
+   procedure Inkling_Blocks (Self : in out Filter; On : Boolean) is
+   begin
+      Self.Inkling := On;
+   end Inkling_Blocks;
 
    function Showed_Nothing (Self : Filter) return Boolean is (not Self.Shown);
 

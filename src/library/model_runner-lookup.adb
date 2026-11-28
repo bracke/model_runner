@@ -1,5 +1,28 @@
 package body Model_Runner.Lookup is
 
+   function Verification_Length
+     (Expected, Cost : Cost_Array; Samples : Sample_Array;
+      Limit, Fallback : Positive) return Positive
+   is
+      Best : Positive := Positive'Min (Limit, Fallback);
+      function Rate (At_Length : Positive) return Long_Float is
+      begin
+         if At_Length not in Expected'Range or else At_Length not in Cost'Range
+           or else At_Length not in Samples'Range or else Samples (At_Length) < 3
+           or else Cost (At_Length) <= 0.0 or else Expected (At_Length) <= 0.0
+           or else Cost (At_Length) > Long_Float'Last or else Expected (At_Length) > Long_Float'Last
+           or else Cost (At_Length) /= Cost (At_Length) or else Expected (At_Length) /= Expected (At_Length)
+         then return 0.0; end if;
+         return Expected (At_Length) / Cost (At_Length);
+      end Rate;
+   begin
+      if Rate (Best) = 0.0 then return Best; end if;
+      for Length in 1 .. Limit loop
+         if Rate (Length) > 1.02 * Rate (Best) then Best := Length; end if;
+      end loop;
+      return Best;
+   end Verification_Length;
+
    -------------
    -- Propose --
    -------------

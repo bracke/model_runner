@@ -23710,9 +23710,125 @@ package body Tests.Framework_Cases is
       S.Close (Store);
    end Tasks_Are_Given_What_They_Name;
 
+   procedure Prepare_Optional_Inkling_Work_Task (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Variable : constant String := "MODEL_RUNNER_INKLING_WORK_MODEL";
+      Store : S.Store;
+      Change : S.Transaction;
+      Status : E.Error_Info;
+      Registry : Tp.Registry;
+      Composed : Tp.Composition;
+      Given : Cf.Value_Maps.Map;
+      Planned : Cf.Plan;
+      Done : Cf.Outcome;
+      Task_Id : Unbounded_String;
+      Project : constant String :=
+        (if Ada.Environment_Variables.Exists (Variable)
+         then Fresh (Ada.Environment_Variables.Value ("MODEL_RUNNER_INKLING_WORK_LABEL", "inkling-native-work"))
+         else "");
+   begin
+      if not Ada.Environment_Variables.Exists (Variable) then
+         Ada.Text_IO.Put_Line ("note: real Inkling V3 fixture needs " & Variable);
+         return;
+      end if;
+      Tp.Add (Registry, Parsed
+        ("template = inkling-proof" & LF & "name = Native Ada development proof" & LF
+         & "description = Native model, normal tools and verification" & LF & "version = 1" & LF
+         & "task_kind implementation = component, acceptance?, notes?" & LF
+         & "set components = calculator" & LF & "map component.calculator = roots=src/" & LF
+         & "scalar task.profile.implementation = checks" & LF
+         & "scalar verification.default = checks" & LF
+         & "scalar work.isolation = project" & LF
+         & "scalar work.model = " & Ada.Environment_Variables.Value (Variable) & LF
+         & "map model.default = context=8192,reserve=1024" & LF
+         & "scalar agents.max_seconds = 7200" & LF & "scalar task.max_steps.implementation = 8" & LF
+         & "set execution.allowed = sh" & LF & "profile checks = Ada acceptance: sh check.sh" & LF
+         & "map permission.project.read_source =" & LF
+         & "map permission.project.write_source = roots=src/" & LF
+         & "map permission.project.run_tests =" & LF
+         & "map permission.kind.implementation.read_source =" & LF
+         & "map permission.kind.implementation.write_source = roots=src/" & LF
+         & "map permission.kind.implementation.run_tests =" & LF));
+      Tp.Compose (Registry, "inkling-proof", Composed, Status);
+      Assert (E.Is_Ok (Status), "Inkling task template did not compose: " & Code_Of (Status));
+      Cf.Prepare (Composed, Project, Given, Planned, Status);
+      Cf.Initialize (Store, Project, Planned, Done, Status);
+      Assert (E.Is_Ok (Status), "Inkling task project did not initialize: " & Code_Of (Status));
+      Dirs.Create_Path (Project & "/src");
+      Put_File (Project & "/src/main.adb",
+                "procedure Main is" & LF
+                & "   function Add (Left, Right : Integer) return Integer is (Left - Right);" & LF
+                & "begin" & LF
+                & "   if Add (2, 3) /= 5 or else Add (-4, 7) /= 3 then" & LF
+                & "      raise Program_Error with ""addition failed"";" & LF
+                & "   end if;" & LF & "end Main;" & LF);
+      Put_File (Project & "/check.sh",
+                "set -eu" & LF & "cd src" & LF
+                & "gnatmake -q -gnat2022 main.adb" & LF & "./main" & LF);
+      declare
+         Values : Tk.Field_Map := Fields
+           ("Fix Add in src/main.adb so it adds its two Integer arguments; run_checks must pass.",
+            "implementation", "component", "calculator");
+      begin
+         Values.Include ("acceptance", "Add(2,3)=5 and Add(-4,7)=3; the Ada executable builds and runs.");
+         Values.Include
+           ("notes", "Change only the addition implementation in src/main.adb. Preserve the acceptance checks.");
+         Tk.Create (Store, Change, Values, "user", "", Task_Id, Status);
+      end;
+      Assert (E.Is_Ok (Status), "Inkling task could not be created: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Tk.Move (Store, Change, To_String (Task_Id), "accepted", "", Status => Status);
+      Assert (E.Is_Ok (Status), "Inkling task could not be accepted: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Ada.Text_IO.Put_Line ("Inkling V3 project: " & Project & " task: " & To_String (Task_Id));
+      S.Close (Store);
+   end Prepare_Optional_Inkling_Work_Task;
+
+   procedure Resume_Optional_Inkling_Work_Task (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      Variable : constant String := "MODEL_RUNNER_INKLING_WORK_RETRY";
+      Store : S.Store;
+      Report : S.Recovery_Report;
+      Change : S.Transaction;
+      Changes : Cf.Value_Maps.Map;
+      Planned : Cf.Change_Plan;
+      Revision : Natural;
+      Status : E.Error_Info;
+   begin
+      if not Ada.Environment_Variables.Exists (Variable) then
+         return;
+      end if;
+      S.Open (Store, Ada.Environment_Variables.Value (Variable), Report, Status);
+      Assert (E.Is_Ok (Status), "interrupted Inkling project did not reopen: " & Code_Of (Status));
+      Changes.Include ("scalar.inference.mode", "adaptive");
+      Changes.Include ("scalar.inference.task.implementation", "coding");
+      Changes.Include ("scalar.inference.profile.coding.thinking", "off");
+      Changes.Include ("scalar.inference.profile.coding.max_tokens", "512");
+      Changes.Include ("scalar.inference.profile.coding.temperature", "0");
+      Cf.Plan_Change (Store, Changes, Planned, Status);
+      Assert (E.Is_Ok (Status), "bounded Inkling retry policy is invalid: " & Code_Of (Status));
+      Cf.Reconfigure (Store, Planned, Revision, Status);
+      Assert (E.Is_Ok (Status), "bounded Inkling retry policy was not recorded: " & Code_Of (Status));
+      Assert (Tk.State_Of (Store, "TASK-001") = "blocked", "retry fixture is not an interrupted task");
+      Tk.Move (Store, Change, "TASK-001", "accepted",
+               "Retry interrupted native inference on CPU within the shared-memory budget", Status => Status);
+      Assert (E.Is_Ok (Status), "interrupted Inkling task did not re-enter its lifecycle: " & Code_Of (Status));
+      S.Commit (Store, Change, Status);
+      Assert (E.Is_Ok (Status), "Inkling retry transition did not persist: " & Code_Of (Status));
+      S.Close (Store);
+   exception
+      when others =>
+         S.Close (Store);
+         raise;
+   end Resume_Optional_Inkling_Work_Task;
+
    overriding procedure Register_Tests (T : in out Case_Type) is
       use AUnit.Test_Cases.Registration;
    begin
+      Register_Routine
+        (T, Prepare_Optional_Inkling_Work_Task'Access, "optional real Inkling V3 task fixture");
+      Register_Routine
+        (T, Resume_Optional_Inkling_Work_Task'Access, "optional interrupted Inkling V3 task retry fixture");
       Register_Routine
         (T, Records_Round_Trip'Access,
          "a record reads back as written and its text is canonical");

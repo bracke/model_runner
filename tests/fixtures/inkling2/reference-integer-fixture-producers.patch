@@ -1,0 +1,146 @@
+--- /dev/null
++++ b/examples/inkling2-fixtures/q8-dot-reference.c
+@@ -0,0 +1,37 @@
++/* Offline reference fixture producer; never linked into model_runner.
++ * Uses the pinned, independently built GGML CPU library recorded in the
++ * adjacent provenance JSON. Input is the existing independent Q8 fixture.
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <dlfcn.h>
++
++int main(int argc, char **argv) {
++    if (argc != 4) return 2;
++    void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
++    if (!lib) { fputs(dlerror(), stderr); return 3; }
++    void (*init)(void) = (void (*)(void))dlsym(lib, "ggml_cpu_init");
++    void (*dot)(int,float *,size_t,const void *,size_t,const void *,size_t,int) =
++        (void (*)(int,float *,size_t,const void *,size_t,const void *,size_t,int))
++        dlsym(lib, "ggml_vec_dot_q8_0_q8_0");
++    if (!init || !dot) return 4;
++    init();
++    unsigned char data[1088];
++    FILE *input = fopen(argv[2], "rb");
++    if (!input || fread(data, 1, sizeof data, input) != sizeof data) return 5;
++    if (fgetc(input) != EOF || fclose(input)) return 6;
++    FILE *output = fopen(argv[3], "wb");
++    if (!output) return 7;
++    for (int row = 0; row < 2; ++row) {
++        for (int vector = 0; vector < 2; ++vector) {
++            float result;
++            dot(512, &result, 0, data + row*544, 0, data + vector*544, 0, 1);
++            if (fwrite(&result, sizeof result, 1, output) != 1) return 8;
++            printf("row%d vector%d %a\n", row, vector, (double)result);
++        }
++    }
++    if (fclose(output)) return 9;
++    dlclose(lib);
++    return 0;
++}
+--- /dev/null
++++ b/examples/inkling2-fixtures/f32-dot-reference.c
+@@ -0,0 +1,37 @@
++/* Offline reference fixture producer; never linked into model_runner.
++ * Uses the pinned, independently built GGML CPU library recorded in the
++ * adjacent provenance JSON. Input is the existing independent binary32 input fixture.
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <dlfcn.h>
++
++int main(int argc, char **argv) {
++    if (argc != 4) return 2;
++    void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
++    if (!lib) { fputs(dlerror(), stderr); return 3; }
++    void (*init)(void) = (void (*)(void))dlsym(lib, "ggml_cpu_init");
++    void (*dot)(int,float *,size_t,const float *,size_t,const float *,size_t,int) =
++        (void (*)(int,float *,size_t,const float *,size_t,const float *,size_t,int))
++        dlsym(lib, "ggml_vec_dot_f32");
++    if (!init || !dot) return 4;
++    init();
++    float data[1024];
++    FILE *input = fopen(argv[2], "rb");
++    if (!input || fread(data, 1, sizeof data, input) != sizeof data) return 5;
++    if (fgetc(input) != EOF || fclose(input)) return 6;
++    FILE *output = fopen(argv[3], "wb");
++    if (!output) return 7;
++    for (int row = 0; row < 2; ++row) {
++        for (int vector = 0; vector < 2; ++vector) {
++            float result;
++            dot(512, &result, 0, data + row*512, 0, data + vector*512, 0, 1);
++            if (fwrite(&result, sizeof result, 1, output) != 1) return 8;
++            printf("row%d vector%d %a\n", row, vector, (double)result);
++        }
++    }
++    if (fclose(output)) return 9;
++    dlclose(lib);
++    return 0;
++}
+--- /dev/null
++++ b/examples/inkling2-fixtures/quantized-dot-reference.c
+@@ -0,0 +1,63 @@
++/* Offline fixture producer using the independently built, pinned GGML library.
++ * This program is never linked into model_runner or its normal test binary.
++ * Arguments: library format input.f32 output-prefix
++ */
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <dlfcn.h>
++
++typedef void (*quant_fn)(const float *, void *, int64_t);
++typedef void (*dot_fn)(int, float *, size_t, const void *, size_t, const void *, size_t, int);
++static int write_file(const char *prefix, const char *suffix, const void *data, size_t n) {
++    char path[4096];
++    if (snprintf(path, sizeof path, "%s%s", prefix, suffix) >= (int)sizeof path) return 1;
++    FILE *f = fopen(path, "wb");
++    if (!f) return 2;
++    int bad = fwrite(data, 1, n, f) != n;
++    return fclose(f) || bad;
++}
++int main(int argc, char **argv) {
++    if (argc != 5) return 2;
++    void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
++    if (!lib) { fputs(dlerror(), stderr); return 3; }
++    int row_bytes = !strcmp(argv[2],"q4_K") ? 288 :
++                    !strcmp(argv[2],"q5_K") ? 352 :
++                    !strcmp(argv[2],"q6_K") ? 420 :
++                    !strcmp(argv[2],"q5_0") ? 352 : 0;
++    if (!row_bytes) return 4;
++    const char *activation = strchr(argv[2], 'K') ? "q8_K" : "q8_0";
++    int activation_bytes = strchr(argv[2], 'K') ? 584 : 544;
++    char name[128];
++    void (*init)(void) = (void (*)(void))dlsym(lib, "ggml_cpu_init");
++    snprintf(name, sizeof name, "quantize_row_%s", argv[2]);
++    quant_fn weights = (quant_fn)dlsym(lib, name);
++    snprintf(name, sizeof name, "quantize_row_%s", activation);
++    quant_fn vectors = (quant_fn)dlsym(lib, name);
++    snprintf(name, sizeof name, "ggml_vec_dot_%s_%s", argv[2], activation);
++    dot_fn dot = (dot_fn)dlsym(lib, name);
++    if (!init || !weights || !vectors || !dot) return 5;
++    init();
++    float input[1024], output[4];
++    unsigned char w[840], v[1168];
++    FILE *f = fopen(argv[3], "rb");
++    if (!f || fread(input, 1, sizeof input, f) != sizeof input) return 6;
++    if (fgetc(f) != EOF || fclose(f)) return 7;
++    for (int row = 0; row < 2; ++row) {
++        weights(input + row*512, w + row*row_bytes, 512);
++        vectors(input + row*512, v + row*activation_bytes, 512);
++    }
++    for (int row = 0; row < 2; ++row) {
++        for (int vector = 0; vector < 2; ++vector) {
++            dot(512, output + row*2 + vector, 0, w + row*row_bytes, 0,
++                v + vector*activation_bytes, 0, 1);
++            printf("%s row%d vector%d %a\n", argv[2], row, vector, (double)output[row*2+vector]);
++        }
++    }
++    if (write_file(argv[4], "-weights.bin", w, (size_t)row_bytes*2) ||
++        write_file(argv[4], "-activations.bin", v, (size_t)activation_bytes*2) ||
++        write_file(argv[4], "-output.bin", output, sizeof output)) return 8;
++    dlclose(lib);
++    return 0;
++}

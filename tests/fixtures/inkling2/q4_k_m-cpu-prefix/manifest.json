@@ -1,0 +1,7634 @@
+{
+  "schema": "model_runner.inkling2.reference_prefix.v1",
+  "status": "canonical LLAMAFILE=OFF prefill/decode match on this prefix; optimized variant discrepancy preserved; native conformance pending",
+  "date": "2026-11-24",
+  "provenance": "Same verified model, source commit and capture patch as ../q4_k_m-cpu-hello/manifest.json; per-mode reference build variant explicit below",
+  "input": {
+    "prompt": "The capital of France is",
+    "tokens": [
+      371,
+      151451,
+      149879,
+      151194,
+      149884
+    ],
+    "positions": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "settings": {
+    "backend": "cpu",
+    "context": 32,
+    "batch": 8,
+    "threads": 7,
+    "kv_k": "f32",
+    "kv_v": "f32",
+    "flash_attention": "off",
+    "repack": false,
+    "warmup": false
+  },
+  "layout": "little-endian 32-bit; final-token rows only; layer/router rows in listed logical execution order; dimension zero fastest",
+  "numeric_tolerance": null,
+  "modes": {
+    "prefill": {
+      "microbatch": 8,
+      "stepwise": false,
+      "files": [
+        {
+          "file": "prefill-expert-ids.i32",
+          "length_bytes": 1536,
+          "sha256": "f6446dc0be6c5bed9edf68721d8c8ff8ac60c63dcd366fd6e7d85e6eff4afb4b"
+        },
+        {
+          "file": "prefill-final-norm.f32",
+          "length_bytes": 9216,
+          "sha256": "ec91a42dc5e76982284b5b1f62135bf2c68bed224854e2861dd40f794bd87b31"
+        },
+        {
+          "file": "prefill-layers.f32",
+          "length_bytes": 442368,
+          "sha256": "b156aa9e8b0981a9744cf1d89810568ddab7b5780fb3054a85c552121b13d2a5"
+        },
+        {
+          "file": "prefill-logits.f32",
+          "length_bytes": 800232,
+          "sha256": "e78b670b280de787fc3b2f3a32ba13f10b01d7d3903ea6f1a986265478ff2f6f"
+        },
+        {
+          "file": "prefill-router-biased-probs.f32",
+          "length_bytes": 24576,
+          "sha256": "4ebdb12910f9faef49b169cd0f855f4ea034591ee4c3a8f2ac3a3503bac543ab"
+        },
+        {
+          "file": "prefill-router-logits.f32",
+          "length_bytes": 24576,
+          "sha256": "9a2b56dc49340918e0044caff1ed0df1f75383edd704629cc8f6040dba1d459b"
+        }
+      ],
+      "layers": [
+        {
+          "logical_layer": 0,
+          "state_layer": 0,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 1,
+          "state_layer": 1,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 2,
+          "state_layer": 2,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 3,
+          "state_layer": 3,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 4,
+          "state_layer": 4,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 5,
+          "state_layer": 5,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 6,
+          "state_layer": 6,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 7,
+          "state_layer": 7,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 8,
+          "state_layer": 8,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 9,
+          "state_layer": 9,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 10,
+          "state_layer": 10,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 11,
+          "state_layer": 11,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 12,
+          "state_layer": 12,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 13,
+          "state_layer": 13,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 14,
+          "state_layer": 14,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 15,
+          "state_layer": 15,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 16,
+          "state_layer": 16,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 17,
+          "state_layer": 17,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 18,
+          "state_layer": 24,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 19,
+          "state_layer": 25,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 20,
+          "state_layer": 26,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 21,
+          "state_layer": 27,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 22,
+          "state_layer": 28,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 23,
+          "state_layer": 29,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 24,
+          "state_layer": 30,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 25,
+          "state_layer": 31,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 26,
+          "state_layer": 32,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 27,
+          "state_layer": 33,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 28,
+          "state_layer": 34,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 29,
+          "state_layer": 35,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 30,
+          "state_layer": 36,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 31,
+          "state_layer": 37,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 32,
+          "state_layer": 38,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 33,
+          "state_layer": 39,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 34,
+          "state_layer": 40,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 35,
+          "state_layer": 41,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 36,
+          "state_layer": 42,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 37,
+          "state_layer": 43,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 38,
+          "state_layer": 44,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 39,
+          "state_layer": 45,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 40,
+          "state_layer": 46,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 41,
+          "state_layer": 47,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 42,
+          "state_layer": 18,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 43,
+          "state_layer": 19,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 44,
+          "state_layer": 20,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 45,
+          "state_layer": 21,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 46,
+          "state_layer": 22,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 47,
+          "state_layer": 23,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "stdout_sha256": "f6c04b023670aa6a47a16edfbe071247dec1e7a64e3d0dbf32573fe32aebd499",
+      "stderr_sha256": "355a7778c52ce0c408bccd11287839ee46703dab4f0eaf54d8ed02e4dcf36fd9",
+      "reference_variant": "llamafile-on"
+    },
+    "decode": {
+      "microbatch": 8,
+      "stepwise": true,
+      "files": [
+        {
+          "file": "decode-expert-ids.i32",
+          "length_bytes": 1536,
+          "sha256": "324ef986c71ff5403cedb9c46635430ddb9566093e109f9b06d03c75e1bdbefd"
+        },
+        {
+          "file": "decode-final-norm.f32",
+          "length_bytes": 9216,
+          "sha256": "2f3e1c2ba1ecc4502a56dab152ff23119e686617cbee4829b1f2eaaee243ad65"
+        },
+        {
+          "file": "decode-layers.f32",
+          "length_bytes": 442368,
+          "sha256": "6c40503a56beee9aacc741e033434f62a61149c922ac8331e85e5f563aac18dd"
+        },
+        {
+          "file": "decode-logits.f32",
+          "length_bytes": 800232,
+          "sha256": "191558da91c3751ad6a2ef880320f2b150c1a516cad69dc42c81ae63ac56ab1a"
+        },
+        {
+          "file": "decode-router-biased-probs.f32",
+          "length_bytes": 24576,
+          "sha256": "c20da9f039f8bb17354256365657787b52efaeaa2d01c9d999d943a9886df4ae"
+        },
+        {
+          "file": "decode-router-logits.f32",
+          "length_bytes": 24576,
+          "sha256": "fa460763a0e0b2a821aaeab5874b70b7ac7d3c6ad0c4d3002e0d041f2f6b0dfe"
+        }
+      ],
+      "layers": [
+        {
+          "logical_layer": 0,
+          "state_layer": 0,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 1,
+          "state_layer": 1,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 2,
+          "state_layer": 2,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 3,
+          "state_layer": 3,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 4,
+          "state_layer": 4,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 5,
+          "state_layer": 5,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 6,
+          "state_layer": 6,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 7,
+          "state_layer": 7,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 8,
+          "state_layer": 8,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 9,
+          "state_layer": 9,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 10,
+          "state_layer": 10,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 11,
+          "state_layer": 11,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 12,
+          "state_layer": 12,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 13,
+          "state_layer": 13,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 14,
+          "state_layer": 14,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 15,
+          "state_layer": 15,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 16,
+          "state_layer": 16,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 17,
+          "state_layer": 17,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 18,
+          "state_layer": 24,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 19,
+          "state_layer": 25,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 20,
+          "state_layer": 26,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 21,
+          "state_layer": 27,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 22,
+          "state_layer": 28,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 23,
+          "state_layer": 29,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 24,
+          "state_layer": 30,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 25,
+          "state_layer": 31,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 26,
+          "state_layer": 32,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 27,
+          "state_layer": 33,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 28,
+          "state_layer": 34,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 29,
+          "state_layer": 35,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 30,
+          "state_layer": 36,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 31,
+          "state_layer": 37,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 32,
+          "state_layer": 38,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 33,
+          "state_layer": 39,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 34,
+          "state_layer": 40,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 35,
+          "state_layer": 41,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 36,
+          "state_layer": 42,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 37,
+          "state_layer": 43,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 38,
+          "state_layer": 44,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 39,
+          "state_layer": 45,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 40,
+          "state_layer": 46,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 41,
+          "state_layer": 47,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 42,
+          "state_layer": 18,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 43,
+          "state_layer": 19,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 44,
+          "state_layer": 20,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 45,
+          "state_layer": 21,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 46,
+          "state_layer": 22,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 47,
+          "state_layer": 23,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "stdout_sha256": "61d3052a6f3593cceba346921ddd0c8e5b850ba6be6040acf2da41b56db60527",
+      "stderr_sha256": "0e4f130944f4150eb4b739cd3703d8395f5201db842e8bd30bcc382e6a5c3e4c",
+      "reference_variant": "llamafile-on"
+    },
+    "microbatch-one": {
+      "microbatch": 1,
+      "stepwise": false,
+      "files": [
+        {
+          "file": "microbatch-one-expert-ids.i32",
+          "length_bytes": 1536,
+          "sha256": "324ef986c71ff5403cedb9c46635430ddb9566093e109f9b06d03c75e1bdbefd"
+        },
+        {
+          "file": "microbatch-one-final-norm.f32",
+          "length_bytes": 9216,
+          "sha256": "2f3e1c2ba1ecc4502a56dab152ff23119e686617cbee4829b1f2eaaee243ad65"
+        },
+        {
+          "file": "microbatch-one-layers.f32",
+          "length_bytes": 442368,
+          "sha256": "6c40503a56beee9aacc741e033434f62a61149c922ac8331e85e5f563aac18dd"
+        },
+        {
+          "file": "microbatch-one-logits.f32",
+          "length_bytes": 800232,
+          "sha256": "191558da91c3751ad6a2ef880320f2b150c1a516cad69dc42c81ae63ac56ab1a"
+        },
+        {
+          "file": "microbatch-one-router-biased-probs.f32",
+          "length_bytes": 24576,
+          "sha256": "c20da9f039f8bb17354256365657787b52efaeaa2d01c9d999d943a9886df4ae"
+        },
+        {
+          "file": "microbatch-one-router-logits.f32",
+          "length_bytes": 24576,
+          "sha256": "fa460763a0e0b2a821aaeab5874b70b7ac7d3c6ad0c4d3002e0d041f2f6b0dfe"
+        }
+      ],
+      "layers": [
+        {
+          "logical_layer": 0,
+          "state_layer": 0,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 1,
+          "state_layer": 1,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 2,
+          "state_layer": 2,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 3,
+          "state_layer": 3,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 4,
+          "state_layer": 4,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 5,
+          "state_layer": 5,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 6,
+          "state_layer": 6,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 7,
+          "state_layer": 7,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 8,
+          "state_layer": 8,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 9,
+          "state_layer": 9,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 10,
+          "state_layer": 10,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 11,
+          "state_layer": 11,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 12,
+          "state_layer": 12,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 13,
+          "state_layer": 13,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 14,
+          "state_layer": 14,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 15,
+          "state_layer": 15,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 16,
+          "state_layer": 16,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 17,
+          "state_layer": 17,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 18,
+          "state_layer": 24,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 19,
+          "state_layer": 25,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 20,
+          "state_layer": 26,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 21,
+          "state_layer": 27,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 22,
+          "state_layer": 28,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 23,
+          "state_layer": 29,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 24,
+          "state_layer": 30,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 25,
+          "state_layer": 31,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 26,
+          "state_layer": 32,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 27,
+          "state_layer": 33,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 28,
+          "state_layer": 34,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 29,
+          "state_layer": 35,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 30,
+          "state_layer": 36,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 31,
+          "state_layer": 37,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 32,
+          "state_layer": 38,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 33,
+          "state_layer": 39,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 34,
+          "state_layer": 40,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 35,
+          "state_layer": 41,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 36,
+          "state_layer": 42,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 37,
+          "state_layer": 43,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 38,
+          "state_layer": 44,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 39,
+          "state_layer": 45,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 40,
+          "state_layer": 46,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 41,
+          "state_layer": 47,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 42,
+          "state_layer": 18,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 43,
+          "state_layer": 19,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 44,
+          "state_layer": 20,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 45,
+          "state_layer": 21,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 46,
+          "state_layer": 22,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 47,
+          "state_layer": 23,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "stdout_sha256": "75d8b1c134fa2ab808a3ebbc6fe336acf6854ba4456870e5844aa256060c2b63",
+      "stderr_sha256": "bae9a82dd5ce7fa3ab8372914a821119caf6210a9269b0143cf9d5255c98dac5",
+      "reference_variant": "llamafile-on"
+    },
+    "no-llamafile-prefill": {
+      "reference_variant": "llamafile-off",
+      "microbatch": 8,
+      "stepwise": false,
+      "files": [
+        {
+          "file": "no-llamafile-prefill-expert-ids.i32",
+          "length_bytes": 1536,
+          "sha256": "459abafbade520315f94c17649fcb68ead63bd84703a69677c7fc0c304a03e00"
+        },
+        {
+          "file": "no-llamafile-prefill-final-norm.f32",
+          "length_bytes": 9216,
+          "sha256": "e06542fc959458e5c177b6d51119557cdaa32f95d200bee7f2f6be065f4a82cb"
+        },
+        {
+          "file": "no-llamafile-prefill-layers.f32",
+          "length_bytes": 442368,
+          "sha256": "e022af39d11687becf09b184a2b5afe11b1e90e85801a254c7efdc5aa8d7672f"
+        },
+        {
+          "file": "no-llamafile-prefill-logits.f32",
+          "length_bytes": 800232,
+          "sha256": "60515a41f5370ba398ff09333baa6d3d7dfc4bf2e241fa08b61430adda320c84"
+        },
+        {
+          "file": "no-llamafile-prefill-router-biased-probs.f32",
+          "length_bytes": 24576,
+          "sha256": "fd4d5b0f3fec42872b9b4c60d23c59c7b4dbc896cb3547a76786399a7bea7364"
+        },
+        {
+          "file": "no-llamafile-prefill-router-logits.f32",
+          "length_bytes": 24576,
+          "sha256": "63175ce88bebf4458fddfe9c3ac5339d6f1afad737ee9219750f756926dbcfb9"
+        }
+      ],
+      "layers": [
+        {
+          "logical_layer": 0,
+          "state_layer": 0,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 1,
+          "state_layer": 1,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 2,
+          "state_layer": 2,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 3,
+          "state_layer": 3,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 4,
+          "state_layer": 4,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 5,
+          "state_layer": 5,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 6,
+          "state_layer": 6,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 7,
+          "state_layer": 7,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 8,
+          "state_layer": 8,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 9,
+          "state_layer": 9,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 10,
+          "state_layer": 10,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 11,
+          "state_layer": 11,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 12,
+          "state_layer": 12,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 13,
+          "state_layer": 13,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 14,
+          "state_layer": 14,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 15,
+          "state_layer": 15,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 16,
+          "state_layer": 16,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 17,
+          "state_layer": 17,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 18,
+          "state_layer": 24,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 19,
+          "state_layer": 25,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 20,
+          "state_layer": 26,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 21,
+          "state_layer": 27,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 22,
+          "state_layer": 28,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 23,
+          "state_layer": 29,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 24,
+          "state_layer": 30,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 25,
+          "state_layer": 31,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 26,
+          "state_layer": 32,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 27,
+          "state_layer": 33,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 28,
+          "state_layer": 34,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 29,
+          "state_layer": 35,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 30,
+          "state_layer": 36,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 31,
+          "state_layer": 37,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 32,
+          "state_layer": 38,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 33,
+          "state_layer": 39,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 34,
+          "state_layer": 40,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 35,
+          "state_layer": 41,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 36,
+          "state_layer": 42,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 37,
+          "state_layer": 43,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 38,
+          "state_layer": 44,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 39,
+          "state_layer": 45,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 40,
+          "state_layer": 46,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 41,
+          "state_layer": 47,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 42,
+          "state_layer": 18,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 43,
+          "state_layer": 19,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 44,
+          "state_layer": 20,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 45,
+          "state_layer": 21,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 46,
+          "state_layer": 22,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 47,
+          "state_layer": 23,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              5,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              5,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "stdout_sha256": "3b68a17ebfa4ff27fb997f4d93cc5b1a191875eee3b62b832d56dcebe579e3da",
+      "stderr_sha256": "c9802bf392100f5871fba76535f10c9bc459445e8adbf5d37d66c4b219fd0d01"
+    },
+    "no-llamafile-decode": {
+      "reference_variant": "llamafile-off",
+      "microbatch": 8,
+      "stepwise": true,
+      "files": [
+        {
+          "file": "no-llamafile-decode-expert-ids.i32",
+          "length_bytes": 1536,
+          "sha256": "459abafbade520315f94c17649fcb68ead63bd84703a69677c7fc0c304a03e00"
+        },
+        {
+          "file": "no-llamafile-decode-final-norm.f32",
+          "length_bytes": 9216,
+          "sha256": "e06542fc959458e5c177b6d51119557cdaa32f95d200bee7f2f6be065f4a82cb"
+        },
+        {
+          "file": "no-llamafile-decode-layers.f32",
+          "length_bytes": 442368,
+          "sha256": "e022af39d11687becf09b184a2b5afe11b1e90e85801a254c7efdc5aa8d7672f"
+        },
+        {
+          "file": "no-llamafile-decode-logits.f32",
+          "length_bytes": 800232,
+          "sha256": "60515a41f5370ba398ff09333baa6d3d7dfc4bf2e241fa08b61430adda320c84"
+        },
+        {
+          "file": "no-llamafile-decode-router-biased-probs.f32",
+          "length_bytes": 24576,
+          "sha256": "fd4d5b0f3fec42872b9b4c60d23c59c7b4dbc896cb3547a76786399a7bea7364"
+        },
+        {
+          "file": "no-llamafile-decode-router-logits.f32",
+          "length_bytes": 24576,
+          "sha256": "63175ce88bebf4458fddfe9c3ac5339d6f1afad737ee9219750f756926dbcfb9"
+        }
+      ],
+      "layers": [
+        {
+          "logical_layer": 0,
+          "state_layer": 0,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 1,
+          "state_layer": 1,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 2,
+          "state_layer": 2,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 3,
+          "state_layer": 3,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 4,
+          "state_layer": 4,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 5,
+          "state_layer": 5,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 6,
+          "state_layer": 6,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 7,
+          "state_layer": 7,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 8,
+          "state_layer": 8,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 9,
+          "state_layer": 9,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 10,
+          "state_layer": 10,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 11,
+          "state_layer": 11,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 12,
+          "state_layer": 12,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 13,
+          "state_layer": 13,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 14,
+          "state_layer": 14,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 15,
+          "state_layer": 15,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 16,
+          "state_layer": 16,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 17,
+          "state_layer": 17,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 18,
+          "state_layer": 24,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 19,
+          "state_layer": 25,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 20,
+          "state_layer": 26,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 21,
+          "state_layer": 27,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 22,
+          "state_layer": 28,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 23,
+          "state_layer": 29,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 24,
+          "state_layer": 30,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 25,
+          "state_layer": 31,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 26,
+          "state_layer": 32,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 27,
+          "state_layer": 33,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 28,
+          "state_layer": 34,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 29,
+          "state_layer": 35,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 30,
+          "state_layer": 36,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 31,
+          "state_layer": 37,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 32,
+          "state_layer": 38,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 33,
+          "state_layer": 39,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 34,
+          "state_layer": 40,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 35,
+          "state_layer": 41,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 36,
+          "state_layer": 42,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 37,
+          "state_layer": 43,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 38,
+          "state_layer": 44,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 39,
+          "state_layer": 45,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 40,
+          "state_layer": 46,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 41,
+          "state_layer": 47,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 42,
+          "state_layer": 18,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 43,
+          "state_layer": 19,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 44,
+          "state_layer": 20,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 45,
+          "state_layer": 21,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 46,
+          "state_layer": 22,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        {
+          "logical_layer": 47,
+          "state_layer": 23,
+          "parent_shapes": {
+            "l_out": [
+              2304,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_logits": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_probs_biased": [
+              128,
+              1,
+              1,
+              1
+            ],
+            "ffn_moe_topk": [
+              8,
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      ],
+      "stdout_sha256": "707bd3678e48ba5dbed63ec9aec33c2130a45288880f54ec2d2da79bd3ca03e1",
+      "stderr_sha256": "37862f44be97456bf3c386818af84f7b8df94314fe0f2b1c066f3224b364010a"
+    }
+  },
+  "comparisons": [
+    {
+      "left": "prefill",
+      "right": "decode",
+      "maximum_absolute_logit_difference": 0.4003310203552246,
+      "rms_logit_difference": 0.09638334313653585,
+      "greedy_ids": [
+        152717,
+        152717
+      ],
+      "changed_expert_id_visits": [
+        8,
+        10,
+        11,
+        13,
+        14,
+        15,
+        25,
+        27,
+        28,
+        29,
+        30,
+        33,
+        36,
+        38,
+        41,
+        44,
+        45
+      ],
+      "all_stored_values_byte_equal": false
+    },
+    {
+      "left": "microbatch-one",
+      "right": "decode",
+      "maximum_absolute_logit_difference": 0.0,
+      "rms_logit_difference": 0.0,
+      "greedy_ids": [
+        152717,
+        152717
+      ],
+      "changed_expert_id_visits": [],
+      "all_stored_values_byte_equal": true
+    },
+    {
+      "left": "no-llamafile-prefill",
+      "right": "no-llamafile-decode",
+      "maximum_absolute_logit_difference": 0.0,
+      "rms_logit_difference": 0.0,
+      "greedy_ids": [
+        152717,
+        152717
+      ],
+      "changed_expert_id_visits": [],
+      "all_stored_values_byte_equal": true,
+      "all_raw_final_token_tensors_byte_equal": 834
+    },
+    {
+      "left": "no-llamafile-decode",
+      "right": "decode",
+      "maximum_absolute_logit_difference": 0.44737792015075684,
+      "rms_logit_difference": 0.0934687228653536,
+      "greedy_ids": [
+        152717,
+        152717
+      ],
+      "changed_expert_id_visits": [
+        27,
+        30,
+        33,
+        39,
+        41,
+        43,
+        46,
+        47,
+        19
+      ],
+      "all_stored_values_byte_equal": false
+    }
+  ],
+  "interpretation": "Only GGML_LLAMAFILE differs between saved CMake caches. Disabling it removes the tested prefill/decode discrepancy. Use OFF for initial conformance; retain ON evidence separately; assign no blanket tolerance.",
+  "reference_variants": {
+    "llamafile-on": {
+      "repository": "https://github.com/ggml-org/llama.cpp",
+      "commit": "29b52d398b294509746ec0a3f28948a3107c0213",
+      "tag": "b12600",
+      "archive_sha256": "baf317f31a6881ef02850691d1287cdfb04edd989261d8384deca7dd2b36956f",
+      "capture_patch_sha256": "2e97e9a28cb74168ad34e8894e4beb741bde8ccfd2e629cb575c0528a4b20462",
+      "compiler": "GCC 13.3.0",
+      "build": "Release -O3 -DNDEBUG; GGML_NATIVE=ON; GGML_VULKAN=ON; GGML_CPU_REPACK=ON",
+      "shared_libraries": [
+        {
+          "file": "libggml-base.so.1.0.0",
+          "sha256": "f98e185d05c3804a2369718a108d7a4e0b228ef9ea5130ed70a6503145f48cd4"
+        },
+        {
+          "file": "libggml-cpu.so.1.0.0",
+          "sha256": "f266fdc26857a3f70a07d75591fd0f4f493026e2a76659b69783cc07e75896b6"
+        },
+        {
+          "file": "libggml-vulkan.so.1.0.0",
+          "sha256": "4dd19073098ac4831510f6271e33e0551c6a2f3360f9219483f5657af2a565a2"
+        },
+        {
+          "file": "libggml.so.1.0.0",
+          "sha256": "a8cb190ffc08a0717271239b68d198388ccb6fd8c8d13e139cf7d8ed05117afd"
+        },
+        {
+          "file": "libllama-bench-impl.so",
+          "sha256": "8af26e456347142a655c4390d5a778971e985b85d66f5dbf5110fe83b753576f"
+        },
+        {
+          "file": "libllama-common.so.1.0.0",
+          "sha256": "68aeb72aef1cf883ad1bd1fd8cb9193df4fd54b8f7871a85a4f16adbf7b645c0"
+        },
+        {
+          "file": "libllama-completion-impl.so",
+          "sha256": "ae137b39adfb60f4fe41a7af2f6b3b1417e2e464a577303e4a33f8e617c49764"
+        },
+        {
+          "file": "libllama-perplexity-impl.so",
+          "sha256": "58090df1013008b265f01e8f1929fa3df1484139615b92f4890cfb5602d33f87"
+        },
+        {
+          "file": "libllama.so.1.0.0",
+          "sha256": "3a629fb84c1c6eb9d78852858e16933f3292b9c0f3b259ae8b29b6300f163201"
+        }
+      ],
+      "ggml_llamafile": true,
+      "cmake_cache_sha256": "16fd8d3d0aedaf4234337bf9adc505b4e3e8e9f889e75641b1eba4fa3883d706"
+    },
+    "llamafile-off": {
+      "repository": "https://github.com/ggml-org/llama.cpp",
+      "commit": "29b52d398b294509746ec0a3f28948a3107c0213",
+      "tag": "b12600",
+      "archive_sha256": "baf317f31a6881ef02850691d1287cdfb04edd989261d8384deca7dd2b36956f",
+      "capture_patch_sha256": "2e97e9a28cb74168ad34e8894e4beb741bde8ccfd2e629cb575c0528a4b20462",
+      "compiler": "GCC 13.3.0",
+      "build": "Release -O3 -DNDEBUG; GGML_NATIVE=ON; GGML_VULKAN=ON; GGML_CPU_REPACK=ON; GGML_LLAMAFILE=OFF",
+      "shared_libraries": [
+        {
+          "file": "libggml-base.so.1.0.0",
+          "sha256": "f98e185d05c3804a2369718a108d7a4e0b228ef9ea5130ed70a6503145f48cd4"
+        },
+        {
+          "file": "libggml-cpu.so.1.0.0",
+          "sha256": "b6565a96976188378673ef11ddad6b3893259fc7bc21e0d236c74b44c1da4278"
+        },
+        {
+          "file": "libggml-vulkan.so.1.0.0",
+          "sha256": "4dd19073098ac4831510f6271e33e0551c6a2f3360f9219483f5657af2a565a2"
+        },
+        {
+          "file": "libggml.so.1.0.0",
+          "sha256": "a8cb190ffc08a0717271239b68d198388ccb6fd8c8d13e139cf7d8ed05117afd"
+        },
+        {
+          "file": "libllama-bench-impl.so",
+          "sha256": "8af26e456347142a655c4390d5a778971e985b85d66f5dbf5110fe83b753576f"
+        },
+        {
+          "file": "libllama-common.so.1.0.0",
+          "sha256": "68aeb72aef1cf883ad1bd1fd8cb9193df4fd54b8f7871a85a4f16adbf7b645c0"
+        },
+        {
+          "file": "libllama-completion-impl.so",
+          "sha256": "ae137b39adfb60f4fe41a7af2f6b3b1417e2e464a577303e4a33f8e617c49764"
+        },
+        {
+          "file": "libllama-perplexity-impl.so",
+          "sha256": "58090df1013008b265f01e8f1929fa3df1484139615b92f4890cfb5602d33f87"
+        },
+        {
+          "file": "libllama.so.1.0.0",
+          "sha256": "3a629fb84c1c6eb9d78852858e16933f3292b9c0f3b259ae8b29b6300f163201"
+        }
+      ],
+      "ggml_llamafile": false,
+      "cmake_cache_sha256": "8eb6611ffb71ef473c7e5c15740c828c1904a4ec3ad6b38367ceadd3efed01f3"
+    }
+  },
+  "controlled_cmake_changes": [
+    "GGML_LLAMAFILE"
+  ],
+  "row_widths": {
+    "layers": 2304,
+    "router-logits": 128,
+    "router-biased-probs": 128,
+    "expert-ids": 8,
+    "final-norm": 2304,
+    "logits": 200058
+  }
+}

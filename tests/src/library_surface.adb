@@ -13,6 +13,9 @@ package body Library_Surface is
    --  The codec's other half.
    Held : constant Text_List :=
      [
+      --  Opt-in prefix retention and its diagnostic for embedded callers.
+      new String'("Reuse_Prompt_Prefix"),
+      new String'("Reused_Prompt_Tokens"),
       --  Stopping a commit short at a crash point: for the tests that
       --  crash a commit at each and reopen the store, and nothing else.
       new String'("Crash_At"),
@@ -91,7 +94,6 @@ package body Library_Surface is
       --  a keeper that stopped from one that went on.
       new String'("Keeper_Rounds"),
       --  Second opinions.
-      new String'("All_Finite"),
       new String'("Row_Dot"),
 
       --  State a library caller needs.
@@ -224,6 +226,12 @@ package body Library_Surface is
       --  rewinds to it wherever it is; a test asks so that a device that
       --  ran no linear layer is told apart from a copy that worked.
       new String'("Checkpoint_On_Device"),
+      new String'("Loop_Device_Attention_Runs"),
+
+      --  Native packed-input reuse is exposed to embedding diagnostics and
+      --  the speed tool. AUnit proves it advances across compatible GPU
+      --  products; the ordinary command does not query this counter.
+      new String'("Reference_Packing_Reuses"),
 
       --  How far back a windowed session may be rewound before a slid layer
       --  can no longer attend. The engine does not decide for the caller --

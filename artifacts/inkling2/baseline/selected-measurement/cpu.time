@@ -1,0 +1,23 @@
+	Command being timed: "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-profiled-next/02-pgo/measurement/tests speed --model /home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf --prompt-file /home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt --backend cpu --threads 8 --batch-size 128 --arith int8 --kv-cache q4t --repack none --memory-limit 24G --context-size 2688 --max-tokens 512 --repeat-penalty 1 --ignore-eos --draft-tokens 7 --repeats 1 --wait 5 --no-cache --draft-model /home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf --budget"
+	User time (seconds): 1596.14
+	System time (seconds): 2.18
+	Percent of CPU this job got: 736%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:36.96
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 4457704
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 249836
+	Voluntary context switches: 279438
+	Involuntary context switches: 37296
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

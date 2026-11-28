@@ -1,0 +1,20 @@
+{
+  "fixture_origin": "Deterministic synthetic IQ3_S/IQ3_XXS blocks; no checkpoint weights are committed.",
+  "reference_commit": "4c7344447cb1727f1e2f982febc99a8f88dcb77f",
+  "shape": {
+    "rows": 4,
+    "columns": 2304,
+    "vectors": 9
+  },
+  "input": "Identical to gsq-small-blocks/input-2304.f32",
+  "generation": "Reconstruct weights from weights-generator.py.patch; run reference-generator.cpp.patch with pinned GGML. quantize_row_q8_K followed by independent native dots, with ggml_cpu_init. Outputs are row-major, nine vectors per row.",
+  "sha256": {
+    "iq3xxs.bin": "016fcb5a8fa7c62cfeda7fa224593e0d02c363db681e944788c019887675f56a",
+    "reference-generator.cpp.patch": "19476586afdbca0a6e21bd4cf5e45b906659e878260dc520b72c07646d3fcbdd",
+    "iq3s.f32": "884c3e675212b60f8b8a1dc57af13f58ec44d6ab17ec82bef81b199256bde58d",
+    "iq3s.bin": "a1ed83184b22a01d1ec8c9cbeb25e6077a441b69379e68157388e9289e25eaf5",
+    "input.f32": "694eeb12f80f8a3fd83550c2d3bf33cb04a41dee10cfe477c46bcf683901ca1a",
+    "weights-generator.py.patch": "2b7f4c9ca02feab6e6328c56d5d1f94e55c89ba6820ed5122cc4079a5c71db86",
+    "iq3xxs.f32": "171cbd7c1f3e5f65c485b82951d713f811752c13859acc34b27ed546dff20803"
+  }
+}

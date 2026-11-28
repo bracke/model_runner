@@ -1,0 +1,60 @@
+{
+  "status": "superseded_before_measurement",
+  "change": "Decode native IQ4_NL/Q2_0 blocks once for four input vectors with unchanged per-vector FP32 reference folds.",
+  "workspace": "/tmp/inkling-gsq-batch",
+  "baseline": "artifacts/inkling2/obj/gsq-iq3s",
+  "root_source_mutations": false,
+  "tests": "Existing independent fixtures at counts1/2/7/9 and CPU grouped batches at1/2/8/33; exact outputs and guards.",
+  "measurement": "One warmup and one measured2048/16pass after the original IQ3_S pipeline and its evidence finalization complete.",
+  "changed_sources": [
+    "src/library/model_runner-quantization-integers.adb",
+    "tests/src/tests-gguf_cases.adb"
+  ],
+  "validation": {
+    "status": "passed",
+    "binary_sha256": "b89c017d930c1df216bd0d77c91a9763599bc41304a6734739c4a0bb9ad39923",
+    "cases": [
+      {
+        "name": "reference",
+        "filter": "gguf container : integer products : GSQ",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-batch/qualification-v1/reference.log"
+      },
+      {
+        "name": "grouped",
+        "filter": "cpu backend : GSQ small-block",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-batch/qualification-v1/grouped.log"
+      },
+      {
+        "name": "q8-groups",
+        "filter": "cpu backend : reference grouped Q8",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-batch/qualification-v1/q8-groups.log"
+      },
+      {
+        "name": "bounds",
+        "filter": "gguf container : the integer kernels prove",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-batch/qualification-v1/bounds.log"
+      },
+      {
+        "name": "native",
+        "filter": "native Inkling",
+        "returncode": 0,
+        "count": 43,
+        "log": "artifacts/inkling2/obj/gsq-batch/qualification-v1/native.log"
+      }
+    ]
+  },
+  "source_manifest": "artifacts/inkling2/obj/gsq-batch/candidate-source-sha256.json",
+  "queued_at": "2026-11-27T20:50:04.257661+00:00",
+  "reason": "Combined two/four-vector candidate replaces this unmeasured four-only candidate; source,binaries,tests and proof retained.",
+  "superseded_at": "2026-11-27T20:53:12.956737+00:00",
+  "obsolete_waiter_stopped_at": "2026-11-27T21:00:37.887636+00:00",
+  "obsolete_waiter_pid": 2389404
+}

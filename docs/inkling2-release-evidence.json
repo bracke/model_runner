@@ -1,0 +1,489 @@
+{
+  "schema": "model_runner.inkling2.release_evidence.v1",
+  "collected_at": "2026-11-25T02:43:34.106529+00:00",
+  "status": "Qualified fixed-loop CPU and private/shared Vulkan text and tools verified; expanded context/performance evaluation incomplete",
+  "model_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+  "native_cli_sha256": "54b165915f021f0c96873a3e57dd6e55784c914af902f6e2a7665614dce900a8",
+  "native_tests_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+  "engine_source_manifest_sha256": "25843062821e3159bd6ece396a0b003edef979f15db9a458187057aaa735be9e",
+  "working_directory": "tests",
+  "checks": [
+    {
+      "name": "aunit",
+      "command": [
+        "./bin/tests",
+        "test",
+        "--timed"
+      ],
+      "environment": {
+        "MR_EXPECT_DEVICE": "1"
+      },
+      "result": "1026/1026 passed; zero assertions and unexpected errors",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-full-vulkan-suite.log",
+      "log_sha256": "5a41fe86fc0f4db037461fd713010e4013ad58b4b38c29324d1689af4d160e33",
+      "log_bytes": 153044,
+      "historical": true
+    },
+    {
+      "name": "repository",
+      "command": [
+        "./bin/tests",
+        "check",
+        "--repository"
+      ],
+      "environment": {},
+      "result": "31492 checks, zero failures; stage timing too busy to qualify",
+      "log": "artifacts/inkling2/obj/release/inkling2-post-measurement-source-gate.log",
+      "log_sha256": "e865bb3c295833c7e5a2270d3baf4707f6f79da1e5380b898baf7d00547c82ac",
+      "log_bytes": 7199,
+      "historical": true
+    },
+    {
+      "name": "cpu-f32",
+      "command": [
+        "./bin/tests",
+        "test",
+        "--only",
+        "native Inkling : optional"
+      ],
+      "environment": {
+        "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+        "MODEL_RUNNER_INKLING_ARITH": "f32",
+        "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix",
+        "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf"
+      },
+      "result": "834 tensors, 1352826 elements, exact routing, sixteen-token independent greedy text",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-generation-aunit.log",
+      "log_sha256": "a94c28709d93b7871f8790ef3ab8a8a76385a876157903d93173cc322592af2f",
+      "log_bytes": 360,
+      "historical": true
+    },
+    {
+      "name": "hybrid-f32",
+      "command": [
+        "./bin/tests",
+        "test",
+        "--only",
+        "native Inkling : optional"
+      ],
+      "environment": {
+        "MODEL_RUNNER_INKLING_BACKEND": "hybrid",
+        "MODEL_RUNNER_INKLING_ARITH": "f32",
+        "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix",
+        "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf"
+      },
+      "result": "834 tensors, 1352826 elements, exact routing; four GiB device budget",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-hybrid-prefix.log",
+      "log_sha256": "2ed8da9698def4e4a0fc104d7c9f8b82eb6de0585c58f2da5a0979076cf27337",
+      "log_bytes": 363,
+      "historical": true
+    },
+    {
+      "name": "cpu-f32-panels",
+      "command": [
+        "./bin/tests",
+        "test",
+        "--only",
+        "native Inkling : optional"
+      ],
+      "environment": {
+        "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+        "MODEL_RUNNER_INKLING_ARITH": "f32",
+        "MODEL_RUNNER_INKLING_REPACK": "rows",
+        "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix",
+        "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf"
+      },
+      "result": "834 tensors, 1352826 elements, exact routing and sixteen-token greedy text; 24 GiB owned-memory limit",
+      "log": "artifacts/inkling2/obj/release/inkling2-existing-cpu-panels-conformance.log",
+      "log_sha256": "a94c28709d93b7871f8790ef3ab8a8a76385a876157903d93173cc322592af2f",
+      "log_bytes": 360,
+      "historical": true
+    },
+    {
+      "name": "final-scoped-cpu-f32",
+      "command": [
+        "./bin/tests-inkling-final",
+        "test",
+        "--only",
+        "native Inkling : optional"
+      ],
+      "environment": {
+        "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+        "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix",
+        "MODEL_RUNNER_INKLING_ARITH": "f32",
+        "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+        "MODEL_RUNNER_INKLING_REPACK": "none"
+      },
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "result": "Passed all 834 tensors / 1352826 elements; maximum 5.34058e-5, RMS 3.88484663922370e-6, exact routing; unwatched pooled logits and sixteen-token independent greedy output also pass.",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-scoped-cpu-checkpoint.log",
+      "log_sha256": "a94c28709d93b7871f8790ef3ab8a8a76385a876157903d93173cc322592af2f",
+      "historical": false
+    },
+    {
+      "name": "final-full-aunit-vulkan",
+      "command": [
+        "./bin/tests",
+        "test",
+        "--timed"
+      ],
+      "environment": {
+        "MR_EXPECT_DEVICE": "1"
+      },
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "result": {
+        "total": 1027,
+        "successful": 1027,
+        "failed_assertions": 0,
+        "unexpected_errors": 0
+      },
+      "log": "artifacts/inkling2/obj/release/inkling2-final-full-suite.log",
+      "log_sha256": "a42be4f1b956cf5c3f877a01a1c9131781196c7d99c5b700f522516b3b661201",
+      "durable_root_state_files_restored": 277,
+      "restored_hashes_verified": true,
+      "historical": false
+    },
+    {
+      "name": "conformance",
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "command": [
+        "taskset",
+        "-c",
+        "0-15",
+        "./bin/tests-inkling-final",
+        "conformance",
+        "--arith",
+        "f32"
+      ],
+      "started_at": "2026-11-24T21:22:32.164691+00:00",
+      "finished_at": "2026-11-24T21:51:28.748754+00:00",
+      "returncode": 0,
+      "result": "conformance: sequences 227688, logits compared 6056520, worst absolute 1.73819554385446E-04, worst relative 4.14812777523767E-01, rounded logits compared 510552, rounded worst absolute 3.16040618944414E-01, rounded worst relative 1.99884800440839E+00, cached logits compared 236848, cached worst absolute 2.65511191236011E-02, cached worst relative 1.98273081491582E+00, tiled logits compared 624536, tiled worst absolute 9.81579549905323E-02, tiled worst relative 1.99050021763666E+00, quantized logits compared 2160, quantized worst absolute 2.18175093729983E-01, quantized worst relative 1.92312577295959E+00, byte logits compared 423320, byte worst absolute 3.26659620511126E-01, byte worst relative 1.99611782818568E+00, nibble logits compared 238680, nibble worst absolute 2.90292333819480E-02, nibble worst relative 1.22329356129550E-02, mixed logits compared 47232, mixed worst absolute 3.03050851817588E-05, mixed worst relative 2.41367419233350E-02, outside tolerance 0, unlearned 0, refused 0, not applicable 11423, wanted 239111",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-release-conformance.log",
+      "log_sha256": "aae337fe3ab67dc5bee04bf76bb8e5f5ea6178c6d98089aa854dbf62a38a2e88",
+      "workers": 7,
+      "worker_cap": 8,
+      "complete_part_reports": 32,
+      "historical": false
+    },
+    {
+      "name": "fixture-check",
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "command": [
+        "taskset",
+        "-c",
+        "0-15",
+        "./bin/tests-inkling-final",
+        "fixture-check"
+      ],
+      "started_at": "2026-11-24T21:51:28.749341+00:00",
+      "finished_at": "2026-11-24T21:53:50.842384+00:00",
+      "returncode": 0,
+      "result": "fixtures: tensors moved 79875, unread 0, quiet 218, unwanted 0, declared 43, faint 10, refused 0",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-release-fixture-check.log",
+      "log_sha256": "6e22d54042556c12eb84d53539f9d10e430b73d9bc4765011c62faff8b998d7a",
+      "historical": false
+    },
+    {
+      "name": "fuzz",
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "command": [
+        "taskset",
+        "-c",
+        "0-15",
+        "./bin/tests-inkling-final",
+        "fuzz",
+        "--seed",
+        "1",
+        "--cases",
+        "200"
+      ],
+      "started_at": "2026-11-24T21:53:50.842881+00:00",
+      "finished_at": "2026-11-24T21:53:52.662481+00:00",
+      "returncode": 0,
+      "result": "text fuzz seed 1 cases 800: encoded 708, refused 92, escaped 0, undocumented 0, out of range 0, slow 0, worst 11 ms at case 420",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-release-fuzz.log",
+      "log_sha256": "17c3b15c78b5b52826170b7b645a08deed237256c9aa59a34709264ade0ad8a8",
+      "historical": false
+    },
+    {
+      "name": "final-no-adapter-regression",
+      "result": "Both seven-pair prompt/decode median gates pass <=1.05; all28outputs and frozenidentities match.",
+      "evidence": "docs/inkling2-no-adapter-evidence.json",
+      "source_manifest_sha256": "25843062821e3159bd6ece396a0b003edef979f15db9a458187057aaa735be9e",
+      "gates": [
+        {
+          "batch": 1,
+          "paired_median_prompt_ratio": 0.9993154630669746,
+          "paired_median_decode_ratio": 0.9974763211333971,
+          "limit": 1.05,
+          "pairs": [
+            {
+              "prompt_seconds": 1.0618129628964108,
+              "decode_seconds": 1.0371706220777361
+            },
+            {
+              "prompt_seconds": 0.9960221709379022,
+              "decode_seconds": 0.9974763211333971
+            },
+            {
+              "prompt_seconds": 0.9979607930725598,
+              "decode_seconds": 0.9968108958333007
+            },
+            {
+              "prompt_seconds": 0.9993154630669746,
+              "decode_seconds": 0.999967028656637
+            },
+            {
+              "prompt_seconds": 0.996752632134509,
+              "decode_seconds": 0.9931457537433956
+            },
+            {
+              "prompt_seconds": 1.0014964567025664,
+              "decode_seconds": 0.997104892449925
+            },
+            {
+              "prompt_seconds": 1.0006479876534127,
+              "decode_seconds": 1.0058344207038286
+            }
+          ],
+          "passed": true
+        },
+        {
+          "batch": 2,
+          "paired_median_prompt_ratio": 1.002031318644499,
+          "paired_median_decode_ratio": 0.9989577656179833,
+          "limit": 1.05,
+          "pairs": [
+            {
+              "prompt_seconds": 1.002031318644499,
+              "decode_seconds": 0.9970148978795328
+            },
+            {
+              "prompt_seconds": 0.9880420630939571,
+              "decode_seconds": 0.9989577656179833
+            },
+            {
+              "prompt_seconds": 1.003340719100994,
+              "decode_seconds": 0.9981915673805618
+            },
+            {
+              "prompt_seconds": 0.9999537944282499,
+              "decode_seconds": 1.007507649541924
+            },
+            {
+              "prompt_seconds": 1.0058091645065768,
+              "decode_seconds": 0.9996958625934336
+            },
+            {
+              "prompt_seconds": 1.0046512573064819,
+              "decode_seconds": 1.0273183176265646
+            },
+            {
+              "prompt_seconds": 0.9976659272373339,
+              "decode_seconds": 0.9967183310840065
+            }
+          ],
+          "passed": true
+        }
+      ],
+      "historical": false
+    },
+    {
+      "name": "native-cpu-five-run-baseline",
+      "result": "passed; five independent measured samples, exact output and checkpoint/source/binary identities verified",
+      "evidence": "docs/inkling2-native-benchmark-evidence.json",
+      "historical": false
+    },
+    {
+      "name": "post-measurement-repository-source-gate",
+      "command": [
+        "./bin/tests",
+        "check",
+        "--repository"
+      ],
+      "returncode": 0,
+      "log": "artifacts/inkling2/obj/release/inkling2-final-source-gate.log",
+      "log_sha256": "beb8c86f47c01508180911172aa56a5fe80ae8d08de30f2ccb391a3d65fd5cae",
+      "summary_tail": "repository checks\n  note: the pinned crate ada_quality compiled nothing in this tree, so nothing is said about its warnings\n  note: the pinned crate ssh_lib compiled nothing in this tree, so nothing is said about its warnings\n  checks 31512, failures 0\n  took: repository checks 231.330603000 s, 212.889999999 s of it the machine's\n  note: repository checks cost 212.889999999 s against a bound of 195.000000000 s, at a load of 1.24000000000000E+00; too busy for that to say anything about the stage, so it is not counted against it",
+      "historical": true
+    },
+    {
+      "name": "final-hybrid-four-gib-checkpoint",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/tmp/inkling2-final-hybrid-checkpoint-after-panels.time",
+        "./bin/tests",
+        "test",
+        "--only",
+        "native Inkling : optional"
+      ],
+      "environment": {
+        "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+        "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix",
+        "MODEL_RUNNER_INKLING_ARITH": "f32",
+        "MODEL_RUNNER_INKLING_REPACK": "none",
+        "MODEL_RUNNER_INKLING_BACKEND": "hybrid",
+        "MODEL_RUNNER_INKLING_CACHE": "f32"
+      },
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "returncode": 0,
+      "result": "Inkling Q4_K_M f32 reference:  834 tensors,  1352826 elements, max  5.34058E-05, RMS  3.84534517533277E-06, outside tolerance  0, worst loop_ffn_input-29\t element  2027, first routing mismatch \n\nOK native Inkling : optional independent Q4_K_M checkpoint reference\n\nTotal Tests Run:   1\nSuccessful Tests:  1\nFailed Assertions: 0\nUnexpected Errors: 0\nsuite: passed",
+      "log": "artifacts/inkling2/obj/release/inkling2-final-hybrid-checkpoint-after-panels.log",
+      "log_sha256": "2ed8da9698def4e4a0fc104d7c9f8b82eb6de0585c58f2da5a0979076cf27337",
+      "available_kib_at_start": 22648372,
+      "headroom_guard_gib": 20,
+      "shared_host_mode": false,
+      "historical": false
+    },
+    {
+      "name": "native-short-case-cpu-private-gpu",
+      "result": "All five samples per measured mode pass exact output and frozen identity checks. Every private-GPU process records actual device work. Shared-host mode was deferred before any sample.",
+      "evidence": "docs/inkling2-native-benchmark-evidence.json",
+      "interpretation_correction": "docs/inkling2-benchmark-interpretation.md",
+      "raw_evidence": "artifacts/inkling2/obj/native-forward/evidence.json",
+      "raw_evidence_sha256": "ae0cc9a0cee646cb33e33de26252a031ce165f42e3addb208a6c6c475f507dc8",
+      "historical": false
+    },
+    {
+      "name": "final-repository-source-gate",
+      "command": [
+        "./bin/tests",
+        "check",
+        "--repository"
+      ],
+      "returncode": 0,
+      "checks": 31513,
+      "failures": 0,
+      "log": "artifacts/inkling2/obj/release/inkling2-release-documentation-gate.log",
+      "log_sha256": "c953e2ab665b1d64a228efffb77de0eca357104c8bab707a3744b096a39a5395",
+      "historical": false,
+      "stage_timing": "Existing host-load policy reported the timing too busy to qualify; no stage-speed claim."
+    },
+    {
+      "name": "shared-host-checkpoint-extra-half-gib",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/tmp/inkling2-final-shared-device-checkpoint.time",
+        "./bin/tests",
+        "test",
+        "--only",
+        "native Inkling : optional"
+      ],
+      "environment": {
+        "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+        "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-hello",
+        "MODEL_RUNNER_INKLING_ARITH": "f32",
+        "MODEL_RUNNER_INKLING_REPACK": "none",
+        "MODEL_RUNNER_INKLING_BACKEND": "device",
+        "MODEL_RUNNER_INKLING_CACHE": "f32"
+      },
+      "binary_sha256": "4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7",
+      "returncode": 0,
+      "headroom_required_kib": 22544384,
+      "user_authorized_extra_gib": 0.5,
+      "result": "All834tensors/1352826values pass: max7.62939e-5,RMS4.35560900357909e-6,zerooutsideandexactrouting.",
+      "log": "artifacts/inkling2/obj/shared-memory-adjustment/inkling2-final-shared-device-checkpoint.log",
+      "log_sha256": "f4c0a09421ec1a720370d590cfa38f604d8673850aaa635b362c576e1ab577ff",
+      "historical": false
+    },
+    {
+      "name": "shared-host-five-sample-extra-half-gib",
+      "result": "Five exact-output samples and frozen source/binary/model checks passed; recorded device work and four output-head products including warmup in every process.",
+      "binary_sha256": "12207757e6846efec3d7c4e783899c203cc91b67713533a929352453d65584a6",
+      "source_manifest_sha256": "9709cd78da74ee76d1808e775a697b7c2bec604b7102922072749447ef497ffd",
+      "protocol": "docs/inkling2-shared-memory-protocol.md",
+      "evidence": "artifacts/inkling2/obj/native-forward-shared-speed-limits/evidence.json",
+      "evidence_sha256": "7a20e55c2b4effed2b1f3a14027cdb79d9ec85b57051b9b60c464cc0250376c0",
+      "historical": false
+    },
+    {
+      "name": "final-source-check-after-half-gib-and-benchmark-fix",
+      "command": [
+        "./bin/tests",
+        "check",
+        "--repository"
+      ],
+      "returncode": 0,
+      "checks": 31517,
+      "failures": 0,
+      "log": "artifacts/inkling2/obj/shared-memory-adjustment/inkling2-half-gib-final-source-check.log",
+      "log_sha256": "2bf3c23e4aa32e6a7108ec07eb71de4a7de99c4c7a7c87c2f1cafa41800dcc16",
+      "historical": false,
+      "stage_timing": "Existing busy-host policy exempts stage-time comparison; no stage-speed qualification claimed."
+    }
+  ],
+  "pending": [
+    "Expanded512/2K/8K/16K prefill,128-token decode and4K/8K/16K/32K memory benchmark matrix.",
+    "Thirty-task comparative Ada coding evaluation before any default-model adoption decision."
+  ],
+  "qualification_note": "Final source uses tests binary4dd06281557d3cca50176dd8bbda0b99f2aba6d46862fa4d979eb221a3b610c7. Historical checks retain their original outcomes. Existing release gates pass; shared-host requalification is resource-deferred and unsupported extensions remain unimplemented.",
+  "premeasurement_audit": {
+    "checks": 31509,
+    "failures": 1,
+    "failure": "stale no_adapter measurement fingerprint after packed-view activation metadata preservation",
+    "expected_fingerprint": "79AD9464DABA7C75",
+    "log": "artifacts/inkling2/obj/release/inkling2-final-premeasurement-source-gate.log",
+    "log_sha256": "3382cd46823d0ce1e8e41ad9573ca76f1faa5ca32b10fb8f859b319ce9d9908c",
+    "resolution": "Resolved by the passing28run matchedcampaign and normal tests restamp; final repository audit remains pending."
+  },
+  "conformance_execution_note": {
+    "workers": 2,
+    "initial_affinity": [
+      0,
+      1,
+      2
+    ],
+    "expanded_affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "record": "artifacts/inkling2/obj/release/inkling2-conformance-affinity-expansion.json"
+  },
+  "unsupported_extensions": [
+    "variable-loop research checkpoint",
+    "native image input"
+  ],
+  "unqualified_precision": "Integer activations on the full checkpoint; F32 activations with original Q4_K_M weights are the qualified profile.",
+  "benchmark_operation_count_correction": "The raw acquisition metadata assumed15decoder evaluations and sampling-only short-case decoding. Both assumptions are withdrawn. Corrected report uses16decoder evaluations for16generated tokens, and2network evaluations for the one-prompt/one-output case. Raw commands, timings, outputs and hashes are preserved.",
+  "benchmark_tool_memory_fix": {
+    "files": [
+      "tests/src/speed_run.adb",
+      "tests/src/tests-cli_cases.adb"
+    ],
+    "production_source_unchanged": true,
+    "behavior": "Explicit memory limit now reaches model preparation and raises its default16GiB single-allocation cap to the caller limit, matching nativeCLI behavior.",
+    "focused_tests": {
+      "run": 5,
+      "passed": 5,
+      "failed": 0,
+      "gpu_required": true,
+      "log": "artifacts/inkling2/obj/shared-memory-adjustment/inkling2-speed-limits-final-focused.log",
+      "log_sha256": "8f12402c5cfa725dff7d69e2666bb4db831ea6fa0d3ea9259e59267d190e0f27"
+    },
+    "failed_original_shared_timing": "artifacts/inkling2/obj/native-forward-shared/evidence.json",
+    "new_no_adapter_evidence": "docs/inkling2-no-adapter-evidence.json",
+    "current_measured_fingerprint": "7D1841622BFD2687",
+    "historical_panels_measurement": "docs/inkling2-no-adapter-panels-evidence.json"
+  },
+  "memory_allowance_adjustment": {
+    "user_authorized_extra_gib": 0.5,
+    "previous_required_free_gib": 22,
+    "required_free_gib": 21.5,
+    "protocol": "docs/inkling2-shared-memory-protocol.md",
+    "functional_shared_checkpoint": "passed",
+    "timing": "All five shared-host samples passed exact output and frozen identity checks after benchmark model-bound propagation fix."
+  },
+  "evidence_scope": "Pre-batching executable qualification at the recorded identities and collection time. Subsequent native batched-prefill qualification is recorded separately.",
+  "subsequent_qualification": "docs/inkling2-batched-prefill-evidence.json"
+}

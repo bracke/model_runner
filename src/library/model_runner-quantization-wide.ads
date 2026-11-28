@@ -1,15 +1,11 @@
---  The same decoders compiled for a wider instruction set.
+--  The shared decoders compiled for x86-64-v3.
 --
---  One source, two compilations: this unit differs from Plain only in the
---  switches the project file gives it, which are recorded there beside the
---  reason. Reached only for the four formats measured faster this way and
---  only where the host says it has the instructions, which
---  Model_Runner.Platform.Instructions answers.
---
---  Its switches turn off floating-point contraction, so the arithmetic is
---  the same operations in the same order as the baseline's and a decoded
---  block is the same bits either way. What is wanted from the wider set is
---  the per-lane shift and the gather, not a fused multiply-add.
+--  Reached only for formats selected by the existing dispatch and only when
+--  the host reports the required instructions. The shared scalar operations
+--  retain contraction-off compilation. Q4_K and Q5_K select native nibble
+--  kernels with exact fused subtraction for finite half scales and six-bit
+--  factors. Q6_K retains both binary32 multiplications; all three share
+--  their existing bounds and scale extraction.
 with Model_Runner.Quantization.Decoders;
 private package Model_Runner.Quantization.Wide is
-   new Model_Runner.Quantization.Decoders;
+   new Model_Runner.Quantization.Decoders (Vector_Q4_K => True, Vector_Q5_K => True, Vector_Q6_K => True);

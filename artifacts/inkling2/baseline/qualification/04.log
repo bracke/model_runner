@@ -1,0 +1,8 @@
+
+OK gguf container : integer products : GSQ small-block rows match independent reference, strides and bounds (in 0.004029 sec.)
+
+Total Tests Run:   1
+Successful Tests:  1
+Failed Assertions: 0
+Unexpected Errors: 0
+suite: passed

@@ -1,3 +1,6 @@
+with Ada.Finalization;
+with Ada.Environment_Variables;
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Platform;
 with Model_Runner.Byte_Sources.Files;
 with Model_Runner.Drafts;
@@ -179,6 +182,23 @@ package body Speed_Run is
    is
       use type Model_Runner.Backend.Backend_Kind;
 
+      type Width_Guard is new Ada.Finalization.Limited_Controlled with record
+         Active : Boolean := False;
+         Integer_Before, Float_Before : Long_Long_Integer := 0;
+      end record;
+      overriding procedure Finalize (Guard : in out Width_Guard);
+      overriding procedure Finalize (Guard : in out Width_Guard) is
+      begin
+         if Guard.Active then
+            IO.Put_Line (IO.Standard_Error, "integer width256: integer shares"
+              & Long_Long_Integer'Image (CPU.Integer_Shares - Guard.Integer_Before)
+              & ", float fallback shares" & Long_Long_Integer'Image (CPU.Float_Shares - Guard.Float_Before));
+            Model_Runner.Quantization.Integers.Use_Deep_Rows (Model_Runner.Platform.Byte_Products);
+            Model_Runner.Quantization.Integers.Use_Wide_Rows (Model_Runner.Platform.Wide_Vectors);
+         end if;
+      end Finalize;
+      Width : Width_Guard;
+      pragma Unreferenced (Width);
       --  A phase name in a fixed width, so the seconds line up.
       function Pad (Text : String) return String
       is (if Text'Length >= 14 then Text (Text'First .. Text'First + 13)
@@ -195,7 +215,7 @@ package body Speed_Run is
 
       Source    : Shards.Shard_Set;
       Container : Containers.Container;
-      Engine    : L.Model;
+      Engine    : aliased L.Model;
       Status    : E.Error_Info;
 
       --  The draft, when one was named. Loaded exactly as the model is.
@@ -345,6 +365,18 @@ package body Speed_Run is
          Bounds : constant Model_Runner.Limits.Session_Limits :=
            Model_Runner.CLI.Execute.Unasked_Session_Bounds (Memory_Limit);
 
+         --  As run's model bounds: an explicit host limit also permits a
+         --  single shared-weight arena larger than the default 16 GiB cap.
+         Preparation_Limits : constant Model_Runner.Limits.Model_Limits :=
+           (if Memory_Limit = 0
+            then Model_Runner.Limits.Default_Model_Limits
+            else
+              (Model_Runner.Limits.Default_Model_Limits with delta
+                 Max_Model_Bytes => Memory_Limit,
+                 Max_Allocation_Bytes => Interfaces.Unsigned_64'Max
+                   (Model_Runner.Limits.Default_Model_Limits.Max_Allocation_Bytes,
+                    Memory_Limit)));
+
          Shared_Session : aliased L.Session;
          Shared_Draft   : aliased L.Session;
 
@@ -391,7 +423,8 @@ package body Speed_Run is
          --  As run prepares it: its paging and panel cache, and refused
          --  for a budget it does not fit unless a budget was named.
          L.Prepare
-           (Engine, Container, Source, Repack => Repack, Backend => Backend,
+           (Engine, Container, Source, Bounds => Preparation_Limits,
+            Repack => Repack, Backend => Backend,
             Threads => Threads, Status => Status, Context => Context,
             Cache => Cache, Paged => Paged,
             Fit_Required => not Device_Named,
@@ -515,7 +548,11 @@ package body Speed_Run is
             --  context, cache and paging its session will hold.
             L.Prepare
               (Draft_Engine, Draft_Container, Draft_Source,
-               Repack => Repack, Backend => Backend,
+               Repack => (if Containers.String_Value (Draft_Container, "general.architecture") = "dflash"
+                          then L.No_Repack else Repack),
+               Backend => (if Containers.String_Value (Draft_Container, "general.architecture") = "dflash"
+                           then Model_Runner.Backend.Backend_CPU else Backend),
+               Target => Engine'Unchecked_Access,
                Threads => Threads, Status => Status,
                Context => Context, Cache => Cache, Paged => Paged,
                Fit_Required => not Device_Named,
@@ -571,6 +608,14 @@ package body Speed_Run is
 
             Watch : Device_Clock.Watcher;
          begin
+            if Ada.Environment_Variables.Value ("MODEL_RUNNER_INKLING_INTEGER_WIDTH", "512") = "256" then
+               if Backend /= Model_Runner.Backend.Backend_CPU or else Arithmetic /= "int8"
+                 or else not Model_Runner.Platform.Wide_Vectors or else Repack /= L.No_Repack
+               then Say ("width256 requires CPU int8 row-major execution"); CPU.Close (Team); return; end if;
+               Width.Active := True; Width.Integer_Before := CPU.Integer_Shares; Width.Float_Before := CPU.Float_Shares;
+               Model_Runner.Quantization.Integers.Use_Wide_Rows (True);
+               Model_Runner.Quantization.Integers.Use_Deep_Rows (False);
+            end if;
             Watch.Start (Watching);
 
             --  Held until a pass is actually running, so that what the
@@ -634,7 +679,8 @@ package body Speed_Run is
                      --  three submissions a layer where the command makes
                      --  one, and the tool measured drafting short.
                      L.Open (Draft_Session, Draft_Engine, Context => Context,
-                             Workers => Where, Cache => Cache,
+                             Workers => Where,
+                             Cache => (if L."=" (L.Config (Draft_Engine).Kind, L.DFlash) then L.Exact else Cache),
                              Status => Local, Paged => Paged,
                              Session_Bounds => Bounds);
                      exit when E.Is_Error (Local);
@@ -678,7 +724,8 @@ package body Speed_Run is
                        Draft_Policy.Decide
                          (Engine, Session, Asked,
                           Draft_Ready  => Drafting,
-                          Auto_Drafted => Drafting and then Draft = "");
+                          Auto_Drafted => Drafting and then Draft = "",
+                          Feature_Draft => Drafting and then L."=" (L.Config (Draft_Engine).Kind, L.DFlash));
                   begin
                      Request.Draft_Tokens := Plan.Tokens;
                      Request.Draft_From_Context := Plan.From_Context;
@@ -758,6 +805,18 @@ package body Speed_Run is
                            (Model_Runner.Clocks.Nanoseconds_Per_Second));
 
                   Result.Digest := Shown (Sink.Hash);
+                  if L."=" (L.Config (Engine).Kind, L.Inkling2_Loop) then
+                     declare
+                        Stats : constant L.Expert_Cache_Statistics := L.Expert_Cache_Stats (Session);
+                     begin
+                        IO.Put_Line (IO.Standard_Error, "Inkling work plans: hits" & Stats.Work_Plan_Hits'Image
+                          & ", misses" & Stats.Work_Plan_Misses'Image & "; metadata bytes" & Stats.Metadata_Bytes'Image
+                          & ", largest layer" & Stats.Largest_Metadata_Layer'Image
+                          & "; batched GPU reductions" & Stats.Batched_Device_Aggregations'Image
+                          & "; GPU packing reuses" & Model_Runner.Backend.Device.Reference_Packing_Reuses'Image);
+                     end;
+                  end if;
+
 
                   --  A run that did not finish is not a figure. This
                   --  reported the wall time of a failure as though it were
@@ -925,15 +984,14 @@ package body Speed_Run is
             Model_Runner.Backend.Device.Keep_Timeline (False);
          end if;
 
-         L.Close (Engine, Status);
-         Containers.Close (Container);
-         Shards.Close (Source);
-
          if Drafting then
             L.Close (Draft_Engine, Status);
             Containers.Close (Draft_Container);
             Shards.Close (Draft_Source);
          end if;
+         L.Close (Engine, Status);
+         Containers.Close (Container);
+         Shards.Close (Source);
       end;
 
       Result.Load_After := Host_Load.Now;

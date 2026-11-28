@@ -1,0 +1,207 @@
+{
+  "schema": "model_runner.inkling2.v3_evidence.v1",
+  "status": "passed: completed through normal native V3 verification",
+  "project": "tests/obj/framework-fixtures/inkling-native-work",
+  "operation_id": "inkling-native-ada-proof-0002",
+  "invocation": "INV-000002",
+  "agent": "AG-000002",
+  "model_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+  "native_executable_sha256": "95310892989035550ce4de5785c76f67b37a7cef112325e028b46b711a7ee85e",
+  "configuration_sha256": "32cbed77f6d6cbb849fd1985d977b3ffd0c1e5c5f078ec89c275ebff50db6853",
+  "configuration": "# Explicit native CPU acceptance profile; original quantized GGUF stays mapped.\nbackend = cpu\nthreads = 8\narith = f32\nkv-cache = f32\nrepack = none\nmemory-limit = 24G\nseed = 1\ntemperature = 0\nno-think = true\nmax-tokens = 512\nmax-total-tokens = 4096\nno-cache = true\n",
+  "initial_acceptance": {
+    "purpose": "Independently establish that the original Ada acceptance check detects the original subtraction defect. The live V3 task files are untouched.",
+    "command": [
+      "sh",
+      "check.sh"
+    ],
+    "working_directory": "/tmp/inkling2-initial-acceptance",
+    "returncode": 1,
+    "stdout": "",
+    "stderr": "\nraised PROGRAM_ERROR : addition failed\n",
+    "initial_main_sha256": "f4866933e88a6b1c96c60ce83f340973c0f64379786ee6ff9728d35204e23d27",
+    "check_sha256": "f75032c002c70969d053c658b8d3bd3e772d976bbe02665004f3e8658823721c"
+  },
+  "observed_model_edit": {
+    "status": "model edit independently passes; native harness invocation still in progress",
+    "observed_at": "2026-11-24T19:46:44.477942+00:00",
+    "command": [
+      "sh",
+      "check.sh"
+    ],
+    "working_directory": "/tmp/inkling2-model-edit-acceptance",
+    "source_sha256": "50c40b098d097132db60d5ec33bfd964e84388d4e40ff6a804f04607afeb5773",
+    "initial_source_sha256": "f4866933e88a6b1c96c60ce83f340973c0f64379786ee6ff9728d35204e23d27",
+    "check_sha256": "f75032c002c70969d053c658b8d3bd3e772d976bbe02665004f3e8658823721c",
+    "only_change": "Left - Right -> Left + Right",
+    "acceptance_checks_unchanged": true,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "scope": "Normal existing V3 task, native model invocation, ordinary tool schemas/permissions, source-only write scope and unchanged Ada acceptance checks. No scripted model supplies this edit.",
+  "evidence_files": [
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/request.json",
+      "sha256": "1fea18e02a2e71f386cb918dc75d2c29ff2bb4f051ddabf8b087f714bd011957"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/initial-main.adb",
+      "sha256": "f4866933e88a6b1c96c60ce83f340973c0f64379786ee6ff9728d35204e23d27"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/initial-check.sh",
+      "sha256": "f75032c002c70969d053c658b8d3bd3e772d976bbe02665004f3e8658823721c"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/observed-model-edit.adb",
+      "sha256": "50c40b098d097132db60d5ec33bfd964e84388d4e40ff6a804f04607afeb5773"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/observed-model-edit-check.json",
+      "sha256": "55c53723d63698adebee18af8c95036f94493cfdf65dc1e0f5a4d95c13e0e4da"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/INV-000001.rec",
+      "sha256": "d485bc41f80beb32f54d6238e59253eed4242605c13e1d9344060999f82cd071"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/INV-000002.rec",
+      "sha256": "aee4233ad5cca7ef6fdb12761bba0147af10c31be8485eb19c02d814d9818ae1"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/VER-000001.rec",
+      "sha256": "fc8afcca5f1a85fd7effc7bc54239788db5e424688df437b832d4b99d17ac75f"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/TASK-001.state.rec",
+      "sha256": "053732876eefde6b996690572a213aaffa472829e0f0cdde49ae86fdf3c4e06a"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/execution.jsonl",
+      "sha256": "f693e25591ace2e5947d8a1a348585465bc12d8a88b6865839596b5af26eb07d"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/final-main.adb",
+      "sha256": "50c40b098d097132db60d5ec33bfd964e84388d4e40ff6a804f04607afeb5773"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/final-independent-check.json",
+      "sha256": "ea9d14071e3d606604306fd7937ec2b9f5337197f3ade2bdecd895bfef861f32"
+    },
+    {
+      "file": "artifacts/inkling2/obj/v3-proof/idempotent-replay.json",
+      "sha256": "07ebf2670f1b8eba96081f583613a58c9b05f1fd307868576e576cd04e070689"
+    }
+  ],
+  "response": {
+    "schema_version": 1,
+    "kind": "work-operation",
+    "operation_id": "inkling-native-ada-proof-0002",
+    "project_identity": "PROJECT-B19EB2A3B164DFED",
+    "source_fingerprint": "a39e5c338f9c8156",
+    "task_id": "TASK-001",
+    "task_revision": "375a7493dd305773",
+    "effective_task_revision": "1c748a53e8772497",
+    "execution_policy": "a6a0c0607b89c9d3",
+    "execution_generation": "2",
+    "execution_state": "completed",
+    "native_task_state": "complete",
+    "core_state": "complete",
+    "ready": false,
+    "readiness_reasons": [
+      "it is complete already"
+    ],
+    "workspace_id": "",
+    "workspace_state": "integrated",
+    "result": "success",
+    "diagnostics": [],
+    "audit_reference": "INV-000002"
+  },
+  "verification": "VER-000001",
+  "normal_file_tool_calls": [
+    "read_file",
+    "edit_file"
+  ],
+  "verification_dispatch": "The headless profile exposes file tools; the parent harness automatically ran its configured required Ada check after the native completion report.",
+  "elapsed_invocation_seconds": 6356,
+  "generated_tokens": 258,
+  "maximum_prompt_tokens": 1893,
+  "prompt_read_tokens": 1891,
+  "prompt_reused_tokens": 3231,
+  "prompt_cache_hit_percent": 63,
+  "performance_limit": "Logical prefix reuse currently replays native Inkling state; the reuse percentage does not imply avoided inference work. This task demonstrates correctness, not competitive coding latency.",
+  "recovery": "INV-000001 failed during the earlier GPU attempt; the ordinary blocked-to-accepted retry completed as INV-000002, generation 2.",
+  "final_independent_check": {
+    "command": [
+      "sh",
+      "check.sh"
+    ],
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "",
+    "source_sha256": "50c40b098d097132db60d5ec33bfd964e84388d4e40ff6a804f04607afeb5773",
+    "check_sha256": "f75032c002c70969d053c658b8d3bd3e772d976bbe02665004f3e8658823721c",
+    "scope_exact": true
+  },
+  "idempotent_replay": {
+    "command": [
+      "./bin/model_runner",
+      "work",
+      "execute",
+      "--project",
+      "/home/bent/Projekte/Ada/model_runner/tests/obj/framework-fixtures/inkling-native-work",
+      "--task",
+      "TASK-001",
+      "--operation-id",
+      "inkling-native-ada-proof-0002",
+      "--expected-task-revision",
+      "375a7493dd305773",
+      "--expected-project-identity",
+      "PROJECT-B19EB2A3B164DFED",
+      "--expected-source-fingerprint",
+      "9f611e127534a90d",
+      "--execution-policy",
+      "a6a0c0607b89c9d3",
+      "--timeout-seconds",
+      "7200",
+      "--noninteractive",
+      "--format",
+      "json"
+    ],
+    "returncode": 0,
+    "response": {
+      "schema_version": 1,
+      "kind": "work-operation",
+      "operation_id": "inkling-native-ada-proof-0002",
+      "project_identity": "PROJECT-B19EB2A3B164DFED",
+      "source_fingerprint": "a39e5c338f9c8156",
+      "task_id": "TASK-001",
+      "task_revision": "375a7493dd305773",
+      "effective_task_revision": "1c748a53e8772497",
+      "execution_policy": "a6a0c0607b89c9d3",
+      "execution_generation": "2",
+      "execution_state": "completed",
+      "native_task_state": "complete",
+      "core_state": "complete",
+      "ready": false,
+      "readiness_reasons": [
+        "it is complete already"
+      ],
+      "workspace_id": "",
+      "workspace_state": "integrated",
+      "result": "success",
+      "diagnostics": [],
+      "audit_reference": "INV-000002"
+    },
+    "invocation_records_before": {
+      "INV-000002.rec": "aee4233ad5cca7ef6fdb12761bba0147af10c31be8485eb19c02d814d9818ae1",
+      "INV-000001.rec": "d485bc41f80beb32f54d6238e59253eed4242605c13e1d9344060999f82cd071"
+    },
+    "invocation_records_after": {
+      "INV-000002.rec": "aee4233ad5cca7ef6fdb12761bba0147af10c31be8485eb19c02d814d9818ae1",
+      "INV-000001.rec": "d485bc41f80beb32f54d6238e59253eed4242605c13e1d9344060999f82cd071"
+    },
+    "no_new_invocation": true
+  }
+}

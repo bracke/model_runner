@@ -8,6 +8,8 @@ package body Model_Runner.Platform.X86_Features is
 
    function Byte_Products return Boolean is (False);
 
+   function Brain_Products return Boolean is (False);
+
 begin
    raise Program_Error with
      "model_runner requires x86_64; shared inference kernels still contain "

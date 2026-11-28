@@ -1,0 +1,48 @@
+--- /dev/null
++++ inkling-dspark-make-tiny.py
+@@ -0,0 +1,45 @@
++import struct,json,math,hashlib
++from pathlib import Path
++out=Path('/tmp/inkling-dspark-tiny');out.mkdir(exist_ok=True)
++H,D,Q,KV,F,V,R=32,16,2,1,64,16,4
++meta={'general.architecture':'dflash','dflash.block_count':3,'dflash.context_length':2048,'dflash.embedding_length':H,'dflash.feed_forward_length':F,'dflash.attention.head_count':Q,'dflash.attention.head_count_kv':KV,'dflash.attention.key_length':D,'dflash.attention.value_length':D,'dflash.rope.dimension_count':D,'dflash.rope.freq_base':1000000.0,'dflash.attention.layer_norm_rms_epsilon':1e-6,'dflash.attention.sliding_window':1025,'dflash.attention.sliding_window_pattern':[True,False,True],'dflash.final_logit_softcapping':30.0,'dflash.block_size':8,'dflash.target_layers':[5,23,41,48],'dflash.sample_from_anchor':False,'dflash.has_confidence_head':False,'dflash.has_markov_context':True,'tokenizer.ggml.model':'llama','tokenizer.ggml.bos_token_id':1,'tokenizer.ggml.eos_token_id':2,'tokenizer.ggml.unknown_token_id':0,'tokenizer.ggml.add_bos_token':False,'tokenizer.ggml.tokens':['<unk>','<s>','</s>']+[chr(97+i)for i in range(13)],'tokenizer.ggml.scores':[0.0]*V,'tokenizer.ggml.token_type':[2,3,3]+[1]*13}
++def st(s):b=s.encode();return struct.pack('<Q',len(b))+b
++def typ(x):return 7 if isinstance(x,bool) else 8 if isinstance(x,str) else 6 if isinstance(x,float) else 9 if isinstance(x,list) else 4
++def val(x):
++ t=typ(x)
++ if t==8:return st(x)
++ if t==9:return struct.pack('<IQ',5 if typ(x[0])==4 else typ(x[0]),len(x))+b''.join(val(v)for v in x)
++ return struct.pack({7:'<?',6:'<f',4:'<I'}[t],x)
++tensors=[];data=bytearray();seed=0
++# Use exactly representable quantized test weights. The converter is independent of native Fixtures.
++def weight(name,cols,rows=1,fmt=8):
++ global seed
++ seed+=1
++ dims=[cols]+([rows]if rows>1 else [])
++ values=[math.sin((i+1)*0.173+seed*0.197)*0.12 for i in range(cols*rows)]
++ if 'norm.weight' in name:values=[1+v for v in values]
++ if 'mix.weight' in name:values=[0.1,0.2,0.3,0.4]
++ if fmt==0:payload=struct.pack('<%df'%len(values),*values)
++ elif fmt==30:
++  payload=b''.join(struct.pack('<H',struct.unpack('<I',struct.pack('<f',v))[0]>>16)for v in values)
++ elif fmt==8:
++  assert cols%32==0
++  payload=b''
++  for start in range(0,len(values),32):
++   b=values[start:start+32];scale=max(map(abs,b))/127
++   d=struct.unpack('<e',struct.pack('<e',scale))[0]
++   payload+=struct.pack('<e',d)+bytes((int(round(v/scale))&255)for v in b)
++ while len(data)%32:data.append(0)
++ tensors.append((name,dims,fmt,len(data)));data.extend(payload)
++for args in [('mask_embd.weight',H,7,0),('token_embd_norm.weight',H,1,0),('output_norm.weight',H,1,0),('markov_w1.weight',R,V,30),('markov_w2.weight',R,V,30),('markov_w2.bias',V,1,0),('joint_proj.weight',2*H+2*R,3*R,30),('joint_proj.bias',3*R,1,0),('markov_ctx_mix.weight',4,1,0),('markov_ctx_norm.weight',H,1,0)]:weight(*args)
++for l in range(3):
++ for n,c,rows,fmt in [('attn_norm',H,1,0),('ffn_norm',H,1,0),('attn_q_norm',D,1,0),('attn_k_norm',D,1,0),('attn_q',H,Q*D,8),('attn_k',H,KV*D,8),('attn_v',H,KV*D,8),('attn_output',Q*D,H,8),('ffn_gate',H,F,8),('ffn_up',H,F,8),('ffn_down',F,H,8),('ctx_mix',4,1,0),('ctx_norm',H,1,0),('attn_k_ctx',H,KV*D,8),('attn_v_ctx',H,KV*D,8),('attn_k_ctx_norm',D,1,0)]:
++  # Q8_0 columns must be multiples of32, so widen synthetic head geometry below.
++  weight(f'blk.{l}.{n}.weight',c,rows,fmt)
++header=b'GGUF'+struct.pack('<IQQ',3,len(tensors),len(meta))
++for k,v in meta.items():header+=st(k)+struct.pack('<I',typ(v))+val(v)
++for name,dims,fmt,offset in tensors:header+=st(name)+struct.pack('<I',len(dims))+struct.pack('<%dQ'%len(dims),*dims)+struct.pack('<IQ',fmt,offset)
++header+=bytes((-len(header))%32)
++path=out/'tiny-dspark.gguf';path.write_bytes(header+data)
++(out/'features.f32').write_bytes(struct.pack('<%df'%(3*4*H),*[math.cos(i*0.067)*0.3 for i in range(3*4*H)]))
++print(path,len(header+data),hashlib.sha256(path.read_bytes()).hexdigest())

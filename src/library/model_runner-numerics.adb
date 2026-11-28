@@ -217,9 +217,10 @@ package body Model_Runner.Numerics is
                     or Interfaces.Unsigned_16 (Truncated));
             end;
 
-         elsif Unbiased >= -24 then
-            --  Subnormal in binary16. Reinstate the implicit leading bit and
-            --  shift it down into the subnormal field, rounding to nearest.
+         elsif Unbiased >= -25 then
+            --  Include the interval between zero and the smallest subnormal:
+            --  values above its midpoint round up, while the tie rounds to
+            --  even zero. Reinstate the leading bit before rounding.
             declare
                Full  : constant Interfaces.Unsigned_32 :=
                  Mantissa or 16#0080_0000#;

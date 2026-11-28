@@ -1,0 +1,40 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -428,7 +428,7 @@
+ // Test-only precision contract: retain GGUF weight decoding and the model
+ // graph, but avoid the CPU backend's implicit Q8 activation conversion.
+ // No model_runner inference code links or calls this reference binary.
+-#define INKLING_FLOAT_DOT(NAME, DECODE) \
++#define INKLING_FLOAT_DOT(NAME, DECODE, ENCODE) \
+     static void inkling_float_dot_##NAME(int n, float * s, size_t bs, const void * vx, size_t bx, \
+                                          const void * vy, size_t by, int nrc) { \
+         GGML_ASSERT(nrc == 1); \
+@@ -441,20 +441,22 @@
+         *s = (float)sum; \
+     } \
+     static const struct ggml_type_traits_cpu inkling_traits_##NAME = { \
+-        .vec_dot = inkling_float_dot_##NAME, .vec_dot_type = GGML_TYPE_F32, .nrows = 1 \
++        .from_float = ENCODE, .vec_dot = inkling_float_dot_##NAME, .vec_dot_type = GGML_TYPE_F32, .nrows = 1 \
+     };
+ 
+-INKLING_FLOAT_DOT(q8_0, dequantize_row_q8_0)
+-INKLING_FLOAT_DOT(q5_0, dequantize_row_q5_0)
+-INKLING_FLOAT_DOT(q4_k, dequantize_row_q4_K)
+-INKLING_FLOAT_DOT(q5_k, dequantize_row_q5_K)
+-INKLING_FLOAT_DOT(q6_k, dequantize_row_q6_K)
++INKLING_FLOAT_DOT(q8_0, dequantize_row_q8_0, NULL)
++INKLING_FLOAT_DOT(q5_0, dequantize_row_q5_0, NULL)
++INKLING_FLOAT_DOT(q4_k, dequantize_row_q4_K, NULL)
++INKLING_FLOAT_DOT(q5_k, dequantize_row_q5_K, NULL)
++INKLING_FLOAT_DOT(q6_k, dequantize_row_q6_K, NULL)
++INKLING_FLOAT_DOT(f16, ggml_fp16_to_fp32_row, (ggml_from_float_t)ggml_fp32_to_fp16_row)
+ 
+ const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
+     const char * floating = getenv("INKLING_F32_ACTIVATIONS");
+     if (floating) {
+         GGML_ASSERT(strcmp(floating, "1") == 0);
+         switch (type) {
++            case GGML_TYPE_F16: return &inkling_traits_f16;
+             case GGML_TYPE_Q8_0: return &inkling_traits_q8_0;
+             case GGML_TYPE_Q5_0: return &inkling_traits_q5_0;
+             case GGML_TYPE_Q4_K: return &inkling_traits_q4_k;

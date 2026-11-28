@@ -16,9 +16,3296 @@ package body Model_Runner.Quantization.Integers.Kernels is
    use type Interfaces.Unsigned_8;
    use type B.Byte_Count;
    use type G.Tensor_Type;
-   use type N.Real;
    use type N.Wide_Real;
    use type Interfaces.Unsigned_32;
+
+   procedure Reference_Coefficients
+     (Format : G.Tensor_Type; Data : B.Byte_Array; Offset : B.Byte_Count;
+      Into : out B.Byte_Array; Ok : out Boolean)
+   is
+      LF : constant Character := ASCII.LF;
+   begin
+      Ok := False;
+      if Format not in G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K or else Into'Length < 16
+        or else not B.Has_Room (Data, Offset, B.Byte_Count (G.Block_Bytes (Format)))
+      then return; end if;
+      if Format = G.Type_Q6_K then
+         Into (Into'First .. Into'First + 15) := Data (Data'First + Offset + 192 .. Data'First + Offset + 207);
+      elsif Deep then
+         System.Machine_Code.Asm
+           ("movq %0, %%r8" & LF
+            & "movq %1, %%r9" & LF
+            & "vmovq 4(%%r8), %%xmm0" & LF
+            & "vmovd 12(%%r8), %%xmm1" & LF
+            & "movl $0x3f3f3f3f, %%eax" & LF
+            & "vmovd %%eax, %%xmm5" & LF
+            & "vpand %%xmm5, %%xmm0, %%xmm2" & LF
+            & "vpsrldq $4, %%xmm0, %%xmm3" & LF
+            & "vpand %%xmm5, %%xmm3, %%xmm4" & LF
+            & "movl $0x0f0f0f0f, %%eax" & LF
+            & "vmovd %%eax, %%xmm5" & LF
+            & "vpand %%xmm5, %%xmm1, %%xmm6" & LF
+            & "vpsrlw $4, %%xmm1, %%xmm7" & LF
+            & "vpand %%xmm5, %%xmm7, %%xmm7" & LF
+            & "movl $0x03030303, %%eax" & LF
+            & "vmovd %%eax, %%xmm5" & LF
+            & "vpsrlw $6, %%xmm0, %%xmm0" & LF
+            & "vpand %%xmm5, %%xmm0, %%xmm0" & LF
+            & "vpsllw $4, %%xmm0, %%xmm0" & LF
+            & "vpor %%xmm0, %%xmm6, %%xmm6" & LF
+            & "vpsrlw $6, %%xmm3, %%xmm3" & LF
+            & "vpand %%xmm5, %%xmm3, %%xmm3" & LF
+            & "vpsllw $4, %%xmm3, %%xmm3" & LF
+            & "vpor %%xmm3, %%xmm7, %%xmm7" & LF
+            & "vpunpckldq %%xmm6, %%xmm2, %%xmm2" & LF
+            & "vpunpckldq %%xmm7, %%xmm4, %%xmm4" & LF
+            & "vpunpcklqdq %%xmm4, %%xmm2, %%xmm2" & LF
+            & "vmovdqu %%xmm2, (%%r9)" & LF
+            & "vzeroupper",
+            Inputs => [System.Address'Asm_Input ("r", Data (Data'First + Offset)'Address),
+                       System.Address'Asm_Input ("r", Into (Into'First)'Address)],
+            Clobber => "rax,r8,r9,xmm0,xmm1,xmm2,xmm3,xmm4,xmm5,xmm6,xmm7,cc,memory", Volatile => True);
+      else
+         for Group in B.Byte_Count range 0 .. 7 loop
+            if Group < 4 then
+               Into (Into'First + Group) := Data (Data'First + Offset + 4 + Group) and 63;
+               Into (Into'First + 8 + Group) := Data (Data'First + Offset + 8 + Group) and 63;
+            else
+               Into (Into'First + Group) := (Data (Data'First + Offset + 8 + Group) and 15)
+                 or Interfaces.Shift_Left (Interfaces.Shift_Right (Data (Data'First + Offset + Group), 6), 4);
+               Into (Into'First + 8 + Group) := Interfaces.Shift_Right (Data (Data'First + Offset + 8 + Group), 4)
+                 or Interfaces.Shift_Left (Interfaces.Shift_Right (Data (Data'First + Offset + 4 + Group), 6), 4);
+            end if;
+         end loop;
+      end if;
+      Ok := True;
+   end Reference_Coefficients;
+
+   --  Native one-to-four-vector products decode weight codes only in
+   --  registers. Only the compact immutable coefficients are staged.
+   procedure Reference_Stream
+     (Format : G.Tensor_Type; Data : B.Byte_Array; Offset, Row_Bytes : B.Byte_Count;
+      Rows, Blocks : Element_Count; Values : Signed_Array; Scales : N.Real_Array;
+      Totals, Halves : Sum_Array; First, Stride, Count : Element_Count;
+      Sums : in out N.Wide_Real_Array; Ok : out Boolean; Metadata : N.Real_Array)
+   is
+      Groups : constant Element_Count := (if Format in G.Type_Q8_0 | G.Type_Q5_0 then 1 else 8);
+      Fields : constant Element_Count := (if Format = G.Type_Q6_K then 5 else 6);
+      Native : constant B.Byte_Count := B.Byte_Count (G.Block_Bytes (Format));
+      Coefficients : B.Byte_Array (0 .. B.Byte_Count (Blocks * 16) - 1);
+      Answer : N.Wide_Real_Array (0 .. Rows * Count - 1);
+      Acc : N.Real_Array (0 .. 63);
+      type Addresses is array (Element_Count range 0 .. Count - 1) of System.Address;
+      Inputs, Scaling, Totalling : Addresses;
+      type Stream_Arguments is record
+         Weight, Coefficients, Inputs, Scales, Totals, Output : System.Address;
+         Blocks : Element_Count;
+         Metadata, Map, Bits : System.Address;
+      end record;
+      for Stream_Arguments use record
+         Weight at 0 range 0 .. 63;
+         Coefficients at 8 range 0 .. 63;
+         Inputs at 16 range 0 .. 63;
+         Scales at 24 range 0 .. 63;
+         Totals at 32 range 0 .. 63;
+         Output at 40 range 0 .. 63;
+         Blocks at 48 range 0 .. 63;
+         Metadata at 56 range 0 .. 63;
+         Map at 64 range 0 .. 63;
+         Bits at 72 range 0 .. 63;
+      end record;
+      Arguments : aliased Stream_Arguments;
+      Argument_Pointer : aliased constant System.Address := Arguments'Address;
+      Map : constant B.Byte_Array (0 .. 31) :=
+        [0 .. 7 => 0, 8 .. 15 => 1, 16 .. 23 => 2, 24 .. 31 => 3];
+      Bits : constant B.Byte_Array (0 .. 31) :=
+        [1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128,
+         1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128];
+      LF : constant Character := ASCII.LF;
+      V, Step : Element_Count;
+      Good : Boolean;
+   begin
+      Ok := False;
+      if not Deep or else Rows = 0 or else Blocks = 0 or else Count = 0
+        or else First mod (Groups * 32) /= 0
+        or else (Count > 1 and then Stride mod (Groups * 32) /= 0)
+        or else Sums'Length < Rows * Count
+        or else Values'Length < First + (Count - 1) * Stride + Blocks * Groups * 32
+        or else Scales'Length < (First + (Count - 1) * Stride) / 32 + Blocks * Groups
+        or else (Groups = 8 and then Totals'Length < (First + (Count - 1) * Stride) / 32 + Blocks * 8)
+        or else (Format = G.Type_Q6_K
+                 and then Halves'Length < (First + (Count - 1) * Stride) / 16 + Blocks * 16)
+        or else not B.Has_Room (Data, Offset, B.Byte_Count (Rows - 1) * Row_Bytes + B.Byte_Count (Blocks) * Native)
+      then return; end if;
+      for Index in Inputs'Range loop
+         declare
+            Position : constant Element_Count := First + Index * Stride;
+         begin
+            Inputs (Index) := Values (Values'First + Position)'Address;
+            Scaling (Index) := Scales (Scales'First + Position / 32)'Address;
+            Totalling (Index) := (if Format = G.Type_Q6_K then Halves (Halves'First + Position / 16)'Address
+              elsif Groups = 8 then Totals (Totals'First + Position / 32)'Address else System.Null_Address);
+         end;
+      end loop;
+      for Row in 0 .. Rows - 1 loop
+         if Groups = 8 then
+            for Block in 0 .. Blocks - 1 loop
+               if Metadata'Length = Rows * Blocks * Fields then
+                  declare
+                     Raw : B.Byte_Array (0 .. 15) with Import,
+                       Address => Metadata (Metadata'First + (Row * Blocks + Block) * Fields
+                                  + (if Format = G.Type_Q6_K then 1 else 2))'Address;
+                  begin Coefficients (B.Byte_Count (Block * 16) .. B.Byte_Count (Block * 16 + 15)) := Raw; end;
+               else
+                  Reference_Coefficients
+                    (Format, Data, Offset + B.Byte_Count (Row) * Row_Bytes + B.Byte_Count (Block) * Native,
+                     Coefficients (B.Byte_Count (Block * 16) .. B.Byte_Count (Block * 16 + 15)), Good);
+                  if not Good then return; end if;
+               end if;
+            end loop;
+         end if;
+         V := 0;
+         while V < Count loop
+            Step := (if Count - V >= 4 then 4 elsif Count - V >= 2 then 2 else 1);
+            Arguments :=
+              (Weight => Data (Data'First + Offset + B.Byte_Count (Row) * Row_Bytes)'Address,
+               Coefficients => Coefficients (0)'Address, Inputs => Inputs (V)'Address, Scales => Scaling (V)'Address,
+               Totals => Totalling (V)'Address, Output => Acc (0)'Address, Blocks => Blocks,
+               Metadata => (if Groups = 8 and then Metadata'Length = Rows * Blocks * Fields
+                            then Metadata (Metadata'First + Row * Blocks * Fields)'Address else System.Null_Address),
+               Map => Map (0)'Address, Bits => Bits (0)'Address);
+            if Step = 1 then
+               if Format = G.Type_Q4_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "vbroadcastss 4(%%rsi), %%ymm23" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 0(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vpbroadcastw 2(%%r8), %%xmm23" & LF
+                     & "vcvtph2ps %%xmm23, %%xmm23" & LF
+                     & "vbroadcastss %%xmm23, %%ymm23" & LF
+                     & "4:" & LF
+                     & "movl $0x80000000, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm28" & LF
+                     & "vxorps %%ymm28, %%ymm23, %%ymm23" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 16(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 16(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm4" & LF
+                     & "addq $144, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $24, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q5_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "vbroadcastss 4(%%rsi), %%ymm23" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 0(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vpbroadcastw 2(%%r8), %%xmm23" & LF
+                     & "vcvtph2ps %%xmm23, %%xmm23" & LF
+                     & "vbroadcastss %%xmm23, %%ymm23" & LF
+                     & "4:" & LF
+                     & "movl $0x80000000, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm28" & LF
+                     & "vxorps %%ymm28, %%ymm23, %%ymm23" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vmovdqu 16(%%r8), %%ymm12" & LF
+                     & "movl $0x01010101, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm10" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $0, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $1, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $2, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $3, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $5, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 144(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $6, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 144(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $7, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm4" & LF
+                     & "addq $176, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $24, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q6_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 208(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "4:" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "movl $0x03030303, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm10" & LF
+                     & "movl $0x20202020, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 0(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 32(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $2, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 0(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $4, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 32(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $6, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 64(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 8(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 9(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 96(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $2, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 10(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 11(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 64(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $4, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 12(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 13(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "vmovdqu64 96(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $6, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 14(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 15(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm24, %%ymm24" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "addq $210, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $20, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q8_0 then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "movl $0x80808080, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "1:" & LF
+                     & "vpbroadcastw (%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vmovdqu64 2(%%r8), %%ymm16" & LF
+                     & "vpxord %%ymm19, %%ymm16, %%ymm16" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "addq $34, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $32, %%r13" & LF
+                     & "addq $4, %%r14" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q5_0 then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "movl $0x80808080, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 64(%%rax), %%rbx" & LF
+                     & "vmovdqu (%%rbx), %%ymm14" & LF
+                     & "movq 72(%%rax), %%rbx" & LF
+                     & "vmovdqu (%%rbx), %%ymm15" & LF
+                     & "1:" & LF
+                     & "vpbroadcastw (%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vpbroadcastd 2(%%r8), %%ymm12" & LF
+                     & "vpshufb %%ymm14, %%ymm12, %%ymm12" & LF
+                     & "vpand %%ymm15, %%ymm12, %%ymm12" & LF
+                     & "vpxord %%ymm9, %%ymm9, %%ymm9" & LF
+                     & "vpcmpeqb %%ymm9, %%ymm12, %%ymm12" & LF
+                     & "movl $0x10101010, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm18" & LF
+                     & "vpandd %%ymm18, %%ymm12, %%ymm12" & LF
+                     & "vmovdqu64 6(%%r8), %%xmm16" & LF
+                     & "vpandd %%xmm8, %%xmm16, %%xmm17" & LF
+                     & "vpsrlw $4, %%xmm16, %%xmm16" & LF
+                     & "vpandd %%xmm8, %%xmm16, %%xmm16" & LF
+                     & "vinserti32x4 $1, %%xmm16, %%ymm17, %%ymm16" & LF
+                     & "vpsubb %%ymm12, %%ymm16, %%ymm16" & LF
+                     & "vpxord %%ymm19, %%ymm16, %%ymm16" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "addq $22, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $32, %%r13" & LF
+                     & "addq $4, %%r14" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               end if;
+            elsif Step = 2 then
+               if Format = G.Type_Q4_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "vbroadcastss 4(%%rsi), %%ymm23" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 0(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vpbroadcastw 2(%%r8), %%xmm23" & LF
+                     & "vcvtph2ps %%xmm23, %%xmm23" & LF
+                     & "vbroadcastss %%xmm23, %%ymm23" & LF
+                     & "4:" & LF
+                     & "movl $0x80000000, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm28" & LF
+                     & "vxorps %%ymm28, %%ymm23, %%ymm23" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vpxord %%ymm25, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 16(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 16(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm4" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm25, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 8(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm5" & LF
+                     & "addq $144, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $24, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q5_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "vbroadcastss 4(%%rsi), %%ymm23" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 0(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vpbroadcastw 2(%%r8), %%xmm23" & LF
+                     & "vcvtph2ps %%xmm23, %%xmm23" & LF
+                     & "vbroadcastss %%xmm23, %%ymm23" & LF
+                     & "4:" & LF
+                     & "movl $0x80000000, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm28" & LF
+                     & "vxorps %%ymm28, %%ymm23, %%ymm23" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vmovdqu 16(%%r8), %%ymm12" & LF
+                     & "movl $0x01010101, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm10" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vpxord %%ymm25, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $0, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $1, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $2, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $3, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $5, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 144(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $6, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 144(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $7, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm4" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm25, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 8(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm5" & LF
+                     & "addq $176, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $24, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q6_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 208(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "4:" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "movl $0x03030303, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm10" & LF
+                     & "movl $0x20202020, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vpxord %%ymm25, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 0(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 32(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $2, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 0(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $4, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 32(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $6, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 64(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 8(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 9(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 96(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $2, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 10(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 11(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 64(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $4, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 12(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 13(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "vmovdqu64 96(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $6, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 14(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 15(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm24, %%ymm24" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 8(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm25, %%ymm25" & LF
+                     & "vcvtdq2ps %%ymm25, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "addq $210, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $20, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q8_0 then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "movl $0x80808080, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "1:" & LF
+                     & "vpbroadcastw (%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vmovdqu64 2(%%r8), %%ymm16" & LF
+                     & "vpxord %%ymm19, %%ymm16, %%ymm16" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "addq $34, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $32, %%r13" & LF
+                     & "addq $4, %%r14" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q5_0 then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "movl $0x80808080, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 64(%%rax), %%rbx" & LF
+                     & "vmovdqu (%%rbx), %%ymm14" & LF
+                     & "movq 72(%%rax), %%rbx" & LF
+                     & "vmovdqu (%%rbx), %%ymm15" & LF
+                     & "1:" & LF
+                     & "vpbroadcastw (%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vpbroadcastd 2(%%r8), %%ymm12" & LF
+                     & "vpshufb %%ymm14, %%ymm12, %%ymm12" & LF
+                     & "vpand %%ymm15, %%ymm12, %%ymm12" & LF
+                     & "vpxord %%ymm9, %%ymm9, %%ymm9" & LF
+                     & "vpcmpeqb %%ymm9, %%ymm12, %%ymm12" & LF
+                     & "movl $0x10101010, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm18" & LF
+                     & "vpandd %%ymm18, %%ymm12, %%ymm12" & LF
+                     & "vmovdqu64 6(%%r8), %%xmm16" & LF
+                     & "vpandd %%xmm8, %%xmm16, %%xmm17" & LF
+                     & "vpsrlw $4, %%xmm16, %%xmm16" & LF
+                     & "vpandd %%xmm8, %%xmm16, %%xmm16" & LF
+                     & "vinserti32x4 $1, %%xmm16, %%ymm17, %%ymm16" & LF
+                     & "vpsubb %%ymm12, %%ymm16, %%ymm16" & LF
+                     & "vpxord %%ymm19, %%ymm16, %%ymm16" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "addq $22, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $32, %%r13" & LF
+                     & "addq $4, %%r14" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               end if;
+            elsif Step = 4 then
+               if Format = G.Type_Q4_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "vxorps %%ymm2, %%ymm2, %%ymm2" & LF
+                     & "vxorps %%ymm6, %%ymm6, %%ymm6" & LF
+                     & "vxorps %%ymm3, %%ymm3, %%ymm3" & LF
+                     & "vxorps %%ymm7, %%ymm7, %%ymm7" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "vbroadcastss 4(%%rsi), %%ymm23" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 0(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vpbroadcastw 2(%%r8), %%xmm23" & LF
+                     & "vcvtph2ps %%xmm23, %%xmm23" & LF
+                     & "vbroadcastss %%xmm23, %%ymm23" & LF
+                     & "4:" & LF
+                     & "movl $0x80000000, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm28" & LF
+                     & "vxorps %%ymm28, %%ymm23, %%ymm23" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vpxord %%ymm25, %%ymm25, %%ymm25" & LF
+                     & "vpxord %%ymm26, %%ymm26, %%ymm26" & LF
+                     & "vpxord %%ymm27, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 16(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 16(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "movzbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm4" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm25, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 8(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm5" & LF
+                     & "movq 16(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm26, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm2" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 16(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm6" & LF
+                     & "movq 24(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm27, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm3" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 24(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpunpcklqdq %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%xmm29, %%xmm20, %%xmm7" & LF
+                     & "addq $144, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $24, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vmovups %%ymm2, 64(%%rbx)" & LF
+                     & "vmovups %%xmm6, 160(%%rbx)" & LF
+                     & "vmovups %%ymm3, 96(%%rbx)" & LF
+                     & "vmovups %%xmm7, 176(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q5_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "vxorps %%ymm2, %%ymm2, %%ymm2" & LF
+                     & "vxorps %%ymm6, %%ymm6, %%ymm6" & LF
+                     & "vxorps %%ymm3, %%ymm3, %%ymm3" & LF
+                     & "vxorps %%ymm7, %%ymm7, %%ymm7" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "vbroadcastss 4(%%rsi), %%ymm23" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 0(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vpbroadcastw 2(%%r8), %%xmm23" & LF
+                     & "vcvtph2ps %%xmm23, %%xmm23" & LF
+                     & "vbroadcastss %%xmm23, %%ymm23" & LF
+                     & "4:" & LF
+                     & "movl $0x80000000, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm28" & LF
+                     & "vxorps %%ymm28, %%ymm23, %%ymm23" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vmovdqu 16(%%r8), %%ymm12" & LF
+                     & "movl $0x01010101, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm10" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vpxord %%ymm25, %%ymm25, %%ymm25" & LF
+                     & "vpxord %%ymm26, %%ymm26, %%ymm26" & LF
+                     & "vpxord %%ymm27, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $0, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 48(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $1, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $2, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 80(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $3, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 112(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $5, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 144(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $6, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 144(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vpsrlw $7, %%ymm12, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movzbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm4" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm25, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 8(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm5" & LF
+                     & "movq 16(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm26, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm2" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 16(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm6" & LF
+                     & "movq 24(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vcvtdq2ps %%ymm27, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm3" & LF
+                     & "vpmovzxbd 8(%%r9), %%ymm17" & LF
+                     & "movq 24(%%r12), %%rbx" & LF
+                     & "vpmulld (%%rbx,%%r14), %%ymm17, %%ymm20" & LF
+                     & "vmovdqa64 %%ymm20, %%ymm8" & LF
+                     & "vphaddd %%ymm8, %%ymm8, %%ymm8" & LF
+                     & "vextracti128 $1, %%ymm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vpshufd $0xb1, %%xmm8, %%xmm9" & LF
+                     & "vpaddd %%xmm9, %%xmm8, %%xmm8" & LF
+                     & "vcvtdq2ps %%xmm8, %%xmm20" & LF
+                     & "vmulps %%ymm23, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ss %%xmm29, %%xmm20, %%xmm7" & LF
+                     & "addq $176, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $24, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vmovups %%ymm2, 64(%%rbx)" & LF
+                     & "vmovups %%xmm6, 160(%%rbx)" & LF
+                     & "vmovups %%ymm3, 96(%%rbx)" & LF
+                     & "vmovups %%xmm7, 176(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q6_K then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "vxorps %%ymm2, %%ymm2, %%ymm2" & LF
+                     & "vxorps %%ymm6, %%ymm6, %%ymm6" & LF
+                     & "vxorps %%ymm3, %%ymm3, %%ymm3" & LF
+                     & "vxorps %%ymm7, %%ymm7, %%ymm7" & LF
+                     & "1:" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 3f" & LF
+                     & "vbroadcastss (%%rsi), %%ymm22" & LF
+                     & "jmp 4f" & LF
+                     & "3:" & LF
+                     & "vpbroadcastw 208(%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "4:" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "movl $0x03030303, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm10" & LF
+                     & "movl $0x20202020, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "vpxord %%ymm24, %%ymm24, %%ymm24" & LF
+                     & "vpxord %%ymm25, %%ymm25, %%ymm25" & LF
+                     & "vpxord %%ymm26, %%ymm26, %%ymm26" & LF
+                     & "vpxord %%ymm27, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 0(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 0(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 1(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 0(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 32(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $2, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 2(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 3(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 32(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 0(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $4, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 4(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 5(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 64(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 32(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 128(%%r8), %%ymm18" & LF
+                     & "vpsrlw $6, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 6(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 7(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 96(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 64(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 8(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 9(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 128(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 96(%%r8), %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $2, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 10(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 11(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 160(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 64(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $4, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 12(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 13(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 192(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "vmovdqu64 96(%%r8), %%ymm16" & LF
+                     & "vpsrlw $4, %%ymm16, %%ymm16" & LF
+                     & "vpandd %%ymm8, %%ymm16, %%ymm16" & LF
+                     & "vmovdqu64 160(%%r8), %%ymm18" & LF
+                     & "vpsrlw $6, %%ymm18, %%ymm18" & LF
+                     & "vpandd %%ymm10, %%ymm18, %%ymm18" & LF
+                     & "vpsllw $4, %%ymm18, %%ymm18" & LF
+                     & "vpord %%ymm18, %%ymm16, %%ymm16" & LF
+                     & "movsbl 14(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm17" & LF
+                     & "vpbroadcastd %%xmm17, %%xmm17" & LF
+                     & "movsbl 15(%%r9), %%eax" & LF
+                     & "vmovd %%eax, %%xmm18" & LF
+                     & "vpbroadcastd %%xmm18, %%xmm18" & LF
+                     & "vinserti32x4 $1, %%xmm18, %%ymm17, %%ymm17" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm24, %%ymm24" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm25, %%ymm25" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm26, %%ymm26" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 224(%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpmulld %%ymm17, %%ymm20, %%ymm20" & LF
+                     & "vpaddd %%ymm20, %%ymm27, %%ymm27" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 0(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm24, %%ymm24" & LF
+                     & "vcvtdq2ps %%ymm24, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 8(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm25, %%ymm25" & LF
+                     & "vcvtdq2ps %%ymm25, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "movq 16(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 16(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm26, %%ymm26" & LF
+                     & "vcvtdq2ps %%ymm26, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm2" & LF
+                     & "movq 24(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "movq 24(%%r12), %%rbx" & LF
+                     & "vpmovsxbw (%%r9), %%ymm17" & LF
+                     & "vmovdqu64 (%%rbx,%%r14,2), %%ymm18" & LF
+                     & "vpackssdw 32(%%rbx,%%r14,2), %%ymm18, %%ymm18" & LF
+                     & "vpermq $0xd8, %%ymm18, %%ymm18" & LF
+                     & "vpmaddwd %%ymm17, %%ymm18, %%ymm18" & LF
+                     & "vpslld $5, %%ymm18, %%ymm18" & LF
+                     & "vpsubd %%ymm18, %%ymm27, %%ymm27" & LF
+                     & "vcvtdq2ps %%ymm27, %%ymm20" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm3" & LF
+                     & "addq $210, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $256, %%r13" & LF
+                     & "addq $32, %%r14" & LF
+                     & "testq %%rsi, %%rsi" & LF
+                     & "jz 5f" & LF
+                     & "addq $20, %%rsi" & LF
+                     & "5:" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vmovups %%ymm2, 64(%%rbx)" & LF
+                     & "vmovups %%xmm6, 160(%%rbx)" & LF
+                     & "vmovups %%ymm3, 96(%%rbx)" & LF
+                     & "vmovups %%xmm7, 176(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q8_0 then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "vxorps %%ymm2, %%ymm2, %%ymm2" & LF
+                     & "vxorps %%ymm6, %%ymm6, %%ymm6" & LF
+                     & "vxorps %%ymm3, %%ymm3, %%ymm3" & LF
+                     & "vxorps %%ymm7, %%ymm7, %%ymm7" & LF
+                     & "movl $0x80808080, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "1:" & LF
+                     & "vpbroadcastw (%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "vmovdqu64 2(%%r8), %%ymm16" & LF
+                     & "vpxord %%ymm19, %%ymm16, %%ymm16" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 16(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm2" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 24(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm3" & LF
+                     & "addq $34, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $32, %%r13" & LF
+                     & "addq $4, %%r14" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vmovups %%ymm2, 64(%%rbx)" & LF
+                     & "vmovups %%xmm6, 160(%%rbx)" & LF
+                     & "vmovups %%ymm3, 96(%%rbx)" & LF
+                     & "vmovups %%xmm7, 176(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               elsif Format = G.Type_Q5_0 then
+                  System.Machine_Code.Asm
+                    ("movq %0, %%rax" & LF
+                     & "movq 0(%%rax), %%r8" & LF
+                     & "movq 8(%%rax), %%r9" & LF
+                     & "movq 16(%%rax), %%r10" & LF
+                     & "movq 24(%%rax), %%r11" & LF
+                     & "movq 32(%%rax), %%r12" & LF
+                     & "movq 48(%%rax), %%r15" & LF
+                     & "movq 56(%%rax), %%rsi" & LF
+                     & "xorq %%r13, %%r13" & LF
+                     & "xorq %%r14, %%r14" & LF
+                     & "vxorps %%ymm0, %%ymm0, %%ymm0" & LF
+                     & "vxorps %%ymm4, %%ymm4, %%ymm4" & LF
+                     & "vxorps %%ymm1, %%ymm1, %%ymm1" & LF
+                     & "vxorps %%ymm5, %%ymm5, %%ymm5" & LF
+                     & "vxorps %%ymm2, %%ymm2, %%ymm2" & LF
+                     & "vxorps %%ymm6, %%ymm6, %%ymm6" & LF
+                     & "vxorps %%ymm3, %%ymm3, %%ymm3" & LF
+                     & "vxorps %%ymm7, %%ymm7, %%ymm7" & LF
+                     & "movl $0x80808080, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm19" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 64(%%rax), %%rbx" & LF
+                     & "vmovdqu (%%rbx), %%ymm14" & LF
+                     & "movq 72(%%rax), %%rbx" & LF
+                     & "vmovdqu (%%rbx), %%ymm15" & LF
+                     & "1:" & LF
+                     & "vpbroadcastw (%%r8), %%xmm22" & LF
+                     & "vcvtph2ps %%xmm22, %%xmm22" & LF
+                     & "vbroadcastss %%xmm22, %%ymm22" & LF
+                     & "movl $0x0f0f0f0f, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm8" & LF
+                     & "vpbroadcastd 2(%%r8), %%ymm12" & LF
+                     & "vpshufb %%ymm14, %%ymm12, %%ymm12" & LF
+                     & "vpand %%ymm15, %%ymm12, %%ymm12" & LF
+                     & "vpxord %%ymm9, %%ymm9, %%ymm9" & LF
+                     & "vpcmpeqb %%ymm9, %%ymm12, %%ymm12" & LF
+                     & "movl $0x10101010, %%eax" & LF
+                     & "vpbroadcastd %%eax, %%ymm18" & LF
+                     & "vpandd %%ymm18, %%ymm12, %%ymm12" & LF
+                     & "vmovdqu64 6(%%r8), %%xmm16" & LF
+                     & "vpandd %%xmm8, %%xmm16, %%xmm17" & LF
+                     & "vpsrlw $4, %%xmm16, %%xmm16" & LF
+                     & "vpandd %%xmm8, %%xmm16, %%xmm16" & LF
+                     & "vinserti32x4 $1, %%xmm16, %%ymm17, %%ymm16" & LF
+                     & "vpsubb %%ymm12, %%ymm16, %%ymm16" & LF
+                     & "vpxord %%ymm19, %%ymm16, %%ymm16" & LF
+                     & "movq 0(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 0(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm0" & LF
+                     & "movq 8(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 8(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm1" & LF
+                     & "movq 16(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 16(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm2" & LF
+                     & "movq 24(%%r10), %%rbx" & LF
+                     & "vmovdqu64 (%%rbx,%%r13), %%ymm18" & LF
+                     & "vpxord %%ymm20, %%ymm20, %%ymm20" & LF
+                     & "vpdpbusd %%ymm18, %%ymm16, %%ymm20" & LF
+                     & "vpxord %%ymm21, %%ymm21, %%ymm21" & LF
+                     & "vpdpbusd %%ymm18, %%ymm19, %%ymm21" & LF
+                     & "vpsubd %%ymm21, %%ymm20, %%ymm20" & LF
+                     & "vcvtdq2ps %%ymm20, %%ymm20" & LF
+                     & "movq 24(%%r11), %%rbx" & LF
+                     & "vbroadcastss (%%rbx,%%r14), %%ymm28" & LF
+                     & "vmulps %%ymm22, %%ymm28, %%ymm29" & LF
+                     & "vfmadd231ps %%ymm29, %%ymm20, %%ymm3" & LF
+                     & "addq $22, %%r8" & LF
+                     & "addq $16, %%r9" & LF
+                     & "addq $32, %%r13" & LF
+                     & "addq $4, %%r14" & LF
+                     & "decq %%r15" & LF
+                     & "jnz 1b" & LF
+                     & "movq %0, %%rax" & LF
+                     & "movq 40(%%rax), %%rbx" & LF
+                     & "vmovups %%ymm0, 0(%%rbx)" & LF
+                     & "vmovups %%xmm4, 128(%%rbx)" & LF
+                     & "vmovups %%ymm1, 32(%%rbx)" & LF
+                     & "vmovups %%xmm5, 144(%%rbx)" & LF
+                     & "vmovups %%ymm2, 64(%%rbx)" & LF
+                     & "vmovups %%xmm6, 160(%%rbx)" & LF
+                     & "vmovups %%ymm3, 96(%%rbx)" & LF
+                     & "vmovups %%xmm7, 176(%%rbx)" & LF
+                     & "vzeroupper",
+                     Inputs => [System.Address'Asm_Input ("m", Argument_Pointer)],
+                     Clobber => "rax,rbx,rdx,rsi,r8,r9,r10,r11,r12,r13,r14,r15,"
+                       & "ymm0,ymm1,ymm2,ymm3,ymm4,ymm5,ymm6,ymm7,ymm8,ymm9,ymm10,ymm11,ymm12,ymm13,"
+                       & "ymm14,ymm15,ymm16,ymm17,ymm18,ymm19,ymm20,ymm21,ymm22,ymm23,ymm24,ymm25,"
+                       & "ymm26,ymm27,ymm28,ymm29,ymm30,ymm31,cc,memory", Volatile => True);
+               end if;
+            end if;
+            for Vector in 0 .. Step - 1 loop
+               declare
+                  At_Main : constant Element_Count := Vector * 8;
+                  At_Min : constant Element_Count := 32 + Vector * 4;
+                  A : constant N.Real := Acc (At_Main) + Acc (At_Main + 4);
+                  B : constant N.Real := Acc (At_Main + 1) + Acc (At_Main + 5);
+                  C : constant N.Real := Acc (At_Main + 2) + Acc (At_Main + 6);
+                  D : constant N.Real := Acc (At_Main + 3) + Acc (At_Main + 7);
+                  Result : N.Real := (A + C) + (B + D);
+               begin
+                  if Format = G.Type_Q4_K then
+                     Result := Result + ((Acc (At_Min) + Acc (At_Min + 2)) + (Acc (At_Min + 1) + Acc (At_Min + 3)));
+                  elsif Format = G.Type_Q5_K then Result := Result + Acc (At_Min);
+                  end if;
+                  Answer (Row * Count + V + Vector) := N.Wide_Real (Result);
+               end;
+            end loop;
+            V := V + Step;
+         end loop;
+      end loop;
+      for Index in Answer'Range loop Sums (Sums'First + Index) := Sums (Sums'First + Index) + Answer (Index); end loop;
+      Ok := True;
+   end Reference_Stream;
+
+   --  Two native rows (or a gate/up pair) share each activation load.
+   --  Q8_0/Q5_0 tiles take up to eight vectors, K formats up to four.
+   --  Small native batches decode in registers; larger K batches and
+   --  interleaved panels reuse bounded byte staging. No float weight copy.
+   procedure Reference_Tile
+     (Format : G.Tensor_Type; Data : Model_Runner.Bytes.Byte_Array;
+      Offset, Row_Bytes : Model_Runner.Bytes.Byte_Count;
+      Rows, Blocks : Element_Count; Values : Signed_Array;
+      Scales : N.Real_Array; Totals, Halves : Sum_Array;
+      First, Stride, Count : Element_Count;
+      Sums : in out N.Wide_Real_Array; Ok : out Boolean;
+      Interleaved : Boolean; Metadata : N.Real_Array;
+      Target : access N.Real_Array := null; Result_First, Result_Stride : Element_Count := 0;
+      Partner : B.Byte_Array := []; Partner_Offset : B.Byte_Count := 0;
+      Partner_Metadata : N.Real_Array := []; Partner_Target : access N.Real_Array := null;
+   Result_Members : Model_Runner.Shares.Member_Rows := [];
+      Input_Members : Model_Runner.Shares.Member_Rows := []) is separate;
+
+   procedure Reference_Products
+     (Format : Model_Runner.GGUF.Tensor_Type; Data : Model_Runner.Bytes.Byte_Array;
+      Offset, Row_Bytes : Model_Runner.Bytes.Byte_Count; Rows, Blocks : Element_Count;
+      Values : Signed_Array; Scales : Model_Runner.Numerics.Real_Array; Totals, Halves : Sum_Array;
+      First, Stride, Count : Element_Count; Target : access Model_Runner.Numerics.Real_Array;
+      Result_First, Result_Stride : Element_Count; Ok : out Boolean;
+      Interleaved : Boolean := False; Metadata : Model_Runner.Numerics.Real_Array := [];
+      Partner : Model_Runner.Bytes.Byte_Array := []; Partner_Offset : Model_Runner.Bytes.Byte_Count := 0;
+      Partner_Metadata : Model_Runner.Numerics.Real_Array := [];
+      Partner_Target : access Model_Runner.Numerics.Real_Array := null;
+      Result_Members : Model_Runner.Shares.Member_Rows := [];
+      Input_Members : Model_Runner.Shares.Member_Rows := []) is
+      Dummy : N.Wide_Real_Array (1 .. 0);
+   begin
+      Ok := False;
+      if Target = null or else not Deep
+        or else Format not in G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K | G.Type_Q8_0 | G.Type_Q5_0
+      then return; end if;
+      Reference_Tile
+        (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales, Totals, Halves,
+         First, Stride, Count, Dummy, Ok, Interleaved, Metadata, Target, Result_First, Result_Stride,
+         Partner, Partner_Offset, Partner_Metadata, Partner_Target, Result_Members, Input_Members);
+   end Reference_Products;
+
 
    --  One block's scale, widened from the two bytes the file holds it in.
    --
@@ -23792,7 +27079,9 @@ package body Model_Runner.Quantization.Integers.Kernels is
       Count     : Element_Count;
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok        : out Boolean;
-      Interleaved : Boolean := False)
+      Interleaved : Boolean := False;
+      Reference_Arithmetic : Boolean := False;
+      Metadata : N.Real_Array := [])
    is
       LF : constant Character := ASCII.LF;
 
@@ -23843,6 +27132,20 @@ package body Model_Runner.Quantization.Integers.Kernels is
       function Halves_Fit return Boolean
       is (Halves'Length >= Base_Reach / Activation_Half + Blocks * 16);
    begin
+      if Deep and then Reference_Arithmetic
+        and then Format in G.Type_Q4_K | G.Type_Q5_K | G.Type_Q6_K | G.Type_Q8_0 | G.Type_Q5_0
+      then
+         if not Interleaved and then (Count <= 4
+           or else (Format in G.Type_Q8_0 | G.Type_Q5_0 and then Count <= 8 and then Blocks >= 16))
+         then
+            Reference_Stream (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales,
+                              Totals, Halves, First, Stride, Count, Sums, Ok, Metadata);
+         else
+         Reference_Tile (Format, Data, Offset, Row_Bytes, Rows, Blocks, Values, Scales, Totals, Halves,
+                         First, Stride, Count, Sums, Ok, Interleaved, Metadata);
+         end if;
+         return;
+      end if;
       Ok := False;
 
       if not Has_Integer_Kernel (Format, Interleaved)
@@ -25433,6 +28736,285 @@ package body Model_Runner.Quantization.Integers.Kernels is
    -----------------
    -- Super_Round --
    -----------------
+
+   procedure Reference_Pack
+     (Vectors : N.Real_Array; First, Last : Element_Count;
+      Values : in out Signed_Array; Scales : in out N.Real_Array;
+      Totals, Halves : in out Sum_Array; Ok : out Boolean;
+      Super, Half_Scales : Boolean; Known_Peak : N.Real := -1.0)
+   is
+      use type Interfaces.Integer_32;
+      Per : constant Element_Count := (if Super then 8 else 1);
+      Peak, Largest, Inverse, Scale : N.Real;
+      Finite : Boolean;
+      Selected : aliased Interfaces.Unsigned_32;
+      Sums : aliased Sum_Array (0 .. 1);
+   begin
+      Ok := False;
+      if not Deep then return; end if;
+      for Group in First / Per .. Last / Per loop
+         declare
+            Base : constant Element_Count := Group * Per * 32;
+            Source : constant System.Address := Vectors (Vectors'First + Base)'Address;
+         begin
+            if not Super and then Known_Peak >= 0.0 then
+               Peak := Known_Peak; Finite := N.Is_Finite (Peak);
+            elsif Super then
+               Super_Extent (Vectors, Base, Peak, Finite);
+            else
+               System.Machine_Code.Asm
+                 ("movq %0, %%r8" & LF
+                  & "movl $0x7fffffff, %%eax" & LF
+                  & "vmovd %%eax, %%xmm4" & LF
+                  & "vpbroadcastd %%xmm4, %%ymm4" & LF
+                  & "vpand 0(%%r8), %%ymm4, %%ymm0" & LF
+                  & "vpand 32(%%r8), %%ymm4, %%ymm1" & LF
+                  & "vpand 64(%%r8), %%ymm4, %%ymm2" & LF
+                  & "vpand 96(%%r8), %%ymm4, %%ymm3" & LF
+                  & "vpmaxud %%ymm1, %%ymm0, %%ymm0" & LF
+                  & "vpmaxud %%ymm3, %%ymm2, %%ymm2" & LF
+                  & "vpmaxud %%ymm2, %%ymm0, %%ymm0" & LF
+                  & "vextracti128 $1, %%ymm0, %%xmm1" & LF
+                  & "vpmaxud %%xmm1, %%xmm0, %%xmm0" & LF
+                  & "vpshufd $0x4e, %%xmm0, %%xmm1" & LF
+                  & "vpmaxud %%xmm1, %%xmm0, %%xmm0" & LF
+                  & "vpshufd $0xb1, %%xmm0, %%xmm1" & LF
+                  & "vpmaxud %%xmm1, %%xmm0, %%xmm0" & LF
+                  & "movq %1, %%r9" & LF
+                  & "vmovd %%xmm0, (%%r9)" & LF
+                  & "vzeroupper",
+                  Inputs => [System.Address'Asm_Input ("r", Source), System.Address'Asm_Input ("r", Selected'Address)],
+                  Clobber => "rax,r8,r9,ymm0,ymm1,ymm2,ymm3,ymm4,cc,memory", Volatile => True);
+               Peak := N.From_Bits (Selected);
+               Finite := Selected < 16#7F80_0000#;
+            end if;
+            if not Finite then return; end if;
+            Largest := Peak;
+            if Super and then Peak /= 0.0 then
+               System.Machine_Code.Asm
+                 ("movq %0, %%r8" & LF
+                  & "movl %2, %%eax" & LF
+                  & "vmovd %%eax, %%xmm17" & LF
+                  & "vpbroadcastd %%xmm17, %%zmm17" & LF
+                  & "movl $0x7fffffff, %%eax" & LF
+                  & "vpbroadcastd %%eax, %%zmm16" & LF
+                  & "vpandd 0(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 2f" & LF
+                  & "vpandd 64(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 3f" & LF
+                  & "vpandd 128(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 4f" & LF
+                  & "vpandd 192(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 5f" & LF
+                  & "vpandd 256(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 6f" & LF
+                  & "vpandd 320(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 7f" & LF
+                  & "vpandd 384(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 8f" & LF
+                  & "vpandd 448(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 9f" & LF
+                  & "vpandd 512(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 10f" & LF
+                  & "vpandd 576(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 11f" & LF
+                  & "vpandd 640(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 12f" & LF
+                  & "vpandd 704(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 13f" & LF
+                  & "vpandd 768(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 14f" & LF
+                  & "vpandd 832(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 15f" & LF
+                  & "vpandd 896(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 16f" & LF
+                  & "vpandd 960(%%r8), %%zmm16, %%zmm0" & LF
+                  & "vpcmpd $0, %%zmm17, %%zmm0, %%k1" & LF
+                  & "kmovw %%k1, %%eax" & LF
+                  & "testl %%eax, %%eax" & LF
+                  & "jnz 17f" & LF
+                  & "xorl %%eax, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "2:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $0, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "3:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $16, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "4:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $32, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "5:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $48, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "6:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $64, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "7:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $80, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "8:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $96, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "9:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $112, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "10:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $128, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "11:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $144, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "12:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $160, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "13:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $176, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "14:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $192, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "15:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $208, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "16:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $224, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "17:" & LF
+                  & "bsfl %%eax, %%eax" & LF
+                  & "addl $240, %%eax" & LF
+                  & "jmp 1f" & LF
+                  & "1:" & LF
+                  & "movq %1, %%r9" & LF
+                  & "movl %%eax, (%%r9)" & LF
+                  & "vzeroupper",
+                  Inputs => [System.Address'Asm_Input ("r", Source), System.Address'Asm_Input ("r",
+                    Selected'Address), N.Real'Asm_Input ("m", Peak)],
+                  Clobber => "rax,r8,r9,zmm0,zmm16,zmm17,k1,cc,memory", Volatile => True);
+               Largest := Vectors (Vectors'First + Base + Element_Count (Selected));
+            end if;
+            if Super then
+               Inverse := (if Peak = 0.0 then 0.0 else -127.0 / Largest);
+               Scale := (if Peak = 0.0 then 0.0 else 1.0 / Inverse);
+            else
+               Inverse := (if Peak = 0.0 then 0.0 else 127.0 / Peak);
+               Scale := Peak / 127.0;
+            end if;
+            if Half_Scales then Scale := N.To_Real (N.To_Half (Scale)); end if;
+            for Part in 0 .. Per - 1 loop
+               declare
+                  At_Element : constant Element_Count := Base + Part * 32;
+                  Input : constant System.Address := Vectors (Vectors'First + At_Element)'Address;
+                  Output : constant System.Address := Values (Values'First + At_Element)'Address;
+               begin
+               System.Machine_Code.Asm
+                 ("vmovups 0(%0), %%zmm0" & LF
+                  & "vmovups 64(%0), %%zmm1" & LF
+                  & "vbroadcastss %3, %%zmm6" & LF
+                  & "vmulps %%zmm6, %%zmm0, %%zmm0" & LF
+                  & "vmulps %%zmm6, %%zmm1, %%zmm1" & LF
+                  & "vrndscaleps $8, %%zmm0, %%zmm0" & LF
+                  & "vrndscaleps $8, %%zmm1, %%zmm1" & LF
+                  & "vcvttps2dq %%zmm0, %%zmm0" & LF
+                  & "vcvttps2dq %%zmm1, %%zmm1" & LF
+                  & "movl $127, %%eax" & LF
+                  & "vpbroadcastd %%eax, %%zmm2" & LF
+                  & "vpminsd %%zmm2, %%zmm0, %%zmm0" & LF
+                  & "vpminsd %%zmm2, %%zmm1, %%zmm1" & LF
+                  & "vpmovsdb %%zmm0, (%1)" & LF
+                  & "vpmovsdb %%zmm1, 16(%1)" & LF
+                  & "vextracti64x4 $1, %%zmm0, %%ymm2" & LF
+                  & "vpaddd %%ymm0, %%ymm2, %%ymm2" & LF
+                  & "vextracti128 $1, %%ymm2, %%xmm3" & LF
+                  & "vpaddd %%xmm3, %%xmm2, %%xmm2" & LF
+                  & "vpshufd $0x4e, %%xmm2, %%xmm3" & LF
+                  & "vpaddd %%xmm3, %%xmm2, %%xmm2" & LF
+                  & "vpshufd $0xb1, %%xmm2, %%xmm3" & LF
+                  & "vpaddd %%xmm3, %%xmm2, %%xmm2" & LF
+                  & "vmovd %%xmm2, 0(%2)" & LF
+                  & "vextracti64x4 $1, %%zmm1, %%ymm2" & LF
+                  & "vpaddd %%ymm1, %%ymm2, %%ymm2" & LF
+                  & "vextracti128 $1, %%ymm2, %%xmm3" & LF
+                  & "vpaddd %%xmm3, %%xmm2, %%xmm2" & LF
+                  & "vpshufd $0x4e, %%xmm2, %%xmm3" & LF
+                  & "vpaddd %%xmm3, %%xmm2, %%xmm2" & LF
+                  & "vpshufd $0xb1, %%xmm2, %%xmm3" & LF
+                  & "vpaddd %%xmm3, %%xmm2, %%xmm2" & LF
+                  & "vmovd %%xmm2, 4(%2)" & LF
+                  & "vzeroupper",
+                  Inputs => [System.Address'Asm_Input ("r", Input), System.Address'Asm_Input ("r", Output),
+                    System.Address'Asm_Input ("r", Sums'Address), N.Real'Asm_Input ("m", Inverse)],
+                  Clobber => "rax,zmm0,zmm1,zmm2,zmm3,zmm6,cc,memory", Volatile => True);
+                  Scales (Scales'First + Group * Per + Part) := Scale;
+                  Halves (Halves'First + (Group * Per + Part) * 2) := Sums (0);
+                  Halves (Halves'First + (Group * Per + Part) * 2 + 1) := Sums (1);
+                  Totals (Totals'First + Group * Per + Part) := Sums (0) + Sums (1);
+               end;
+            end loop;
+         end;
+      end loop;
+      Ok := True;
+   end Reference_Pack;
 
    procedure Super_Round
      (Vectors : Model_Runner.Numerics.Real_Array;

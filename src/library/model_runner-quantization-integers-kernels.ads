@@ -87,6 +87,8 @@ package Model_Runner.Quantization.Integers.Kernels is
    --    only by the pass that was asked to; every other format and every
    --    model read as its file stores it leaves this False and reaches the
    --    same kernels it always did.
+   --  @param Reference_Arithmetic Retain reference binary32 lanes in the deep compilation.
+   --  @param Metadata Optional immutable native header scales.
    procedure Rows
      (Format    : Model_Runner.GGUF.Tensor_Type;
       Data      : Model_Runner.Bytes.Byte_Array;
@@ -103,7 +105,9 @@ package Model_Runner.Quantization.Integers.Kernels is
       Count     : Element_Count;
       Sums      : in out Model_Runner.Numerics.Wide_Real_Array;
       Ok        : out Boolean;
-      Interleaved : Boolean := False);
+      Interleaved : Boolean := False;
+      Reference_Arithmetic : Boolean := False;
+      Metadata : Model_Runner.Numerics.Real_Array := []);
 
    --  A block of an activation, packed: its own scale, its thirty-two
    --  bytes and the two sums a k-quant's minimum term wants.
@@ -178,6 +182,76 @@ package Model_Runner.Quantization.Integers.Kernels is
       At_It   : Element_Count;
       Largest : out Model_Runner.Numerics.Real;
       Finite  : out Boolean);
+
+   --  Reference products written directly in vector-major output order.
+   --  An optional same-shape native partner shares each activation read.
+   --  Unsupported profiles or malformed ranges return before output writes.
+   --  @param Format Shared quantization format.
+   --  @param Data Native or interleaved weight bytes.
+   --  @param Offset First weight byte.
+   --  @param Row_Bytes Native row stride.
+   --  @param Rows Number of output rows.
+   --  @param Blocks Quantization blocks per row.
+   --  @param Values Packed activation bytes.
+   --  @param Scales Activation scales.
+   --  @param Totals Activation block totals.
+   --  @param Halves Activation half-block totals.
+   --  @param First First activation coordinate.
+   --  @param Stride Activation vector stride.
+   --  @param Count Number of vectors.
+   --  @param Target Receives completed binary32 products.
+   --  @param Result_First First output row within each vector.
+   --  @param Result_Stride Output vector stride.
+   --  @param Ok True after all products are written.
+   --  @param Interleaved Whether Data uses eight-row panels.
+   --  @param Metadata Optional compact physical weight coefficients.
+   --  @param Partner Optional second native weight matrix.
+   --  @param Partner_Offset First partner byte.
+   --  @param Partner_Metadata Optional partner coefficients.
+   --  @param Partner_Target Receives partner products; must not alias Target.
+   --  @param Result_Members Optional destination vector index for each input; distinct and in range.
+   --  @param Input_Members Optional source vector indices; repeated indices are permitted.
+   procedure Reference_Products
+     (Format : Model_Runner.GGUF.Tensor_Type; Data : Model_Runner.Bytes.Byte_Array;
+      Offset, Row_Bytes : Model_Runner.Bytes.Byte_Count; Rows, Blocks : Element_Count;
+      Values : Signed_Array; Scales : Model_Runner.Numerics.Real_Array; Totals, Halves : Sum_Array;
+      First, Stride, Count : Element_Count; Target : access Model_Runner.Numerics.Real_Array;
+      Result_First, Result_Stride : Element_Count; Ok : out Boolean;
+      Interleaved : Boolean := False; Metadata : Model_Runner.Numerics.Real_Array := [];
+      Partner : Model_Runner.Bytes.Byte_Array := []; Partner_Offset : Model_Runner.Bytes.Byte_Count := 0;
+      Partner_Metadata : Model_Runner.Numerics.Real_Array := [];
+      Partner_Target : access Model_Runner.Numerics.Real_Array := null;
+      Result_Members : Model_Runner.Shares.Member_Rows := [];
+      Input_Members : Model_Runner.Shares.Member_Rows := []);
+
+   --  Decode only the sixteen compact group coefficients of a K block.
+   --  @param Format Q4_K, Q5_K or Q6_K.
+   --  @param Data Native block storage.
+   --  @param Offset Byte position of the block.
+   --  @param Into Sixteen scale/minimum or signed-scale bytes.
+   --  @param Ok True when the native block and output fit.
+   procedure Reference_Coefficients
+     (Format : Model_Runner.GGUF.Tensor_Type; Data : Model_Runner.Bytes.Byte_Array;
+      Offset : Model_Runner.Bytes.Byte_Count; Into : out Model_Runner.Bytes.Byte_Array;
+      Ok : out Boolean);
+
+   --  Reference nearest-even packing with the original scale divisions.
+   --  @param Vectors Valid finite-input candidate rows.
+   --  @param First First 32-value block.
+   --  @param Last Last 32-value block.
+   --  @param Values Receives reference bytes at their source offsets.
+   --  @param Scales Receives one scale per 32 values.
+   --  @param Totals Receives block sums.
+   --  @param Halves Receives sixteen-value sums.
+   --  @param Ok False for nonfinite inputs.
+   --  @param Super Use signed first-maximum Q8_K scaling.
+   --  @param Half_Scales Round stored scales to binary16.
+   --  @param Known_Peak Optional measured finite peak of a single 32-value block.
+   procedure Reference_Pack
+     (Vectors : Model_Runner.Numerics.Real_Array; First, Last : Element_Count;
+      Values : in out Signed_Array; Scales : in out Model_Runner.Numerics.Real_Array;
+      Totals, Halves : in out Sum_Array; Ok : out Boolean;
+      Super, Half_Scales : Boolean; Known_Peak : Model_Runner.Numerics.Real := -1.0);
 
    --  A super-block's eight blocks rounded against one scale: Block_Round
    --  eight times over, its constants made once.

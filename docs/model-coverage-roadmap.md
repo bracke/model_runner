@@ -1,5 +1,22 @@
 # Model coverage roadmap
 
+## Inkling 2 Mini (2026-11-24)
+
+Native fixed-loop text execution is implemented through the existing engine.
+CPU and Vulkan F32 activation paths match all 834 independently captured tensors
+from the verified Q4_K_M checkpoint, with exact expert IDs. Logical cache state,
+reset/rewind, convolution recovery, typed tool calls and the official chat
+format have focused AUnit coverage. F16 cache storage has its own independently
+calibrated precision envelope. Prefill uses native batches; relative attention
+runs on the host using CPU workers across heads, and convolution reuses fixed taps across
+the batch. A real native V3 task and the existing complete
+release checks pass. The [initial CPU/private-GPU measurements](inkling2-benchmarks.md)
+are recorded; Shared-host reference validation/timing now pass with the user-authorized
+0.5 GiB allowance; larger-context measurements and
+performance tuning remain open. Track the [verification evidence](inkling2-verification.md) and
+[57-task V3 backlog](inkling2-tasks.md). Variable-loop and vision qualification
+remain separate extensions and are refused explicitly.
+
 A plan to close every model-related gap the survey found — the live refusal
 paths and host fallbacks that block or slow real models. Ordered by dependency
 and cost, not by tier, so the sequence is buildable start-to-finish.
@@ -330,3 +347,11 @@ Do **Phase 0** in full (cheap, unblocks real loads immediately), then pick the
 one Phase-2 quant or Phase-3/4 arch of a model you actually want to run — the
 big phases only pay off against a concrete download, so drive them by need
 rather than completeness.
+
+
+Native CPU DSpark drafting for the fixed Inkling companion is tracked separately
+from target text inference, variable loops and vision. The adapter reuses the
+existing generation verifier and preserves Q4T target storage; see
+[its contract](inkling2-dspark-native.md) and [evidence](inkling2-dspark-native-evidence.json).
+Sampled drafting, other DFlash variants and a Vulkan DSpark path remain separate
+extensions.

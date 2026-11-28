@@ -1,0 +1,18 @@
+{
+  "reference_commit": "29b52d398b294509746ec0a3f28948a3107c0213",
+  "model_sha256": "9b63be6e6bfcca5738d343c40e7c1ec42cd72b2fab2ae4a631daa5243f882d23",
+  "fixture_sha256": "7ef0e9aba8c66242ebba61187e07b6d564a9c6eee6ec98dc077b54ffe28a340b",
+  "tensors": 834,
+  "tokens": [
+    1
+  ],
+  "zero_controls": "All learned gain and forget projections are zero; all three core visits still execute.",
+  "capture_command": "INKLING_FIXTURE_DIR=$CAPTURE llama-eval-callback -m fixtures/tiny-inkling-zero-controls.gguf -p <s> -c 32 -b 8 -ub 8 -ngl 0 -ctk f32 -ctv f32 -fa off -t 1 --no-repack",
+  "patches": [
+    "reference-capture.patch",
+    "reference-f32-activations.patch",
+    "reference-last-token-capture.patch",
+    "reference-f16-attention.patch"
+  ],
+  "precision_overrides_enabled": false
+}

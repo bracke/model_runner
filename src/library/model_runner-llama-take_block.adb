@@ -164,10 +164,11 @@ begin
          --  And how far the halves are read: this block's need and
          --  every held block's, which for a packed one is the room a
          --  layer unpacks into and not the block.
-         Copy_Upto : Element_Count := Base + Copy_Span_Of (Item.all);
+         Copy_Upto : Element_Count :=
+           (if Copy_Span_Of (Item.all) = 0 then 0 else Base + Copy_Span_Of (Item.all));
       begin
          for Which in Block_Holder'Range loop
-            if Block_Holder (Which) /= null then
+            if Block_Holder (Which) /= null and then Copy_Span_Of (Block_Holder (Which).all) > 0 then
                Copy_Upto :=
                  Element_Count'Max
                    (Copy_Upto,

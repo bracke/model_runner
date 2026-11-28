@@ -1,0 +1,73 @@
+{
+  "selection": "Keep Q4T for KV-memory savings, explicitly requested by the user; throughput is secondary for this change",
+  "status": "Complete: native Q4T enabled, independent attention and lifecycle tests, actual CPU/hybrid model validation, one-pass measurement, shared-engine and repository checks passed",
+  "model": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+  "model_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+  "weights": "original Q4_K_M GGUF, unchanged",
+  "cache": "Q4T transformed keys / ordinary Q4 values, existing fixed transform and packed format",
+  "activation_arithmetic": "unchanged F32 profile; integer activations remain separately unqualified",
+  "runtime": "existing native model_runner CPU and Vulkan matrix paths; Inkling attention remains on CPU",
+  "default_selection": "Existing CLI default q4t now accepts Inkling when every physical head width is divisible by 32; explicit unsupported cache/value combinations still fail. Existing generic fallback to f16 handles unasked incompatible widths.",
+  "implementation": [
+    "Allow Q4T/ordinary-Q4 in existing Inkling planning/compatibility, preserving other variant refusals",
+    "Pack keys through shared Q4T codec and values through existing ordinary-Q4 packer, indexed by logical visit",
+    "Rotate queries independently once per aligned head with a head-sized temporary",
+    "Reuse grouped heads, paired queries, score tiles, local/global masks, sinks and relative bias",
+    "Extend private packed-row reader with guarded SIMD nibble expansion, preserving default scalar callers and reduction order",
+    "Reuse original snapshot/adoption, rollback, reset, rewind, eviction and memory budget mechanisms"
+  ],
+  "validation": "artifacts/inkling2/obj/q4t-native/validation.json",
+  "source_manifest_sha256": "388f204f57715a2c4632e98bedc72100fad2b4fd455be829dd49e5a723d79065",
+  "binary_sha256": {
+    "tests/bin/tests": "9392a5e1450c682433db20d36c913885bd2ade3d8e3438dd882f79f0428c617b",
+    "bin/model_runner": "96f88d32b498daba5f0fb7a51b37eabceefa2a0e39675b7a1f2b543ee736c030",
+    "tests/bin/no_adapter_probe": "3650f4f584e2a25901c7882aae8007beed3d72f3885cc2ebcdce9a4617f7413e"
+  },
+  "correctness": {
+    "synthetic": "1152 attention rows /110592 elements, independent Hadamard matrix + scalar attention; max2.38419e-7; exact prefill/decode, snapshots, changed continuation, cancellation, 512-token eviction and rewind",
+    "full_cpu": "240 attention rows /737280 elements, max1.23978e-5, all within existing 1e-5+2e-5*abs(reference); exact prefill/decode and continuation",
+    "full_hybrid": "240 attention rows /737280 elements, max1.72853e-5, existing numerical envelope; prefill/incremental logits max1.04904e-5, continuation exact",
+    "comparison_scope": "New cache-dependent attention is compared against the independent direct-Hadamard test codec and a scalar architecture attention equation using observed model-basis Q/K/V. Existing F32 decoder goldens remain separate; no requirement or claim that lossy Q4T reproduces F32-cache logits or routing.",
+    "preserved_initial_hybrid_failure": "artifacts/inkling2/obj/q4t-native/q4t-hybrid-exact-failure.log; the initial bit-equality assertion was inappropriate for existing Vulkan batch reductions. The revised check uses the preexisting F32 envelope, unchanged; no tolerance was widened."
+  },
+  "memory": {
+    "bits_per_kv_element_including_scales": 5,
+    "f32_bits": 32,
+    "kv_storage_reduction_factor": 6.4,
+    "kv_savings_vs_f32_percent": 84.375,
+    "kv_savings_vs_f16_percent": 68.75,
+    "scope": "KV arrays only. Model weights, convolution state and other workspaces retain their existing storage. The inspector uses its default declared context; its totals are not the 2176-token timing context."
+  },
+  "measurement": {
+    "evidence": "artifacts/inkling2/obj/q4t-native/measurement/evidence.json",
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "warmup_passes": 1,
+    "measured_passes": 1,
+    "f32_baseline_prefill_tok_s": 17.03699390228685,
+    "f32_baseline_decode_tok_s": 3.6917397323488697,
+    "q4t_prefill_tok_s": 16.896016896016896,
+    "q4t_decode_tok_s": 3.722661703117729,
+    "output_digest": "4f1d96c1112e7b25",
+    "same_digest_as_f32": true,
+    "interpretation": "Single measured sample with the same 2048-token prompt and unchanged model, arithmetic, backend, thread/batch settings and memory limits. No repeated-run confidence claim; all outputs retained."
+  },
+  "shared_engine_evidence": "docs/inkling2-no-adapter-evidence.json",
+  "shared_engine_protocol": "docs/inkling2-q4t-no-adapter-protocol.json",
+  "repository_check": {
+    "command": [
+      "./bin/tests",
+      "check",
+      "..",
+      "--repository"
+    ],
+    "returncode": 0,
+    "log": "artifacts/inkling2/obj/q4t-native/repository-check.log",
+    "log_sha256": "00bc0125b764a24428c01e0bcf3329151cabf5b2a958f3230e102f006613b06a",
+    "summaries": [
+      "checks 31739, failures 0"
+    ]
+  },
+  "finished_at": "2026-11-26T14:54:39.324664+00:00",
+  "final_source_and_binary_integrity": "passed"
+}

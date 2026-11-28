@@ -1,0 +1,129 @@
+{
+  "reference_revision": "4c7344447cb1727f1e2f982febc99a8f88dcb77f",
+  "generator": "Actual ggml_vec_dot_iq4_nl_q8_0 and ggml_vec_dot_q2_0_q8_0, quantize_row_q8_0, pinned native AVX2/FMA reference library",
+  "widths": [
+    64,
+    128,
+    1152,
+    2304
+  ],
+  "rows": 5,
+  "vectors": 9,
+  "first_vector": "all zero",
+  "seed": 91173,
+  "files": {
+    "input-1152.f32": {
+      "bytes": 41472,
+      "sha256": "7e837396c9e8488bd1d2c3f8a6af32caee55252a90852fb414657d5718dc7697"
+    },
+    "input-128.f32": {
+      "bytes": 4608,
+      "sha256": "ec3df20fd9f22661c0d0003aeb4f1caa67f401701b57d083ab748275338e6001"
+    },
+    "input-2304.f32": {
+      "bytes": 82944,
+      "sha256": "694eeb12f80f8a3fd83550c2d3bf33cb04a41dee10cfe477c46bcf683901ca1a"
+    },
+    "input-64.f32": {
+      "bytes": 2304,
+      "sha256": "5d4e74a42d2d4735b0c882c7bde63c4a7835990aa6590e8dbc3e133c8b4d4d09"
+    },
+    "nl-1152.bin": {
+      "bytes": 3240,
+      "sha256": "22a5bf66432c8c0119f64698b9922e8de6a3cb2889d5c289615bea8a0461a062"
+    },
+    "nl-1152.f32": {
+      "bytes": 180,
+      "sha256": "9519ce58abe628a2010a6bb2efb8c3a12489e5bd213c9c446649ffff3014de4b"
+    },
+    "nl-128.bin": {
+      "bytes": 360,
+      "sha256": "7e18a019c46f056673d80aa2092c87419fad5290768315882aa959961989b6ef"
+    },
+    "nl-128.f32": {
+      "bytes": 180,
+      "sha256": "b29e8d3538ea0341690ad55bfe4e454afe6e78179ab03dc1c90cd0d669a43aab"
+    },
+    "nl-2304.bin": {
+      "bytes": 6480,
+      "sha256": "ac1ebfbdfa918822441fd8bcaa39462a9031d39c7179ce13758259ff22b31e2c"
+    },
+    "nl-2304.f32": {
+      "bytes": 180,
+      "sha256": "2add6f5524e60da6cd8ceaf6a645b28735bc33c5c537f5f29be96beeab75ec50"
+    },
+    "nl-64.bin": {
+      "bytes": 180,
+      "sha256": "1e96b82687cbae848a6dbddb1c10fe8a8455ce6835e5ee78978e66a17bfee98f"
+    },
+    "nl-64.f32": {
+      "bytes": 180,
+      "sha256": "748ae3d14167278760690143e95af53bcf63fb94b5dd1de3d7f01fa6af40e991"
+    },
+    "q2-1152.bin": {
+      "bytes": 1620,
+      "sha256": "fe759ae7a49a695e171b735a4d2a9b86561e613c6f6898deb8a13c7d5d967b13"
+    },
+    "q2-1152.f32": {
+      "bytes": 180,
+      "sha256": "462638ddda791e6f96b70e5441c3aa795036d27526629fbc9961246bf1ba7b16"
+    },
+    "q2-128.bin": {
+      "bytes": 180,
+      "sha256": "beb53261f64d5ac0efb6cf65558631e4dcb486cc63966e3e5af5efadddf5835a"
+    },
+    "q2-128.f32": {
+      "bytes": 180,
+      "sha256": "9e64f8840ca5183971acca19f759ff8deb15bc5dc3b18d801aad955fefab9abd"
+    },
+    "q2-2304.bin": {
+      "bytes": 3240,
+      "sha256": "24977c2e9b4957992ce6fd41c4a2d3da17bcc4808a703f763c164d5cad3ed8d0"
+    },
+    "q2-2304.f32": {
+      "bytes": 180,
+      "sha256": "c0819481e13200e7d356b447da8c5bf5c26cdc1791c9e37c9b97f240d1e8f8d8"
+    },
+    "q2-64.bin": {
+      "bytes": 90,
+      "sha256": "ef0c923925a6547498f06047ae2b01ac6a82ff6c99eccb272795a329c7be03be"
+    },
+    "q2-64.f32": {
+      "bytes": 180,
+      "sha256": "a0d8a1e6820a63d0b7a383cc4f151a2826c9c9fc43db22c47a0419745944e93e"
+    },
+    "scales-1152.f32": {
+      "bytes": 1296,
+      "sha256": "0c2f840b7e2a9c1ac9c79cc3766d2143c11752261a2634d8f8af1cbbb6a31355"
+    },
+    "scales-128.f32": {
+      "bytes": 144,
+      "sha256": "7c417ede510b2b4e99c282194951b2f4c2a0e5dcdc69da81451ef75ea52dd7dd"
+    },
+    "scales-2304.f32": {
+      "bytes": 2592,
+      "sha256": "78c9ee70a200f166ee971b2a303eea03f7c2d88e8eb1aa4bfe0763d83c84ae0f"
+    },
+    "scales-64.f32": {
+      "bytes": 72,
+      "sha256": "99efeac791813e2c3f948a879f8a077893b1485fd634eb91d575f2f589ef5e7c"
+    },
+    "values-1152.i8": {
+      "bytes": 10368,
+      "sha256": "ff62ba73900b6caeb1f34ca16e99b13bcc58ced99a4b96a91093afaf8c0bbc9f"
+    },
+    "values-128.i8": {
+      "bytes": 1152,
+      "sha256": "4fc40334c4ca547846b90ee9a8a01acbaf412143dce7864cc2278262159b45b4"
+    },
+    "values-2304.i8": {
+      "bytes": 20736,
+      "sha256": "e9b71496145777fbd7a3f5b7b1148ae8c7595594f8c13a54dfb372abe19da56a"
+    },
+    "values-64.i8": {
+      "bytes": 576,
+      "sha256": "5f8c6e21bd17b96467caefccbd557f9995647653b5067ffe22c227b7f4f5fbda"
+    }
+  },
+  "reference_initialization": "ggml_cpu_init called before quantization/dots to initialize the CPU library half-to-float table"
+}

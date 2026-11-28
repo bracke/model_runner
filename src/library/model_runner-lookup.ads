@@ -42,6 +42,23 @@ package Model_Runner.Lookup is
    subtype Token_Id is Model_Runner.Tokenizer.Token_Id;
    subtype Token_Array is Model_Runner.Tokenizer.Token_Array;
 
+   --  Observed verification costs and expected committed-token counts.
+   type Cost_Array is array (Positive range <>) of Long_Float;
+   type Sample_Array is array (Positive range <>) of Natural;
+
+   --  Choose a measured proposal length by expected tokens per unit time.
+   --  Require three samples of the current length and a two-percent gain
+   --  before switching; missing/invalid evidence preserves the bounded fallback.
+   --  @param Expected Expected committed tokens, including the target token.
+   --  @param Cost Mean verification costs in one consistent time unit.
+   --  @param Samples Measured verification rounds at each length.
+   --  @param Limit Explicit maximum proposal count.
+   --  @param Fallback Current proposal length, clamped to Limit.
+   --  @return Evidence-supported length in 1 .. Limit.
+   function Verification_Length
+     (Expected, Cost : Cost_Array; Samples : Sample_Array;
+      Limit, Fallback : Positive) return Positive;
+
    --  How many tokens at the end of the history are matched against it.
    --
    --  TWO, and it is a measurement rather than a preference. Replayed over

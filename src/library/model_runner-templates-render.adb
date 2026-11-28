@@ -931,6 +931,18 @@ is
                  (Conv.Role_Name (Conv.Sender_At (Messages, Value.Start)));
             elsif Name = "content" then
                return Content_Of (Value.Start);
+            elsif Name = "name" then
+               declare
+                  Text : constant String := Conv.Name_At (Messages, Value.Start);
+               begin
+                  return (if Text = "" then Nothing else As_Text (Text));
+               end;
+            elsif Name = "tool_call_id" then
+               declare
+                  Text : constant String := Conv.Tool_Call_Id_At (Messages, Value.Start);
+               begin
+                  return (if Text = "" then Nothing else As_Text (Text));
+               end;
             elsif Name = "tool_calls" then
                if Conv.Call_Count (Messages, Value.Start) = 0 then
                   return Nothing;
@@ -943,6 +955,12 @@ is
          when Value_Call =>
             if Value.Index = 0 then
                return Nothing;
+            elsif Name = "id" then
+               declare
+                  Text : constant String := Conv.Call_Id (Messages, Value.Start, Value.Index);
+               begin
+                  return (if Text = "" then Nothing else As_Text (Text));
+               end;
             elsif Name = "name" then
                return As_Text
                  (Call_Name_Text (Value.Start, Value.Index));
@@ -2233,7 +2251,9 @@ is
       --  its name and arguments under function.
       procedure Add_Call (At_Message, Which : Positive) is
       begin
-         Add ("{""type"": ""function"", ""function"": {""name"": "
+         Add ("{" & (if Conv.Call_Id (Messages, At_Message, Which) = "" then ""
+                     else """id"": " & Quoted (Conv.Call_Id (Messages, At_Message, Which)) & ", ")
+              & """type"": ""function"", ""function"": {""name"": "
               & Quoted (Call_Name_Text (At_Message, Which))
               & ", ""arguments"": "
               & Call_Arguments_Text (At_Message, Which) & "}}");
@@ -2264,6 +2284,12 @@ is
                     & (if Conv.Parts_At (Messages, At_Message) /= ""
                        then Parts_Text (At_Message)
                        else Quoted (Content_Text (At_Message))));
+               if Conv.Name_At (Messages, At_Message) /= "" then
+                  Add (", ""name"": " & Quoted (Conv.Name_At (Messages, At_Message)));
+               end if;
+               if Conv.Tool_Call_Id_At (Messages, At_Message) /= "" then
+                  Add (", ""tool_call_id"": " & Quoted (Conv.Tool_Call_Id_At (Messages, At_Message)));
+               end if;
                if Conv.Call_Count (Messages, At_Message) > 0 then
                   Add (", ""tool_calls"": [");
                   for Which in 1 .. Conv.Call_Count (Messages, At_Message)
@@ -2298,19 +2324,42 @@ is
       return Ada.Strings.Unbounded.To_String (R);
    end Listed;
 
-   --  JSON text written out again with each container's members on
-   --  lines of their own, Width blanks deeper a level, as Python's
-   --  json.dumps(indent=Width) writes it.
-   function Indented_JSON (Src : String; Width : Natural) return String is
+   --  JSON text with explicit item/key separators, optionally indented as
+   --  Python's json.dumps writes it. Structural whitespace changes outside
+   --  strings only; expansion stays within the intermediate-value budget.
+   function Indented_JSON
+     (Src : String; Width : Natural; Pretty : Boolean := True;
+      Item_Separator : String := ","; Key_Separator : String := ": ") return String
+   is
       R     : Ada.Strings.Unbounded.Unbounded_String;
       Level : Natural := 0;
       Quote : Boolean := False;
       Index : Natural := Src'First;
 
-      procedure Break_Line is
-         Pad : constant String (1 .. Level * Width) := [others => ' '];
+      procedure Add (Text : String) is
       begin
-         Ada.Strings.Unbounded.Append (R, ASCII.LF & Pad);
+         if Text'Length > Max_Variable_Bytes - Ada.Strings.Unbounded.Length (R) then
+            Refuse (0, 0, E.Template_Variables_Too_Large);
+            Refused_Limit := Max_Variable_Bytes;
+         elsif not Refused then
+            Ada.Strings.Unbounded.Append (R, Text);
+         end if;
+      end Add;
+
+      procedure Break_Line is
+      begin
+         if Pretty then
+            if Level /= 0 and then Width > (Max_Variable_Bytes - 1) / Level then
+               Refuse (0, 0, E.Template_Variables_Too_Large);
+               Refused_Limit := Max_Variable_Bytes;
+            else
+               declare
+                  Pad : constant String (1 .. Level * Width) := [others => ' '];
+               begin
+                  Add (ASCII.LF & Pad);
+               end;
+            end if;
+         end if;
       end Break_Line;
 
       --  Whether the container opening at Index is empty.
@@ -2320,26 +2369,26 @@ is
          return Look <= Src'Last and then Src (Look) in ']' | '}';
       end Empty_Ahead;
    begin
-      while Index <= Src'Last loop
+      while Index <= Src'Last and then not Refused loop
          declare
             C : constant Character := Src (Index);
          begin
             if Quote then
-               Ada.Strings.Unbounded.Append (R, C);
+               Add (String'(1 => C));
                if C = '\' and then Index < Src'Last then
                   Index := Index + 1;
-                  Ada.Strings.Unbounded.Append (R, Src (Index));
+                  Add (String'(1 => Src (Index)));
                elsif C = '"' then
                   Quote := False;
                end if;
             elsif C = '"' then
                Quote := True;
-               Ada.Strings.Unbounded.Append (R, C);
+               Add (String'(1 => C));
             elsif C in '[' | '{' then
-               Ada.Strings.Unbounded.Append (R, C);
+               Add (String'(1 => C));
                if Empty_Ahead then
                   Index := Past_Blanks (Src, Index + 1);
-                  Ada.Strings.Unbounded.Append (R, Src (Index));
+                  Add (String'(1 => Src (Index)));
                else
                   Level := Level + 1;
                   Break_Line;
@@ -2347,16 +2396,16 @@ is
             elsif C in ']' | '}' then
                Level := (if Level > 0 then Level - 1 else 0);
                Break_Line;
-               Ada.Strings.Unbounded.Append (R, C);
+               Add (String'(1 => C));
             elsif C = ',' then
-               Ada.Strings.Unbounded.Append (R, C);
+               Add (Item_Separator);
                Break_Line;
             elsif C = ':' then
-               Ada.Strings.Unbounded.Append (R, ": ");
+               Add (Key_Separator);
             elsif C in ' ' | ASCII.LF | ASCII.CR | ASCII.HT then
                null;
             else
-               Ada.Strings.Unbounded.Append (R, C);
+               Add (String'(1 => C));
             end if;
          end;
          Index := Index + 1;
@@ -3877,6 +3926,8 @@ is
                   --  A message named by position: the fields it has,
                   --  as "'x' in message" answers them.
                   Found := Needle = "role" or else Needle = "content"
+                    or else (Needle = "name" and then Conv.Name_At (Messages, Right.Start) /= "")
+                    or else (Needle = "tool_call_id" and then Conv.Tool_Call_Id_At (Messages, Right.Start) /= "")
                     or else (Needle = "tool_calls"
                              and then Right.Start in 1 .. Count
                              and then Conv.Call_Count (Messages, Right.Start)
@@ -4493,7 +4544,8 @@ begin
       Assign_Text (Item.Effort_Slot, Effort_Word (Item, Effort));
    elsif Item.Effort_Slot /= 0 and then Thinking /= Thinking_Unstated then
       Assign_Text (Item.Effort_Slot,
-                   (if Thinking = Thinking_On then Effort_Word (Item, Effort_High) else "low"));
+                   (if Thinking = Thinking_On then Effort_Word (Item, Effort_High)
+                    elsif Recognise (Item.Original_Source.all) = Inkling_Shape then "none" else "low"));
    end if;
 
    --  A flat instruction list with jumps. Rendering recurses in one

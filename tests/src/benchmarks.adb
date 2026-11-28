@@ -893,7 +893,11 @@ package body Benchmarks is
          Held : constant Boolean :=
            Model_Runner.Backend.CPU.Integer_Activations;
       begin
-         Model_Runner.Backend.CPU.Use_Integer_Activations (True);
+         Model_Runner.Backend.CPU.Use_Integer_Activations
+           (not Ada.Environment_Variables.Exists ("BENCH_NATIVE_F32"));
+         if Ada.Environment_Variables.Exists ("BENCH_NO_NATIVE_PRODUCTS") then
+            T.Use_Deep_Products (False);
+         end if;
 
          for Format of Formats loop
             for Each of Shapes loop
@@ -905,9 +909,16 @@ package body Benchmarks is
                      Value : constant Long_Float :=
                        Cost (Format, Each.Rows, Each.Columns, Count);
                   begin
-                     IO.Put ("  " & Model_Runner.Text.Trim (N.Element_Count'Image (Count))
-                             & " vectors "
-                             & Long_Float'Image (Value) & " ns");
+                     if Ada.Environment_Variables.Exists ("BENCH_NATIVE_F32") and then Value > 0.0 then
+                        IO.Put ("  " & Model_Runner.Text.Trim (N.Element_Count'Image (Count))
+                                & " input tokens "
+                                & Long_Float'Image (1.0E9 / Value / Long_Float (Each.Rows * Each.Columns))
+                                & " tok/s");
+                     else
+                        IO.Put ("  " & Model_Runner.Text.Trim (N.Element_Count'Image (Count))
+                                & " vectors "
+                                & Long_Float'Image (Value) & " ns");
+                     end if;
                   end;
                end loop;
                IO.New_Line;
@@ -915,6 +926,7 @@ package body Benchmarks is
          end loop;
 
          Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
+         T.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
 
          --  Closed by hand, as every other pool here is. This one was left
          --  to its finalization, and the benchmark stopped at the end of
@@ -927,6 +939,8 @@ package body Benchmarks is
          --  exception kept its workers waiting, and leaving the block
          --  waited on them for ever instead of saying what went wrong.
          when others =>
+            Model_Runner.Backend.CPU.Use_Integer_Activations (Held);
+            T.Use_Deep_Products (Model_Runner.Platform.Byte_Products);
             Model_Runner.Backend.CPU.Close (Team);
             raise;
       end Measure_Expert_Shapes;
@@ -2004,6 +2018,7 @@ package body Benchmarks is
 
       IO.Put_Line ("expert-shaped products, in panels, on the pool");
       Measure_Expert_Shapes;
+      if Ada.Environment_Variables.Exists ("BENCH_EXPERT_ONLY") then return; end if;
       IO.New_Line;
 
       IO.Put_Line ("row dot product");

@@ -5,7 +5,252 @@ Keep a Changelog and the project uses semantic versioning.
 
 ## [Unreleased]
 
+- Share native reference convolution channels across the existing CPU pool while retaining causal token/tap ordering, cancellation recovery and IQ3_S/Q4T storage. Paired 2048/512: prefill 25.10 to 26.64 tok/s; decode 15.69 to 16.29 tok/s. 72 focused checks pass. Evidence: `docs/inkling2-gsq-profiled-convolution-evidence.json`.
+
+- Add native IQ3_S products for up to sixteen queries with original scheduling, attention and matched profiles. Preserve IQ3_S/Q4T. Full 2048/512 throughput is essentially unchanged: prefill 25.00 to 25.08 tok/s, decode 15.56 to 15.53 tok/s. Retained for faster large-query projection; 70 focused cases pass. Evidence: `docs/inkling2-gsq-next-five-evidence.json`.
+
+- Add native IQ3_S five/six-query products, preserving original decoder/math, compressed weights and Q4T. Reject normalization/loading experiments after validation and measurements. Paired 2048/512 decode: 15.70 to 15.82 tok/s; 70 focused cases pass. Evidence: `docs/inkling2-gsq-attn-six-evidence.json`.
+
+- Add native IQ3_S one-to-four-query products and exact fused Inkling expert reduction, retaining compressed weights and Q4T. Paired 2048/512 decode: 15.54 to 15.76 tok/s; 70 focused checks pass. Evidence: `docs/inkling2-gsq-small-moe-evidence.json`.
+
+- Reuse native IQ3_S block decoding across seven/eight reference queries, preserving original accumulation and mapped-row guards. Reject the slower interleaved layout; retain native compressed weights, Q4T, SiTU and the Q5 head. Single paired 2048/512 result: 25.08 to 25.07 tok/s prefill and 15.69 to 15.73 tok/s decode, essentially unchanged overall. 68 focused checks pass. Evidence: `docs/inkling2-gsq-iq3-native8-evidence.json`.
+
+- Add exact reference CPU SIMD SiTU with scalar fallback and preserved activation peaks. Retain IQ3_S weights, Q4T and the seven-vector Q5_K projection. Single paired 2048/512 trial: 24.65 to 24.99 tok/s prefill and 15.58 to 15.62 tok/s decode, with 67 focused checks passing. See `docs/inkling2-gsq-situ-evidence.json`.
+
+- Optimize seven-vector native Q5_K vocabulary products with an existing eight-vector tile and guarded output stores. Retain the seven-vector candidate after a longer 512-token decode comparison. Actual-head projection: 349.4 to 427.1 tok/s with bit-identical outputs; full 2048/512 trial: 24.68 tok/s prefill, 15.64 tok/s decode versus 15.38 tok/s baseline. IQ3_S weights and Q4T retained. See `docs/inkling2-gsq-head-seven-evidence.json`.
+
+- Implement and evaluate six Q4T/context candidates with exact reference tests and fresh selective PGO. Restore the preceding engine after the paired comparison: 24.75 tok/s prefill, 15.68 tok/s decode. Candidate measurements and source are preserved in `docs/inkling2-gsq-context-six-evidence.json`.
+
+- Evaluate compatible target softmax vectorization, unused anchor-row omission, balanced residual ranges, local greedy correction tiles, Q4T normalization fusion and prepared expert views. Retain the combined candidate with fresh selective PGO: 24.72 tok/s prefill, 16.32 tok/s decode in one 2,048/16 trial. See `docs/inkling2-gsq-more-six-evidence.json`.
+
+- Evaluate deferred MoE input copies, vector drafter arithmetic, rotary-table reuse, KV-group attention jobs, loop-visit scheduling plans and tiled projection/residual epilogues. Retain the combined candidate with fresh selective PGO: 24.65 tok/s prefill, 15.71 tok/s decode in one 2,048/16 trial. See `docs/inkling2-gsq-follow-six-evidence.json`.
+
+- Evaluate shared Inkling packing, grouped DSpark prefix attention, compact greedy feature verification and workload-matched selective PGO. Retain the combined selective-PGO candidate; retain opt-in compiler unit selection. Selected single-trial throughput: 24.68 tok/s prefill, 15.83 tok/s decode. See `docs/inkling2-gsq-four-evidence.json`.
+
+- Add indexed native small-block products, stable Inkling 8-of-128 routing, and opt-in profile-guided compilation for five CPU engine units. Revert the slower direct/paired grid and metadata candidates. Final single-trial throughput: 25.18 tok/s prefill, 15.09 tok/s decode; see `docs/inkling2-gsq-next-six-evidence.json`.
+
+- Reuse Q4T decoding across eight Inkling queries and add native Vulkan GSQ reference products with safe mixed-format expert fallback. Evaluate all six candidates, remove slower CPU variants, and retain eight threads/batch 128. Final single-trial throughput: 24.24 tok/s prefill, 14.91 tok/s decode; see `docs/inkling2-gsq-six-evidence.json`.
+
+- Simplify native IQ4_NL signed dots to one VNNI product, preserving signed-minimum activations and exact reference accumulation. Add exhaustive signed-edge coverage; no established throughput gain is claimed from the single trial. See `docs/inkling2-gsq-signed-dot-evidence.json`.
+
+- Add native IQ4_NL/Q2_0 products with two/four-vector decode reuse and exact reference coverage. One IQ3_S/Q4T 2,048/16 trial reports 23.70 tok/s prefill and 14.58 tok/s decode; see `docs/inkling2-gsq-selected-evidence.json`.
+
+- Reuse grouped batched CPU products for native DSpark projections and preserve full worker teams for packed multi-vector groups. One Q4_K_M/Q4T 2,048/16 trial reports 14.70 tok/s decode versus 14.57; see `docs/inkling2-dspark-groups-evidence.json`.
+
+- Fuse native DSpark Markov vocabulary projection and finishing in CPU worker tiles with unchanged softcap and lowest-ID ties. One Q4_K_M/Q4T 2,048/16 trial changes decode from 14.34 to 14.57 tok/s; see `docs/inkling2-dspark-readout-evidence.json`.
+
+- Share native DSpark block attention across the existing CPU workers with separately budgeted scratch and unchanged reductions. One Q4_K_M/Q4T 2,048/16 trial improves decode from 12.69 to 14.34 tok/s; see `docs/inkling2-dspark-attention-evidence.json`.
+
+- Add opt-in native CPU DSpark drafting for the verified Inkling Q8 companion, retaining Q4_K_M target weights and Q4T target storage. Target features, transactional context injection, block attention and the BF16 Markov head use the existing engine, CPU kernels and generation verifier. See `docs/inkling2-dspark-native-evidence.json` for qualification and the measured result.
+
+- Audit and retain the published Q8 DSpark drafter: tokenizer/shape compatibility is verified, with native execution subsequently added as an opt-in CPU adapter. A correct register-fused depth reduction measured 26.14 tok/s prefill and 9.96 tok/s decode and was rejected; the faster preceding engine is restored. See `docs/inkling2-dspark-depth-mix-evidence.json`.
+
+- Add guarded batched greedy verification, tiled complete-logit output, route-aware expert dispatch, cached metadata priorities, elastic bounded metadata shares and exact route work plans. Native GPU products can reuse packed input and aggregate compatible resident batches in routing order. The single Q4_K_M/Q4T sample gives 26.19 tok/s prefill and 10.26 tok/s decode; all outcomes appear in `docs/inkling2-plans-eight-evidence.json`.
+
+- Schedule native K integer streams, prioritize metadata by estimated decode work per byte, tune expert chunks and fuse eligible output heads. Group resident GPU experts, overlap nonresident CPU work and chain packed Q4T attention into its epilogue. One Q4_K_M/Q4T sample gives 26.20 tok/s prefill and 10.06 tok/s decode; prefill improves and decode regresses. The slower256-bit comparison is retained in `docs/inkling2-dispatch-eight-evidence.json`.
+
+- Fuse native K-format Inkling SiTU packing, cache down metadata inside the existing 128 MiB budget, specialize/parallelize normalized input preparation and stream K blocks at unchanged eight-token width. Add batched resident GPU experts and exact integer attention epilogues; retain the existing dynamic expert queue. One CPU sample gives 25.93 tok/s prefill and 10.32 tok/s decode with Q4_K_M/Q4T. See `docs/inkling2-super-eight-evidence.json`.
+
+- Fuse native Inkling CPU normalization/packing, grouped worker dispatch and MoE convolution/residual. Add batched integer Vulkan Q4T prefill, grouped decode projections and exact native SiTU/resident expert sequences. The sixteen-token K tile was removed after a slower combined trial. The selected single CPU sample is 24.87 tok/s prefill and 10.30 tok/s decode; Q4_K_M and Q4T remain. See `docs/inkling2-batch-chain-eight-evidence.json`.
+
+- Share native Inkling projection packing and local normalization, fuse four-query Q4T score finishing, add sixteen-token Q8_0/Q5_0 tiles and transfer rewind-buffer ownership. Cooperative Vulkan integer products and exact device activation packing pass conformance. Full resident integer MoE remains disabled after an arithmetic prerequisite mismatch. One 2048/16 CPU sample is 25.20 tok/s prefill and 10.38 tok/s decode, effectively unchanged; see `docs/inkling2-projection-eight-evidence.json`.
+
+- Add resident native Vulkan Q4T relative attention with cache lifecycle validation; reduce CPU cache bookkeeping, score finishing and constrained-generation overhead while retaining quantized weights and existing runtime infrastructure.
+
+- Improve native Inkling Q4T CPU execution with parallel output softcapping, direct selected-expert preparation, whole-run SiTU packing, SIMD relative bias, cached stable scheduling, and narrow greedy grammar projection with full-logit lifecycle recovery.
+
+### Added
+
+- Inkling integer expert batches can read selected packed inputs directly, scheduling accounts for eight-vector tiles, and streaming scratch is bounded to used buffers. Q4T gains wider independent value updates; scalar convolution checks its produced values. Native Vulkan reference products can share one submission with distinct packed-input regions, including separate inputs and mixed formats. Private 4 GiB checkpoint and Q4T lifecycle checks pass. The block-layout and vector transcendental experiments were rejected. Single-run CPU results are 24.04 tok/s prefill and 9.89 tok/s decode, with no decode gain claimed; see `docs/inkling2-quantized-followup-eight-evidence.json`.
+
+- Inkling quantized execution adds eight-vector K tiles, medium-batch streaming, direct coefficient and expert-output access, restricted four-row products, batched Q4T rotations and four-query attention. The existing Vulkan engine gains reference integer products for five native formats. Q4_K_M and Q4T remain selected; CPU single-run results are 23.30 tok/s prefill and 10.11 tok/s decode, with no decode gain claimed. The GPU trial timed out and is not selected as a speed improvement. See `docs/inkling2-quantized-next-eight-evidence.json`.
+
+- Native Inkling CPU integer products retain packed worker buffers, hoist input tables, share gate/up and paired-row activation reads, guard the cheaper signed-dot transform, write outputs directly, use routing-aware bounded coefficients, and batch eight Q8 vectors. Q4_K_M weights and Q4T storage remain selected. Exact checkpoint, lifecycle and tok/s results are recorded in `docs/inkling2-integer-pair-eight-evidence.json`.
+- Native Inkling CPU integer execution adds streaming small-batch products, SIMD reference packing/corrections, bounded four-vector correction workspace, direct compressed-panel reading, compact physical coefficient caching, measured SiTU packing and format-aware dispatch. Q4_K_M weights and Q4T cache remain selected. Long-row reference-lane regressions, full independent checkpoint comparisons and single-pass tok/s are recorded in `docs/inkling2-integer-stream-eight-evidence.json`.
+
+- Native Inkling CPU integer products share decoded byte tiles across two output rows and four token vectors, use VNNI while preserving reference reductions, share gate/up packed inputs, cache physical headers within the existing budget, fuse SiTU with down-input packing, and tune integer expert chunks. Compressed interleaved weights pass independent full-model comparison. Q4_K_M weights and Q4T cache remain selected; single-pass tok/s and release evidence are in `docs/inkling2-integer-eight-evidence.json`.
+
+- Native Inkling row-major CPU integer arithmetic and batched experts now match both independent checkpoint references bit-for-bit. Q4T prefill, decode, cancellation and rewind pass with integer activations. Binary16 conversion also correctly rounds values above the smallest-subnormal midpoint. Independent operator fixtures and unchanged F32/Vulkan regression checks are recorded in `docs/inkling2-integer-native-evidence.json`.
+
+- Inkling Q4T attention decodes full key tiles and grouped values in registers. A longer checkpoint test also fixes Vulkan Q4T prefill/decode consistency through transactional row execution, covering cancellation and rewind. Context-lookup drafting and one-pass long-prompt tok/s evidence are recorded in `docs/inkling2-q4t-four-evidence.json`. CPU row-major integer activation conformance is now recorded separately in `docs/inkling2-integer-native-evidence.json`.
+
+- Native Inkling Q4T cache integration: existing transformed keys and ordinary-Q4 values, grouped attention with bounded SIMD decoding, and validated snapshots, cancellation, rewind and eviction. See `docs/inkling2-q4t-evidence.json` for independent attention checks and tok/s measurements.
+
+- Native exact Q4_K products and direct F32 panel reading, selected-block prefetch, scoped CPU core placement, and persistent marked Inkling conversation boundaries. Matched long-prompt tok/s measurements and reference evidence: `docs/inkling2-expert-five-evidence.json`.
+
+- Native Inkling CPU attention shares eight-position key tiles across grouped heads and paired queries, accelerates F16 expansion checks, fuses finite validation into normalization/clipping outputs and schedules experts by estimated work. The slower resident-GPU prototype was reverted. Long-prompt measurements and reference/regression evidence are in `docs/inkling2-attention-six-evidence.json`.
+
+- Inkling F16 KV caches use vectorized expansion and reuse converted key/value rows across grouped heads. Seven other CPU/GPU candidates were tested and rejected after measurements; their prior production paths remain. Long-prompt trials and validation are recorded in `docs/inkling2-resident-eight-evidence.json`.
+
+- Native Inkling uses stable routing buckets, direct indexed expert inputs, fused batches through sixteen and bounded physical quantization metadata. Expert chunks adapt to batch size. Vulkan sequences now include the checkpoint's output convolution and accurate loop-control blending; explicit greedy context lookup can cap proposals using measured verification costs. Tests, reference comparisons and measurements are recorded in `docs/inkling2-pipeline-eight-evidence.json`.
+
+- Native Inkling adds fused small-batch Q4_K/Q5_K/Q6_K products, retained MoE worker scratch, in-place learned RMS and SIMD residual mixing. Related attention heads share KV loads; Vulkan supports batched attention gates and a final normalization/output sequence. A bounded checkpoint ring accelerates reachable drafting rewinds. Qualification is recorded in `docs/inkling2-further-eight-evidence.json`.
+
+- Native Inkling execution adds small-batch products, fused Q5_K/Q6_K output products, SIMD finite checks and unweighted RMS normalization. Scratch lifetimes avoid blanket clearing, cancellation and rewind share convolution backup, and decode attention groups shared KV reads. Vulkan can chain the attention gate, multiplication and output projection. Reference and single-run measurement evidence is retained in `docs/inkling2-next-eight-evidence.json`.
+
+- Native Inkling evaluation reuses bounded workspaces and physical scalar tables, fuses eight-output Q4_K products, vectorizes three-tap convolution, and reduces residual staging copies. A call-boundary checkpoint accelerates reachable rewinds with the existing full-replay fallback. CPU prefill uses grouped projection jobs; Vulkan chains control projections without an intermediate host round trip. Qualification and measured limits are retained in `docs/inkling2-eight-candidates-evidence.json`.
+
+- Embedded inference sessions can opt into the existing committed-prompt prefix reuse and inspect the last retained-token count.
+- Native Q8 products fuse unpacking with eight-output accumulation; CPU expert work uses grouped jobs, Q5_K/Q6_K use guarded vector decoders, and Inkling control projections reuse grouped backend dispatch. Inkling speculative verification accepts reusable capacity buffers while preserving trailing output space. See `docs/inkling2-optimization-set-evidence.json` for validation and measured limits.
+
+- **Native fixed-loop Inkling 2 Mini.** GGUF recognition, strict metadata/tensor
+  validation, a reusable physical/logical scheduler, depth attention, cross-loop
+  controllers, per-visit convolution/KV state, hybrid relative attention and SITU
+  MoE execution reuse the existing engine, CPU workers, Vulkan products and
+  sessions. The Q4_K_M checkpoint passes independent F32-activation comparisons.
+  Tokenization, typed tool calls and streaming use the existing APIs and harness.
+  A real native V3 task passes required verification and recovery. The complete
+  AUnit, source, conformance, fixture and seeded fuzz checks pass; initial CPU
+  and bounded-GPU measurements are retained in `docs/inkling2-benchmarks.md`.
+  F16 cache precision has a separately calibrated comparison profile. Variable
+  loops, vision and stock CPU byte-activation equivalence remain unqualified;
+  see `docs/inkling2-verification.md` for release status.
+
+- **Native Inkling batched prefill.** The existing evaluator batches projections
+  and F32 expert execution while preserving token-ordered attention and
+  convolution state. Prefix replay uses the same bounded batch path. Exact
+  scalar/batch, cancellation, rewind and independent checkpoint tests pass;
+  the full suite passes 1,029 cases. Measurement conditions and remaining
+  performance verification are in `docs/inkling2-batched-prefill-protocol.md`.
+
+- **Inkling attention execution.** Independent heads use the existing CPU worker
+  pool and per-head score rows, preserving their reduction order. Relative-bias
+  distances are decoded once per visit and reused across heads and tokens.
+  A single dispatch covers the visit's whole batch, with causal query bounds
+  and the existing sliding-cache margin.
+
+- **Inkling convolution tap reuse.** Batched convolution decodes each channel's
+  fixed taps once and reuses them across tokens, preserving that channel's
+  causal history and the existing scalar arithmetic.
+
+- **Inkling clipping-weight reuse.** Head clipping decodes learned weights once
+  per batch and reuses them across tokens with the original reduction order.
+
+- **Exact CPU SIMD dot accumulation.** The existing wide-vector capability
+  enables four binary64 lanes while preserving the portable reduction, scalar
+  tails and separate multiply/add operations. Fifteen-format exact comparisons
+  and native Inkling CPU/private-Vulkan checkpoint checks pass. One 512-token
+  CPU prefill measured 79.967 seconds versus 107.022 seconds previously, with
+  identical output; see `docs/inkling2-wide-dot-speed-evidence.json`.
+
+- **Four-token SIMD weight reuse.** Batched dot products share each weight
+  load and conversion across four tokens while preserving each original
+  reduction. Exact comparisons cover batch sizes 1–13 and fifteen formats;
+  native CPU/private-Vulkan checkpoint checks pass. One 512-token CPU prefill
+  measured 48.150 seconds versus 79.967 seconds previously, with identical
+  output; see `docs/inkling2-four-dot-speed-evidence.json`.
+
+- **Inkling attention-value SIMD.** Four independent binary64 channels advance
+  together with the original accumulation order. Exact-cache rows are read
+  directly, while F16 conversion and portable arithmetic are preserved. All
+  2,425 captured activation files match the preceding executable exactly.
+  One decode timing measured 7.531 seconds versus 7.886 seconds; prefill
+  remained essentially unchanged. See `docs/inkling2-attention-values-speed-evidence.json`.
+
+- **Four-position Inkling attention scoring.** Independent cached positions
+  share a SIMD dot loop while retaining each original F32 reduction and
+  chronological relative-bias/softmax calculation. Cache wraps and scalar
+  remainders retain their existing semantics; all 2,425 captured activation
+  files match exactly. One 512-token CPU prefill measured 46.126 seconds
+  versus 47.785 seconds; see `docs/inkling2-attention-scores-speed-evidence.json`.
+
+- **Eight-token CPU weight reuse.** Larger batched dot products share each
+  weight load and conversion across eight vectors, preserving the original
+  reductions and using four-vector/scalar paths for remainders. Exact
+  comparisons cover batch sizes 1–17 across fifteen formats. One 512-token
+  CPU prefill measured 44.657 seconds versus 46.126 seconds; see
+  `docs/inkling2-eight-dot-speed-evidence.json`.
+
+- **Inkling residual reuse and pooled controllers.** Completed residual
+  blocks and loop-message sources retain their normalized values in existing
+  buffers. Independent controller gates use the existing CPU workers with
+  unchanged scalar arithmetic. All 2,425 captured activation files match
+  exactly. Combined prefill measured 43.110 seconds versus 44.657 seconds
+  at task start; see `docs/inkling2-control-pool-speed-evidence.json`.
+
+- **Exact paired-row Q4 products.** CPU batches share activation loads and
+  conversions across adjacent Q4_K rows while preserving F64 reductions,
+  span boundaries and fallback behavior. New AUnit cases verify exact
+  results, row ranges, remainders and unaligned offsets; all 2,425 checkpoint
+  captures match. One 512-token prefill measured 41.339 seconds versus
+  43.110 seconds; see `docs/inkling2-q4-row-pair-speed-evidence.json`.
+
+- **Paired rows for more quantized tensors.** The exact CPU kernel now
+  covers Q5_K, Q6_K, Q5_0 and Q8_0 as well as Q4_K, using existing block
+  metadata and retaining single-token execution. Five-format exact tests
+  and all reference profiles pass. One prefill measured 37.858 versus
+  41.339 seconds; decode measured slower in the same sample. Both figures
+  are retained in `docs/inkling2-quant-row-pair-speed-evidence.json`.
+
+- **Six vectors per quantized row pair.** The exact CPU kernel shares each
+  widened weight across six activation vectors with twelve SIMD accumulators.
+  Existing four-vector and remainder paths preserve reduction order. Expanded
+  exact tests and all checkpoint profiles pass. One prefill measured
+  37.108 versus 37.858 seconds; decode measured
+  7.179 versus 7.615 seconds. See
+  `docs/inkling2-six-row-pair-speed-evidence.json`, including rejected trials.
+
+- **Exact fused products in paired CPU batches.** Binary32 operands widened
+  to binary64 have exactly representable products, allowing paired kernels
+  to fuse their multiply/add without changing finite results. Existing FMA
+  feature checks apply. New extreme-input scalar comparisons and all
+  reference profiles pass. One prefill measured 30.508 versus
+  37.108 seconds; decode measured 7.575 versus
+  7.179 seconds. See `docs/inkling2-exact-fma-speed-evidence.json`.
+
+- **Three weight rows share CPU activation conversions.** Selected quantized
+  batches process three rows and four vectors with twelve F64 accumulators,
+  keeping exact FMA and reduction order. Pair and single-row paths handle
+  other cases. Expanded bitwise and extreme-input tests pass. One prefill
+  measured 29.879 versus 30.508 seconds; decode measured
+  7.826 versus 7.575 seconds. See
+  `docs/inkling2-three-row-speed-evidence.json`.
+
+- **Eight independent output rows during CPU decoding.** Single-vector
+  quantized products share activation loads across eight rows and advance
+  independent F64 accumulators with exact FMA. Existing span reductions,
+  batch paths and leftover rows are preserved. Expanded exact and reference
+  tests pass. One decode measured 6.412 versus 7.826
+  seconds; prefill measured 29.712 versus 29.879 seconds.
+  See `docs/inkling2-eight-row-decode-speed-evidence.json`.
+
+- **Floating-point tensors share eight-row decoding.** The exact single-vector
+  kernel now covers F32/F16/BF16, reading validated F32 rows directly without
+  copying into workspace. Odd widths and floating batch paths are preserved.
+  Expanded eight-format and extreme-input tests pass. One decode measured
+  6.169 versus 6.412 seconds; prefill measured
+  29.691 versus 29.712 seconds. See
+  `docs/inkling2-float-decode-speed-evidence.json`.
+
+- **Vector Q8_0 span unpacking.** Existing AVX2/F16C feature guards select
+  a native span decoder that widens eight signed bytes at a time and avoids
+  scalar/vector transitions per block. The scalar fallback and bounds checks
+  remain. All half-scale encodings and signed-byte values are compared, with
+  exact finite results. One decode measured 5.403 versus
+  6.169 seconds; prefill measured 29.154 versus
+  29.691 seconds. See `docs/inkling2-q8-unpack-speed-evidence.json`.
+
+- **Native SIMD Q4_K nibble decoding.** The existing wide decoder shares
+  scalar scale extraction and unpacks eight low/high nibbles at a time.
+  Fused subtraction preserves finite bits because the bounded product is
+  exact in binary32. Expanded half-scale, factor/minimum and layout tests
+  pass. One decode measured 5.401 versus 5.403 seconds;
+  prefill measured 28.752 versus 29.154 seconds. See
+  `docs/inkling2-q4-unpack-speed-evidence.json`.
+
 ### Fixed
+
+- **Benchmark model-memory bounds.** `tests speed --memory-limit` now reaches
+  model preparation and its single-allocation cap, matching the native command.
+  Shared-host models larger than the default 16 GiB allocation cap can use the
+  explicit caller budget. Focused memory-budget and real-device tests pass.
+
+- **Template mapping keys and JSON separators.** Indexed assignments retain
+  dynamic mapping keys. `tojson` accepts an explicit separator pair, including
+  when indented, and bounds expansion by the existing intermediate-value limit.
+  All six Inkling official template cases match independent recordings. Sender
+  names, tool call IDs and result identities survive history rebuilding,
+  compaction and version-2 checkpoints; older checkpoint versions still load.
 
 - **Runtime call constraints.** Open JSON readers constrain marked calls on later turns as well as the
   first. Generation resumed inside a partial call retains its grammar prefix; captured evidence records
@@ -43,6 +288,16 @@ Keep a Changelog and the project uses semantic versioning.
   lookup, including independently tested negative outcomes and replay.
 
 ### Added
+
+- **Looped execution foundation.** A bounded native schedule helper separates
+  physical weights, logical visits and session-state slots, with independent
+  source-trace AUnit coverage. Inkling 2 Mini architecture, metadata, reference
+  qualification and V3 task documents track the remaining work. This foundation
+  underpins the native fixed-loop decoder described above.
+
+- **Inkling tokenizer mapping.** The `inkling2` pre-tokenizer uses the existing
+  GPT-4o cutting rule, checked against independent expression tests and
+  vocabulary-only reference recordings for text, Ada, Unicode and markers.
 
 - **Historical Ada transfer evaluation.** Native test-crate tools construct pinned real-project snapshots,
   qualify protected independent graders, isolate upstream answers and sibling attempts, and compare frozen

@@ -16,6 +16,9 @@
 //  invocation reads only the element it writes, so overlapping them is safe
 //  and saves a buffer.
 
+#ifdef NATIVE_CONTROLS
+#extension GL_ARB_gpu_shader_fp64 : require
+#endif
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : enable
 #extension GL_EXT_shader_16bit_storage : require
 
@@ -43,6 +46,9 @@ layout(std430, binding = 3) writeonly buffer Halves { float16_t h[]; };
 //  step reads them -- the arms come from here rather than through bindings
 //  nought and one, and half the bytes cross for each.
 layout(std430, binding = 3) readonly  buffer Arms   { float16_t a[]; };
+
+//  Additional immutable caller rows for native controller/convolution steps.
+layout(std430, binding = 4) readonly buffer Payload { float extra[]; };
 
 layout(push_constant) uniform Shape {
     //  How many elements each arm holds.
@@ -118,6 +124,66 @@ float logistic(float x) {
     return 1.0 / (1.0 + exp(-clamp(x, -60.0, 60.0)));
 }
 
+//  Native binary32 logistic: exactly the host's operation order, with no
+//  contraction. Existing modes keep their original exponential contract.
+float native_logistic(float x) {
+    precise float held = clamp(-x, -87.0, 87.0) * 1.44269504088896;
+    precise float moved = held + 12582912.0;
+    precise float whole = moved - 12582912.0;
+    precise float f = held - whole;
+    precise float p = 0.009618129107629 + f * 0.001333355814643;
+    p = 0.055504108664822 + f * p;
+    p = 0.240226506959101 + f * p;
+    p = 0.693147180559945 + f * p;
+    p = 1.0 + f * p;
+    precise float raised = p * uintBitsToFloat(uint(int(whole) + 127) << 23);
+    precise float denominator = 1.0 + raised;
+    precise float answer = 1.0 / denominator;
+    return answer;
+}
+
+//  The host computes tanh on the widened binary32 argument, then rounds
+//  once. A separate optional pipeline retains that accuracy without adding
+//  a Float64 requirement to the ordinary shared combine shader.
+float control_tanh(float x) {
+    if (x == 0.0) return x;
+#ifdef NATIVE_CONTROLS
+    precise double a = abs(double(x));
+    if (a < 0.0001lf) {
+        precise double square = a * a;
+        precise double result = a * (1.0lf + square * (-1.0lf / 3.0lf + square * (2.0lf / 15.0lf)));
+        return float(x < 0.0 ? -result : result);
+    }
+    if (a > 20.0lf) return x < 0.0 ? -1.0 : 1.0;
+    precise double z = -2.0lf * a;
+    precise double n = floor(z * 1.4426950408889634074lf + 0.5lf);
+    precise double remainder = z - n * 0.69314718055994530942lf;
+    precise double p = 1.1470745597729724714e-11lf;
+    p = 1.6059043836821614599e-10lf + remainder * p;
+    p = 2.0876756987868098979e-9lf + remainder * p;
+    p = 2.5052108385441718775e-8lf + remainder * p;
+    p = 2.7557319223985892511e-7lf + remainder * p;
+    p = 2.7557319223985890653e-6lf + remainder * p;
+    p = 2.4801587301587301584e-5lf + remainder * p;
+    p = 1.9841269841269841253e-4lf + remainder * p;
+    p = 1.3888888888888889419e-3lf + remainder * p;
+    p = 8.3333333333333332177e-3lf + remainder * p;
+    p = 4.1666666666666664354e-2lf + remainder * p;
+    p = 1.6666666666666665741e-1lf + remainder * p;
+    p = 0.5lf + remainder * p;
+    p = 1.0lf + remainder * p;
+    p = 1.0lf + remainder * p;
+    precise double power = packDouble2x32(uvec2(0u, uint(int(n) + 1023) << 20));
+    precise double exponential = p * power;
+    precise double numerator = 1.0lf - exponential;
+    precise double denominator = 1.0lf + exponential;
+    precise double result = numerator / denominator;
+    return float(x < 0.0 ? -result : result);
+#else
+    return tanh(clamp(x, -20.0, 20.0));
+#endif
+}
+
 //  x / (1 + exp(-x)), guarded so a large negative x cannot overflow the
 //  exponential. The host computes the same thing the same way.
 float sigmoid_weighted(float x) {
@@ -170,6 +236,31 @@ void main() {
         return;
     }
 
+    if (shape.unit == 13u) {
+        //  One invocation owns a channel and processes token history in order.
+        if (index >= shape.row) return;
+        uint taps = uint(uintBitsToFloat(shape.limit_bits));
+        precise float history[3];
+        for (uint lag = 0u; lag < taps - 1u; ++lag)
+            history[lag] = extra[taps * shape.row + (taps - 1u) * index + lag];
+        for (uint token = 0u; token < shape.width / shape.row; ++token) {
+            uint at = token * shape.row + index;
+            precise float raw = g[at];
+            precise float total = 0.0;
+            for (uint tap = 0u; tap < taps; ++tap) {
+                precise float source = tap == taps - 1u ? raw : history[tap];
+                precise float product = extra[taps * index + tap] * source;
+                total = total + product;
+            }
+            precise float joined = raw + total;
+            precise float result = joined * uintBitsToFloat(shape.alpha_bits);
+            y[at] = result;
+            for (uint lag = 1u; lag < taps - 1u; ++lag) history[lag - 1u] = history[lag];
+            history[taps - 2u] = raw;
+        }
+        return;
+    }
+
     bool  halves = shape.gate_at > 0u;
 
     float gate = halves ? float (a[shape.gate_at - 1u + index]) : g[index];
@@ -180,6 +271,15 @@ void main() {
 
     if (shape.unit == 2) {
         made = gate + other;
+    } else if (shape.unit == 12) {
+        precise float gain = control_tanh(gate);
+        precise float forget = control_tanh(other);
+        precise float removed = forget * extra[index];
+        precise float kept = extra[index] - removed;
+        precise float added = gain * extra[shape.width + index];
+        made = kept + added;
+    } else if (shape.unit == 11) {
+        made = native_logistic(other) * gate;
     } else if (shape.unit == 6) {
         made = logistic(gate) * other;
     } else if (shape.unit == 7) {

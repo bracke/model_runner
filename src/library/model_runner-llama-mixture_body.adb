@@ -4,7 +4,8 @@ procedure Mixture_Body
    Current : Layer;
    Input   : T.Real_Array_Access;
    Result  : T.Real_Array_Access;
-   Status  : out E.Error_Info)
+   Status  : out E.Error_Info;
+   Trace   : Mixture_Observer := null)
 is
    Settings : Configuration renames Item.Owner.Settings;
    Used     : constant Natural := Settings.Experts_Used;
@@ -16,6 +17,17 @@ is
 
    Total  : Real := 0.0;
    Usable : Boolean;
+
+   procedure Note_Shares (Which : String) is
+      Values : Real_Array (0 .. Element_Count (Used) - 1);
+   begin
+      if Trace /= null then
+         for Slot in Share'Range loop
+            Values (Element_Count (Slot)) := Share (Slot);
+         end loop;
+         Trace (Which, Values);
+      end if;
+   end Note_Shares;
 
    --  Whether this position's experts are read gathered out of the
    --  stacks the device holds, which is also where it is routed: the
@@ -112,14 +124,33 @@ begin
          Current.Router_Bias.all);
    end if;
 
+   if Trace /= null then
+      Trace ("ffn_moe_logits", Item.Routing.all);
+   end if;
    if Settings.Sigmoid_Gate then
-      K.Sigmoid (Item.Routing.all);
+      if Settings.Kind = Inkling2_Loop and then (for some Role of Item.Arithmetic => Role) then
+         for Value of Item.Routing.all loop Value := Reference_Sigmoid (Value); end loop;
+      else
+         K.Sigmoid (Item.Routing.all);
+      end if;
    else
       K.Softmax (Item.Routing.all, Usable);
       if not Usable then
          Status := E.Make (E.Tensor_Non_Finite_Value);
          return;
       end if;
+   end if;
+
+   if Trace /= null then
+      Trace ("ffn_moe_probs", Item.Routing.all);
+      declare
+         Biased : Real_Array := Item.Routing.all;
+      begin
+         if Current.Select_Bias /= null then
+            K.Add (Biased, Current.Select_Bias.all);
+         end if;
+         Trace ("ffn_moe_probs_biased", Biased);
+      end;
    end if;
 
    --  What an expert is chosen by: its score, and the selection bias
@@ -171,6 +202,27 @@ begin
       end;
    end loop;
 
+   if Settings.Kind = Inkling2_Loop and then (for some Role of Item.Arithmetic => Role) then
+      declare
+         Wide_Total : N.Wide_Real := 0.0;
+      begin
+         for Value of Share loop Wide_Total := Wide_Total + N.Wide_Real (Value); end loop;
+         Total := Real (Wide_Total);
+      end;
+   end if;
+
+   if Trace /= null then
+      declare
+         Ids : Real_Array (0 .. Element_Count (Used) - 1);
+      begin
+         for Slot in Chosen'Range loop
+            Ids (Element_Count (Slot)) := Real (Chosen (Slot));
+         end loop;
+         Trace ("ffn_moe_topk", Ids);
+      end;
+      Note_Shares ("ffn_moe_weights");
+   end if;
+
    --  The shares came out of a softmax, so they are positive and sum to
    --  one over every expert; over the chosen few they sum to less, and
    --  this puts them back on a scale where the sum below is a weighted
@@ -184,9 +236,11 @@ begin
       end if;
 
       for Slot in Share'Range loop
-         Share (Slot) := Share (Slot) / Total;
+         Share (Slot) := Share (Slot) / (Total + (if Settings.Kind = Inkling2_Loop then 1.0E-20 else 0.0));
       end loop;
    end if;
+
+   Note_Shares ("ffn_moe_weights_norm");
 
    <<Routed>>
 
@@ -211,6 +265,8 @@ begin
          Share (Slot) := Share (Slot) * Settings.Expert_Scale;
       end loop;
    end if;
+
+   Note_Shares ("ffn_moe_weights_scaled");
 
    --  Gemma4's scale an expert, on its share, as Mixture_Batch takes it.
    if Current.Expert_Down_Scale /= null then
@@ -421,18 +477,20 @@ begin
                      + Expert_Feed - 1));
          end if;
 
+         if Trace /= null then
+            Trace ("expert_gate_" & Ada.Strings.Fixed.Trim (Slot'Image, Ada.Strings.Both), Gate_Room.all);
+            Trace ("expert_up_" & Ada.Strings.Fixed.Trim (Slot'Image, Ada.Strings.Both), Up_Room.all);
+         end if;
+
          --  The gate this architecture states. A mixture used to be
          --  Qwen3_MoE only, which is the plain logistic gate; the
          --  clamped one below reaches the up projection as well as the
          --  gate, so it cannot be an activation followed by a multiply.
-         if Item.Owner.all.Settings.Gate_Alpha > 0.0 then
-            K.Clamped_Gate
-              (Gate_Room.all, Up_Room.all,
-               Item.Owner.all.Settings.Gate_Alpha,
-               Item.Owner.all.Settings.Gate_Limit);
-         else
-            Gate_Activation (Item.Owner.all, Gate_Room.all);
-            K.Multiply (Gate_Room.all, Up_Room.all);
+         Expert_Activation (Item.Owner.all, Gate_Room.all, Up_Room.all,
+                            Reference_Arithmetic => (for some Role of Item.Arithmetic => Role));
+
+         if Trace /= null then
+            Trace ("expert_situ_" & Ada.Strings.Fixed.Trim (Slot'Image, Ada.Strings.Both), Gate_Room.all);
          end if;
 
          --  Grouped, the gated vector is laid into the one activation
@@ -453,6 +511,9 @@ begin
          Product (Item, Which.Down, Gate_Room, Item.Expert_Row, Status);
          if E.Is_Error (Status) then
             return;
+         end if;
+         if Trace /= null then
+            Trace ("expert_down_" & Ada.Strings.Fixed.Trim (Slot'Image, Ada.Strings.Both), Item.Expert_Row.all);
          end if;
 
          if Current.Expert_Down_Bias /= null then

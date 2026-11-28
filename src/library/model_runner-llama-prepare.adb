@@ -19,7 +19,8 @@ procedure Prepare
    Cache    : Cache_Precision := Exact;
    Paged    : Boolean := True;
    Beside   : Interfaces.Unsigned_64 := 0;
-   Expert_Cache : Interfaces.Unsigned_64 := 0)
+   Expert_Cache : Interfaces.Unsigned_64 := 0;
+   Target : access Model'Class := null)
 is
    Ignored : E.Error_Info;
 
@@ -368,6 +369,10 @@ is
 
 begin
    Close (Item, Ignored);
+   if E.Is_Error (Ignored) then
+      Status := Ignored;
+      return;
+   end if;
    Status := E.Success;
    Item.Expert_Cache_Room := 0;
 
@@ -464,6 +469,20 @@ begin
    if E.Is_Error (Status) then
       Fail (Status);
       return;
+   end if;
+
+   if Item.Settings.Kind = DFlash then
+      if Target = null or else not Target.Ready or else Target.Settings.Kind /= Inkling2_Loop
+        or else Target.Settings.Embedding /= Item.Settings.Embedding
+        or else Target.Settings.Vocabulary /= Item.Settings.Vocabulary
+        or else not Model_Runner.Backend."=" (Target.Able.Kind, Model_Runner.Backend.Backend_CPU)
+        or else Stretch /= No_Rotary_Request
+        or else not Model_Runner.Backend."=" (Backend, Model_Runner.Backend.Backend_CPU) or else Repack /= No_Repack
+      then
+         Fail (E.Make (E.Arch_Unsupported_Feature));
+         E.Add_Text (Status, "feature", "dflash.target_or_backend", E.Param_Identifier);
+         return;
+      end if;
    end if;
 
    P.Publish (Observer, P.Load_Progress (P.Loading_Tokenizer));
@@ -758,6 +777,45 @@ begin
    if C.Is_Cancelled (Cancel) then
       Fail (E.Make (E.Generation_Cancelled));
       return;
+   end if;
+
+   if Item.Settings.Kind = DFlash then
+      --  Reuse the normal tokenizer and mapped arena. Only the embedding
+      --  and head views come from the already prepared target.
+      declare
+         package Words renames Model_Runner.Tokenizer;
+         Norm_Bytes : constant Interfaces.Unsigned_64 :=
+           4 * Interfaces.Unsigned_64
+             (12 * Item.Settings.Embedding + 9 * Item.Settings.Head_Size + 16
+              + Item.Settings.Vocabulary + 3 * Item.Settings.DSpark.Markov_Rank);
+      begin
+         for Id in 0 .. Item.Settings.Vocabulary - 1 loop
+            if Words.Token_Text (Item.Words, Words.Token_Id (Id))
+                /= Words.Token_Text (Target.Words, Words.Token_Id (Id))
+              or else not Words."=" (Words.Class_Of (Item.Words, Words.Token_Id (Id)),
+                                    Words.Class_Of (Target.Words, Words.Token_Id (Id)))
+            then
+               Fail (E.Make (E.Arch_Invalid_Metadata));
+               E.Add_Text (Status, "key", "dflash.target_tokenizer", E.Param_Identifier);
+               return;
+            end if;
+         end loop;
+         Mem.Check_Allocation (Item.Accounting, Mem.Converted_Weights, Norm_Bytes, Status);
+         if E.Is_Error (Status) then Fail (Status); return; end if;
+         DSpark_Tensors (Item, Source, Item.Settings, Load => True, Status => Status);
+         if E.Is_Error (Status) then Fail (Status); return; end if;
+         Item.Embeddings := Target.Embeddings;
+         Item.Output := Target.Output;
+         Item.Output.Rows := Element_Count (Item.Settings.Vocabulary);
+         Item.Output_As_Stored := Item.Output;
+         Item.DSpark_Target := Target.all'Unchecked_Access;
+         Target.Borrowers := Target.Borrowers + 1;
+         Item.Packing := No_Repack;
+         Item.Ready := True;
+         P.Publish (Observer, P.Load_Progress (P.Model_Ready));
+         Status := E.Success;
+         return;
+      end;
    end if;
 
    declare
@@ -2590,6 +2648,14 @@ begin
          end if;
       end Resolve_Block;
    begin
+      if Item.Settings.Kind = Inkling2_Loop then
+         Inkling_Tensors (Item, Source, Item.Settings, Load => True, Status => Status);
+         if E.Is_Error (Status) then
+            Fail (Status);
+            return;
+         end if;
+         goto Layers_Resolved;
+      end if;
       Resolve
         (Item, Source, "token_embd.weight", Vocab, Width,
          Item.Embeddings, Status, Repack);
@@ -2981,6 +3047,8 @@ begin
          Fail (Status);
          return;
       end if;
+      <<Layers_Resolved>>
+      null;
    end;
 
    --  Or write them out again in panels, if that was what was asked.
@@ -3570,6 +3638,7 @@ begin
                      Held (Which).all.Columns, Files.Base (Map.all),
                      Files.Size (Map.all), Header_Bytes + Base_Of (Which),
                      Fresh, Ok);
+                  Fresh.Reference_Activations := Held (Which).all.Reference_Activations;
                   Held (Which).all := Fresh;
                end;
             end loop;
@@ -3846,6 +3915,7 @@ begin
                         return;
                      end if;
 
+                     Fresh.Reference_Activations := Held (Index).all.Reference_Activations;
                      Held (Index).all := Fresh;
                   end;
                end loop;
@@ -4129,6 +4199,7 @@ begin
                      return;
                   end if;
                   Fresh.Role := Held (Index).all.Role;
+                  Fresh.Reference_Activations := Held (Index).all.Reference_Activations;
                   Held (Index).all := Fresh;
                end;
             end loop;

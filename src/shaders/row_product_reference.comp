@@ -1,0 +1,136 @@
+#version 450
+#extension GL_EXT_integer_dot_product : require
+// Native reference integer products. Activation bytes and scales are packed
+// once on the device where reference packing is available, or by the existing
+// Ada packer into binding 6. No floating weight expansion is required.
+layout(local_size_x = 64) in;
+layout(std430, binding = 0) readonly buffer Weights { uint w[]; };
+layout(std430, binding = 2) writeonly buffer Results { float y[]; };
+layout(std430, binding = 6) readonly buffer Rounded { int q[]; };
+layout(std430, binding = 6) readonly buffer Scales { float scales[]; };
+layout(push_constant) uniform Shape {
+    uint rows, columns, count, first, format, base, joins, table;
+    uint members[16];
+    uint stride, apart, routed;
+} shape;
+uint byte_at(uint p) { return (w[p >> 2u] >> ((p & 3u) * 8u)) & 255u; }
+int signed_byte(uint p) { uint a = byte_at(p); return a >= 128u ? int(a) - 256 : int(a); }
+float half_at(uint p) { return unpackHalf2x16(byte_at(p) | (byte_at(p + 1u) << 8u)).x; }
+uint coefficient(uint p, uint g, bool minimum) {
+    uint a = g + (minimum ? 4u : 0u);
+    if (g < 4u) return byte_at(p + 4u + a) & 63u;
+    if (minimum) return (byte_at(p + 8u + g) >> 4u) | ((byte_at(p + 8u + g - 4u) >> 6u) << 4u);
+    return (byte_at(p + 8u + g) & 15u) | ((byte_at(p + 4u + g - 4u) >> 6u) << 4u);
+}
+int code_at(uint p, uint c) {
+    if (shape.format == 7u) return signed_byte(p + 2u + c);
+    if (shape.format == 5u) {
+        uint a = byte_at(p + 6u + c % 16u);
+        int v = int((a >> (c < 16u ? 0u : 4u)) & 15u);
+        return v - (((byte_at(p + 2u + c / 8u) >> (c % 8u)) & 1u) == 0u ? 16 : 0);
+    }
+    uint g = c / 32u, k = c % 32u;
+    if (shape.format == 13u) {
+        uint h = g / 4u, part = g % 4u;
+        uint low = byte_at(p + h * 64u + (part % 2u) * 32u + k);
+        uint high = byte_at(p + 128u + h * 32u + k);
+        return int(((low >> (part >= 2u ? 4u : 0u)) & 15u) | (((high >> (part * 2u)) & 3u) << 4u));
+    }
+    uint low = byte_at(p + (shape.format == 11u ? 16u : 48u) + (g / 2u) * 32u + k);
+    uint v = (low >> ((g % 2u) * 4u)) & 15u;
+    if (shape.format == 12u) v |= ((byte_at(p + 16u + k) >> g) & 1u) << 4u;
+    return int(v);
+}
+int weight_word(uint p, uint c) {
+    uint packed = 0u;
+    for (uint j = 0u; j < 4u; ++j) packed |= (uint(code_at(p, c + j)) & 255u) << (8u * j);
+    return int(packed);
+}
+// Eight invocations retain the original eight ordered accumulation streams.
+// Only the final fold crosses lanes; no subgroup-width assumption is required.
+shared float main_sums[64];
+shared float minimum_sums[32];
+void main() {
+    uint lane = gl_LocalInvocationID.x & 7u;
+    uint slot = gl_LocalInvocationID.x / 8u;
+    uint row = gl_WorkGroupID.x * 8u + slot;
+    uint vector = gl_GlobalInvocationID.y;
+    bool valid_row = row < shape.rows && vector < shape.count;
+    bool small = shape.format == 5u || shape.format == 7u;
+    uint elements = small ? 32u : 256u;
+    uint bytes = shape.format == 5u ? 22u : shape.format == 7u ? 34u
+               : shape.format == 11u ? 144u : shape.format == 12u ? 176u : 210u;
+    uint blocks = shape.columns / elements;
+    uint weights = shape.base + row * blocks * bytes;
+    uint input_base = shape.first + vector * shape.columns / 4u;
+    uint scale_base = shape.table + vector * shape.columns / 32u;
+    precise float main_sum = 0.0;
+    precise float minimum_sum = 0.0;
+    if (valid_row) for (uint b = 0u; b < blocks; ++b) {
+        uint at = weights + b * bytes;
+        uint first_word = input_base + b * elements / 4u;
+        int product = 0;
+        for (uint g = 0u; g < (small ? 1u : 8u); ++g) {
+            int activation = q[first_word + g * 8u + lane];
+            int value = dotPacked4x8EXT(activation, weight_word(at, g * 32u + lane * 4u));
+            int factor = small ? 1 : shape.format == 13u
+                ? signed_byte(at + 192u + g * 2u + (lane >= 4u ? 1u : 0u))
+                : int(coefficient(at, g, false));
+            product += value * factor;
+        }
+        if (shape.format == 13u) {
+            int h0 = 0, h1 = 0;
+            for (uint j = 0u; j < 4u; ++j) {
+                h0 += dotPacked4x8EXT(q[first_word + lane * 8u + j], 0x01010101);
+                h1 += dotPacked4x8EXT(q[first_word + lane * 8u + j + 4u], 0x01010101);
+            }
+            product -= 32 * (signed_byte(at + 192u + lane * 2u) * h0
+                           + signed_byte(at + 193u + lane * 2u) * h1);
+        }
+        precise float activation_scale = scales[scale_base + b * (small ? 1u : 8u)];
+        precise float product_scale = half_at(at + (shape.format == 13u ? 208u : 0u)) * activation_scale;
+        main_sum = fma(float(product), product_scale, main_sum);
+        if (!small && shape.format != 13u && lane < 4u) {
+            int bias = 0;
+            for (uint group = lane * 2u; group < lane * 2u + 2u; ++group) {
+                int total = 0;
+                for (uint j = 0u; j < 8u; ++j)
+                    total += dotPacked4x8EXT(q[first_word + group * 8u + j], 0x01010101);
+                bias += int(coefficient(at, group, true)) * total;
+            }
+            precise float minimum_scale = -half_at(at + 2u) * activation_scale;
+            if (shape.format == 11u) minimum_sum = fma(float(bias), minimum_scale, minimum_sum);
+            // Q5_K folds integer biases before the FMA; every stream computes
+            // the same four biases rather than reassociating float additions.
+            else if (lane == 0u) {
+                int biases[4]; biases[0] = bias;
+                for (uint i = 1u; i < 4u; ++i) {
+                    biases[i] = 0;
+                    for (uint group = i * 2u; group < i * 2u + 2u; ++group) {
+                        int total = 0;
+                        for (uint j = 0u; j < 8u; ++j)
+                            total += dotPacked4x8EXT(q[first_word + group * 8u + j], 0x01010101);
+                        biases[i] += int(coefficient(at, group, true)) * total;
+                    }
+                }
+                int total = (biases[0] + biases[2]) + (biases[1] + biases[3]);
+                minimum_sum = fma(float(total), minimum_scale, minimum_sum);
+            }
+        }
+    }
+    main_sums[slot * 8u + lane] = main_sum;
+    if (lane < 4u) minimum_sums[slot * 4u + lane] = minimum_sum;
+    barrier();
+    if (valid_row && lane == 0u) {
+        uint a0 = slot * 8u, m0 = slot * 4u;
+        precise float a = main_sums[a0] + main_sums[a0 + 4u];
+        precise float b = main_sums[a0 + 1u] + main_sums[a0 + 5u];
+        precise float c = main_sums[a0 + 2u] + main_sums[a0 + 6u];
+        precise float d = main_sums[a0 + 3u] + main_sums[a0 + 7u];
+        precise float result = (a + c) + (b + d);
+        if (shape.format == 11u) result += (minimum_sums[m0] + minimum_sums[m0 + 2u])
+                                       + (minimum_sums[m0 + 1u] + minimum_sums[m0 + 3u]);
+        if (shape.format == 12u) result += minimum_sums[m0];
+        y[vector * shape.rows + row] = result;
+    }
+}

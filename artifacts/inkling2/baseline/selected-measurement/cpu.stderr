@@ -1,0 +1,14 @@
+Inkling work plans: hits 424, misses 2648; metadata bytes 0, largest layer 0; batched GPU reductions 0; GPU packing reuses 0
+Inkling work plans: hits 424, misses 2648; metadata bytes 0, largest layer 0; batched GPU reductions 0; GPU packing reuses 0
+  where a prompt's time goes, run 1
+    NORMALIZING   8.960 s   8.6 per cent of what is accounted for
+    PROJECTING    23.986 s   23.0 per cent of what is accounted for
+    ROTATING      0.000 s   0.0 per cent of what is accounted for
+    ATTENDING     25.933 s   24.9 per cent of what is accounted for
+    FEEDING       39.230 s   37.7 per cent of what is accounted for
+    JOINING       4.142 s   4.0 per cent of what is accounted for
+    FUSING        0.000 s   0.0 per cent of what is accounted for
+    READING_OUT   1.897 s   1.8 per cent of what is accounted for
+    ACCOUNTED FOR 104.149 s
+    expert cache candidates: 979770 hits of 983040, 2809 promotions, 2426 evictions, 0 admitted, 0 device runs, 0 of 0 reserved bytes resident
+median of 1 runs:  2048 prompt tokens, 512 generated; 108.312 s wall -- 76.876 s evaluating the prompt (26.64 t/s) and 31.434 s generating (16.29 t/s); loading took 0.263 s; output ef944d4b056d2325, proposed 448 accepted 448 (kept/offered by position: 64/64 64/64 64/64 64/64 64/64 64/64 64/64); 799.90 s of processor time; load 1.02 to 7.24; 58.4 to 89.4 degrees

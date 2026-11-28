@@ -1,0 +1,8 @@
+
+OK gguf container : the integer kernels prove what they read before they read it, and the float path refuses what no array holds (in 0.000106 sec.)
+
+Total Tests Run:   1
+Successful Tests:  1
+Failed Assertions: 0
+Unexpected Errors: 0
+suite: passed

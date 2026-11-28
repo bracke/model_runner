@@ -1,0 +1,171 @@
+{
+  "schema": "model_runner.inkling2.clip_weight_reuse.v1",
+  "collected_at": "2026-11-25T15:30:04.149120+00:00",
+  "status": "Implemented; focused and real-checkpoint correctness checks passed",
+  "change": "Decode learned clipping weights once per head per batch, then reuse them across token rows with original weighted-square reductions and clipping factors.",
+  "source": "src/library/model_runner-llama-inkling_evaluate.adb",
+  "release_build": "passed",
+  "focused_aunit": "15/15",
+  "real_checkpoint_profiles": [
+    "CPU F32 activations/cache",
+    "private Vulkan F32 activations/cache",
+    "CPU F32 activations with independently calibrated F16 cache"
+  ],
+  "numerical_tolerances": "unchanged",
+  "throughput_measurement": {
+    "raw": "artifacts/inkling2/obj/clip-speed/single-speed.json",
+    "measured_passes": 1,
+    "warmup_passes": 1,
+    "prefill_seconds": 107.387,
+    "decode_seconds": 9.179,
+    "reference_output_matched": true,
+    "prior_prefill_seconds": 107.868,
+    "interpretation": "Single samples: prefill is 0.45% lower than the previous 107.868-second sample; no meaningful speedup established."
+  },
+  "full_release_suite": "not rerun for this bounded change",
+  "stopped_prior_campaigns": "preserved; not resumed",
+  "validation": {
+    "status": "passed",
+    "stages": [
+      {
+        "label": "test-build",
+        "command": [
+          "alr",
+          "-n",
+          "exec",
+          "--",
+          "gprbuild",
+          "-p",
+          "-j0",
+          "-P",
+          "tests.gpr",
+          "tests_main.adb"
+        ],
+        "started_at": "2026-11-25T15:28:38.731372+00:00",
+        "environment": {},
+        "returncode": 0,
+        "finished_at": "2026-11-25T15:28:45.315782+00:00",
+        "log_sha256": "da899cdb66d70fb5e5ad6a0111f418bb66d9475afaa1fee63cc60bbc21cee303"
+      },
+      {
+        "label": "focused",
+        "command": [
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T15:28:45.316526+00:00",
+        "environment": {
+          "MR_EXPECT_DEVICE": "1"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T15:28:50.295951+00:00",
+        "log_sha256": "bcac0d10718927c6900914c754eb3c204e527de4f5c3b332ac3379ebb8f32783"
+      },
+      {
+        "label": "cpu",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-clip-final-cpu",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T15:28:50.296583+00:00",
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "f32",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_CACHE": "f32",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T15:29:10.615265+00:00",
+        "log_sha256": "c17ff6236d8f9269a524b8a586f5d3fb3d87052650de6230853f8c07b2c108af"
+      },
+      {
+        "label": "private-vulkan",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-clip-final-private-vulkan",
+          "-p",
+          "MemoryMax=16G",
+          "-p",
+          "MemorySwapMax=0",
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T15:29:10.615986+00:00",
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "f32",
+          "MODEL_RUNNER_INKLING_BACKEND": "hybrid",
+          "MODEL_RUNNER_INKLING_CACHE": "f32",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-prefix"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T15:29:28.836923+00:00",
+        "log_sha256": "4776ef6d57af45d2820e6bf9e57c846e3c768eb0e3796791e90e0386ce8ec9d9"
+      },
+      {
+        "label": "f16-cache",
+        "command": [
+          "systemd-run",
+          "--user",
+          "--scope",
+          "--quiet",
+          "--unit",
+          "inkling-clip-final-f16-cache",
+          "-p",
+          "MemoryMax=20G",
+          "-p",
+          "MemorySwapMax=0",
+          "./bin/tests",
+          "test",
+          "--only",
+          "native Inkling : optional independent",
+          "--timed"
+        ],
+        "started_at": "2026-11-25T15:29:28.837824+00:00",
+        "environment": {
+          "MODEL_RUNNER_INKLING_MODEL": "/home/bent/models/Inkling-2-Mini-Q4_K_M.gguf",
+          "MODEL_RUNNER_INKLING_ARITH": "f32",
+          "MODEL_RUNNER_INKLING_BACKEND": "cpu",
+          "MODEL_RUNNER_INKLING_CACHE": "f16",
+          "MODEL_RUNNER_INKLING_REFERENCE": "fixtures/inkling2/q4_k_m-f32-half-prefix"
+        },
+        "returncode": 0,
+        "finished_at": "2026-11-25T15:29:34.165824+00:00",
+        "log_sha256": "71ab9106b0a7dc700e8fae1235dcb2d07b2b204c865ae8d4cebde1634107fb9b"
+      }
+    ],
+    "scope": "Focused tests and three real-checkpoint profiles; no benchmark campaign or full release-suite claim.",
+    "binary_sha256": {
+      "tests/bin/tests": "21ebe4857ea29167d245ae517864cfc1a8dfcb06fce3eba99142e73b37426c7b",
+      "bin/model_runner": "ee75937755d72de70699a830c978656a3c61e3f129e32496ec1e45646ad52070"
+    },
+    "source_manifest_sha256": "e745f0dfbbcb251c6cc7dbc3030ad6b133c02cd35351e84f8de1bc14b6d8f657",
+    "finished_at": "2026-11-25T15:29:34.785849+00:00"
+  },
+  "whitespace_check": "passed",
+  "root_durable_store_present": true
+}

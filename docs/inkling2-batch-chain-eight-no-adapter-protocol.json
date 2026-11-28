@@ -1,0 +1,12 @@
+{
+  "declared_at": "2026-11-27T11:30:08.693715+00:00",
+  "purpose": "Requalify the shared native engine after sixteen-token K-format CPU tiles, fused normalization/packing, one projection-group worker dispatch, fused convolution/residual, batched Q4T GPU prefill, grouped GPU integer projections and reference-equivalent resident SiTU/MoE. All existing fixed workload, compiler matching, digest and paired-median gates unchanged.",
+  "baseline": "Existing pinned a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b probe and source archive",
+  "workload": "Same qwen3.5-0.8b-q8_0.gguf, speed-prompt-110.txt, 100 prompt tokens,16 generated,4 threads,batch16,context512,F32 arithmetic/KV,no repack/cache/drafting/adapters",
+  "design": "Two batches of seven alternating before/after pairs; preserve every result; no unchanged retry or exclusion",
+  "gates": "Unchanged paired median prompt/decode time ratios <=1.05 in both batches; exact c85e719a42725969 output digest",
+  "os_memory_max_bytes": 4294967296,
+  "os_swap_max_bytes": 0,
+  "bounds": "One warmup and one measured pass per process;180 seconds each;1200 overall. Sources, compiler, dependencies, binaries and inputs pinned and reverified.",
+  "candidate": "Q4_K_M weights and Q4T retained; integer activation performance profile explicit; default F32 activations unchanged. No tolerance, digest, workload, source-audit limit or regression bound changed."
+}

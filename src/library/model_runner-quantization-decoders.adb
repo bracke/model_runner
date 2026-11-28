@@ -1,3 +1,5 @@
+with System;
+with System.Machine_Code;
 with Interfaces;
 with Model_Runner.Quantization.Grid_Tables;
 
@@ -783,28 +785,93 @@ package body Model_Runner.Quantization.Decoders is
                         Offset_1 : constant Real := Minimum * Real (Min1);
                         Offset_2 : constant Real := Minimum * Real (Min2);
                      begin
-                        for L in 0 .. 31 loop
+                        if Vector_Q4_K then
                            declare
-                              --  Indexed directly rather than through Raw:
-                              --  one read instead of a call per element.
-                              Packed : constant Interfaces.Unsigned_8 :=
-                                Data (Data'First + Base + B.Byte_Count (L));
+                              Parameters : aliased constant Real_Array (0 .. 3) :=
+                                [Scale_1, Scale_2, Offset_1, Offset_2];
                            begin
-                              Target
-                                (Target'First + Target_Index
-                                 + Element_Count (L)) :=
-                                Scale_1 * Real (Integer (Packed and 16#0F#))
-                                - Offset_1;
-                              Target
-                                (Target'First + Target_Index + 32
-                                 + Element_Count (L)) :=
-                                Scale_2
-                                  * Real (Integer
-                                            (Interfaces.Shift_Right
-                                               (Packed, 4)))
-                                - Offset_2;
+                              --  A finite half scale has at most eleven
+                              --  significant bits. Times a six-bit factor
+                              --  and a four-bit nibble, its product fits in
+                              --  binary32 exactly (at most 21 bits), so the
+                              --  fused subtraction rounds exactly as before.
+                              System.Machine_Code.Asm
+                                ("vbroadcastss 0(%2), %%ymm2" & ASCII.LF
+                                 & "vbroadcastss 4(%2), %%ymm3" & ASCII.LF
+                                 & "vbroadcastss 8(%2), %%ymm4" & ASCII.LF
+                                 & "vbroadcastss 12(%2), %%ymm5" & ASCII.LF
+                                 & "movl $15, %%eax" & ASCII.LF
+                                 & "vmovd %%eax, %%xmm6" & ASCII.LF
+                                 & "vpbroadcastd %%xmm6, %%ymm6" & ASCII.LF
+                                 & "vpmovzxbd 0(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 0(%1)" & ASCII.LF
+                                 & "vmovups %%ymm1, 128(%1)" & ASCII.LF
+                                 & "vpmovzxbd 8(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 32(%1)" & ASCII.LF
+                                 & "vmovups %%ymm1, 160(%1)" & ASCII.LF
+                                 & "vpmovzxbd 16(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 64(%1)" & ASCII.LF
+                                 & "vmovups %%ymm1, 192(%1)" & ASCII.LF
+                                 & "vpmovzxbd 24(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 96(%1)" & ASCII.LF
+                                 & "vmovups %%ymm1, 224(%1)" & ASCII.LF
+                                 & "vzeroupper",
+                                 Inputs =>
+                                   [System.Address'Asm_Input ("r", Data (Data'First + Base)'Address),
+                                    System.Address'Asm_Input
+                                      ("r", Target (Target'First + Target_Index)'Address),
+                                    System.Address'Asm_Input ("r", Parameters (0)'Address)],
+                                 Clobber => "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, eax, memory",
+                                 Volatile => True);
                            end;
-                        end loop;
+                        else
+                           for L in 0 .. 31 loop
+                              declare
+                                 --  Indexed directly rather than through Raw:
+                                 --  one read instead of a call per element.
+                                 Packed : constant Interfaces.Unsigned_8 :=
+                                   Data (Data'First + Base + B.Byte_Count (L));
+                              begin
+                                 Target
+                                   (Target'First + Target_Index
+                                    + Element_Count (L)) :=
+                                   Scale_1 * Real (Integer (Packed and 16#0F#))
+                                   - Offset_1;
+                                 Target
+                                   (Target'First + Target_Index + 32
+                                    + Element_Count (L)) :=
+                                   Scale_2
+                                     * Real (Integer
+                                               (Interfaces.Shift_Right
+                                                  (Packed, 4)))
+                                   - Offset_2;
+                              end;
+                           end loop;
+                        end if;
                      end;
 
                      Target_Index := Target_Index + 64;
@@ -850,29 +917,137 @@ package body Model_Runner.Quantization.Decoders is
                         Offset_2 : constant Real := Minimum * Real (Min2);
                      begin
 
-                        for L in 0 .. 31 loop
+                        if Vector_Q5_K then
                            declare
-                              Packed : constant Interfaces.Unsigned_8 :=
-                                Data (Data'First + Base + B.Byte_Count (L));
-                              Fifth  : constant Interfaces.Unsigned_8 :=
-                                Data (Data'First + High + B.Byte_Count (L));
-                              Low    : constant Integer :=
-                                Integer (Packed and 16#0F#)
-                                + (if (Fifth and Mask_Low) /= 0 then 16 else 0);
-                              Upper  : constant Integer :=
-                                Integer (Interfaces.Shift_Right (Packed, 4))
-                                + (if (Fifth and Mask_High) /= 0 then 16 else 0);
+                              Parameters : aliased constant Real_Array (0 .. 3) :=
+                                [Scale_1, Scale_2, Offset_1, Offset_2];
+                              Masks : aliased constant array (0 .. 1) of Interfaces.Unsigned_32 :=
+                                [Interfaces.Unsigned_32 (Mask_Low), Interfaces.Unsigned_32 (Mask_High)];
                            begin
-                              Target
-                                (Target'First + Target_Index
-                                 + Element_Count (L)) :=
-                                Scale_1 * Real (Low) - Offset_1;
-                              Target
-                                (Target'First + Target_Index + 32
-                                 + Element_Count (L)) :=
-                                Scale_2 * Real (Upper) - Offset_2;
+                              --  At most 22 significant product bits for a
+                              --  half scale, six-bit factor and five-bit value.
+                              System.Machine_Code.Asm
+                                ("vbroadcastss 0(%3), %%ymm2" & ASCII.LF
+                                 & "vbroadcastss 4(%3), %%ymm3" & ASCII.LF
+                                 & "vbroadcastss 8(%3), %%ymm4" & ASCII.LF
+                                 & "vbroadcastss 12(%3), %%ymm5" & ASCII.LF
+                                 & "movl $15, %%eax" & ASCII.LF
+                                 & "vmovd %%eax, %%xmm6" & ASCII.LF
+                                 & "vpbroadcastd %%xmm6, %%ymm6" & ASCII.LF
+                                 & "movl $16, %%eax" & ASCII.LF
+                                 & "vmovd %%eax, %%xmm11" & ASCII.LF
+                                 & "vpbroadcastd %%xmm11, %%ymm11" & ASCII.LF
+                                 & "vpxor %%ymm10, %%ymm10, %%ymm10" & ASCII.LF
+                                 & "vpbroadcastd 0(%4), %%ymm12" & ASCII.LF
+                                 & "vpbroadcastd 4(%4), %%ymm13" & ASCII.LF
+                                 & "vpmovzxbd 0(%1), %%ymm7" & ASCII.LF
+                                 & "vpand %%ymm12, %%ymm7, %%ymm8" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpand %%ymm13, %%ymm7, %%ymm9" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpmovzxbd 0(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm8, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm9, %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 0(%2)" & ASCII.LF
+                                 & "vmovups %%ymm1, 128(%2)" & ASCII.LF
+                                 & "vpmovzxbd 8(%1), %%ymm7" & ASCII.LF
+                                 & "vpand %%ymm12, %%ymm7, %%ymm8" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpand %%ymm13, %%ymm7, %%ymm9" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpmovzxbd 8(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm8, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm9, %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 32(%2)" & ASCII.LF
+                                 & "vmovups %%ymm1, 160(%2)" & ASCII.LF
+                                 & "vpmovzxbd 16(%1), %%ymm7" & ASCII.LF
+                                 & "vpand %%ymm12, %%ymm7, %%ymm8" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpand %%ymm13, %%ymm7, %%ymm9" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpmovzxbd 16(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm8, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm9, %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 64(%2)" & ASCII.LF
+                                 & "vmovups %%ymm1, 192(%2)" & ASCII.LF
+                                 & "vpmovzxbd 24(%1), %%ymm7" & ASCII.LF
+                                 & "vpand %%ymm12, %%ymm7, %%ymm8" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm8, %%ymm8" & ASCII.LF
+                                 & "vpand %%ymm13, %%ymm7, %%ymm9" & ASCII.LF
+                                 & "vpcmpeqd %%ymm10, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpandn %%ymm11, %%ymm9, %%ymm9" & ASCII.LF
+                                 & "vpmovzxbd 24(%0), %%ymm0" & ASCII.LF
+                                 & "vpsrld $4, %%ymm0, %%ymm1" & ASCII.LF
+                                 & "vpand %%ymm6, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm8, %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vpaddd %%ymm9, %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm0, %%ymm0" & ASCII.LF
+                                 & "vcvtdq2ps %%ymm1, %%ymm1" & ASCII.LF
+                                 & "vfmsub132ps %%ymm2, %%ymm4, %%ymm0" & ASCII.LF
+                                 & "vfmsub132ps %%ymm3, %%ymm5, %%ymm1" & ASCII.LF
+                                 & "vmovups %%ymm0, 96(%2)" & ASCII.LF
+                                 & "vmovups %%ymm1, 224(%2)" & ASCII.LF
+                                 & "vzeroupper",
+                                 Inputs =>
+                                   [System.Address'Asm_Input ("r", Data (Data'First + Base)'Address),
+                                    System.Address'Asm_Input ("r", Data (Data'First + High)'Address),
+                                    System.Address'Asm_Input ("r", Target (Target'First + Target_Index)'Address),
+                                    System.Address'Asm_Input ("r", Parameters (0)'Address),
+                                    System.Address'Asm_Input ("r", Masks (0)'Address)],
+                                 Clobber => "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, "
+                                   & "ymm8, ymm9, ymm10, ymm11, ymm12, ymm13, eax, memory",
+                                 Volatile => True);
                            end;
-                        end loop;
+                        else
+                           for L in 0 .. 31 loop
+                              declare
+                                 Packed : constant Interfaces.Unsigned_8 :=
+                                   Data (Data'First + Base + B.Byte_Count (L));
+                                 Fifth  : constant Interfaces.Unsigned_8 :=
+                                   Data (Data'First + High + B.Byte_Count (L));
+                                 Low    : constant Integer :=
+                                   Integer (Packed and 16#0F#)
+                                   + (if (Fifth and Mask_Low) /= 0 then 16 else 0);
+                                 Upper  : constant Integer :=
+                                   Integer (Interfaces.Shift_Right (Packed, 4))
+                                   + (if (Fifth and Mask_High) /= 0 then 16 else 0);
+                              begin
+                                 Target
+                                   (Target'First + Target_Index
+                                    + Element_Count (L)) :=
+                                   Scale_1 * Real (Low) - Offset_1;
+                                 Target
+                                   (Target'First + Target_Index + 32
+                                    + Element_Count (L)) :=
+                                   Scale_2 * Real (Upper) - Offset_2;
+                              end;
+                           end loop;
+                        end if;
                      end;
 
                      Target_Index := Target_Index + 64;
@@ -944,69 +1119,180 @@ package body Model_Runner.Quantization.Decoders is
                               D * Real (Signed (Data, Scale_Half
                                                 + B.Byte_Count (Sub + 6)));
                         begin
-                           --  Low nibble of the first thirty-two bytes, with the
-                           --  lowest two bits of the shared byte.
-                           for L in 0 .. 15 loop
-                              Target (Target'First + Out_Run + Element_Count (L)) :=
-                                Scale_1
-                                * Real (Integer
-                                          (Data (Data'First + Low_Run
-                                                 + B.Byte_Count (L)) and 16#0F#)
-                                      + 16 * Integer
-                                                 (Data (Data'First + High_Run
-                                                      + B.Byte_Count (L)) and 3)
-                                      - 32);
-                           end loop;
+                           if Vector_Q6_K then
+                              declare
+                                 Parameters : aliased constant Real_Array (0 .. 3) :=
+                                   [Scale_1, Scale_2, Scale_3, Scale_4];
+                              begin
+                                 --  Preserve the two rounded binary32
+                                 --  multiplications; no FMA applies here.
+                                 System.Machine_Code.Asm
+                                   ("vbroadcastss 0(%3), %%ymm8" & ASCII.LF
+                                    & "vbroadcastss 4(%3), %%ymm9" & ASCII.LF
+                                    & "vbroadcastss 8(%3), %%ymm10" & ASCII.LF
+                                    & "vbroadcastss 12(%3), %%ymm11" & ASCII.LF
+                                    & "movl $15, %%eax" & ASCII.LF
+                                    & "vmovd %%eax, %%xmm6" & ASCII.LF
+                                    & "vpbroadcastd %%xmm6, %%ymm6" & ASCII.LF
+                                    & "movl $3, %%eax" & ASCII.LF
+                                    & "vmovd %%eax, %%xmm7" & ASCII.LF
+                                    & "vpbroadcastd %%xmm7, %%ymm7" & ASCII.LF
+                                    & "movl $32, %%eax" & ASCII.LF
+                                    & "vmovd %%eax, %%xmm5" & ASCII.LF
+                                    & "vpbroadcastd %%xmm5, %%ymm5" & ASCII.LF
+                                    & "vpmovzxbd 0(%0), %%ymm0" & ASCII.LF
+                                    & "vpmovzxbd 32(%0), %%ymm1" & ASCII.LF
+                                    & "vpmovzxbd 0(%1), %%ymm2" & ASCII.LF
+                                    & "vpand %%ymm6, %%ymm0, %%ymm3" & ASCII.LF
+                                    & "vpsrld $0, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm8, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 0(%2)" & ASCII.LF
+                                    & "vpand %%ymm6, %%ymm1, %%ymm3" & ASCII.LF
+                                    & "vpsrld $2, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm9, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 128(%2)" & ASCII.LF
+                                    & "vpsrld $4, %%ymm0, %%ymm3" & ASCII.LF
+                                    & "vpsrld $4, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm10, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 256(%2)" & ASCII.LF
+                                    & "vpsrld $4, %%ymm1, %%ymm3" & ASCII.LF
+                                    & "vpsrld $6, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm11, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 384(%2)" & ASCII.LF
+                                    & "vpmovzxbd 8(%0), %%ymm0" & ASCII.LF
+                                    & "vpmovzxbd 40(%0), %%ymm1" & ASCII.LF
+                                    & "vpmovzxbd 8(%1), %%ymm2" & ASCII.LF
+                                    & "vpand %%ymm6, %%ymm0, %%ymm3" & ASCII.LF
+                                    & "vpsrld $0, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm8, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 32(%2)" & ASCII.LF
+                                    & "vpand %%ymm6, %%ymm1, %%ymm3" & ASCII.LF
+                                    & "vpsrld $2, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm9, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 160(%2)" & ASCII.LF
+                                    & "vpsrld $4, %%ymm0, %%ymm3" & ASCII.LF
+                                    & "vpsrld $4, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm10, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 288(%2)" & ASCII.LF
+                                    & "vpsrld $4, %%ymm1, %%ymm3" & ASCII.LF
+                                    & "vpsrld $6, %%ymm2, %%ymm4" & ASCII.LF
+                                    & "vpand %%ymm7, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpslld $4, %%ymm4, %%ymm4" & ASCII.LF
+                                    & "vpaddd %%ymm4, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vpsubd %%ymm5, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vcvtdq2ps %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmulps %%ymm11, %%ymm3, %%ymm3" & ASCII.LF
+                                    & "vmovups %%ymm3, 416(%2)" & ASCII.LF
+                                    & "vzeroupper",
+                                    Inputs =>
+                                      [System.Address'Asm_Input ("r", Data (Data'First + Low_Run)'Address),
+                                       System.Address'Asm_Input ("r", Data (Data'First + High_Run)'Address),
+                                       System.Address'Asm_Input ("r", Target (Target'First + Out_Run)'Address),
+                                       System.Address'Asm_Input ("r", Parameters (0)'Address)],
+                                    Clobber => "ymm0, ymm1, ymm2, ymm3, ymm4, ymm5, ymm6, ymm7, "
+                                      & "ymm8, ymm9, ymm10, ymm11, eax, memory",
+                                    Volatile => True);
+                              end;
+                           else
+                              --  Low nibble of the first thirty-two bytes, with the
+                              --  lowest two bits of the shared byte.
+                              for L in 0 .. 15 loop
+                                 Target (Target'First + Out_Run + Element_Count (L)) :=
+                                   Scale_1
+                                   * Real (Integer
+                                             (Data (Data'First + Low_Run
+                                                    + B.Byte_Count (L)) and 16#0F#)
+                                         + 16 * Integer
+                                                    (Data (Data'First + High_Run
+                                                         + B.Byte_Count (L)) and 3)
+                                         - 32);
+                              end loop;
 
-                           --  Low nibble of the second thirty-two bytes.
-                           for L in 0 .. 15 loop
-                              Target (Target'First + Out_Run + 32
-                                    + Element_Count (L)) :=
-                                Scale_2
-                                * Real (Integer
-                                          (Data (Data'First + Low_Run + 32
-                                                 + B.Byte_Count (L)) and 16#0F#)
-                                      + 16 * Integer
-                                                 (Interfaces.Shift_Right
-                                                  (Data (Data'First + High_Run
-                                                         + B.Byte_Count (L)), 2)
-                                                and 3)
-                                      - 32);
-                           end loop;
+                              --  Low nibble of the second thirty-two bytes.
+                              for L in 0 .. 15 loop
+                                 Target (Target'First + Out_Run + 32
+                                       + Element_Count (L)) :=
+                                   Scale_2
+                                   * Real (Integer
+                                             (Data (Data'First + Low_Run + 32
+                                                    + B.Byte_Count (L)) and 16#0F#)
+                                         + 16 * Integer
+                                                    (Interfaces.Shift_Right
+                                                     (Data (Data'First + High_Run
+                                                            + B.Byte_Count (L)), 2)
+                                                   and 3)
+                                         - 32);
+                              end loop;
 
-                           --  High nibble of the first thirty-two bytes.
-                           for L in 0 .. 15 loop
-                              Target (Target'First + Out_Run + 64
-                                    + Element_Count (L)) :=
-                                Scale_3
-                                * Real (Integer
-                                          (Interfaces.Shift_Right
-                                           (Data (Data'First + Low_Run
-                                                  + B.Byte_Count (L)), 4))
-                                      + 16 * Integer
-                                                 (Interfaces.Shift_Right
-                                                  (Data (Data'First + High_Run
-                                                         + B.Byte_Count (L)), 4)
-                                                and 3)
-                                      - 32);
-                           end loop;
+                              --  High nibble of the first thirty-two bytes.
+                              for L in 0 .. 15 loop
+                                 Target (Target'First + Out_Run + 64
+                                       + Element_Count (L)) :=
+                                   Scale_3
+                                   * Real (Integer
+                                             (Interfaces.Shift_Right
+                                              (Data (Data'First + Low_Run
+                                                     + B.Byte_Count (L)), 4))
+                                         + 16 * Integer
+                                                    (Interfaces.Shift_Right
+                                                     (Data (Data'First + High_Run
+                                                            + B.Byte_Count (L)), 4)
+                                                   and 3)
+                                         - 32);
+                              end loop;
 
-                           --  High nibble of the second thirty-two bytes.
-                           for L in 0 .. 15 loop
-                              Target (Target'First + Out_Run + 96
-                                    + Element_Count (L)) :=
-                                Scale_4
-                                * Real (Integer
-                                          (Interfaces.Shift_Right
-                                           (Data (Data'First + Low_Run + 32
-                                                  + B.Byte_Count (L)), 4))
-                                      + 16 * Integer
-                                                 (Interfaces.Shift_Right
-                                                  (Data (Data'First + High_Run
-                                                         + B.Byte_Count (L)), 6)
-                                                and 3)
-                                      - 32);
-                           end loop;
+                              --  High nibble of the second thirty-two bytes.
+                              for L in 0 .. 15 loop
+                                 Target (Target'First + Out_Run + 96
+                                       + Element_Count (L)) :=
+                                   Scale_4
+                                   * Real (Integer
+                                             (Interfaces.Shift_Right
+                                              (Data (Data'First + Low_Run + 32
+                                                     + B.Byte_Count (L)), 4))
+                                         + 16 * Integer
+                                                    (Interfaces.Shift_Right
+                                                     (Data (Data'First + High_Run
+                                                            + B.Byte_Count (L)), 6)
+                                                   and 3)
+                                         - 32);
+                              end loop;
+                           end if;
                         end;
                      end loop;
                   end;

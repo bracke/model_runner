@@ -8438,6 +8438,16 @@ package body Tests.Inference_Cases is
       Into  : Vocab.Token_Array (1 .. 4);
       Count : Natural;
    begin
+      Assert (Look.Verification_Length ([2.0, 3.0, 4.0], [1.0, 1.2, 1.5], [3, 3, 3], 3, 1) = 3,
+              "verification costs did not select the highest expected rate");
+      Assert (Look.Verification_Length ([2.0, 3.0, 4.0], [1.0, 3.0, 5.0], [3, 3, 3], 3, 3) = 1,
+              "expensive verification failed to shorten proposals");
+      Assert (Look.Verification_Length ([2.0, 3.0], [1.0, 1.0], [2, 9], 2, 1) = 1,
+              "insufficient current evidence changed verification length");
+      Assert (Look.Verification_Length ([2.0, 2.01], [1.0, 1.0], [3, 3], 2, 1) = 1,
+              "verification hysteresis was ignored");
+      Assert (Look.Verification_Length ([2.0, 3.0], [0.0, 0.0], [3, 3], 1, 2) = 1,
+              "invalid verification costs escaped the explicit bound");
       --  "a b c d a b" -- the last two are "a b", which occurred at the
       --  front and was followed by "c d a b". All four, and running back
       --  into the phrase itself is the point rather than an oversight: a
@@ -12706,7 +12716,7 @@ package body Tests.Inference_Cases is
       --  the two: a name mapped one way here and another way there would
       --  otherwise be found by no test at all. Starcoder was such a name
       --  and was wrong.
-      Rules : constant array (1 .. 14) of Case_Text :=
+      Rules : constant array (1 .. 15) of Case_Text :=
         [new String'(""),
          new String'("default"),
          new String'("gpt-2"),
@@ -12720,7 +12730,8 @@ package body Tests.Inference_Cases is
          new String'("qwen2"),
          new String'("stablelm2"),
          new String'("tekken"),
-         new String'("deepseek-v3")];
+         new String'("deepseek-v3"),
+         new String'("inkling2")];
 
       --  Text that reaches every part of the rule: a bare word, the markers
       --  a chat template writes and two strings that open a bracket without
@@ -12848,7 +12859,7 @@ package body Tests.Inference_Cases is
 
       --  One name per rule the engine accepts, and one more for each name
       --  that is mapped onto a rule another name is too.
-      Names : constant array (1 .. 41) of Case_Text :=
+      Names : constant array (1 .. 42) of Case_Text :=
         [new String'(""), new String'("default"), new String'("gpt-2"),
          new String'("jina-v2-code"), new String'("falcon"),
          new String'("smollm"), new String'("mellum2"),
@@ -12868,7 +12879,8 @@ package body Tests.Inference_Cases is
          new String'("gpt3-finnish"), new String'("viking"),
          new String'("superbpe"), new String'("chameleon"),
          new String'("hunyuan-dense"), new String'("grok-2"),
-         new String'("chatglm-bpe"), new String'("kanana2")];
+         new String'("chatglm-bpe"), new String'("kanana2"),
+         new String'("inkling2")];
 
       function U (Code : Natural) return String
         renames Model_Runner.UTF8.Encode;
@@ -20468,6 +20480,20 @@ package body Tests.Inference_Cases is
          Assert (Chosen.Tokens = 7 and then not Chosen.Adapts,
                  "a found draft took" & Natural'Image (Chosen.Tokens)
                  & " a round where seven were named");
+         Assert (Chosen.Lookup_First, "ordinary named draft lost automatic context lookup");
+         Chosen := DP.Decide (Under.Ready, Live, Asked,
+                              Draft_Ready => True, Auto_Drafted => False, Feature_Draft => True);
+         Assert (Chosen.Tokens = 7 and then not Chosen.Lookup_First and then not Chosen.Adapts,
+                 "feature-conditioned draft inherited ordinary lookup or adaptive length");
+         Asked.Tokens_Set := False;
+         Chosen := DP.Decide (Under.Ready, Live, Asked,
+                              Draft_Ready => True, Auto_Drafted => False, Feature_Draft => True);
+         Assert (Chosen.Tokens = 7 and then not Chosen.Adapts,
+                 "feature-conditioned draft did not select the trained block length");
+         Asked.Lookup := True;
+         Chosen := DP.Decide (Under.Ready, Live, Asked,
+                              Draft_Ready => True, Auto_Drafted => False, Feature_Draft => True);
+         Assert (Chosen.Lookup_First, "explicit incompatible lookup request was silently discarded");
          L.Close (Live);
       end;
       B.Free (Image);
@@ -22476,7 +22502,19 @@ package body Tests.Inference_Cases is
                 Options.Maximum_Output_Bytes,
               "the public completion exceeded its output bound");
 
+      Assert (I.Reused_Prompt_Tokens (Item) = 0, "default completions unexpectedly reuse prompt state");
+      I.Reuse_Prompt_Prefix (Item);
+      I.Complete (Item, "ab", "{""const"":12}", Options, Again);
+      Assert (Again.Text = First.Text and then I.Reused_Prompt_Tokens (Item) > 0,
+              "opt-in prompt reuse changed the answer or retained no prefix");
+      I.Complete (Item, "abab", "{""const"":12}", Options, Again);
+      I.Reuse_Prompt_Prefix (Item, False);
+      I.Complete (Item, "abab", "{""const"":12}", Options, First);
+      Assert (Again.Text = First.Text and then I.Reused_Prompt_Tokens (Item) = 0,
+              "prefix extension disagreed with a fresh completion");
+      I.Reuse_Prompt_Prefix (Item);
       I.Close (Item);
+      Assert (I.Reused_Prompt_Tokens (Item) = 0, "close kept the reuse diagnostic");
       I.Close (Item);
       Assert (not I.Is_Open (Item), "an idempotent close left the session open");
       Assert (I.Model_Path (Item) = "", "a closed session retained its path");

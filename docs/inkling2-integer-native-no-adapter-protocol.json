@@ -1,0 +1,12 @@
+{
+  "declared_at": "2026-11-26T17:03:13.725861+00:00",
+  "purpose": "Requalify the shared native engine after Inkling integer arithmetic and batched expert corrections, plus IEEE binary16 subnormal rounding. Existing workload and gates unchanged.",
+  "baseline": "Existing pinned a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b probe and source archive",
+  "workload": "Same qwen3.5-0.8b-q8_0.gguf, speed-prompt-110.txt, 100 prompt tokens,16 generated,4 threads,batch16,context512,F32 arithmetic/KV,no repack/cache/drafting/adapters",
+  "design": "Two batches of seven alternating before/after pairs; preserve every result; no unchanged retry or exclusion",
+  "gates": "Unchanged paired median prompt/decode time ratios <=1.05 in both batches; exact c85e719a42725969 output digest",
+  "os_memory_max_bytes": 4294967296,
+  "os_swap_max_bytes": 0,
+  "bounds": "One warmup and one measured pass per process;180 seconds each;1200 overall. Sources, compiler, dependencies, binaries and inputs pinned and reverified.",
+  "candidate": "Model-marked reference arithmetic; explicit batch packing contract; standard platform math only; corrected shared binary16 subnormal midpoint rounding. Q4T stays selected for the Inkling measurement."
+}

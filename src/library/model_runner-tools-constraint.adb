@@ -834,7 +834,7 @@ package body Model_Runner.Tools.Constraint is
          return;
       end if;
 
-      if Syntax = Model_Runner.Tools.Gemma4_Call then
+      if Syntax in Model_Runner.Tools.Gemma4_Call | Model_Runner.Tools.Inkling_Call then
          --  Gemma4's form: its calls open with a token it was trained to
          --  place, and their arguments are an object no JSON grammar
          --  describes; held by none here, the reader takes the calls out

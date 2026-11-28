@@ -1,0 +1,136 @@
+{
+  "status": "Complete: all five optimization areas implemented and verified; slower row prototype replaced; final reference, shared-engine and repository checks passed",
+  "model": "Inkling-2-Mini-Q4_K_M.gguf",
+  "model_sha256": "ed38ac618a24ee65142c27073783a80aa3b100546a21212d59690c9081945a9b",
+  "model_weights_changed": false,
+  "validation": "artifacts/inkling2/obj/expert-five/v2/validation.json",
+  "baseline_measurements": "artifacts/inkling2/obj/expert-five/before/measurements.json",
+  "comparison_protocol": "2048 prompt tokens, 16 output tokens, batch128, 8 threads, F32 arithmetic, CPU, no repack/cache/drafting; F32 and F16 KV cache measured separately; one warmup and one measured pass per version/configuration; preserve all outcomes",
+  "items": [
+    {
+      "id": 1,
+      "title": "AVX-512 exact Q4_K row products",
+      "scope": "Keep eight rows of scale/minimum parameters in the extra AVX-512 registers while preserving the original four binary64 lanes per row. A separately targeted, CPU/OS-validated unit retains 256-bit arithmetic. The slower pair-packed row prototype is rejected.",
+      "status": "retained_and_verified"
+    },
+    {
+      "id": 2,
+      "title": "Direct F32 products on existing Q4_K panels",
+      "scope": "Reads the established lossless eight-row quantized layout directly; shares block metadata across input rows and preserves 2048-element reduction boundaries. Existing partial-range fallback and opt-in repack policy remain.",
+      "status": "retained_and_verified"
+    },
+    {
+      "id": 3,
+      "title": "Selected-block processing pipeline",
+      "scope": "Loads independent row pairs ahead of arithmetic; bounded lookahead prefetches the next selected Q4_K block, never a predicted or unselected expert.",
+      "status": "retained_and_verified"
+    },
+    {
+      "id": 4,
+      "title": "Scoped physical-core placement",
+      "scope": "Linux chooses distinct cores from the current allowed CPU mask. Worker bindings last for each worker; caller bindings restore on scope exit, including exceptions. Unknown/insufficient topology or other hosts preserve existing scheduler placement.",
+      "status": "retained_and_verified"
+    },
+    {
+      "id": 5,
+      "title": "Retained conversation prefix checkpoint",
+      "scope": "Existing Mark_Checkpoint reserves slot zero while three recent checkpoints rotate. Generation marks reusable Inkling conversation boundaries through the established policy. No extra checkpoint memory or KV copies; evicted KV history still triggers exact replay. Reset, adoption and invalidation clear the mark.",
+      "status": "retained_and_verified"
+    }
+  ],
+  "performance_claim": "Observed matched single-pass rates, not a statistical significance claim. Panel measurements are synthetic input tok/s; marked-prefix tests prove zero replay at reachable marked boundaries, not arbitrary evicted-KV reuse.",
+  "comparisons": [
+    {
+      "configuration": "cpu-f32",
+      "before_prefill_tok_s": 17.116590054325115,
+      "after_prefill_tok_s": 17.03699390228685,
+      "prefill_rate_change_percent": -0.465023417547783,
+      "before_decode_tok_s": 3.7869822485207103,
+      "after_decode_tok_s": 3.6917397323488697,
+      "decode_rate_change_percent": -2.5149976926626683,
+      "output_digests_match": true
+    },
+    {
+      "configuration": "cpu-f16",
+      "before_prefill_tok_s": 16.943543583294726,
+      "after_prefill_tok_s": 17.159470804601554,
+      "prefill_rate_change_percent": 1.2743923385643896,
+      "before_decode_tok_s": 3.436426116838488,
+      "after_decode_tok_s": 3.577817531305903,
+      "decode_rate_change_percent": 4.11449016100176,
+      "output_digests_match": true
+    }
+  ],
+  "measurement_evidence": "artifacts/inkling2/obj/expert-five/after-v2/measurements.json",
+  "panel_kernel_evidence": "artifacts/inkling2/obj/expert-five/panel-kernel/measurements.json",
+  "shared_engine_evidence": "docs/inkling2-no-adapter-evidence.json",
+  "shared_engine_protocol": "docs/inkling2-expert-five-no-adapter-protocol.json",
+  "source_manifest_sha256": "adb88429aef61d91f69be992b4075934c91242c10ba2a180f0012206cdd0c9f2",
+  "binary_sha256": {
+    "tests/bin/tests": "b36beaee25a3052af1119b0dc818e37fdbb88cf1ab5081a690f8237df2c80f67",
+    "bin/model_runner": "7079488bcd38bee33890f6c8bc2b4488ccc908e4ce7789ee1cc1186d95df679c",
+    "tests/bin/no_adapter_probe": "f5e16e0f0f44a6251c68135476c6c99b333c573f7aee8b38264be60933d05406"
+  },
+  "rejected_row_prototype": {
+    "reason": "Measured 9% slower than the existing AVX2 row product; replaced by resident metadata registers, observed 1.5-2.4% faster across three synthetic shapes in one measured round.",
+    "first_trial_model_measurements": "artifacts/inkling2/obj/expert-five/after/measurements.json",
+    "first_trial_kernel_measurements": "artifacts/inkling2/obj/expert-five/panel-kernel/measurements.json",
+    "first_trial_source": "artifacts/inkling2/obj/expert-five/v2/first-trial-source.tar",
+    "first_trial_shared_engine_evidence": "docs/inkling2-no-adapter-expert-five-first-trial-evidence.json"
+  },
+  "revised_row_kernel_evidence": "artifacts/inkling2/obj/expert-five/row-kernel-v2/measurements.json",
+  "panel_measurement_qualification": "The measured direct panel function and compiler target are unchanged in the final source. Its earlier first-trial kernel rates are retained; no fresh final-binary panel timing is claimed.",
+  "wide_product_compiler_arguments": [
+    "A -O3",
+    "A -gnatA",
+    "A -gnatn",
+    "A -ffunction-sections",
+    "A -fdata-sections",
+    "A -gnatW8",
+    "A -gnat2022",
+    "A -gnata",
+    "A -gnatwa",
+    "A -gnatw.X",
+    "A -g",
+    "A -fstack-usage",
+    "A -gnatyM120",
+    "A -march=x86-64-v4",
+    "A -ffp-contract=off"
+  ],
+  "repository_check": {
+    "command": [
+      "./bin/tests",
+      "check",
+      "..",
+      "--repository"
+    ],
+    "returncode": 0,
+    "log": "artifacts/inkling2/obj/expert-five/v2/repository-check-fresh.log",
+    "log_sha256": "92e216e45e6e59933fd9ec9e02d7026a56cf8e11e45665a1e3e006e7efd17736",
+    "summaries": [
+      "checks 31736, failures 0"
+    ]
+  },
+  "repository_check_attempts": [
+    {
+      "command": [
+        "./bin/tests",
+        "check",
+        "..",
+        "--repository"
+      ],
+      "returncode": 1,
+      "log": "artifacts/inkling2/obj/expert-five/v2/repository-check.log",
+      "log_sha256": "7862bbe00f72e7a511f12a30cc0c454ec17ae2afdb80bb99230782a241b4e2c7",
+      "summaries": [
+        "checks 31736, failures 6"
+      ]
+    }
+  ],
+  "fresh_compilation_evidence": [
+    "artifacts/inkling2/obj/expert-five/v2/fresh-compilation.json",
+    "artifacts/inkling2/obj/expert-five/v2/fresh-platform-compilation.json"
+  ],
+  "finished_at": "2026-11-26T14:12:50.295036+00:00",
+  "final_source_and_binary_integrity": "passed"
+}

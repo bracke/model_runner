@@ -1,3 +1,4 @@
+with Model_Runner.Kernels;
 with Ada.Characters.Latin_1;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Conversion;
@@ -7,6 +8,8 @@ with Model_Runner.Platform;
 with Model_Runner.Platform.Device.Tuning;
 
 package body Model_Runner.Backend.Device is
+   use type Model_Runner.Platform.Device.Products.Walk_Rounding;
+   use type Model_Runner.Tensors.Weight_Role;
 
    use type System.Address;
    use type System.Storage_Elements.Integer_Address;
@@ -1444,6 +1447,13 @@ package body Model_Runner.Backend.Device is
       end case;
    end Packing_Of;
 
+   function Native_Reference_Format (Format : Model_Runner.GGUF.Tensor_Type) return Boolean
+   is (Format in Model_Runner.GGUF.Type_Q4_K | Model_Runner.GGUF.Type_Q5_K | Model_Runner.GGUF.Type_Q6_K
+         | Model_Runner.GGUF.Type_Q8_0 | Model_Runner.GGUF.Type_Q5_0
+       or else (Products.Takes_Reference_GSQ (Engine) and then Format in Model_Runner.GGUF.Type_IQ3_S
+         | Model_Runner.GGUF.Type_IQ3_XXS | Model_Runner.GGUF.Type_IQ4_NL | Model_Runner.GGUF.Type_Q2_0));
+
+
    --------------
    -- Products --
    --------------
@@ -1668,6 +1678,7 @@ package body Model_Runner.Backend.Device is
    is
       Packing   : Products.Weight_Packing;
       Known     : Boolean;
+      Reference_Product : Boolean := False;
 
       --  The largest buffer this product asks the device for, which is what
       --  a refusal has to be able to name.
@@ -1710,6 +1721,21 @@ package body Model_Runner.Backend.Device is
          Status := E.Make (E.Tensor_Shape_Mismatch);
          return;
       end if;
+
+      Reference_Product := Weight.Reference_Activations
+        and then (Rounding_Wanted = Products.Rounds_Every
+          or else (Rounding_Wanted = Products.Rounds_Feed_Forward and then Weight.Role = T.Role_Feed_Forward))
+        and then Packing in Products.Packed_Q4_K | Products.Packed_Q5_K | Products.Packed_Q6_K
+                          | Products.Packed_Q8_0 | Products.Packed_Q5_0 | Products.Packed_IQ3_S
+                          | Products.Packed_IQ3_XXS | Products.Packed_IQ4_NL | Products.Packed_Q2_0;
+      if Reference_Product and then (Weight.Interleaved or else not Products.Takes_Reference_Integers (Engine)
+        or else not Native_Reference_Format (Weight.Format)) then
+         Status := E.Make (E.Backend_Capability_Missing);
+         return;
+      end if;
+      if Reference_Product and then not Model_Runner.Kernels.All_Finite
+        (Vectors.all (Vectors.all'First .. Vectors.all'First + Count * Weight.Columns - 1))
+      then Status := E.Make (E.Tensor_Non_Finite_Value); return; end if;
 
       --  The weights as they are stored. A view is a run of bytes at a known
       --  offset whatever the packing, so what the device is handed is the
@@ -1765,7 +1791,7 @@ package body Model_Runner.Backend.Device is
               (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
                Natural (Weight.Rows), Natural (Weight.Columns), Added,
                Key => Storage (Storage'First + Weight.Offset)'Address,
-               Exact => Exact);
+               Exact => Exact, Reference_Integer => Reference_Product);
 
             if not Added then
                Declined (Status, Asked);
@@ -2052,7 +2078,8 @@ package body Model_Runner.Backend.Device is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       K_Codec    : Products.Cache_Codec := Products.Scaled_Integer_Cache;
-      V_Codec    : Products.Cache_Codec := Products.Scaled_Integer_Cache) is
+      V_Codec    : Products.Cache_Codec := Products.Scaled_Integer_Cache;
+   Relative_At : Natural := 0) is
    begin
       if not Ready_Now then
          Ok := False;
@@ -2063,7 +2090,7 @@ package body Model_Runner.Backend.Device is
         (Engine, K_Bits, V_Bits, Query, Heads, Head_Size, Value_Size, Group_Size,
          First, Last, K_Bytes, V_Bytes, KV_Width, V_Width, KS_At, VS_At,
          K_Blocks, V_Blocks, Scale, Cap, Target, Ok, Positions, Window,
-         Causal, Max_Bias, K_Codec, V_Codec);
+         Causal, Max_Bias, K_Codec, V_Codec, Relative_At);
    end Attend_Packed;
 
    ---------------
@@ -2650,6 +2677,267 @@ package body Model_Runner.Backend.Device is
    -- Add_View_Product --
    ----------------------
 
+   procedure Gate_And_Project
+     (Gate, Projection : T.View;
+      Input, Value, Raw_Gate, Into : T.Real_Array_Access;
+      Weighted : T.Real_Array_Access;
+      Done : out Boolean;
+      Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null;
+      Count : Positive := 1;
+      Conv_Taps : Model_Runner.Numerics.Real_Array := [];
+      Conv_History : T.Real_Array_Access := null;
+      Raw_Output : T.Real_Array_Access := null;
+      Reference_Arithmetic : Boolean := False; Residual : T.Real_Array_Access := null;
+      Attention : Attention_Recorder := null)
+   is
+      use type Model_Runner.Numerics.Real;
+      Steps : Products.Sequence;
+      Added : Boolean;
+      Convolving : constant Boolean := Conv_Taps'Length > 0;
+      Taps : constant Model_Runner.Numerics.Element_Count :=
+        (if Convolving and then Projection.Rows > 0 then Conv_Taps'Length / Projection.Rows else 0);
+      Past : constant Model_Runner.Numerics.Element_Count := (if Taps > 0 then Taps - 1 else 0);
+      Targets : Products.Address_List
+        (1 .. (if Weighted = null then 2 else 3) + (if Convolving then 1 else 0)
+         + (if Residual = null then 0 else 1));
+      Payload : constant Model_Runner.Numerics.Element_Count :=
+        Model_Runner.Numerics.Element_Count (Count) * (Gate.Columns + Gate.Rows);
+      Width : constant Model_Runner.Numerics.Element_Count :=
+        Payload + Model_Runner.Numerics.Element_Count (Conv_Taps'Length)
+          + Past * Projection.Rows + (if Residual = null then 0
+                                      else Model_Runner.Numerics.Element_Count (Count) * Projection.Rows);
+      Shift : constant Natural := (if Attention = null then 0 else 1);
+      Raw_Slot : constant Positive := (if Weighted = null then 2 else 3);
+      Residual_At : constant Model_Runner.Numerics.Element_Count := Payload + (Taps + Past) * Projection.Rows;
+      procedure Add_Projection (W : T.View; From_Step : Natural) is
+         Packing : Products.Weight_Packing;
+         Known : Boolean;
+      begin
+         if not Reference_Arithmetic then
+            if From_Step = 0 then Add_View_Product_At (Steps, W, 0, Added, Kept => True);
+            else Add_View_Product (Steps, W, From_Step, Added, Kept => True); end if;
+         else
+            Packing_Of (W.Format, Packing, Known);
+            if not Known or else W.Interleaved or else not Native_Reference_Format (W.Format)
+            then Added := False; return; end if;
+            if From_Step = 0 then
+               Products.Add_Product
+                 (Steps, W.Base, W.Span, W.Offset, Packing, Natural (W.Rows), Natural (W.Columns), Added,
+                  Key => At_Offset (W.Base, W.Offset), Kept => True, Reference_Integer => True);
+            else
+               Products.Add_Chained_Product
+                 (Steps, W.Base, W.Span, W.Offset, Packing, Natural (W.Rows), Natural (W.Columns), Added,
+                  Key => At_Offset (W.Base, W.Offset), Kept => True,
+                  From_Step => From_Step, Reference_Integer => True);
+            end if;
+         end if;
+      end Add_Projection;
+   begin
+      Done := False;
+      Status := E.Success;
+      if Reference_Arithmetic and then (Count > 128 or else not Takes_Reference_Mixture) then return; end if;
+      if Attention /= null and then not Reference_Arithmetic then return; end if;
+      if Residual /= null and then (not Reference_Arithmetic
+        or else Residual.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Projection.Rows)
+      then return; end if;
+      if Input = null or else Value = null or else Raw_Gate = null or else Into = null
+
+        or else Input.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Gate.Columns
+        or else Value.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Gate.Rows
+
+        or else Projection.Columns /= Gate.Rows
+        or else Raw_Gate.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Gate.Rows
+        or else Into.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Projection.Rows
+
+        or else (Weighted /= null
+                 and then Weighted.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Gate.Rows)
+      then
+         return;
+      end if;
+      if Convolving and then
+        (Taps not in 3 .. 4 or else Conv_Taps'Length /= Taps * Projection.Rows
+         or else Conv_History = null or else Raw_Output = null
+         or else Conv_History.all'Length /= Past * Projection.Rows
+         or else Raw_Output.all'Length /= Model_Runner.Numerics.Element_Count (Count) * Projection.Rows)
+      then return; end if;
+      if Landing = null or else Landing.all'Length < Width then
+         T.Free (Landing);
+         T.Allocate (Width, Landing);
+      end if;
+      if Landing = null then
+         Status := E.Make (E.Memory_Allocation_Failed);
+         return;
+      end if;
+      Landing.all (0 .. Model_Runner.Numerics.Element_Count (Count) * Gate.Columns - 1) := Input.all;
+      Landing.all (Model_Runner.Numerics.Element_Count (Count) * Gate.Columns .. Payload - 1) := Value.all;
+      if Convolving then
+         Landing.all (Payload .. Payload + Taps * Projection.Rows - 1) := Conv_Taps;
+         Landing.all (Payload + Taps * Projection.Rows .. Residual_At - 1) := Conv_History.all;
+      end if;
+      if Residual /= null then Landing.all (Residual_At .. Width - 1) := Residual.all; end if;
+      Products.Open_Sequence (Steps);
+      Add_Projection (Gate, 0);
+      if not Added then
+         return;
+      end if;
+      if Attention /= null then
+         Attention (Steps, Natural (Model_Runner.Numerics.Element_Count (Count) * Gate.Columns), Added);
+         if not Added or else Products.Length (Steps) /= 2 then return; end if;
+      end if;
+      Products.Add_Join (Steps, Added, From_Step => 1, Residual_Step => (if Attention = null then 0 else 2),
+                         From_Vector => Natural (Model_Runner.Numerics.Element_Count (Count) * Gate.Columns),
+                         Kept => Weighted /= null, Unit => (if Reference_Arithmetic then 16 else 11));
+      if not Added then
+         return;
+      end if;
+      Add_Projection (Projection, 2 + Shift);
+      if not Added then
+         return;
+      end if;
+      if Convolving then
+         Products.Add_Join (Steps, Added, From_Step => 3 + Shift, Residual_Step => 3 + Shift,
+                            Unit => (if Reference_Arithmetic then 17 else 13), Payload => Natural (Payload),
+                            Payload_Elements => Natural ((Taps + Past) * Projection.Rows),
+                            Alpha => 1.0 / Model_Runner.Numerics.Real (Model_Runner.Numerics.Sqrt
+                              (Model_Runner.Numerics.Wide_Real (Taps + 1))),
+                            Limit => Model_Runner.Numerics.Real (Taps));
+         if not Added then return; end if;
+      end if;
+      if Residual /= null then
+         Products.Add_Join (Steps, Added, From_Step => (if Convolving then 4 + Shift else 3 + Shift),
+                            From_Vector => Natural (Residual_At), Unit => 18);
+         if not Added then return; end if;
+      end if;
+      Targets (1) := Raw_Gate.all (Raw_Gate.all'First)'Address;
+      if Weighted /= null then
+         Targets (2) := Weighted.all (Weighted.all'First)'Address;
+      end if;
+      Targets (Raw_Slot) :=
+        (if Convolving then Raw_Output.all (Raw_Output.all'First)'Address else Into.all (Into.all'First)'Address);
+      if Convolving then Targets (Raw_Slot + 1) := Into.all (Into.all'First)'Address; end if;
+      if Residual /= null then Targets (Targets'Last) := Into.all (Into.all'First)'Address; end if;
+      Run_Steps (Steps, Landing.all (0 .. Width - 1), Count, System.Null_Address, Status,
+                 Targets => Targets, Cancel => Cancel);
+      Done := E.Is_Ok (Status);
+      if Done and then Reference_Arithmetic
+        and then (not Model_Runner.Kernels.All_Finite (Into.all)
+          or else not Model_Runner.Kernels.All_Finite (Raw_Gate.all)
+          or else (Convolving and then not Model_Runner.Kernels.All_Finite (Raw_Output.all)))
+      then Done := False; Status := E.Make (E.Tensor_Non_Finite_Value); end if;
+      if Done and then Convolving then
+         for Channel in 0 .. Projection.Rows - 1 loop
+            for Lag in 0 .. Past - 1 loop
+               declare
+                  Into_History : constant Model_Runner.Numerics.Element_Count :=
+                    Conv_History.all'First + Channel * Past;
+                  Position : constant Long_Long_Integer :=
+                    Long_Long_Integer (Count) - Long_Long_Integer (Past) + Long_Long_Integer (Lag);
+               begin
+                  Conv_History (Into_History + Lag) :=
+                    (if Position < 0 then Conv_History (Into_History + Lag
+                                                        + Model_Runner.Numerics.Element_Count (Count))
+                     else Raw_Output (Raw_Output.all'First
+                       + Model_Runner.Numerics.Element_Count (Position) * Projection.Rows + Channel));
+               end;
+            end loop;
+         end loop;
+      end if;
+   end Gate_And_Project;
+
+   procedure Control_And_Blend
+     (Down, Gain, Forget : T.View;
+      Joined, Value, Message, Down_Row, Gain_Row, Forget_Row : T.Real_Array_Access;
+      Count : Positive; Done : out Boolean; Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Many : constant Model_Runner.Numerics.Element_Count := Model_Runner.Numerics.Element_Count (Count);
+      Input_Width : constant Model_Runner.Numerics.Element_Count := Many * Down.Columns;
+      Width : constant Model_Runner.Numerics.Element_Count := Many * Gain.Rows;
+      Steps : Products.Sequence;
+      Added : Boolean;
+      Targets : Products.Address_List (1 .. 4);
+   begin
+      Done := False; Status := E.Success;
+      if not Products.Native_Controls (Engine) then return; end if;
+      if Joined = null or else Value = null or else Message = null
+        or else Down_Row = null or else Gain_Row = null or else Forget_Row = null
+        or else Joined.all'Length /= Input_Width or else Value.all'Length /= Width
+        or else Message.all'Length /= Width or else Down_Row.all'Length /= Many * Down.Rows
+        or else Gain_Row.all'Length /= Width or else Forget_Row.all'Length /= Width
+        or else Gain.Columns /= Down.Rows or else Forget.Columns /= Down.Rows or else Forget.Rows /= Gain.Rows
+      then return; end if;
+      if Landing = null or else Landing.all'Length < Input_Width + 2 * Width then
+         T.Free (Landing); T.Allocate (Input_Width + 2 * Width, Landing);
+      end if;
+      if Landing = null then Status := E.Make (E.Memory_Allocation_Failed); return; end if;
+      Landing.all (0 .. Input_Width - 1) := Joined.all;
+      Landing.all (Input_Width .. Input_Width + Width - 1) := Value.all;
+      Landing.all (Input_Width + Width .. Input_Width + 2 * Width - 1) := Message.all;
+      Products.Open_Sequence (Steps);
+      Add_View_Product_At (Steps, Down, 0, Added, Kept => True);
+      if not Added then return; end if;
+      Add_View_Product (Steps, Gain, 1, Added, Kept => True);
+      if not Added then return; end if;
+      Add_View_Product (Steps, Forget, 1, Added, Kept => True);
+      if not Added then return; end if;
+      Products.Add_Join (Steps, Added, From_Step => 3, Residual_Step => 2, Unit => 12,
+                         Payload => Natural (Input_Width), Payload_Elements => Natural (2 * Width));
+      if not Added then return; end if;
+      Targets := [Down_Row.all (Down_Row.all'First)'Address, Gain_Row.all (Gain_Row.all'First)'Address,
+                  Forget_Row.all (Forget_Row.all'First)'Address, Value.all (Value.all'First)'Address];
+      Run_Steps (Steps, Landing.all (0 .. Input_Width + 2 * Width - 1), Count,
+                 System.Null_Address, Status, Targets => Targets, Cancel => Cancel);
+      Done := E.Is_Ok (Status);
+   end Control_And_Blend;
+
+   procedure Normalize_Output
+     (Projection : T.View; Gain : Model_Runner.Numerics.Real_Array;
+      Epsilon : Model_Runner.Numerics.Real;
+      Input, Normalized, Output : T.Real_Array_Access;
+      Done : out Boolean; Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      Steps : Products.Sequence;
+      Added : Boolean;
+      Targets : Products.Address_List (1 .. 2);
+   begin
+      Done := False; Status := E.Success;
+      if Input = null or else Normalized = null or else Output = null
+        or else Input.all'Length = 0 or else Input.all'Length /= Gain'Length
+        or else Normalized.all'Length /= Gain'Length
+        or else Projection.Columns /= Gain'Length or else Projection.Rows /= Output.all'Length
+      then return; end if;
+      Products.Open_Sequence (Steps);
+      Products.Add_Norm (Steps, Gain (Gain'First)'Address,
+                        Model_Runner.Bytes.Byte_Count (Gain'Length) * 4, 0,
+                        Gain'Length, Epsilon, Added, Key => Gain (Gain'First)'Address, Kept => True);
+      if not Added then return; end if;
+      Add_View_Product (Steps, Projection, 1, Added, Kept => True);
+      if not Added then return; end if;
+      Targets := [Normalized.all (Normalized.all'First)'Address, Output.all (Output.all'First)'Address];
+      Run_Steps (Steps, Input.all, 1, System.Null_Address, Status, Targets => Targets, Cancel => Cancel);
+      Done := E.Is_Ok (Status);
+   end Normalize_Output;
+
+   procedure Open_Steps (Steps : out Product_Sequence) is
+   begin
+      Products.Open_Sequence (Steps);
+   end Open_Steps;
+
+   procedure Add_Packed_Attention
+     (Steps : in out Product_Sequence;
+      Heads, Head_Size, Value_Size, Group_Size, First, Last, KV_Width, V_Width : Natural;
+      Scale, Cap : Model_Runner.Numerics.Real;
+      Added : out Boolean; Packed : Packed_Cache;
+      Window : Natural := 0; At_Vector : Natural := 0; Relative_At : Natural := 0) is
+   begin
+      Products.Add_Attention
+        (Steps, Heads, Head_Size, Value_Size, Group_Size, First, Last, 0, 0,
+         KV_Width, V_Width, Scale, Cap, Added, Window => Window, Kept => False,
+         Packed => Packed, At_Vector => At_Vector, Relative_At => Relative_At);
+   end Add_Packed_Attention;
+
    procedure Add_View_Product
      (Steps     : in out Products.Sequence;
       Weight    : T.View;
@@ -2773,7 +3061,9 @@ package body Model_Runner.Backend.Device is
       Carry_Out : Boolean := False;
       In_Place  : Boolean := False;
       Origin    : Interfaces.Unsigned_64 := 0;
-      Hold      : Boolean := False)
+      Hold      : Boolean := False;
+      Targets   : Products.Address_List := Products.No_Places;
+      Cancel    : Model_Runner.Cancellation.Token_Reference := null)
    is
       Ok        : Boolean;
       Cancelled : Boolean := False;
@@ -2786,11 +3076,14 @@ package body Model_Runner.Backend.Device is
          return;
       end if;
       Products.Run
-        (Engine, Steps, Vectors, Count, None, Ok, Cancelled, null, Carry_In => Carry_In or else In_Place,
+        (Engine, Steps, Vectors, Count, None, Ok, Cancelled, Cancel, Carry_In => Carry_In or else In_Place,
          Carry_Out => Carry_Out,
-         Kept_Into => (if Into = System.Null_Address or else In_Place then Products.No_Places else One),
+         Kept_Into => (if Targets'Length > 0 then Targets
+                       elsif Into = System.Null_Address or else In_Place then Products.No_Places else One),
          Leave_Kept => In_Place, Origin => Origin, Hold => Hold);
-      if Ok then
+      if Cancelled then
+         Status := E.Make (E.Generation_Cancelled);
+      elsif Ok then
          Note_Timeline (Steps, Count);
       elsif Products.Is_Stalled (Engine) then
          Status := E.Make (E.Backend_Device_Stalled);
@@ -2862,9 +3155,17 @@ package body Model_Runner.Backend.Device is
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;
             end if;
+            if This.Reference_Activations and then
+              (Rounding_Wanted = Products.Rounds_Every
+               or else (Rounding_Wanted = Products.Rounds_Feed_Forward and then This.Role = T.Role_Feed_Forward))
+              and then (This.Interleaved or else not Products.Takes_Reference_Integers (Engine))
+            then Status := E.Make (E.Backend_Capability_Missing); return; end if;
             Products.Add_Product
               (Steps, This.Base, This.Span, This.Offset, Packing, Natural (This.Rows), Natural (This.Columns),
-               Added, Key => At_Offset (This.Base, This.Offset));
+               Added, Key => At_Offset (This.Base, This.Offset),
+               Reference_Integer => This.Reference_Activations and then
+                 (Rounding_Wanted = Products.Rounds_Every or else
+                  (Rounding_Wanted = Products.Rounds_Feed_Forward and then This.Role = T.Role_Feed_Forward)));
             if not Added then
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;
@@ -2968,11 +3269,19 @@ package body Model_Runner.Backend.Device is
                return;
             end if;
 
+            if This.Reference_Activations and then
+              (Rounding_Wanted = Products.Rounds_Every
+               or else (Rounding_Wanted = Products.Rounds_Feed_Forward and then This.Role = T.Role_Feed_Forward))
+              and then (This.Interleaved or else not Products.Takes_Reference_Integers (Engine))
+            then Status := E.Make (E.Backend_Capability_Missing); return; end if;
             Products.Add_Product
               (Steps, This.Base, This.Span, This.Offset, Packing,
                Natural (This.Rows), Natural (This.Columns), Added,
                Key => At_Offset (This.Base, This.Offset),
-               At_Vector => Natural (Skip));
+               At_Vector => Natural (Skip),
+               Reference_Integer => This.Reference_Activations and then
+                 (Rounding_Wanted = Products.Rounds_Every or else
+                  (Rounding_Wanted = Products.Rounds_Feed_Forward and then This.Role = T.Role_Feed_Forward)));
             if not Added then
                Status := E.Make (E.Tensor_Shape_Mismatch);
                return;
@@ -8372,6 +8681,289 @@ package body Model_Runner.Backend.Device is
    -- Dispatch_Expert --
    ---------------------
 
+   function Reference_Packing_Reuses return Natural is (Products.Reference_Packing_Reuses (Engine));
+
+   function Takes_Reference_Mixture return Boolean
+   is (Ready_Now and then Products.Takes_Reference_SiTU (Engine));
+
+   procedure Dispatch_Reference_Mixture
+     (Gates, Ups, Downs : T.View_Group; Shares : Model_Runner.Numerics.Real_Array;
+      Vector, Target : T.Real_Array_Access; Gate_Cap, Up_Cap : Model_Runner.Numerics.Real;
+      Status : out E.Error_Info; Cancel : Model_Runner.Cancellation.Token_Reference := null; Count : Positive := 1)
+   is
+      use type Model_Runner.Numerics.Real;
+      Steps : Products.Sequence;
+      Added : Boolean;
+      Number : constant Natural := Gates'Length;
+      Feed, Width, Wanted : Model_Runner.Numerics.Element_Count := 0;
+      Accumulated : Natural := 0;
+      Tokens : constant Model_Runner.Numerics.Element_Count := Model_Runner.Numerics.Element_Count (Count);
+      Input_Room, Share_Stride : Model_Runner.Numerics.Element_Count := 0;
+      Held : T.Real_Array_Access := null;
+      function Native (Weight : T.View) return Boolean is
+        (not Weight.Interleaved and then Native_Reference_Format (Weight.Format));
+      procedure Add (Weight : T.View; Chained : Boolean := False) is
+         Known : Boolean;
+         Packing : Products.Weight_Packing;
+      begin
+         Packing_Of (Weight.Format, Packing, Known);
+         if not Known then Added := False; return; end if;
+         if Chained then
+            Products.Add_Chained_Product
+              (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+               Natural (Weight.Rows), Natural (Weight.Columns), Added,
+               Key => At_Offset (Weight.Base, Weight.Offset), Kept => False, Reference_Integer => True);
+         else
+            Products.Add_Product
+              (Steps, Weight.Base, Weight.Span, Weight.Offset, Packing,
+               Natural (Weight.Rows), Natural (Weight.Columns), Added,
+               Key => At_Offset (Weight.Base, Weight.Offset), Kept => False, Reference_Integer => True);
+         end if;
+      end Add;
+   begin
+      Status := E.Make (E.Backend_Capability_Missing);
+      if not Takes_Reference_Mixture then return; end if;
+      Status := E.Make (E.Tensor_Shape_Mismatch);
+      if Count > 128 or else Number = 0 or else Number > Products.Sequence_Limit / 5 or else Ups'Length /= Number
+        or else Downs'Length /= Number or else Shares'Length /= Model_Runner.Numerics.Element_Count (Number) * Tokens
+        or else Vector = null or else Target = null
+        or else not Model_Runner.Numerics.Is_Finite (Gate_Cap)
+        or else not Model_Runner.Numerics.Is_Finite (Up_Cap) or else Gate_Cap <= 0.0 or else Up_Cap <= 0.0
+      then return; end if;
+      Feed := Gates (Gates'First).Rows; Width := Gates (Gates'First).Columns;
+      if Feed = 0 or else Width = 0
+        or else Width > Model_Runner.Numerics.Element_Count'Last / (5 * Tokens
+          * Model_Runner.Numerics.Element_Count (Number))
+        or else Feed > Model_Runner.Numerics.Element_Count'Last / (5 * Tokens
+          * Model_Runner.Numerics.Element_Count (Number))
+        or else Vector.all'Length < Tokens * Width or else Target.all'Length < Tokens * Width
+      then return; end if;
+      for I in 0 .. Number - 1 loop
+         declare
+            G : T.View renames Gates (Gates'First + I);
+            U : T.View renames Ups (Ups'First + I);
+            D : T.View renames Downs (Downs'First + I);
+         begin
+            if not Native (G) or else not Native (U) or else not Native (D)
+              or else G.Rows /= Feed or else U.Rows /= Feed or else D.Rows /= Width
+              or else G.Columns /= Width or else U.Columns /= Width or else D.Columns /= Feed
+
+            then return; end if;
+         end;
+      end loop;
+      for Share of Shares loop
+         if not Model_Runner.Numerics.Is_Finite (Share) then return; end if;
+      end loop;
+      Held := Vector;
+      if Count > 1 then
+         Input_Room := (Tokens * Width + 63) / 64 * 64;
+         Share_Stride := (Tokens + 63) / 64 * 64;
+         declare
+            Needed : constant Model_Runner.Numerics.Element_Count :=
+              Input_Room + Model_Runner.Numerics.Element_Count (Number) * Share_Stride;
+         begin
+            if Fed_Room = null or else Fed_Room.all'Length < Needed then
+               T.Free (Fed_Room); T.Allocate (Needed, Fed_Room);
+            end if;
+            if Fed_Room = null then Status := E.Make (E.Memory_Allocation_Failed); return; end if;
+            Fed_Room.all (0 .. Needed - 1) := [others => 0.0];
+            Fed_Room.all (0 .. Tokens * Width - 1) :=
+              Vector.all (Vector.all'First .. Vector.all'First + Tokens * Width - 1);
+            for I in 0 .. Number - 1 loop
+               declare
+                  At_Route : constant Model_Runner.Numerics.Element_Count :=
+                    Model_Runner.Numerics.Element_Count (I) * Tokens;
+                  Into : constant Model_Runner.Numerics.Element_Count :=
+                    Input_Room + Model_Runner.Numerics.Element_Count (I) * Share_Stride;
+               begin
+                  Fed_Room.all (Into .. Into + Tokens - 1) :=
+                    Shares (Shares'First + At_Route .. Shares'First + At_Route + Tokens - 1);
+               end;
+            end loop;
+            Held := Fed_Room;
+         end;
+      end if;
+      Products.Open_Sequence (Steps);
+      for I in 0 .. Number - 1 loop
+         Add (Gates (Gates'First + I)); if not Added then return; end if;
+         Add (Ups (Ups'First + I)); if not Added then return; end if;
+         Products.Add_Combination (Steps, 14, Added, Kept => False, Alpha => Gate_Cap, Limit => Up_Cap);
+         if not Added then return; end if;
+         Add (Downs (Downs'First + I), Chained => True); if not Added then return; end if;
+         Products.Add_Combination
+           (Steps, (if Count = 1 then 15 else 19), Added, Kept => I = Number - 1,
+            Alpha => Shares (Shares'First + Model_Runner.Numerics.Element_Count (I)),
+            Limit => (if I = 0 then 1.0 else 0.0), From_Step => I * 5 + 4,
+            Other_Step => (if I = 0 then 4 else Accumulated),
+            Payload => (if Count = 1 then 0 else Natural
+              (Input_Room + Model_Runner.Numerics.Element_Count (I) * Share_Stride)),
+            Payload_Elements => (if Count = 1 then 0 else Count));
+         if not Added then return; end if;
+         Accumulated := I * 5 + 5;
+         Wanted := Wanted + Tokens * (3 * Feed + 2 * Width);
+      end loop;
+      Run_Sequence (Steps, Held, Count, Wanted, 0, Status, Cancel);
+      if E.Is_Error (Status) then return; end if;
+      for X of Landing.all (Landing.all'First + Wanted - Tokens * Width .. Landing.all'First + Wanted - 1) loop
+         if not Model_Runner.Numerics.Is_Finite (X) then
+            Status := E.Make (E.Tensor_Non_Finite_Value); return;
+         end if;
+      end loop;
+      Target.all (Target.all'First .. Target.all'First + Tokens * Width - 1) :=
+        Landing.all (Landing.all'First + Wanted - Tokens * Width .. Landing.all'First + Wanted - 1);
+   end Dispatch_Reference_Mixture;
+
+   procedure Dispatch_Reference_Experts
+     (Gates, Ups, Downs : T.View_Group; Vectors : T.Target_Group;
+      Count : Model_Runner.Numerics.Element_Count; Targets : T.Target_Group;
+      Gate_Cap, Up_Cap : Model_Runner.Numerics.Real; Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      use type Model_Runner.Numerics.Real;
+      Number : constant Natural := Gates'Length;
+      Width, Feed, Stride, Wanted, Input_Width : Model_Runner.Numerics.Element_Count := 0;
+      Steps : Products.Sequence;
+      Added, Known : Boolean;
+      Packing : Products.Weight_Packing;
+      function Native (W : T.View) return Boolean is
+        (not W.Interleaved and then Native_Reference_Format (W.Format));
+      procedure Add (W : T.View; First : Natural; Chained : Boolean := False) is
+      begin
+         Packing_Of (W.Format, Packing, Known);
+         if not Known then Added := False; return; end if;
+         if Chained then
+            Products.Add_Chained_Product
+              (Steps, W.Base, W.Span, W.Offset, Packing, Natural (W.Rows), Natural (W.Columns), Added,
+               Key => At_Offset (W.Base, W.Offset), Kept => True, Reference_Integer => True);
+         else
+            Products.Add_Product
+              (Steps, W.Base, W.Span, W.Offset, Packing, Natural (W.Rows), Natural (W.Columns), Added,
+               Key => At_Offset (W.Base, W.Offset), At_Vector => First, Kept => False, Reference_Integer => True);
+         end if;
+      end Add;
+   begin
+      Status := E.Make (E.Backend_Capability_Missing);
+      if not Takes_Reference_Mixture then return; end if;
+      Status := E.Make (E.Tensor_Shape_Mismatch);
+      if Number not in 1 .. Products.Sequence_Limit / 4 or else Count not in 1 .. 128
+        or else Ups'Length /= Number or else Downs'Length /= Number
+        or else Vectors'Length /= Number or else Targets'Length /= Number
+        or else not Model_Runner.Numerics.Is_Finite (Gate_Cap) or else Gate_Cap <= 0.0
+        or else not Model_Runner.Numerics.Is_Finite (Up_Cap) or else Up_Cap <= 0.0
+      then return; end if;
+      Width := Gates (Gates'First).Columns; Feed := Gates (Gates'First).Rows;
+      if Width = 0 or else Feed = 0
+        or else Width > Model_Runner.Numerics.Element_Count'Last / (Count
+            * Model_Runner.Numerics.Element_Count (Number))
+        or else Feed > (Model_Runner.Numerics.Element_Count'Last / (Count
+            * Model_Runner.Numerics.Element_Count (Number)) - Width) / 3
+      then return; end if;
+      for I in 0 .. Number - 1 loop
+         declare
+            G : T.View renames Gates (Gates'First + I);
+            U : T.View renames Ups (Ups'First + I);
+            D : T.View renames Downs (Downs'First + I);
+         begin
+            if not Native (G) or else not Native (U) or else not Native (D)
+              or else G.Rows /= Feed or else U.Rows /= Feed or else D.Rows /= Width
+              or else G.Columns /= Width or else U.Columns /= Width or else D.Columns /= Feed
+              or else Vectors (Vectors'First + I) = null or else Targets (Targets'First + I) = null
+              or else Vectors (Vectors'First + I).all'Length < Count * Width
+              or else Targets (Targets'First + I).all'Length < Count * Width
+            then return; end if;
+         end;
+      end loop;
+      Input_Width := Model_Runner.Numerics.Element_Count (Number) * Count * Width; Stride := Count * (3
+            * Feed + Width); Wanted := Model_Runner.Numerics.Element_Count (Number) * Stride;
+      if Fed_Room = null or else Fed_Room.all'Length < Input_Width then
+         T.Free (Fed_Room); T.Allocate (Input_Width, Fed_Room);
+      end if;
+      if Fed_Room = null then Status := E.Make (E.Memory_Allocation_Failed); return; end if;
+      Products.Open_Sequence (Steps);
+      for I in 0 .. Number - 1 loop
+         Fed_Room.all (Model_Runner.Numerics.Element_Count (I) * Count * Width .. 
+           Model_Runner.Numerics.Element_Count (I + 1) * Count * Width - 1) :=
+           Vectors (Vectors'First + I).all (Vectors (Vectors'First + I).all'First
+                                          .. Vectors (Vectors'First + I).all'First + Count * Width - 1);
+         Add (Gates (Gates'First + I), Natural (Model_Runner.Numerics.Element_Count (I) * Count
+            * Width)); if not Added then return; end if;
+         Add (Ups (Ups'First + I), Natural (Model_Runner.Numerics.Element_Count (I) * Count
+            * Width)); if not Added then return; end if;
+         Products.Add_Combination (Steps, 14, Added, Kept => False, Alpha => Gate_Cap, Limit => Up_Cap);
+         if not Added then return; end if;
+         Add (Downs (Downs'First + I), 0, Chained => True); if not Added then return; end if;
+      end loop;
+      Run_Sequence (Steps, Fed_Room, Positive (Count), Wanted, 0, Status, Cancel);
+      if E.Is_Error (Status) then return; end if;
+      for I in 0 .. Number - 1 loop
+         for X of Landing.all (Landing.all'First + Model_Runner.Numerics.Element_Count (I + 1)
+            * Stride - Count * Width
+            .. Landing.all'First + Model_Runner.Numerics.Element_Count (I + 1) * Stride - 1) loop
+            if not Model_Runner.Numerics.Is_Finite (X) then
+               Status := E.Make (E.Tensor_Non_Finite_Value); return;
+            end if;
+         end loop;
+      end loop;
+      for I in 0 .. Number - 1 loop
+         Targets (Targets'First + I).all (Targets (Targets'First + I).all'First
+                                        .. Targets (Targets'First + I).all'First + Count * Width - 1) :=
+           Landing.all (Landing.all'First + Model_Runner.Numerics.Element_Count (I + 1) * Stride - Count
+            * Width .. Landing.all'First + Model_Runner.Numerics.Element_Count (I + 1) * Stride - 1);
+      end loop;
+   end Dispatch_Reference_Experts;
+
+   procedure Dispatch_Reference_Expert
+     (Gate, Up, Down : T.View; Vectors : T.Real_Array_Access;
+      Count : Model_Runner.Numerics.Element_Count; Target : T.Real_Array_Access;
+      Gate_Cap, Up_Cap : Model_Runner.Numerics.Real; Status : out E.Error_Info;
+      Cancel : Model_Runner.Cancellation.Token_Reference := null)
+   is
+      use type Model_Runner.Numerics.Real;
+      Steps : Products.Sequence;
+      Added, Known : Boolean;
+      Packing : Products.Weight_Packing;
+      Width : constant Model_Runner.Numerics.Element_Count := Gate.Columns;
+      Feed : constant Model_Runner.Numerics.Element_Count := Gate.Rows;
+      Wanted : Model_Runner.Numerics.Element_Count := 0;
+      function Native (W : T.View) return Boolean is
+        (not W.Interleaved and then Native_Reference_Format (W.Format));
+   begin
+      Status := E.Make (E.Backend_Capability_Missing);
+      if not Takes_Reference_Mixture then return; end if;
+      Status := E.Make (E.Tensor_Shape_Mismatch);
+      if Count not in 1 .. 128 or else Width = 0 or else Feed = 0 or else Vectors = null or else Target = null
+        or else Width > Model_Runner.Numerics.Element_Count'Last / Count
+        or else Feed > (Model_Runner.Numerics.Element_Count'Last / Count - Width) / 3
+        or else Vectors.all'Length < Count * Width or else Target.all'Length < Count * Width
+        or else not Native (Gate) or else not Native (Up) or else not Native (Down)
+        or else Up.Rows /= Feed or else Up.Columns /= Width or else Down.Rows /= Width or else Down.Columns /= Feed
+        or else not Model_Runner.Numerics.Is_Finite (Gate_Cap) or else Gate_Cap <= 0.0
+        or else not Model_Runner.Numerics.Is_Finite (Up_Cap) or else Up_Cap <= 0.0
+      then return; end if;
+      Wanted := Count * (3 * Feed + Width);
+      Products.Open_Sequence (Steps);
+      for W of T.View_Group'[Gate, Up] loop
+         Packing_Of (W.Format, Packing, Known); if not Known then return; end if;
+         Products.Add_Product (Steps, W.Base, W.Span, W.Offset, Packing, Natural (Feed), Natural (Width), Added,
+                               Key => At_Offset (W.Base, W.Offset), Kept => False, Reference_Integer => True);
+         if not Added then return; end if;
+      end loop;
+      Products.Add_Combination (Steps, 14, Added, Kept => False, Alpha => Gate_Cap, Limit => Up_Cap);
+      if not Added then return; end if;
+      Packing_Of (Down.Format, Packing, Known); if not Known then return; end if;
+      Products.Add_Chained_Product
+        (Steps, Down.Base, Down.Span, Down.Offset, Packing, Natural (Width), Natural (Feed), Added,
+         Key => At_Offset (Down.Base, Down.Offset), Kept => True, Reference_Integer => True);
+      if not Added then return; end if;
+      Run_Sequence (Steps, Vectors, Positive (Count), Wanted, 0, Status, Cancel);
+      if E.Is_Error (Status) then return; end if;
+      for X of Landing.all (Landing.all'First + Wanted - Count * Width .. Landing.all'First + Wanted - 1) loop
+         if not Model_Runner.Numerics.Is_Finite (X) then Status := E.Make (E.Tensor_Non_Finite_Value); return; end if;
+      end loop;
+      Target.all (Target.all'First .. Target.all'First + Count * Width - 1) :=
+        Landing.all (Landing.all'First + Wanted - Count * Width .. Landing.all'First + Wanted - 1);
+   end Dispatch_Reference_Expert;
+
    procedure Dispatch_Expert
      (Gates   : T.View;
       Ups     : T.View;
@@ -8587,13 +9179,22 @@ package body Model_Runner.Backend.Device is
                     Natural (Weight.Rows), Natural (Weight.Columns));
    end Matrix_Held;
 
+   --  A reference expert may be cached only if all three native products
+   --  exist. Other formats retain the established CPU fallback; F32 walks
+   --  and architectures without reference activations retain their policy.
+   function Reference_Expert_Allowed (Gate, Up, Down : T.View) return Boolean is
+     (Rounding_Wanted not in Products.Rounds_Every | Products.Rounds_Feed_Forward
+      or else not (Gate.Reference_Activations or else Up.Reference_Activations or else Down.Reference_Activations)
+      or else (Native_Reference_Format (Gate.Format) and then Native_Reference_Format (Up.Format)
+               and then Native_Reference_Format (Down.Format)));
+
    function Expert_Held
      (Gate : T.View;
       Up   : T.View;
       Down : T.View) return Boolean
    is
    begin
-      return Matrix_Held (Gate)
+      return Reference_Expert_Allowed (Gate, Up, Down) and then Matrix_Held (Gate)
         and then Matrix_Held (Up)
         and then Matrix_Held (Down);
    end Expert_Held;
@@ -8621,6 +9222,7 @@ package body Model_Runner.Backend.Device is
       end Undo;
    begin
       Held := False;
+      if not Reference_Expert_Allowed (Gate, Up, Down) then return; end if;
 
       if not Was_Gate then
          Hold (Gate, Status, Ahead => True);

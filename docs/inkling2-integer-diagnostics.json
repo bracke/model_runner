@@ -1,0 +1,68 @@
+{
+  "schema": "model_runner.inkling2.integer_diagnostics.v1",
+  "status": "unqualified; full-checkpoint conformance still fails",
+  "rounding_metadata_fix": "Preserve Reference_Activations in rebuilt and mapped row-panel views. Existing architecture role handling is unchanged.",
+  "regression": "Independent Q8 fixture: 834 tensors / 14000 elements per run; error before fix 0.154113; error after fix 2.38419e-6 for anonymous panels, first cache build and verified cache mapping.",
+  "full_checkpoint": "Canonical byte-activation Hello and five-token cached prefix still fail the original strict floating-element and exact-routing gates. No tolerance was widened.",
+  "first_hello_failure": {
+    "tensor": "ffn_out-1",
+    "element": 0,
+    "native_rounded_display": 1.44773,
+    "reference_rounded_display": 1.44769,
+    "first_routing_mismatch_logical_layer": 8
+  },
+  "sensitivity_probe": {
+    "reference": "Pinned original GGML optimized quantize_row_q8_K, ggml_cpu_init called; same quantizer applied to both separately captured inputs.",
+    "ffn_input_physical_layer": 1,
+    "maximum_absolute_input_difference": 5.245208740234375e-06,
+    "rms_input_difference": 7.95903552949526e-07,
+    "changed_quantized_bytes": 1,
+    "position": 1966,
+    "native_input_quant": -33,
+    "reference_input_quant": -34,
+    "changed_block_scales": 8,
+    "interpretation": "Confirms one amplification mechanism; does not prove that every remaining integer-profile difference has this cause and does not qualify that profile."
+  },
+  "artifacts": [
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-panel-regression-before.log",
+      "bytes": 385,
+      "sha256": "923016cbe41a8b4d967498ffb0242b64cea119b168ae3f60b971962b107f9f27"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-panel-regression-after.log",
+      "bytes": 353,
+      "sha256": "33debd8611c1db6d17c2b33458c22f8e8a63bb0a8d36d4ed4d95a51992966458"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-final-panel-regression.log",
+      "bytes": 353,
+      "sha256": "33debd8611c1db6d17c2b33458c22f8e8a63bb0a8d36d4ed4d95a51992966458"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-fixed-packed-integer-prefix.log",
+      "bytes": 584,
+      "sha256": "5299337ab328e2a9d3f937c502ecec6d1cf2476c7f4023fdc9d48c08a1273a90"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-fixed-packed-integer-hello.log",
+      "bytes": 584,
+      "sha256": "299a7a179040bde0253f8291b8fe8b7084c09587582da9fe2ab477032f89e32c"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-integer-input-debug.log",
+      "bytes": 2363,
+      "sha256": "2543214f57cdcc00383d56fcb04c926454eff8b8af6199a7518d53f302aed632"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-native-ffn-input-1.f32",
+      "bytes": 9216,
+      "sha256": "81e2bdca11d72953ff312bb5cb10b0290936b2a28d8c5f709964673169f6dfd0"
+    },
+    {
+      "file": "artifacts/inkling2/obj/integer-diagnostics/inkling2-integer-input-sensitivity.json",
+      "bytes": 1416,
+      "sha256": "62fbf07c89162b30e3c48626b19895c6414c3cfdf7a4202300f6a1389a94cd30"
+    }
+  ]
+}

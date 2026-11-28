@@ -13,6 +13,7 @@ with Interfaces.C.Strings;
 with System.Storage_Elements;
 
 with Model_Runner.Kernels;
+with Model_Runner.Quantization.Integers;
 with Model_Runner.Shaders;
 with Model_Runner.Shaders.Low;
 with Model_Runner.Shaders.Low_Dots;
@@ -1842,7 +1843,7 @@ package body Model_Runner.Platform.Device.Products is
    --  rows' in bytes and the scales' in floats -- the bits an element of
    --  each side, how many heads and positions a workgroup answers, a
    --  round's table and the sinks.
-   Packed_Bytes    : constant := 124;
+   Packed_Bytes    : constant := 128;
    Product_Bytes   : constant := 32 + 4 * Max_Gather + 12;
    Widest_Plain    : constant :=
      (if Product_Bytes > Attention_Bytes then Product_Bytes
@@ -2041,6 +2042,7 @@ package body Model_Runner.Platform.Device.Products is
       --  describe its meaning, so transformed Q4 never aliases plain Q4.
       K_Codec : C.unsigned := 0;
       V_Codec : C.unsigned := 0;
+      Relative_At : C.unsigned := 0;
    end record
      with Convention => C;
 
@@ -3160,6 +3162,7 @@ package body Model_Runner.Platform.Device.Products is
       procedure Give_Back (Handle : in out Address; Name : String) is
          Destroy : constant Destroy_Call := To_Destroy (Point (Name));
       begin
+      Item.Reference_Packing_Reused := 0;
          if Handle /= Null_Handle
            and then Item.Logical /= Null_Handle
            and then Destroy /= null
@@ -3494,6 +3497,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Halve_Line, "vkDestroyPipeline");
       Give_Back (Item.Matrix_Line, "vkDestroyPipeline");
       Give_Back (Item.Attend_Line, "vkDestroyPipeline");
+      Give_Back (Item.Native_Blend_Line, "vkDestroyPipeline");
       Give_Back (Item.Blend_Line, "vkDestroyPipeline");
       Give_Back (Item.Pipeline, "vkDestroyPipeline");
       Give_Back (Item.Layout, "vkDestroyPipelineLayout");
@@ -3616,6 +3620,7 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Turner, "vkDestroyShaderModule");
       Give_Back (Item.Placer, "vkDestroyShaderModule");
       Give_Back (Item.Fetcher, "vkDestroyShaderModule");
+      Give_Back (Item.Native_Blender, "vkDestroyShaderModule");
       Give_Back (Item.Blender, "vkDestroyShaderModule");
       Give_Back (Item.Shader, "vkDestroyShaderModule");
       Give_Back (Item.Wave_Shader, "vkDestroyShaderModule");
@@ -3664,6 +3669,14 @@ package body Model_Runner.Platform.Device.Products is
       Give_Back (Item.Dots_Shader5, "vkDestroyShaderModule");
       Give_Back (Item.Dots_Shader6, "vkDestroyShaderModule");
       Give_Back (Item.Glu_Dots_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Reference_Activation_Line, "vkDestroyPipeline");
+      Give_Back (Item.Reference_Activation_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Reference_Round_Line, "vkDestroyPipeline");
+      Give_Back (Item.Reference_Round_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Reference_GSQ_Line, "vkDestroyPipeline");
+      Give_Back (Item.Reference_GSQ_Shader, "vkDestroyShaderModule");
+      Give_Back (Item.Reference_Line, "vkDestroyPipeline");
+      Give_Back (Item.Reference_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Round_Shader, "vkDestroyShaderModule");
       Give_Back (Item.Round_Line, "vkDestroyPipeline");
       Give_Back (Item.Long_Shader6, "vkDestroyShaderModule");
@@ -3690,6 +3703,15 @@ package body Model_Runner.Platform.Device.Products is
       Item.Owns_Slot := False;
       Life.Release;
    end Close;
+
+   function Reference_Packing_Reuses (Item : Engine) return Natural is (Item.Reference_Packing_Reused);
+
+   function Takes_Reference_SiTU (Item : Engine) return Boolean
+   is (Item.Reference_Activation_Line /= Null_Handle and then Item.Reference_Round_Line /= Null_Handle
+       and then Item.Reference_Line /= Null_Handle);
+
+   function Native_Controls (Item : Engine) return Boolean
+   is (Item.Native_Blend_Line /= Null_Handle);
 
    function Is_Ready (Item : Engine) return Boolean
    is (Item.Pipeline /= Null_Handle and then Item.Fence /= Null_Handle
@@ -3755,6 +3777,14 @@ package body Model_Runner.Platform.Device.Products is
                   = Item.Many_Lines6 (Count)
        then Item.Dots_Lines6 (Count)
        else Null_Handle);
+
+   function Takes_Reference_Integers
+     (Item : Engine; Device_Packing : Boolean := False) return Boolean
+   is (Item.Reference_Line /= Null_Handle
+       and then (not Device_Packing or else Item.Reference_Round_Line /= Null_Handle));
+
+   function Takes_Reference_GSQ (Item : Engine) return Boolean
+   is (Item.Reference_GSQ_Line /= Null_Handle);
 
    procedure Round_Walks (Item : in out Engine; Rounding : Walk_Rounding)
    is
@@ -7913,6 +7943,34 @@ package body Model_Runner.Platform.Device.Products is
    --  head's four never straddle a word only where every base and width
    --  is a multiple of four -- which the engine's layout gives, and which
    --  this holds it to. Asked by the single call and by a sequence alike.
+   function Relative_Fits
+     (Item : Engine; K_Codec, V_Codec : Cache_Codec; At_Meta, Heads, Positions, First : Natural) return Boolean
+   is
+      use System.Storage_Elements;
+   begin
+      if At_Meta = 0 then return True; end if;
+      if Interfaces.Unsigned_64 (At_Meta) > Item.Cache_Elements
+        or else Item.Cache_Elements - Interfaces.Unsigned_64 (At_Meta) < 4 or else Item.Cache_At = Null_Handle
+        or else K_Codec /= Transformed_Four_Bit_Cache or else V_Codec /= Scaled_Integer_Cache
+        or else Positions not in 1 .. 128 or else Heads = 0
+      then return False; end if;
+      declare
+         type Header_Words is array (0 .. 3) of C.unsigned;
+         Header : Header_Words with Import, Address => Item.Cache_At + Storage_Offset (At_Meta) * 4;
+         Width : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Header (0));
+         Extent : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Header (1));
+         Table_At : constant Interfaces.Unsigned_64 := Interfaces.Unsigned_64 (Header (3));
+      begin
+         return Width in 1 .. 1024 and then Extent > 0
+           and then Interfaces.Unsigned_64 (Header (2)) <= Interfaces.Unsigned_64 (First)
+           and then Table_At <= Item.Cache_Elements
+           and then Extent <= (Item.Cache_Elements - Table_At) / Width
+           and then Interfaces.Unsigned_64 (At_Meta) + 4
+             + Interfaces.Unsigned_64 (Positions) * Interfaces.Unsigned_64 (Heads) * (Width + 1)
+               <= Item.Cache_Elements;
+      end;
+   end Relative_Fits;
+
    function Packed_Fits
      (Item       : Engine;
       Packed     : Packed_Cache;
@@ -8038,7 +8096,8 @@ package body Model_Runner.Platform.Device.Products is
       Causal     : Boolean := True;
       Max_Bias   : Model_Runner.Numerics.Real := 0.0;
       K_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
-      V_Codec    : Cache_Codec := Inferred_From_Bits_Cache)
+      V_Codec    : Cache_Codec := Inferred_From_Bits_Cache;
+   Relative_At : Natural := 0)
    is separate;
 
    ---------------
@@ -9662,7 +9721,8 @@ package body Model_Runner.Platform.Device.Products is
       Key     : System.Address := System.Null_Address;
       Kept    : Boolean := True;
       At_Vector : Natural := 0;
-      Exact   : Boolean := False)
+      Exact   : Boolean := False;
+      Reference_Integer : Boolean := False)
    is
    begin
       if Steps.Held = Sequence_Limit or else Base = System.Null_Address then
@@ -9674,8 +9734,8 @@ package body Model_Runner.Platform.Device.Products is
       Steps.Items (Steps.Held) :=
         (Base => Base, Span => Span, At_Byte => At_Byte, Packing => Packing,
          Rows => Rows, Columns => Columns, Key => Key, Chained => False,
-         Kept => Kept, At_Vector => At_Vector,
-         Blends => False, Unit => 0, Attends => False, Exact => Exact,
+         Kept => Kept, At_Vector => At_Vector, Reference_Integer => Reference_Integer,
+         Blends => False, Unit => 0, Attends => False, Exact => Exact or else Reference_Integer,
          others => <>);
       Added := True;
    end Add_Product;
@@ -9700,7 +9760,8 @@ package body Model_Runner.Platform.Device.Products is
       Region_Rows : Natural := 0;
       Region_At   : Natural := 0;
       Streamed    : Boolean := False;
-      Exact       : Boolean := False)
+      Exact       : Boolean := False;
+      Reference_Integer : Boolean := False)
    is
       Source : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -9727,7 +9788,8 @@ package body Model_Runner.Platform.Device.Products is
          Kept => Kept, Rounded => Rounded,
          Blends => False, Unit => 0, Attends => False,
          Region_Rows => Region_Rows, Region_At => Region_At,
-         Streams => Streamed, Exact => Exact,
+         Streams => Streamed, Exact => Exact or else Reference_Integer,
+         Reference_Integer => Reference_Integer,
          others => <>);
       Added := True;
    end Add_Chained_Product;
@@ -11043,7 +11105,8 @@ package body Model_Runner.Platform.Device.Products is
       Alpha : Model_Runner.Numerics.Real := 0.0;
       Limit : Model_Runner.Numerics.Real := 0.0;
       From_Step  : Natural := 0;
-      Other_Step : Natural := 0)
+      Other_Step : Natural := 0;
+      Payload : Natural := 0; Payload_Elements : Natural := 0)
    is
       --  A unit alone reads the one step before it, for both arms: the
       --  kernel reads the first and not the second, and naming the same
@@ -11074,7 +11137,11 @@ package body Model_Runner.Platform.Device.Products is
                  elsif not Alone
                  then Steps.Items (First).Rows /= Steps.Items (Second).Rows
                  else False)
-        or else Unit > 10
+        or else Unit not in 0 .. 10 | 14 | 15 | 19
+        or else (Unit in 14 | 15 and then (not Model_Runner.Numerics.Is_Finite (Alpha)
+          or else not Model_Runner.Numerics.Is_Finite (Limit)))
+        or else (Unit = 14 and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
+          or else Model_Runner.Numerics."<=" (Limit, 0.0)))
         or else (Unit = 3
                  and then (Model_Runner.Numerics."<=" (Alpha, 0.0)
                            or else Model_Runner.Numerics."<=" (Limit, 0.0)))
@@ -11093,6 +11160,7 @@ package body Model_Runner.Platform.Device.Products is
          Reads => (if Alone or else From_Step /= 0 then First else 0),
          Reads_Two => (if Alone or else Other_Step /= 0 then Second else 0),
          Blends => True, Unit => Unit, Alpha => Alpha, Limit => Limit,
+         Payload => Payload, Payload_Elements => Payload_Elements,
          Attends => False,
          others => <>);
       Added := True;
@@ -11109,7 +11177,12 @@ package body Model_Runner.Platform.Device.Products is
       From_Vector   : Natural := 0;
       Residual_Step : Natural := 0;
       Kept          : Boolean := True;
-      Bias_Too      : Boolean := False)
+      Bias_Too      : Boolean := False;
+      Unit          : Natural := 2;
+      Payload       : Natural := 0;
+      Payload_Elements : Natural := 0;
+      Alpha         : Model_Runner.Numerics.Real := 0.0;
+      Limit         : Model_Runner.Numerics.Real := 0.0)
    is
       Other : constant Natural :=
         (if From_Step = 0 then Steps.Held else From_Step);
@@ -11129,6 +11202,7 @@ package body Model_Runner.Platform.Device.Products is
       --  it named.
       Foldable : constant Boolean :=
         Room
+        and then Unit = 2
         and then Other = Steps.Held
         and then not Steps.Items (Other).Kept
         and then not Steps.Items (Other).Joins
@@ -11151,6 +11225,7 @@ package body Model_Runner.Platform.Device.Products is
       Product : constant Natural := (if Other > 1 then Other - 1 else 0);
       Onto_Bias : constant Boolean :=
         Bias_Too
+        and then Unit = 2
         and then Room
         and then Other = Steps.Held
         and then Product >= 1
@@ -11165,7 +11240,11 @@ package body Model_Runner.Platform.Device.Products is
         and then Steps.Items (Product).Gathers = 0
         and then Steps.Items (Product).Packing in Half_Packing;
    begin
-      if not Room then
+      if not Room or else Unit not in 2 | 11 | 12 | 13 | 14 | 16 | 17 | 18
+        or else (Unit = 14 and then (not Model_Runner.Numerics.Is_Finite (Alpha)
+          or else not Model_Runner.Numerics.Is_Finite (Limit)
+          or else Model_Runner.Numerics."<=" (Alpha, 0.0) or else Model_Runner.Numerics."<=" (Limit, 0.0)))
+      then
          Added := False;
          return;
       end if;
@@ -11181,8 +11260,9 @@ package body Model_Runner.Platform.Device.Products is
          Reads => Residual_Step,
          Reads_Two => Other,
          At_Vector => From_Vector,
+         Payload => Payload, Payload_Elements => Payload_Elements, Alpha => Alpha, Limit => Limit,
          Kept => Kept,
-         Blends => True, Unit => 2, Attends => False,
+         Blends => True, Unit => Unit, Attends => False,
          Folded => Foldable or else Onto_Bias,
          others => <>);
 
@@ -11548,7 +11628,8 @@ package body Model_Runner.Platform.Device.Products is
       Sinks_At   : Natural := 0;
       Pages_At   : Natural := 0;
       Page_Shift : Natural := 0;
-      Rows_As_Heads : Boolean := False) is
+      Rows_As_Heads : Boolean := False;
+      At_Vector : Natural := 0; Relative_At : Natural := 0) is
    begin
       --  The same refusals the single call makes, made while recording
       --  rather than while running: a step that could not be dispatched is
@@ -11576,7 +11657,7 @@ package body Model_Runner.Platform.Device.Products is
                  and then (not Causal or else Window /= 0 or else Group_Size /= 1
                            or else Model_Runner.Numerics."/=" (Max_Bias, 0.0)
                            or else Model_Runner.Numerics."/=" (Cap, 0.0)
-                           or else Sinks_At /= 0 or else Pages_At /= 0
+                           or else Sinks_At /= 0 or else Pages_At /= 0 or else Relative_At /= 0
                            or else Packed /= Not_Packed))
       then
          Added := False;
@@ -11594,7 +11675,7 @@ package body Model_Runner.Platform.Device.Products is
          Rows => Heads * Value_Size,
          Columns => Heads * Head_Size,
          Key => System.Null_Address, Chained => Chained, Blends => False,
-         Reads => From_Step,
+         Reads => From_Step, At_Vector => At_Vector, Relative_At => Relative_At,
          Kept => Kept,
          Unit => 0, Attends => True,
          Heads => Heads, Head_Size => Head_Size, Value_Size => Value_Size,

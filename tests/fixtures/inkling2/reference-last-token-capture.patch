@@ -1,0 +1,26 @@
+--- a/common/debug.cpp
++++ b/common/debug.cpp
+@@ -168,6 +168,8 @@
+         return true;
+     }
+ 
++    if (std::getenv("INKLING_CAPTURE_SKIP")) { return true; }
++
+     char src1_str[128] = { 0 };
+     if (src1) {
+         snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, common_ggml_ne_string(src1).c_str());
+--- a/examples/eval-callback/eval-callback.cpp
++++ b/examples/eval-callback/eval-callback.cpp
+@@ -29,7 +29,12 @@
+ 
+     if (const char * stepwise = std::getenv("INKLING_STEPWISE")) {
+         GGML_ASSERT(std::string(stepwise) == "1");
++        size_t capture_position = 0;
+         for (llama_token token : tokens) {
++            if (std::getenv("INKLING_CAPTURE_LAST_ONLY")) {
++                if (++capture_position < tokens.size()) { setenv("INKLING_CAPTURE_SKIP", "1", 1); }
++                else { unsetenv("INKLING_CAPTURE_SKIP"); }
++            }
+             std::vector<llama_token> one{token};
+             common_batch batch = common_batch_get_one(ctx, one);
+             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {

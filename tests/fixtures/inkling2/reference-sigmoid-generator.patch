@@ -1,0 +1,13 @@
+diff --git a/reference-sigmoid.c b/reference-sigmoid.c
+new file mode 100644
+--- /dev/null
++++ b/reference-sigmoid.c
+@@ -0,0 +1,8 @@
++#include <stdio.h>
++#include <math.h>
++#include <gnu/libc-version.h>
++int main(int argc,char**argv){if(argc!=2)return 2;float out[32];
++for(int i=0;i<32;i++){float x=(float)(i-16);if(i==0)x=127.0f;if(i==31)x=-127.0f;
++out[i]=x<=-88.72283935546875f?0.0f:1.0f/(1.0f+expf(-x));}
++FILE*f=fopen(argv[1],"wb");if(!f)return 3;int n=fwrite(out,4,32,f);fclose(f);
++printf("%s\n",gnu_get_libc_version());return n==32?0:4;}

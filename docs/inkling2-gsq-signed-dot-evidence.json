@@ -1,0 +1,151 @@
+{
+  "status": "retained_arithmetic_simplification",
+  "started_at": "2026-11-27T22:01:40.696632+00:00",
+  "hypothesis": "IQ4_NL signed weights exclude -128. Apply activation sign to weights and take unsigned activation magnitude, preserving -128 activations while replacing two biased VNNI products and correction with one VNNI product. FP32 FMA chains and folds unchanged.",
+  "changed_sources": [
+    "src/library/model_runner-quantization-integers.adb",
+    "tests/src/tests-gguf_cases.adb"
+  ],
+  "baseline": "docs/inkling2-gsq-selected-evidence.json",
+  "protected_kernel_sha256": "c551092b42e47746131552936b7d44ebfcf3a41e832975288a15cbbaa02873a5",
+  "constraints": [
+    "Q4T, IQ3_S, int8 activations, no repack, CPU 8 threads, seven proposals.",
+    "No persistent memory or weight expansion. Exact reference and signed extrema tests before timing.",
+    "One warmup and one measured 2048/16 pass, no concurrent build/test/download."
+  ],
+  "measurement": {
+    "status": "passed",
+    "started_at": "2026-11-27T22:02:59.340546+00:00",
+    "command": [
+      "systemd-run",
+      "--user",
+      "--scope",
+      "--quiet",
+      "--unit",
+      "inkling-gsq-signed-dot-2048-v1",
+      "-p",
+      "MemoryMax=20G",
+      "-p",
+      "MemorySwapMax=0",
+      "/usr/bin/time",
+      "-v",
+      "-o",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-signed-dot/measurement-v1/cpu-int8-q4t.time",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/gsq-signed-dot/measurement-v1/tests",
+      "speed",
+      "--model",
+      "/home/bent/models/Inkling-2-Mini-GSQ-RCO-IQ3_S.gguf",
+      "--prompt-file",
+      "/home/bent/Projekte/Ada/model_runner/artifacts/inkling2/obj/performance-round2/prompt-2048.txt",
+      "--backend",
+      "cpu",
+      "--threads",
+      "8",
+      "--batch-size",
+      "128",
+      "--arith",
+      "int8",
+      "--kv-cache",
+      "q4t",
+      "--repack",
+      "none",
+      "--memory-limit",
+      "24G",
+      "--context-size",
+      "2176",
+      "--max-tokens",
+      "16",
+      "--repeat-penalty",
+      "1",
+      "--ignore-eos",
+      "--draft-tokens",
+      "7",
+      "--repeats",
+      "1",
+      "--wait",
+      "5",
+      "--no-cache",
+      "--draft-model",
+      "/home/bent/models/Inkling-2-Mini-dspark-Q8_0.gguf"
+    ],
+    "binary_sha256": "17181f0e4662d9c12fc662c1a0bee05c42ec2188b880fca42736833d51a7ea21",
+    "baseline": "artifacts/inkling2/obj/gsq-few/measurement-v1/evidence.json",
+    "baseline_prefill_tok_s": 23.7,
+    "baseline_decode_tok_s": 14.58,
+    "protocol": "One warmup and one measured2048/16pass; identical IQ3_S checkpoint,Q4T,int8,CPU8threads,batch128,context2176,no repack,seven DSpark proposals. No concurrent build/test/download/audit. Exact digest and proposals required.",
+    "returncode": 0,
+    "prompt_tokens": 2048,
+    "generated_tokens": 16,
+    "prefill_tok_s": 23.76,
+    "decode_tok_s": 14.8,
+    "prefill_seconds": 86.204,
+    "decode_seconds": 1.081,
+    "output_digest": "4f1d96c1112e7b25",
+    "proposed": 14,
+    "accepted": 14,
+    "same_output_and_acceptance_as_baseline": true,
+    "finished_at": "2026-11-27T22:05:54.135001+00:00"
+  },
+  "prefill_change_percent": 0.25316455696202667,
+  "decode_change_percent": 1.5089163237311354,
+  "finished_at": "2026-11-27T22:07:22.442431+00:00",
+  "decision": "Retain the exact signed-dot simplification: one VNNI product replaces two biased products and their correction. No additional persistent memory, code path or public interface. The single trial is effectively unchanged; do not claim an established throughput improvement.",
+  "validation": {
+    "status": "passed",
+    "binary_sha256": "17181f0e4662d9c12fc662c1a0bee05c42ec2188b880fca42736833d51a7ea21",
+    "cases": [
+      {
+        "name": "reference",
+        "filter": "gguf container : integer products : GSQ",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-signed-dot/qualification-v1/reference.log"
+      },
+      {
+        "name": "grouped",
+        "filter": "cpu backend : GSQ small-block",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-signed-dot/qualification-v1/grouped.log"
+      },
+      {
+        "name": "q8-groups",
+        "filter": "cpu backend : reference grouped Q8",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-signed-dot/qualification-v1/q8-groups.log"
+      },
+      {
+        "name": "bounds",
+        "filter": "gguf container : the integer kernels prove",
+        "returncode": 0,
+        "count": 1,
+        "log": "artifacts/inkling2/obj/gsq-signed-dot/qualification-v1/bounds.log"
+      },
+      {
+        "name": "native",
+        "filter": "native Inkling",
+        "returncode": 0,
+        "count": 43,
+        "log": "artifacts/inkling2/obj/gsq-signed-dot/qualification-v1/native.log"
+      }
+    ]
+  },
+  "extrema_validation": {
+    "batch_invocations": 3456,
+    "individual_output_comparisons": 17280,
+    "coverage": "All 16 nonlinear levels; activations -128,-127,-1,0,1,127; widths 64,128,1152,2304; counts 1..9; accumulation and output guards. Byte-product execution explicitly enabled."
+  },
+  "source_manifest": "artifacts/inkling2/obj/gsq-signed-dot/final-source-sha256.json",
+  "source_archive": "artifacts/inkling2/obj/gsq-signed-dot/candidate-source.tar",
+  "binary_sha256": {
+    "bin/model_runner": "fcaaf3f2adf84059cf282ab38c51a28b780f1688b9215ff33a84ed6a11d828e4",
+    "tests/bin/tests": "17181f0e4662d9c12fc662c1a0bee05c42ec2188b880fca42736833d51a7ea21",
+    "tests/bin/no_adapter_probe": "12597b2bbe09683ca69320030c71fa940e52716a30530f8f53999c7139629a1b"
+  },
+  "elf_proof": "artifacts/inkling2/obj/gsq-signed-dot/elf-proof.json",
+  "existing_fixture_files_unchanged": 228,
+  "new_persistent_allocation_bytes": 0,
+  "peak_rss_bytes": 4586340352,
+  "performance_interpretation": "23.76 versus 23.70 tok/s prefill (+0.25%); 14.80 versus 14.58 tok/s decode (+1.51%). One warmup and one measured run. The preceding rejected dispatch measured 14.79 tok/s on an unchanged decode path, so decode variability alone could explain the apparent gain. No repeated-run or new model-quality claim."
+}

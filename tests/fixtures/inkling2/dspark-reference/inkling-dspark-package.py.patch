@@ -1,0 +1,16 @@
+--- /dev/null
++++ inkling-dspark-package.py
+@@ -0,0 +1,13 @@
++# Reference-only packaging, executed after independent GGML/NumPy output capture.
++from pathlib import Path
++import hashlib,json,math
++work=Path('/tmp/inkling-dspark-tiny');header=json.loads((work/'header.json').read_text());raw=(work/'tiny-dspark.gguf').read_bytes();base=(header['header_end']+31)//32*32;payload=bytearray()
++for tensor in header['tensors']:
++ count=math.prod(tensor['dims']);size={0:count*4,8:count//32*34,30:count*2}[tensor['type']];offset=base+tensor['offset'];payload.extend(raw[offset:offset+size])
++(work/'weights.bin').write_bytes(payload)
++for directory in [work,Path('/tmp/inkling-dspark-long')]:
++ path=directory/'manifest.json';manifest=json.loads(path.read_text());manifest['generated_files']={'tiny-dspark.gguf':manifest['files'].pop('tiny-dspark.gguf')};manifest['generation']='Tiny_Model.Build_DSpark reconstructs GGUF framing with independent raw tensor payloads from dspark-tiny/weights.bin. Generated GGUF SHA is unchanged.'
++ if directory==work:manifest['files']['weights.bin']={'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
++ (directory/'packaged-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
++# Copy payload, packaged manifests, features and independent expected arrays to
++# the fixture directories. Do not copy GGUF: Tiny_Model writes it into obj.

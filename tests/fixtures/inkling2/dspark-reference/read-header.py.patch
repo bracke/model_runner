@@ -1,0 +1,23 @@
+--- /dev/null
++++ read-header.py
+@@ -0,0 +1,20 @@
++import struct,json,sys
++from pathlib import Path
++p=Path(sys.argv[1]);f=p.open('rb')
++def read(fmt):
++ n=struct.calcsize(fmt);b=f.read(n);assert len(b)==n;return struct.unpack('<'+fmt,b)[0]
++def string():return f.read(read('Q')).decode('utf8')
++def val(t):
++ if t==8:return string()
++ if t==9:
++  kind=read('I');n=read('Q');return [val(kind) for _ in range(n)]
++ return read({0:'B',1:'b',2:'H',3:'h',4:'I',5:'i',6:'f',7:'?',10:'Q',11:'q',12:'d'}[t])
++assert f.read(4)==b'GGUF';version=read('I');nt=read('Q');nk=read('Q');meta={}
++for _ in range(nk):
++ key=string();meta[key]=val(read('I'))
++tensors=[]
++for _ in range(nt):
++ name=string();rank=read('I');dims=[read('Q')for _ in range(rank)];typ=read('I');offset=read('Q');tensors.append(dict(name=name,dims=dims,type=typ,offset=offset))
++j={'file':str(p),'version':version,'metadata':meta,'tensors':tensors,'header_end':f.tell()}
++Path(sys.argv[2]).write_text(json.dumps(j,indent=2)+'\n')
++print(json.dumps({'version':version,'header_end':f.tell(),'tensor_count':len(tensors),'metadata':{k:(v if not isinstance(v,list) or len(v)<20 else {'length':len(v)}) for k,v in meta.items() if not k.startswith('tokenizer.')}},indent=2))

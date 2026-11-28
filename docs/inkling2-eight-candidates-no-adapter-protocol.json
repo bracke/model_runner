@@ -1,0 +1,11 @@
+{
+  "declared_at": "2026-11-25T23:52:24.764496+00:00",
+  "purpose": "Requalify eight native candidates: fused Q4_K products, reusable workspace and physical tensor tables, SIMD convolution, reduced residual copying, bounded rewind checkpoints and CPU/Vulkan grouped/chained projections.",
+  "baseline": "Existing pinned a0522e83cf42fe2b8cf95e5e73759c0d7aa5087b probe and source archive",
+  "workload": "Same qwen3.5-0.8b-q8_0.gguf, speed-prompt-110.txt, 100 prompt tokens, 16 generated, 4 threads, batch16, context512, f32 activations/cache, no repack/cache/drafting/adapters",
+  "design": "Existing two batches of seven alternating before/after pairs; preserve all results; no timing-based retry or exclusion",
+  "gates": "Unchanged paired median prompt and decode ratios <=1.05 in both batches; exact c85e719a42725969 output digest",
+  "os_memory_max_bytes": 4294967296,
+  "os_swap_max_bytes": 0,
+  "bounds": "One warmup and one measured pass per process; <=180 seconds each and <=1200 seconds overall; sources, compiler, dependencies, binaries and inputs pinned and reverified"
+}
